@@ -58,11 +58,27 @@ set(DRACO_SOURCES
 if(APPLE)
     list(APPEND DRACO_SOURCES src/core/kqueue_reactor.cpp)
 else()
-    list(APPEND DRACO_SOURCES src/core/epoll_reactor.cpp)
+    # Prefer io_uring (Linux ≥ 5.1) for true async I/O; fall back to epoll.
+    find_path(LIBURING_INCLUDE_DIR liburing.h)
+    find_library(LIBURING_LIB NAMES uring)
+
+    if(LIBURING_INCLUDE_DIR AND LIBURING_LIB)
+        message(STATUS "io_uring found: ${LIBURING_LIB} — using IOUringReactor")
+        set(DRACO_USE_IOURING TRUE)
+        list(APPEND DRACO_SOURCES src/core/io_uring_reactor.cpp)
+    else()
+        message(STATUS "io_uring not found — falling back to EpollReactor")
+        list(APPEND DRACO_SOURCES src/core/epoll_reactor.cpp)
+    endif()
 endif()
 
 add_library(draco STATIC ${DRACO_SOURCES})
 add_library(draco::draco ALIAS draco)
+
+if(DRACO_USE_IOURING)
+    target_compile_definitions(draco PUBLIC DRACO_HAS_IOURING)
+    target_link_libraries(draco PUBLIC ${LIBURING_LIB})
+endif()
 
 target_include_directories(draco
     PUBLIC

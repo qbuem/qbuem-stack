@@ -1,6 +1,9 @@
 #include <draco/core/dispatcher.hpp>
+
 #ifdef __APPLE__
 #include <draco/core/kqueue_reactor.hpp>
+#elif defined(DRACO_HAS_IOURING)
+#include <draco/core/io_uring_reactor.hpp>
 #else
 #include <draco/core/epoll_reactor.hpp>
 #endif
@@ -11,6 +14,8 @@ Dispatcher::Dispatcher(size_t thread_count) {
   for (size_t i = 0; i < thread_count; ++i) {
 #ifdef __APPLE__
     reactors_.push_back(std::make_unique<KqueueReactor>());
+#elif defined(DRACO_HAS_IOURING)
+    reactors_.push_back(std::make_unique<IOUringReactor>());
 #else
     reactors_.push_back(std::make_unique<EpollReactor>());
 #endif
@@ -25,10 +30,9 @@ void Dispatcher::run() {
       auto &reactor = reactors_[i];
       Reactor::set_current(reactor.get());
       while (running_) {
-        auto result = reactor->poll(100);
-        if (!result || *result == 0) {
-          std::this_thread::sleep_for(std::chrono::milliseconds(1));
-        }
+        // poll() blocks up to 100 ms internally (epoll_wait / io_uring_wait).
+        // No additional sleep needed — it would only add latency.
+        reactor->poll(100);
       }
     });
   }
