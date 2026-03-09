@@ -1,49 +1,45 @@
-# Draco WAS: Ultra-Low Latency C++23 Web Framework
+# Draco WAS Development Roadmap (v0.2.0)
 
-## Development Roadmap & TODO
+Draco WAS is a C++20/23 ultra-low latency Web Application Server designed for extreme performance and zero-dependency agility.
 
-Draco WAS is designed to be the fastest, most ergonomic C++23 Web Application Server for REST APIs. It combines the raw performance of zero-copy infrastructure with the usability of modern web frameworks (like Express.js or FastAPI).
+## ✅ Phase 0-2 & L: Foundation & Core Engine (COMPLETED)
+- [x] Expert architecture design (Shared-Nothing, io_uring, Coroutines).
+- [x] C++23 project foundation & directory structure.
+- [x] Dependency management via `FetchContent` (Beast-JSON, GTest).
+- [x] **Reactor Core**: `kqueue` (macOS) and `io_uring` (Linux placeholder) implemented.
+- [x] **Dispatcher**: Thread-per-core Dispatcher with CPU affinity support.
+- [x] **HTTP Abstractions**: Zero-copy HTTP Parser, `Request`/`Response` API.
+- [x] **Modern Routing**: Radix Tree for fast route matching.
+- [x] **Library Infrastructure**: Refactored to header + source distribution with modern CMake.
 
-### Phase 1: Core Networking & HTTP/1.1 Engine (Foundation)
-- [ ] Implement C++23 native epoll/kqueue event loop or integrate high-performance I/O backend (e.g., io_uring for Linux).
-- [ ] Lock-free, thread-per-core (Shared-Nothing) architecture.
-- [ ] Zero-allocation HTTP/1.1 parser (custom or heavily optimized llhttp wrapper).
-- [ ] Thread-local memory arenas per request lifecycle to completely eliminate `new`/`malloc` overhead during request processing.
-- [ ] Basic Request and Response object abstractions.
+## ✅ Phase 3: Coroutines & Beast JSON (COMPLETED)
+- [x] **Async Flow**: Custom `draco::Task<T>` with symmetric transfer for nested coroutines.
+- [x] **Beast JSON Integration**: Native integration in `Request`/`Response`.
+- [x] **Verification**: `coro_json` example successfully running.
 
-### Phase 2: Ultra-Fast Routing & REST Ergonomics
-- [ ] **Compile-Time Routing**: Utilize C++23 `constexpr` and template metaprogramming to build a trie or radix tree at compile time (zero runtime route registration cost).
-- [ ] Support for Path Parameters (e.g., `/api/users/:id`).
-- [ ] Support for Query Parameters and form-data parsing.
-- [ ] **Extreme Usability API**: Chainable, highly intuitive routing syntax (similar to Express/FastAPI) using C++20/23 lambdas.
-- [ ] Automatic Request/Response JSON serialization via native **Beast JSON** integration.
+## 🚀 Phase 4: Async I/O & Performance Optimization (IN PROGRESS)
+- [x] **Robust Event Handling**: Multi-event support (Read/Write) per FD in Kqueue.
+- [x] **Awaiters**: Implemented `AsyncRead`, `AsyncWrite`, and `AsyncSleep`.
+- [ ] **Debugging & Hardening**:
+    - [ ] Resolve segfault in `AsyncSleep` resumption (Reactor callback ownership issue).
+    - [ ] Robust lifecycle management for detached coroutines in `App::listen`.
+- [ ] **Performance Verification**:
+    - [ ] Zero-copy Serialization Optimizations for `Beast JSON`.
+    - [ ] Benchmark Suite (Latency/Throughput comparisons).
 
-### Phase 3: Modern Concurrency & Async I/O
-- [ ] C++20/23 Coroutine (`co_await`) support for non-blocking database and external API calls.
-- [ ] (Optional/Future) P2300 Senders/Receivers execution model integration.
-- [ ] Connection pooling for upstream services (Database, Redis, etc.).
+## 🛡️ Future Phases: Middleware & Production Hardening
+- [ ] **Middleware Pipeline**: Logging, CORS, Auth, and Error Handling.
+- [ ] **TLS/SSL Support**: OpenSSL/BoringSSL non-blocking plugin.
+- [ ] **C10M Goal**: Stress testing 10M+ concurrent connections.
 
-### Phase 4: Middleware, Security & Web Protocols
-- [ ] Middleware pipeline support for pre/post-processing (Logging, Auth, CORS, Rate Limiting).
-- [ ] TLS/SSL termination support (OpenSSL/BoringSSL).
-- [ ] HTTP/2 (and potentially HTTP/3 QUIC) support.
-- [ ] WebSocket and Server-Sent Events (SSE) support for real-time streaming.
-- [ ] JWT authentication utilities.
+## ⚠️ Known Issues & Improvement Areas
+1.  **Beast JSON Mutation**: `operator[]` on `beast::Value` does not create keys. Use `.insert()` instead.
+2.  **Reactor Callback Segfault**: Under investigation. Possible use-after-free when callbacks unregister themselves during invocation.
+3.  **Task Return Value**: `Task<T>` needs robust testing for complex types.
 
-### Phase 5: Draco Exclusive Features (The "Unfair Advantage")
-- [ ] **Native Beast JSON Integration**: Direct-to-tape parse from socket buffer; zero-copy JSON DOM routing.
-- [ ] **Auto-OpenAPI Generation**: Use C++23 reflection or macro attributes to automatically generate Swagger/OpenAPI 3.0 specs from the C++ route definitions.
-- [ ] **Zero-Config Deployment**: Single binary static compilation, self-contained. YAML/JSON based simple server configuration.
-- [ ] **Adaptive Backpressure**: Built-in OS-level backpressure handling to survive DDoS or extreme burst traffic without OOM (Out Of Memory).
-
-### Phase 6: Developer Experience & Ecosystem
-- [ ] Comprehensive Doxygen & VitePress documentation (Ah, that's easy! concept).
-- [ ] Hot-reload development mode for fast C++ rebuilds.
-- [ ] Pre-built ORM integration examples (e.g., sqlpp11 or similar).
+## 📝 Contribution & Issues
+- For bugs, create a GitHub Issue with a reproducible test case (C++ example).
+- Performance profiling should use `macOS Performance Tools` or `Linux perf`.
 
 ---
-
-## Architecture Brainstorming Notes
-* **Event Loop**: Epoll (Linux), kqueue (macOS), io_uring (Linux modern).
-* **Routing**: Since it's C++23, we should push string matching to compile-time wherever possible.
-* **Ergonomics over everything**: If the user has to write more than 5 lines of code to spin up a server and handle a GET request returning JSON, we failed.
+*Created by The LKB Innovations.*

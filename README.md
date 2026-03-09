@@ -1,82 +1,54 @@
-# 🐉 Draco WAS
+# 🐉 Draco WAS (Development)
 
-**Draco WAS** is an ultra-low latency, C++23 Web Application Server framework designed for modern REST APIs. It combines the extreme performance of systems programming with the developer-friendly ergonomics of frameworks like Express.js or FastAPI.
+**Draco WAS** is a C++23 ultra-low latency Web Application Server designed for modern REST APIs. It combines the raw performance of systems-level C++ with the extreme developer-friendly ergonomics of frameworks like Express.js.
 
-## ✨ Why Draco WAS?
+## ✨ Philosophy: Zero-Dependency, Zero-Overhead
 
-Most C++ web frameworks are notoriously difficult to configure, overly verbose, or sacrifice performance for abstractions. Draco WAS solves this by leveraging C++23 features to deliver:
+Draco WAS is built for high-performance environments (HFT, real-time analytics, high-traffic APIs) where every microsecond matters. We achieve this through:
 
-1. **Extreme Usability**: Spin up a multi-threaded, non-blocking REST API server in under 10 lines of code.
-2. **Zero-Overhead Abstractions**: Compile-time routing and thread-local memory arenas guarantee consistent microsecond latencies.
-3. **Native Beast JSON**: Seamlessly integrated with Beast JSON, the fastest C++20 JSON library, for zero-copy parsing and high-throughput serialization.
-4. **Modern C++23**: Built with coroutines (`co_await`), `std::expected`, and compile-time string processing.
+1.  **C++20/23 Modernity**: Fully leveraging Coroutines (`co_await`), Symmetric Transfer in `Task` types, and `std::expected` for safe, zero-overhead async flow.
+2.  **Shared-Nothing Reactor**: A thread-per-core architecture using `kqueue` (macOS) and `io_uring` (Linux) that eliminates locking and maximizes cache locality.
+3.  **Beast JSON Integrated**: Built-in support for `beast-json` for ultra-fast, zero-copy JSON parsing and serialization.
+4.  **Compiled Library Design**: Transitioned from header-only to a structured `header + static/shared library` for better distribution and build times.
 
-## 🚀 Quick Start (Conceptual)
+## 🚀 Current Implementation Status
 
-Draco aims for zero boilerplate. Here is what an application looks like:
+Draco is evolving rapidly. Currently:
+- **Phase 1-3 Completed**: Core Reactor, Dispatcher, Router (Radix Tree), and Coroutine `Task` foundation are implemented.
+- **Beast JSON Integration**: Fully integrated into `Request` and `Response` objects.
+- **Async Awaiters**: `AsyncRead`, `AsyncWrite`, and `AsyncSleep` (timer-based) are available.
 
-```cpp
-#include <draco/draco.hpp>
-#include <beast_json/beast_json.hpp>
+## 🛠 Features Roadmap
 
-struct User {
-    uint64_t id;
-    std::string name;
-};
-BEAST_JSON_FIELDS(User, id, name)
+*   **Phase 4 (In Progress)**: Robust Async I/O, Performance Hardening, and Awaiter optimization.
+*   **Phase 5 (Next)**: Zero-copy Serialization Optimizations and C10M stress testing.
 
-int main() {
-    draco::App app;
-
-    // Simple GET returning JSON
-    app.get("/api/ping", [](const draco::Request& req, draco::Response& res) {
-        res.json(beast::json::Value{{"status", "ok"}});
-    });
-
-    // Path parameters and auto-serialization
-    app.get("/api/users/:id", [](auto req, auto res) {
-        uint64_t id = req.path_param<uint64_t>("id");
-        User user{id, "Alice"};
-        res.json(user); // Auto-serialized by Beast JSON
-    });
-
-    // Modern Coroutine Support
-    app.post("/api/data", [](auto req, auto res) -> draco::Task<void> {
-        auto json = req.json(); // Parses request body instantly
-        co_await db::save(json);
-        res.status(201).send("Created");
-    });
-
-    app.listen(8080);
-    return 0;
-}
-```
-
-## 🛠 Features
-
-### Standard WAS Framework Features
-* **HTTP/1.1 & HTTP/2** support.
-* **Middleware Pipeline**: Easy integration of CORS, Authentication, Logging, and Rate Limiting.
-* **Multipart/Form-Data**: Native handling for file uploads.
-* **TLS/SSL**: Built-in support for secure connections.
-* **Connection Pooling**: Native tools for managing upstream database or Redis connections.
-* **WebSockets & SSE**: Real-time bidirectional streaming support.
-
-### Draco Exclusive Features 🌟
-* **Compile-Time Radix Tree Router**: Route matching happens in nanoseconds with zero mallocs.
-* **Shared-Nothing Multi-Threading**: Lock-free, thread-per-core event loops maximizing hardware utilization and preventing CPU cache trashing.
-* **Auto-OpenAPI Generation**: Generate Swagger UI definitions directly from your route handlers.
-* **Arena Allocation**: Memory is allocated via thread-local arenas per HTTP request lifecycle, meaning `new`/`delete` are effectively eliminated from the hot path.
-
-## 🔧 Build & Installation
-
-*(Coming soon! Draco requires a C++23 compiler like GCC 13+ or Clang 16+).*
+## 📦 Build Instructions
 
 ```bash
 mkdir build && cd build
-cmake -DCMAKE_BUILD_TYPE=Release ..
-make -j
+cmake ..
+make -j$(sysctl -n hw.ncpu)
 ```
+
+### Run Examples
+```bash
+./examples/hello_world
+./examples/coro_json
+./examples/async_timer
+```
+
+## ⚠️ Known Issues & Technical Gotchas
+
+- **Beast JSON Mutations**: When using `beast::Value`, use `.insert("key", value)` to add new keys. Using `operator[]` on a non-existent key returns a null handle and will cause a segfault upon assignment.
+- **Async Lifecycle**: The async handler wrapper in `App::listen` manages coroutine status. Ensure `task.detach()` is called for suspended tasks to prevent premature destruction.
+- **Reactor Callbacks**: Avoid recursive event registration within the same callback without careful state management.
+
+## 📦 Build Requirements
+
+*   **Compiler**: GCC 13+ or Clang 16+ (C++20/23 required).
+*   **OS**: Linux (io_uring) or macOS (kqueue).
+*   **Windows**: Not supported.
 
 ---
 *Created by The LKB Innovations.*

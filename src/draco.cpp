@@ -1,0 +1,167 @@
+#include <draco/draco.hpp>
+#include <draco/http/parser.hpp>
+
+#include <arpa/inet.h>
+#include <cstring>
+#include <fcntl.h>
+#include <iostream>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#include <unistd.h>
+#include <variant>
+
+namespace draco {
+
+App::App(size_t thread_count) : dispatcher_(thread_count) {
+  std::cout << "Draco WAS v" << Version::string << " Initializing..."
+            << std::endl;
+}
+
+void App::use(Middleware mw) { router_.use(std::move(mw)); }
+
+void App::get(std::string_view path, HandlerVariant handler) {
+  router_.add_route(Method::Get, path, std::move(handler));
+}
+
+void App::post(std::string_view path, HandlerVariant handler) {
+  router_.add_route(Method::Post, path, std::move(handler));
+}
+
+Result<void> App::listen(int port) {
+  std::cout << "[Debug] App::listen starting on port " << port << std::endl;
+  int server_fd = socket(AF_INET, SOCK_STREAM, 0);
+  if (server_fd == -1) {
+    return std::unexpected(
+        std::make_error_code(std::errc::resource_unavailable_try_again));
+  }
+
+  int opt = 1;
+  setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+
+  struct sockaddr_in address;
+  address.sin_family = AF_INET;
+  address.sin_addr.s_addr = INADDR_ANY;
+  address.sin_port = htons(port);
+
+  if (bind(server_fd, (struct sockaddr *)&address, sizeof(address)) < 0) {
+    close(server_fd);
+    return std::unexpected(std::make_error_code(std::errc::address_in_use));
+  }
+
+  if (::listen(server_fd, 1024) < 0) {
+    close(server_fd);
+    return std::unexpected(std::make_error_code(std::errc::address_in_use));
+  }
+
+  fcntl(server_fd, F_SETFL, O_NONBLOCK);
+  std::cout << "Draco WAS v" << Version::string
+            << " listening on http://0.0.0.0:" << port << std::endl;
+
+  std::cout << "[Debug] Registering listener on FD: " << server_fd << std::endl;
+  auto listen_res = dispatcher_.register_listener(server_fd, [this](int lfd) {
+    struct sockaddr_in client_addr;
+    socklen_t client_len = sizeof(client_addr);
+    int client_fd = accept(lfd, (struct sockaddr *)&client_addr, &client_len);
+    if (client_fd == -1) {
+      if (errno != EAGAIN && errno != EWOULDBLOCK) {
+        std::cerr << "[ERROR] accept failed: " << strerror(errno) << std::endl;
+      }
+      return;
+    }
+
+    std::cout << "[Debug] Accepted connection on FD: " << client_fd
+              << std::endl;
+    fcntl(client_fd, F_SETFL, O_NONBLOCK);
+
+    auto *worker = dispatcher_.get_worker_reactor(client_fd);
+    std::cout << "[Debug] Registering Read event for client FD: " << client_fd
+              << " on worker" << std::endl;
+    worker->register_event(client_fd, EventType::Read, [this](int cfd) {
+      std::cout << "[Debug] Read event fired for FD: " << cfd << std::endl;
+      char buffer[8192];
+      ssize_t n = read(cfd, buffer, sizeof(buffer));
+      if (n > 0) {
+        std::string_view data(buffer, n);
+        Request req;
+        HttpParser parser;
+        auto parsed_bytes = parser.parse(data, req);
+
+        if (parsed_bytes && parser.is_complete()) {
+          std::cout << "[Debug] Request parsed: " << req.path() << std::endl;
+          Response res;
+
+          bool cont = true;
+          for (const auto &mw : router_.middlewares()) {
+            if (!mw(req, res)) {
+              cont = false;
+              break;
+            }
+          }
+
+          if (cont) {
+            std::unordered_map<std::string, std::string> params;
+            auto handler = router_.match(req.method(), req.path(), params);
+            if (!std::holds_alternative<std::monostate>(handler)) {
+              for (auto const &[key, val] : params) {
+                req.set_param(key, val);
+              }
+
+              if (std::holds_alternative<Handler>(handler)) {
+                std::cout << "[Debug] Running Sync Handler" << std::endl;
+                std::get<Handler>(handler)(req, res);
+                std::string output = res.serialize();
+                write(cfd, output.data(), output.size());
+                close(cfd);
+              } else {
+                std::cout << "[Debug] Running Async Handler Wrapper"
+                          << std::endl;
+                auto h = std::get<AsyncHandler>(handler);
+                auto wrapper = [](AsyncHandler ah, Request areq, Response ares,
+                                  int fd) -> Task<void> {
+                  std::cout << "[Debug] Wrapper started" << std::endl;
+                  co_await ah(areq, ares);
+                  std::cout << "[Debug] Handler finished, sending response"
+                            << std::endl;
+                  std::string output = ares.serialize();
+                  write(fd, output.data(), output.size());
+                  close(fd);
+                };
+                auto task = wrapper(h, std::move(req), std::move(res), cfd);
+                task.resume();
+                task.detach();
+                std::cout << "[Debug] Async Handler detached" << std::endl;
+              }
+            } else {
+              res.status(404).body("Not Found");
+              std::string output = res.serialize();
+              write(cfd, output.data(), output.size());
+              close(cfd);
+            }
+          } else {
+            // Middleware blocked
+            std::string output = res.serialize();
+            write(cfd, output.data(), output.size());
+            close(cfd);
+          }
+        } else if (!parsed_bytes) {
+          std::cerr << "[ERROR] HTTP Parse Error" << std::endl;
+          close(cfd);
+        } else {
+          // Incomplete request
+          return;
+        }
+      } else {
+        close(cfd);
+      }
+    });
+  });
+
+  if (!listen_res)
+    return std::unexpected(listen_res.error());
+
+  std::cout << "[Debug] Starting dispatcher..." << std::endl;
+  dispatcher_.run();
+  return {};
+}
+
+} // namespace draco

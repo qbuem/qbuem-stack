@@ -1,0 +1,7 @@
+build/
+.agent/
+.DS_Store
+*.swp
+*.o
+*.a
+bin/
