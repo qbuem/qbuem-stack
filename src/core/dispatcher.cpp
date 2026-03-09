@@ -1,8 +1,9 @@
 #include <draco/core/dispatcher.hpp>
-#include <draco/core/io_uring_reactor.hpp>
+#ifdef __APPLE__
 #include <draco/core/kqueue_reactor.hpp>
-
-#include <iostream>
+#else
+#include <draco/core/epoll_reactor.hpp>
+#endif
 
 namespace draco {
 
@@ -11,7 +12,7 @@ Dispatcher::Dispatcher(size_t thread_count) {
 #ifdef __APPLE__
     reactors_.push_back(std::make_unique<KqueueReactor>());
 #else
-    reactors_.push_back(std::make_unique<IOUringReactor>());
+    reactors_.push_back(std::make_unique<EpollReactor>());
 #endif
   }
 }
@@ -22,7 +23,6 @@ void Dispatcher::run() {
   for (size_t i = 0; i < reactors_.size(); ++i) {
     threads.emplace_back([this, i]() {
       auto &reactor = reactors_[i];
-      std::cout << "[Debug] Worker thread " << i << " starting..." << std::endl;
       Reactor::set_current(reactor.get());
       while (running_) {
         auto result = reactor->poll(100);
@@ -30,7 +30,6 @@ void Dispatcher::run() {
           std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
       }
-      std::cout << "[Debug] Worker thread " << i << " exiting." << std::endl;
     });
   }
 

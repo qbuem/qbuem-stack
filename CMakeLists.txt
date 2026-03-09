@@ -49,12 +49,17 @@ FetchContent_MakeAvailable(beast_json)
 set(DRACO_SOURCES
     src/draco.cpp
     src/core/reactor.cpp
-  src/core/dispatcher.cpp
-    src/core/kqueue_reactor.cpp
+    src/core/dispatcher.cpp
     src/http/parser.cpp
     src/http/response.cpp
     src/http/router.cpp
 )
+
+if(APPLE)
+    list(APPEND DRACO_SOURCES src/core/kqueue_reactor.cpp)
+else()
+    list(APPEND DRACO_SOURCES src/core/epoll_reactor.cpp)
+endif()
 
 add_library(draco STATIC ${DRACO_SOURCES})
 add_library(draco::draco ALIAS draco)

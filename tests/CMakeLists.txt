@@ -1,5 +1,6 @@
 add_executable(draco_tests
     reactor_test.cpp
+    http_test.cpp
 )
 
 target_link_libraries(draco_tests

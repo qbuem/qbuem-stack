@@ -6,7 +6,7 @@ Draco WAS is a C++20/23 ultra-low latency Web Application Server designed for ex
 - [x] Expert architecture design (Shared-Nothing, io_uring, Coroutines).
 - [x] C++23 project foundation & directory structure.
 - [x] Dependency management via `FetchContent` (Beast-JSON, GTest).
-- [x] **Reactor Core**: `kqueue` (macOS) and `io_uring` (Linux placeholder) implemented.
+- [x] **Reactor Core**: `kqueue` (macOS) and `epoll` (Linux) implemented.
 - [x] **Dispatcher**: Thread-per-core Dispatcher with CPU affinity support.
 - [x] **HTTP Abstractions**: Zero-copy HTTP Parser, `Request`/`Response` API.
 - [x] **Modern Routing**: Radix Tree for fast route matching.
@@ -17,29 +17,26 @@ Draco WAS is a C++20/23 ultra-low latency Web Application Server designed for ex
 - [x] **Beast JSON Integration**: Native integration in `Request`/`Response`.
 - [x] **Verification**: `coro_json` example successfully running.
 
-## 🚀 Phase 4: Async I/O & Performance Optimization (IN PROGRESS)
-- [x] **Robust Event Handling**: Multi-event support (Read/Write) per FD in Kqueue.
-- [x] **Awaiters**: Implemented `AsyncRead`, `AsyncWrite`, and `AsyncSleep`.
-- [ ] **Debugging & Hardening**:
-    - [ ] Resolve segfault in `AsyncSleep` resumption (Reactor callback ownership issue).
-    - [ ] Robust lifecycle management for detached coroutines in `App::listen`.
-- [ ] **Performance Verification**:
-    - [ ] Zero-copy Serialization Optimizations for `Beast JSON`.
-    - [ ] Benchmark Suite (Latency/Throughput comparisons).
+## ✅ Phase 4: Async I/O & Hardening (COMPLETED)
+- [x] **Robust Event Handling**: Multi-event support (Read/Write) per FD.
+- [x] **Awaiters**: `AsyncRead`, `AsyncWrite`, and `AsyncSleep` (timer-based).
+- [x] **Linux Reactor**: `EpollReactor` using `epoll` + `timerfd` replaces the io_uring stub.
+- [x] **Callback Safety**: Callbacks are copied before invocation in all reactors, preventing UAF when a callback unregisters itself.
+- [x] **Detached Coroutine Lifecycle**: `Task::detach()` now sets a flag so the coroutine self-destructs on completion, eliminating the memory leak for fire-and-forget async handlers.
+- [x] **Async Handler Hardening**: `App::listen` async wrapper uses the corrected `detach()` semantics; detached frames are automatically cleaned up.
+- [x] **Build Fixed on Linux**: Platform-specific reactor compilation is now conditional (`kqueue_reactor` on macOS, `epoll_reactor` on Linux).
+- [x] **Test Suite Expanded**: `http_test.cpp` added to the test runner; `RouterTest` updated to work correctly with `HandlerVariant`.
 
 ## 🛡️ Future Phases: Middleware & Production Hardening
 - [ ] **Middleware Pipeline**: Logging, CORS, Auth, and Error Handling.
 - [ ] **TLS/SSL Support**: OpenSSL/BoringSSL non-blocking plugin.
+- [ ] **Zero-copy Serialization**: Beast JSON write optimizations.
+- [ ] **Benchmark Suite**: Latency/Throughput comparisons (wrk, hey).
 - [ ] **C10M Goal**: Stress testing 10M+ concurrent connections.
-
-## ⚠️ Known Issues & Improvement Areas
-1.  **Beast JSON Mutation**: `operator[]` on `beast::Value` does not create keys. Use `.insert()` instead.
-2.  **Reactor Callback Segfault**: Under investigation. Possible use-after-free when callbacks unregister themselves during invocation.
-3.  **Task Return Value**: `Task<T>` needs robust testing for complex types.
 
 ## 📝 Contribution & Issues
 - For bugs, create a GitHub Issue with a reproducible test case (C++ example).
-- Performance profiling should use `macOS Performance Tools` or `Linux perf`.
+- Performance profiling: use `Linux perf` or `macOS Instruments`.
 
 ---
 *Created by The LKB Innovations.*
