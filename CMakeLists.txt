@@ -51,6 +51,7 @@ set(DRACO_SOURCES
     src/core/reactor.cpp
     src/core/dispatcher.cpp
     src/http/parser.cpp
+    src/http/request.cpp
     src/http/response.cpp
     src/http/router.cpp
 )
