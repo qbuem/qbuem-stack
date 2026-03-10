@@ -13,15 +13,17 @@ permissions:
 # Job graph:
 #
 #   analyze ──┐
-#             ├─► build (matrix: macos-arm64, linux-x86_64, linux-aarch64)
-#   test    ──┘           └─► upload artifacts to GitHub Release
+#             ├─► build/macos-arm64    ──┐
+#   test    ──┤   build/linux-x86_64   ──┼─► publish (single release upload)
+#             └─► build/linux-aarch64  ──┘
 #
-# Release artifacts are only published when both static analysis and all
-# platform tests pass.
+# Each build job saves its tarball as a GitHub Actions artifact.
+# The publish job downloads all three and creates the GitHub Release in one
+# shot — no race condition on the release body.
 # ============================================================================
 
 jobs:
-  # ── 1. Static analysis ───────────────────────────────────────────────────────
+  # ── 1. Static analysis (clang-tidy) ─────────────────────────────────────────
   analyze:
     name: Static Analysis (clang-tidy)
     runs-on: ubuntu-22.04
@@ -34,9 +36,7 @@ jobs:
           sudo apt-get update -q
           sudo apt-get install -y clang clang-tidy liburing-dev
 
-      # Build only the library sources; tests/examples would pull in gtest
-      # which we do not want to analyze.
-      - name: Configure (compile_commands.json)
+      - name: Configure (generate compile_commands.json)
         run: |
           cmake -B build \
             -DCMAKE_BUILD_TYPE=Debug \
@@ -45,14 +45,13 @@ jobs:
             -DDRACO_BUILD_TESTS=OFF \
             -DDRACO_BUILD_EXAMPLES=OFF
 
-      # Generate headers / dependency sources so clang-tidy can parse them.
-      - name: Fetch dependencies (headers only)
+      # Build library targets so FetchContent headers are materialised and
+      # clang-tidy can resolve all includes.
+      - name: Materialise FetchContent headers
         run: cmake --build build --target draco_core --target draco_http --target draco -j$(nproc) || true
 
       - name: Run clang-tidy
         run: |
-          # run-clang-tidy analyses every TU that appears in compile_commands.json
-          # and is located under src/ — vendored / fetched deps are excluded.
           run-clang-tidy \
             -p build \
             -config-file .clang-tidy \
@@ -113,6 +112,9 @@ jobs:
           - os: ubuntu-24.04-arm
             platform: linux-aarch64
 
+    outputs:
+      beast_tag: ${{ steps.beast_tag.outputs.tag }}
+
     steps:
       - uses: actions/checkout@v4
 
@@ -120,9 +122,7 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get update -q && sudo apt-get install -y liburing-dev
 
-      # Pin beast_json to the latest semver tag that existed at release time.
-      # This tag is baked into the installed draco-config.cmake so that
-      # downstream find_package(draco) fetches the exact same version.
+      # Resolve at release time so the baked tag is reproducible.
       - name: Resolve beast_json latest tag
         id: beast_tag
         run: |
@@ -152,32 +152,52 @@ jobs:
 
       - name: Package
         run: |
-          VERSION=${GITHUB_REF_NAME}
-          ARCHIVE="draco-${VERSION}-${{ matrix.platform }}.tar.gz"
+          ARCHIVE="draco-${GITHUB_REF_NAME}-${{ matrix.platform }}.tar.gz"
           tar -czf "${ARCHIVE}" -C dist .
           echo "ARCHIVE=${ARCHIVE}" >> "$GITHUB_ENV"
-          echo "BEAST_TAG=${{ steps.beast_tag.outputs.tag }}" >> "$GITHUB_ENV"
 
-      - name: Upload to GitHub Release
+      # Store tarball as a GitHub Actions artifact so the publish job can
+      # collect all three and upload them in a single release API call.
+      - name: Save artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ARCHIVE }}
+          path: ${{ env.ARCHIVE }}
+          retention-days: 1
+
+  # ── 4. Publish GitHub Release (single job — no race condition) ───────────────
+  publish:
+    name: Publish GitHub Release
+    runs-on: ubuntu-22.04
+    needs: [build]
+
+    steps:
+      - name: Download all platform tarballs
+        uses: actions/download-artifact@v4
+        with:
+          pattern: draco-*
+          merge-multiple: true   # flatten into cwd
+
+      - name: List artifacts
+        run: ls -lh draco-*.tar.gz
+
+      - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: ${{ env.ARCHIVE }}
+          files: draco-*.tar.gz
           body: |
             ## draco ${{ github.ref_name }}
-
-            ### Dependency versions baked into this release
-            | Library    | Version |
-            |------------|---------|
-            | beast_json | `${{ steps.beast_tag.outputs.tag }}` |
 
             ### Platforms
             | Artifact | OS | Arch |
             |----------|----|------|
-            | `draco-*-macos-arm64.tar.gz`   | macOS 14 | Apple Silicon |
+            | `draco-*-macos-arm64.tar.gz`   | macOS 14     | Apple Silicon (arm64) |
             | `draco-*-linux-x86_64.tar.gz`  | Ubuntu 22.04 | x86-64 |
             | `draco-*-linux-aarch64.tar.gz` | Ubuntu 24.04 | AArch64 |
 
             ### Usage
+            Download the tarball for your platform, extract it, then:
+
             ```cmake
             list(APPEND CMAKE_PREFIX_PATH "/path/to/draco-dist")
             find_package(draco REQUIRED)
@@ -186,5 +206,6 @@ jobs:
             target_link_libraries(myapp PRIVATE draco::http)   # HTTP + core
             target_link_libraries(myapp PRIVATE draco::core)   # reactor only
             ```
-            beast_json is fetched automatically at configure time.
+
+            > **beast_json** is fetched automatically at configure time — no manual setup needed.
           generate_release_notes: true
