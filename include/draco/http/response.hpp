@@ -1,15 +1,19 @@
-#include <beast_json/beast_json.hpp>
+#pragma once
+
 #include <draco/common.hpp>
 
 #include <string>
 #include <string_view>
 #include <unordered_map>
-#include <vector>
 
 namespace draco {
 
 /**
  * @brief HTTP Response builder.
+ *
+ * Use body() with a pre-serialized string for structured data (JSON, etc.).
+ * There is intentionally no built-in JSON method — serialize with whichever
+ * library you choose and pass the result to body(). See examples/coro_json.cpp.
  */
 class Response {
 public:
@@ -18,7 +22,6 @@ public:
   Response &status(int code);
   Response &header(std::string_view key, std::string_view value);
   Response &body(std::string_view b);
-  Response &json(const beast::Value &v);
 
   std::string serialize() const;
 

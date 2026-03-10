@@ -106,7 +106,8 @@ endif()
 # ============================================================================
 # Target: draco::http
 #   HTTP parser, Request, Response, Router.
-#   Depends on draco::core + beast_json (header-only, no extra link cost).
+#   No JSON library dependency — body() is raw bytes; callers choose their
+#   own JSON library (see examples/ which use beast_json directly).
 # ============================================================================
 add_library(draco_http STATIC
     src/http/parser.cpp
@@ -116,7 +117,7 @@ add_library(draco_http STATIC
 )
 add_library(draco::http ALIAS draco_http)
 
-target_link_libraries(draco_http PUBLIC draco_core beast_json::beast_json)
+target_link_libraries(draco_http PUBLIC draco_core)
 draco_compile_options(draco_http)
 
 # ============================================================================

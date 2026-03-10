@@ -14,13 +14,7 @@ Response &Response::header(std::string_view key, std::string_view value) {
 }
 
 Response &Response::body(std::string_view b) {
-  body_ = b;
-  return *this;
-}
-
-Response &Response::json(const beast::Value &v) {
-  header("Content-Type", "application/json");
-  body(v.dump());
+  body_ = std::string(b);
   return *this;
 }
 
@@ -43,6 +37,16 @@ std::string_view Response::status_to_string(int code) const {
     return "OK";
   case 201:
     return "Created";
+  case 204:
+    return "No Content";
+  case 206:
+    return "Partial Content";
+  case 301:
+    return "Moved Permanently";
+  case 302:
+    return "Found";
+  case 304:
+    return "Not Modified";
   case 400:
     return "Bad Request";
   case 401:
@@ -51,8 +55,18 @@ std::string_view Response::status_to_string(int code) const {
     return "Forbidden";
   case 404:
     return "Not Found";
+  case 405:
+    return "Method Not Allowed";
+  case 408:
+    return "Request Timeout";
+  case 429:
+    return "Too Many Requests";
   case 500:
     return "Internal Server Error";
+  case 502:
+    return "Bad Gateway";
+  case 503:
+    return "Service Unavailable";
   default:
     return "Unknown";
   }

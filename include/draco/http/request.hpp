@@ -2,11 +2,9 @@
 
 #include <draco/common.hpp>
 
-#include <beast_json/beast_json.hpp>
-#include <optional>
+#include <string>
 #include <string_view>
 #include <unordered_map>
-#include <vector>
 
 namespace draco {
 
@@ -31,7 +29,11 @@ inline Method string_to_method(std::string_view m) {
 }
 
 /**
- * @brief Zero-copy HTTP Request representation.
+ * @brief HTTP Request.
+ *
+ * Body is exposed as raw bytes via body(). JSON parsing is the application's
+ * responsibility — use your preferred library (beast_json, simdjson,
+ * nlohmann/json, …) directly on body(). See examples/coro_json.cpp.
  */
 class Request {
 public:
@@ -51,10 +53,10 @@ public:
     return (it != params_.end()) ? it->second : std::string_view{};
   }
 
-  // Setters for the parser/router
+  // Setters used by the parser / router
   void set_method(Method m) { method_ = m; }
-  void set_path(std::string_view p) { path_ = p; }
-  void set_body(std::string_view b) { body_ = b; }
+  void set_path(std::string_view p) { path_ = std::string(p); }
+  void set_body(std::string_view b) { body_ = std::string(b); }
   void add_header(std::string_view key, std::string_view value) {
     headers_[std::string(key)] = std::string(value);
   }
@@ -62,26 +64,12 @@ public:
     params_[std::string(key)] = std::string(value);
   }
 
-  /**
-   * @brief Access the request body as JSON.
-   * Returns an invalid Value{} if the body is empty or not valid JSON.
-   */
-  beast::Value json() const;
-
 private:
   Method method_ = Method::Unknown;
-  std::string path_; // Changed from std::string_view
-  std::string body_; // Changed from std::string_view
-  std::unordered_map<std::string, std::string>
-      headers_; // Changed from std::vector<std::pair<std::string_view,
-                // std::string_view>>
-  std::unordered_map<std::string, std::string>
-      params_; // Changed from std::unordered_map<std::string_view,
-               // std::string_view>
-
-  // Cached JSON view (mutable to allow lazy init from const json())
-  mutable beast::Document json_doc_;
-  mutable std::optional<beast::Value> cached_json_;
+  std::string path_;
+  std::string body_;
+  std::unordered_map<std::string, std::string> headers_;
+  std::unordered_map<std::string, std::string> params_;
 };
 
 } // namespace draco
