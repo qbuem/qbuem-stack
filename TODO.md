@@ -321,21 +321,7 @@ Draco WAS is a C++23 ultra-low latency Web Application Server designed for extre
 
 ---
 
-## 🔵 Phase 16: 배포 & 패키지 지원
-
-- [ ] `[Common]` **vcpkg 포팅** — `vcpkg.json` + portfile 작성 및 upstream 제출
-- [ ] `[Common]` **Conan 레시피** — `conanfile.py` 작성
-- [ ] `[Common]` **`pkg-config` 지원** — `draco.pc` 생성 (CMake install 시 자동)
-- [ ] `[Common]` **CMake `find_package(draco)` 지원** — `DracoConfig.cmake` 패키지 파일
-- [ ] `[Linux]`  **`.deb` 패키지** — Debian/Ubuntu 배포용 패키지 빌드
-- [ ] `[Linux]`  **`.rpm` 패키지** — Fedora/RHEL 배포용 패키지 빌드
-- [ ] `[macOS]`  **Homebrew Formula** — `homebrew-draco` tap 작성
-- [ ] `[Common]` **Docker 이미지** — `ghcr.io/lkb/draco-was:latest` (builder + runtime)
-- [ ] `[Common]` **SemVer 릴리스 자동화** — 태그 기반 GitHub Release + CHANGELOG 생성
-
----
-
-## 🔵 Phase 17: 문서화 & DX (Developer Experience)
+## 🔵 Phase 16: 문서화 & DX (Developer Experience)
 
 - [ ] `[Common]` **API 레퍼런스 문서** — Doxygen + GitHub Pages 자동 배포
 - [ ] `[Common]` **Getting Started 가이드** — 5분 안에 Hello World 실행
@@ -370,8 +356,7 @@ Draco WAS is a C++23 ultra-low latency Web Application Server designed for extre
 | **13** | URL / Request 유틸리티 | Common | 🟡 Medium |
 | **14** | 성능 & 벤치마킹 | Common + Linux + macOS | 🟡 Medium |
 | **15** | 테스트 & CI/CD | Common + Linux + macOS | 🟡 Medium |
-| **16** | 패키지 배포 (vcpkg, Homebrew, deb, rpm) | Common + Linux + macOS | 🟢 Low |
-| **17** | 문서화 & DX | Common | 🟢 Low |
+| **16** | 문서화 & DX | Common | 🟢 Low |
 
 ---
 
