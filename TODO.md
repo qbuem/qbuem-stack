@@ -924,6 +924,154 @@ Draco WAS는 **Zero Latency · Zero Cost · Low Memory · Low CPU** 를 4대 핵
 
 ---
 
+## 🔴 Phase 30: 외부 의존성 관리 & 빌드 시스템 통합
+
+> 목표: 모든 외부 의존성을 FetchContent / find_package / vcpkg 로 **버전 고정 + 라이선스 검증 + optional 처리** 완료
+
+### 의존성 전체 목록 & CMake 통합 계획
+
+> 표기: ✅ 완료 | 🔧 `FetchContent` | 🔍 `find_package` | 📦 `vcpkg/conan` | ⚠️ 주의사항
+
+#### 🟥 필수 의존성 (always required)
+
+| 라이브러리 | 최소 버전 | 라이선스 | 통합 방법 | 사용처 | 비고 |
+|-----------|---------|---------|---------|-------|------|
+| **Boost.JSON** (Beast JSON) | 1.85+ | BSL-1.0 | 🔧 FetchContent ✅ | HTTP JSON 파싱 | 이미 통합 완료 |
+| **GoogleTest** | 1.14+ | BSD-3 | 🔧 FetchContent ✅ | 단위/통합 테스트 | 이미 통합 완료 |
+| **zlib** | 1.3+ | zlib/libpng | 🔍 `find_package(ZLIB)` | gzip 압축(Phase 8), 로그 아카이브(Phase 24) | 거의 모든 시스템에 존재 |
+
+#### 🟧 조건부 필수 의존성 (feature flag로 제어)
+
+| 라이브러리 | 최소 버전 | 라이선스 | 통합 방법 | 사용처 | CMake 옵션 |
+|-----------|---------|---------|---------|-------|-----------|
+| **liburing** | 2.5+ | LGPL-2.1 | 🔍 `find_package(Liburing)` [Linux] | io_uring Reactor (Phase 5) | `DRACO_USE_IO_URING=ON` |
+| **OpenSSL** | 3.0+ | Apache-2.0 | 🔍 `find_package(OpenSSL 3.0)` | TLS(Phase 10), crypto util(Phase 27) | `DRACO_USE_TLS=ON` |
+| **nghttp2** | 1.61+ | MIT | 🔧 FetchContent or 🔍 find_package | HTTP/2 (Phase 11) | `DRACO_USE_HTTP2=ON` |
+| **protobuf** | 26+ | BSD-3 | 🔧 FetchContent or 📦 vcpkg | gRPC(Phase 15), MessagePack 대안 | `DRACO_USE_GRPC=ON` |
+| **libpq** | 16+ | PostgreSQL(BSD-like) | 🔍 `find_package(PostgreSQL)` | PostgreSQL 드라이버(Phase 23) | `DRACO_USE_DB_POSTGRES=ON` |
+| **libmariadb** | 3.3+ | LGPL-2.1 | 🔍 `find_package(libmariadb)` | MySQL/MariaDB 드라이버(Phase 23) | `DRACO_USE_DB_MYSQL=ON` |
+| **sqlite3** | 3.45+ | Public Domain | 🔧 FetchContent (amalgamation) | SQLite 드라이버(Phase 23) | `DRACO_USE_DB_SQLITE=ON` |
+| **librdkafka** | 2.4+ | BSD-2 | 🔧 FetchContent or 📦 vcpkg | Kafka 드라이버(Phase 25) | `DRACO_USE_KAFKA=ON` |
+| **opentelemetry-cpp** | 1.14+ | Apache-2.0 | 🔧 FetchContent or 📦 vcpkg | OTel 트레이싱(Phase 17) | `DRACO_USE_OTEL=ON` |
+| **brotli** | 1.1+ | MIT | 🔧 FetchContent | Brotli 압축(Phase 8) | `DRACO_USE_BROTLI=ON` |
+
+#### 🟨 헤더 전용 / 초경량 의존성 (항상 FetchContent로 번들)
+
+| 라이브러리 | 버전 | 라이선스 | 통합 방법 | 사용처 |
+|-----------|-----|---------|---------|-------|
+| **xxHash** | 0.8.2+ | BSD-2 | 🔧 FetchContent (단일 헤더) | 비암호 해시(Phase 27) |
+| **msgpack-cxx** | 6.1+ | BSL-1.0 | 🔧 FetchContent (헤더 전용) | MessagePack 직렬화(Phase 27) |
+| **tinycbor** | 0.6.0+ | MIT | 🔧 FetchContent | CBOR 직렬화(Phase 27) |
+| **nlohmann/json** | — | MIT | ❌ 불필요 | Beast JSON으로 대체 |
+
+#### 🟦 선택적 성능 의존성 (opt-in, 없어도 빌드 성공)
+
+| 라이브러리 | 버전 | 라이선스 | 통합 방법 | 사용처 | CMake 옵션 |
+|-----------|-----|---------|---------|-------|-----------|
+| **BoringSSL** | latest commit | BSD | git submodule + ExternalProject | OpenSSL 대안 TLS(Phase 10) | `DRACO_USE_BORINGSSL=ON` |
+| **jemalloc** | 5.3+ | BSD-2 | 🔍 find_package (optional) | 전역 allocator 교체(Phase 6) | `DRACO_USE_JEMALLOC=ON` |
+| **tcmalloc** (gperftools) | 2.15+ | BSD-3 | 🔍 find_package (optional) | 전역 allocator 교체(Phase 6) | `DRACO_USE_TCMALLOC=ON` |
+| **libnuma** | 2.0+ | LGPL-2.1 | 🔍 find_package [Linux] | NUMA 배치(Phase 16) | `DRACO_USE_NUMA=ON` |
+| **libbpf** | 1.3+ | LGPL-2.1 | 🔍 find_package [Linux] | AF_XDP(Phase 5) | `DRACO_USE_XDP=ON` |
+
+#### 🟪 HTTP/3 / QUIC 의존성 (별도 빌드 파이프라인 필요)
+
+| 라이브러리 | 버전 | 라이선스 | 통합 방법 | 주의사항 |
+|-----------|-----|---------|---------|---------|
+| **msquic** | 2.4+ | MIT | 🔧 FetchContent (CMake 지원) | `DRACO_USE_QUIC_MSQUIC=ON` |
+| **quiche** (Cloudflare) | latest | BSD-2 | ExternalProject + cargo | Rust 툴체인 필요 — CI에 `rustup` 추가 |
+| **lsquic** (LiteSpeed) | 4.0+ | MIT | 🔧 FetchContent | msquic 보다 C 친화적 |
+
+> HTTP/3 기본값: `msquic` (순수 C, CMake 지원). `quiche`는 Rust 필요 → 선택적 대안.
+
+### CMake 빌드 시스템 통합 작업
+
+- [ ] `[Common]` **`cmake/FindLiburing.cmake`** — liburing custom finder (pkg-config 없을 때 대비)
+- [ ] `[Common]` **`cmake/deps/core.cmake`** — 필수 의존성 FetchContent 선언 (Boost.JSON, GTest)
+- [ ] `[Common]` **`cmake/deps/optional.cmake`** — 선택 의존성 find_package + FetchContent fallback
+- [ ] `[Common]` **`cmake/deps/drivers.cmake`** — DB/Kafka 드라이버 per-flag 조건부 로드
+- [ ] `[Common]` **`cmake/deps/perf.cmake`** — jemalloc / tcmalloc / BOLT 조건부 설정
+- [ ] `[Common]` **버전 고정 전략**
+  - [ ] FetchContent: `GIT_TAG` 로 SHA 고정 (branch 금지)
+  - [ ] find_package: `VERSION 3.0 REQUIRED` 최소 버전 명시
+  - [ ] vcpkg baseline: `vcpkg.json` + `builtin-baseline` SHA 고정
+- [ ] `[Common]` **`vcpkg.json` 매니페스트 작성** — vcpkg 사용자 지원
+  ```json
+  {
+    "name": "draco-was",
+    "version": "0.2.0",
+    "dependencies": [
+      { "name": "openssl", "version>=": "3.0" },
+      { "name": "nghttp2" },
+      { "name": "protobuf" },
+      { "name": "librdkafka" },
+      { "name": "opentelemetry-cpp" }
+    ],
+    "features": {
+      "postgres": { "description": "PostgreSQL driver", "dependencies": ["libpq"] },
+      "mysql":    { "description": "MySQL driver",    "dependencies": ["libmariadb"] },
+      "sqlite":   { "description": "SQLite driver",   "dependencies": ["sqlite3"] },
+      "kafka":    { "description": "Kafka driver",    "dependencies": ["librdkafka"] }
+    }
+  }
+  ```
+- [ ] `[Common]` **`cmake/DracoFeatures.cmake`** — 활성 feature 목록 출력 (`cmake --preset release -LAH` 용)
+- [ ] `[Common]` **CMake Presets** (`CMakePresets.json`)
+  - [ ] `debug` — ASan + UBSan, no LTO
+  - [ ] `release` — `-O3 -march=native`, LTO=thin
+  - [ ] `sanitize-thread` — TSan
+  - [ ] `sanitize-mem` — MSan
+  - [ ] `pgo-instrument` — PGO 1차 계측 빌드
+  - [ ] `pgo-optimize` — PGO 2차 최적화 빌드
+  - [ ] `benchmark` — `-O3 -march=native -DNDEBUG`, no sanitizers
+
+### 라이선스 호환성 검증
+
+- [ ] `[Common]` **라이선스 호환성 매트릭스 문서화** (`LICENSES.md`)
+  - [ ] LGPL-2.1 라이브러리 (liburing, libmariadb, libnuma, libbpf) — **동적 링크 권장**
+    - 정적 링크 시 사용자에게 재링크 허용 필요 (LGPL 조항)
+    - CMake: `set_target_properties(draco_db_mysql PROPERTIES POSITION_INDEPENDENT_CODE ON)` + SHARED 권장
+  - [ ] GPL 라이브러리 — **사용 금지** (wrk/perf는 런타임 도구, 링크 안 함)
+  - [ ] Apache-2.0 (OpenSSL 3.x, OTel) — MIT/BSD Draco와 호환
+  - [ ] Public Domain (sqlite3) — 제한 없음
+  - [ ] Rust 라이브러리 (quiche) — MIT/Apache-2.0 듀얼 라이선스, FFI 바인딩 → 호환
+- [ ] `[Common]` **`scripts/check_licenses.sh`** — CMake FetchContent 소스 대상 라이선스 헤더 자동 검사
+- [ ] `[Common]` **CI 라이선스 게이트** — GitHub Actions에서 `reuse lint` 실행, 라이선스 위반 시 PR 차단
+
+### 빌드 환경 요구사항 문서화
+
+- [ ] `[Common]` **시스템 패키지 설치 가이드** (`docs/build-deps.md`)
+  ```bash
+  # Ubuntu 24.04
+  apt install -y \
+    liburing-dev          \  # io_uring (Phase 5)
+    libssl-dev            \  # OpenSSL (Phase 10)
+    libpq-dev             \  # PostgreSQL (Phase 23)
+    libmariadb-dev        \  # MySQL/MariaDB (Phase 23)
+    librdkafka-dev        \  # Kafka (Phase 25)
+    libnuma-dev           \  # NUMA (Phase 16)
+    libbpf-dev xdp-tools  \  # AF_XDP (Phase 5)
+    zlib1g-dev            \  # gzip (Phase 8)
+    libbrotli-dev         \  # Brotli (Phase 8)
+    valgrind              \  # 메모리 검사 (Phase 20)
+    lcov                     # Coverage (Phase 20)
+  ```
+  ```bash
+  # macOS (Homebrew)
+  brew install openssl@3 nghttp2 protobuf librdkafka sqlite zlib brotli
+  ```
+- [ ] `[Common]` **Docker 개발 컨테이너** (`devcontainer/Dockerfile`) — 모든 의존성 사전 설치된 Ubuntu 24.04 이미지
+- [ ] `[Common]` **GitHub Actions `setup-deps` 재사용 워크플로** — 매트릭스별 의존성 캐싱 (`actions/cache` + `ccache`)
+
+### 의존성 보안 & 업데이트 관리
+
+- [ ] `[Common]` **Dependabot 설정** (`.github/dependabot.yml`) — vcpkg / GitHub Actions 자동 업데이트 PR
+- [ ] `[Common]` **CVE 스캔** — `trivy` 또는 `grype` 로 의존성 취약점 주간 스캔 (GitHub Actions scheduled)
+- [ ] `[Common]` **FetchContent SHA 자동 갱신 스크립트** (`scripts/update_deps.sh`)
+  - 각 라이브러리 latest release tag → SHA 갱신 → PR 생성
+
+---
+
 ## 📌 Phase 우선순위 요약
 
 | Phase | 핵심 내용 | 플랫폼 | 중요도 |
@@ -953,6 +1101,7 @@ Draco WAS는 **Zero Latency · Zero Cost · Low Memory · Low CPU** 를 4대 핵
 | **27** | WAS 공용 유틸리티 (UUID, SIMD Base64, HMAC, Result<T,E>, Msgpack) | Common | 🟠 High |
 | **28** | 고급 동시성 (Channel, WaitGroup, Select, SPSC/MPSC, AtomicHashMap) | Common | 🟡 Medium |
 | **29** | 최대 동시접속 & 수평 확장 (Admission Control, Cluster, K8s probe, 서비스 디스커버리) | Common + Linux | 🟡 Medium |
+| **30** | 외부 의존성 관리 (FetchContent/vcpkg 버전 고정, LGPL 동적 링크, CVE 스캔, devcontainer) | Common | 🔴 Critical |
 
 ---
 
