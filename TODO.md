@@ -511,6 +511,419 @@ Draco WAS는 **Zero Latency · Zero Cost · Low Memory · Low CPU** 를 4대 핵
 
 ---
 
+## 🟠 Phase 22: SOLID 설계 원칙 & 확장 인터페이스
+
+> 목표: Draco 전체 확장 포인트를 SOLID 원칙으로 설계 — 코어 수정 없이 드라이버/플러그인 추가 가능
+
+### 인터페이스 분리 원칙 (ISP) — 작고 집중된 인터페이스
+
+- [ ] `[Common]` **`IReadable`** / **`IWritable`** — I/O 역할 분리 (읽기·쓰기 독립 인터페이스)
+- [ ] `[Common]` **`IDbReader`** — `co_await query(sql, params)` 만 노출
+- [ ] `[Common]` **`IDbWriter`** — `co_await execute(sql, params)` 만 노출
+- [ ] `[Common]` **`IDbPool`** — `co_await acquire()` / `release()` 만 노출
+- [ ] `[Common]` **`ILogSink`** — `write(LogRecord)` / `flush()` 만 노출
+- [ ] `[Common]` **`ILogFormatter`** — `format(LogRecord) → string_view` 만 노출
+- [ ] `[Common]` **`ICacheReader`** — `co_await get(key)` 만 노출
+- [ ] `[Common]` **`ICacheWriter`** — `co_await set(key, value, ttl)` 만 노출
+- [ ] `[Common]` **`IPublisher`** — `co_await publish(topic, message)` 만 노출
+- [ ] `[Common]` **`ISubscriber`** — `co_await subscribe(topic)` 만 노출
+- [ ] `[Common]` **`ISerializer`** — `serialize(T) → bytes` / `deserialize<T>(bytes)` 만 노출
+- [ ] `[Common]` **`IHealthCheck`** — `co_await ping() → bool` 만 노출
+
+### 의존성 역전 원칙 (DIP) — 추상에 의존, 구현체에 미의존
+
+- [ ] `[Common]` **의존성 주입 컨테이너 (`draco::Container`)** — 런타임 DI 지원
+  - [ ] `container.bind<IDbPool>(PostgresPool::create(config))`
+  - [ ] `container.bind<ICache>(RedisCache::create(config))`
+  - [ ] `container.resolve<IDbPool>()` → 등록된 구현체 반환
+  - [ ] 스코프 지원: Singleton / PerRequest / Transient
+- [ ] `[Common]` **핸들러 DI 자동 주입** — 라우트 핸들러 파라미터로 추상 인터페이스 주입
+  ```cpp
+  app.get("/users", [](Request& req, Response& res,
+                       IDbPool& db, ICache& cache) -> Task<void> { ... });
+  ```
+
+### 개방-폐쇄 원칙 (OCP) — 확장에 열리고 수정에 닫혀 있음
+
+- [ ] `[Common]` **드라이버 레지스트리** — `DriverRegistry::register<IDbPool>("postgres", factory)` 패턴
+- [ ] `[Common]` **플러그인 로더** — 동적 `.so` / `.dylib` 드라이버 로드 (선택적)
+- [ ] `[Common]` **미들웨어 플러그인** — 써드파티 미들웨어 CMake 타겟으로 독립 배포 가능
+
+### 단일 책임 원칙 (SRP) — 모듈 경계 정의
+
+- [ ] `[Common]` **CMake 모듈 분리**
+  ```
+  draco::core        — Reactor, Dispatcher, Coroutine
+  draco::http        — Parser, Router, Request/Response
+  draco::tls         — TLS 추상 레이어
+  draco::db          — DB 추상화 인터페이스만 (드라이버 미포함)
+  draco::log         — 로깅 인터페이스 + 내장 구현체
+  draco::cache       — 캐시 인터페이스만
+  draco::queue       — 메시지 큐 인터페이스만
+  draco::util        — 공용 유틸리티 (uuid, hash, base64 등)
+  draco::concurrency — Channel, WaitGroup, Select 등
+  draco::metrics     — Prometheus, OTel (Phase 17)
+  draco::di          — 의존성 주입 컨테이너
+  ```
+
+---
+
+## 🟠 Phase 23: DB 추상화 레이어 & 드라이버
+
+> 목표: WAS 차원에서 공용 DB 인터페이스 제공 — 실제 드라이버는 별도 CMake 타겟, 프로젝트에서 선택 탑재
+
+### 핵심 추상화 (`draco/db/`)
+
+- [ ] `[Common]` **`DbParams`** — 타입 안전 바인드 파라미터 (`std::variant<int64_t, double, std::string, std::vector<uint8_t>, std::nullptr_t>`)
+- [ ] `[Common]` **`IDbResult`** 인터페이스
+  - [ ] `bool next()` — 다음 행으로 이동
+  - [ ] `get<T>(int col)` / `get<T>(string_view name)` — 타입 안전 컬럼 조회
+  - [ ] `column_count()` / `column_name(int)` — 메타데이터
+  - [ ] `rows_affected()` — DML 결과 행 수
+- [ ] `[Common]` **`IDbConnection`** 인터페이스
+  - [ ] `co_await query(sql, params) → IDbResult::Ptr`
+  - [ ] `co_await execute(sql, params) → uint64_t` (affected rows)
+  - [ ] `co_await prepare(sql) → IDbStatement::Ptr` — 재사용 가능 prepared statement
+  - [ ] `co_await begin() → IDbTransaction::Ptr`
+- [ ] `[Common]` **`IDbTransaction`** 인터페이스
+  - [ ] `co_await commit()` / `co_await rollback()`
+  - [ ] RAII: 소멸자에서 자동 rollback
+- [ ] `[Common]` **`IDbPool`** 인터페이스
+  - [ ] `co_await acquire() → PooledConnection` (RAII wrapper, 소멸 시 자동 반환)
+  - [ ] `size()` / `idle_count()` / `waiting_count()` — 풀 상태 조회
+- [ ] `[Common]` **제네릭 `AsyncPool<T>`** — DB 외 Redis 등에도 재사용 가능한 커넥션 풀 템플릿
+  - [ ] per-reactor 파티션 풀 (lock-free per shard)
+  - [ ] Idle timeout / Max connection lifetime
+  - [ ] Health check (ping before use)
+  - [ ] Circuit breaker 연동 (Phase 26)
+  - [ ] Backpressure: 풀 소진 시 `co_await` 대기 or timeout
+
+### 드라이버 구현체 (별도 CMake 타겟 `draco::db_<name>`)
+
+- [ ] `[Common]` **`draco::db_postgres`** — PostgreSQL 비동기 드라이버
+  - [ ] `libpq` non-blocking API (`PQsendQuery` + `PQconsumeInput`) 기반
+  - [ ] io_uring / kqueue 이벤트와 연동 (socket FD 직접 등록)
+  - [ ] COPY 프로토콜 지원 (bulk insert)
+  - [ ] `NOTIFY` / `LISTEN` 비동기 알림 수신
+  - [ ] SSL/TLS 연결 지원
+- [ ] `[Common]` **`draco::db_mysql`** — MySQL / MariaDB 드라이버
+  - [ ] MariaDB C Connector 비동기 모드
+  - [ ] Prepared statement 서버사이드 캐싱
+- [ ] `[Common]` **`draco::db_sqlite`** — SQLite 드라이버
+  - [ ] 블로킹 SQLite API → Draco thread pool offload (`AsyncTask`)
+  - [ ] WAL 모드 자동 활성화 (동시 읽기 성능)
+  - [ ] In-memory DB 지원 (테스트용)
+- [ ] `[Common]` **`draco::db_redis`** — Redis RESP3 프로토콜 드라이버
+  - [ ] 완전 비동기 RESP3 파서 (co_await)
+  - [ ] Pipeline 모드 (배치 커맨드)
+  - [ ] Pub/Sub 채널 (ISubscriber 구현)
+  - [ ] Cluster 모드 (슬롯 기반 라우팅)
+  - [ ] Sentinel 모드 (failover 자동 추적)
+
+### 편의 API
+
+- [ ] `[Common]` **`draco::db::scope`** — RAII 연결 스코프 헬퍼
+  ```cpp
+  auto conn = co_await db.acquire();
+  auto result = co_await conn->query("SELECT ...", {user_id});
+  while (result->next()) { ... }
+  // 스코프 종료 시 자동 release
+  ```
+- [ ] `[Common]` **`draco::db::transaction`** — 람다 기반 트랜잭션 헬퍼
+  ```cpp
+  co_await draco::db::transaction(pool, [](auto& tx) -> Task<void> {
+      co_await tx.execute("INSERT ...", {...});
+      co_await tx.execute("UPDATE ...", {...});
+  }); // 예외 시 자동 rollback
+  ```
+- [ ] `[Common]` **마이그레이션 러너** — `migrations/001_init.sql` 순차 실행 + 버전 추적
+
+---
+
+## 🟠 Phase 24: 로깅 시스템 심화
+
+> 목표: 핫 패스에서 I/O 없는 비동기 로거 — `ILogSink` 교체만으로 출력 대상 변경
+
+### 로거 코어 (`draco/log/`)
+
+- [ ] `[Common]` **로그 레벨** — `TRACE < DEBUG < INFO < WARN < ERROR < FATAL`
+- [ ] `[Common]` **`LogRecord`** — 구조체 (timestamp, level, logger_name, message, key-value pairs, source_location)
+- [ ] `[Common]` **`draco::Logger`** — 비동기 front-end (hot path에서 ring-buffer enqueue만)
+  - [ ] `log.info("user logged in", {{"user_id", id}, {"ip", ip}})` API
+  - [ ] `log.error("db failed", {{"sql", sql}, {"error", e.what()}})` API
+  - [ ] 로그 레벨 런타임 변경 (atomic)
+  - [ ] 네임드 로거 계층 (`log.child("db")`, `log.child("http")`)
+- [ ] `[Common]` **비동기 링 버퍼** — SPSC 링 버퍼로 핫 패스와 I/O 스레드 분리
+  - [ ] 링 버퍼 포화 시 드롭 or 블로킹 선택 (configurable)
+  - [ ] 백그라운드 flush 스레드 (전용 코어 핀 가능)
+
+### 포매터 (`ILogFormatter`)
+
+- [ ] `[Common]` **`TextFormatter`** — `[2025-03-10 12:00:00.123] [INFO] message key=value`
+- [ ] `[Common]` **`JsonFormatter`** — `{"ts":..,"level":"INFO","msg":..,"user_id":..}`
+- [ ] `[Common]` **`LogfmtFormatter`** — `ts=... level=INFO msg=... user_id=...`
+
+### 싱크 (`ILogSink`)
+
+- [ ] `[Common]` **`ConsoleSink`** — stdout/stderr, ANSI 컬러 레벨 표시
+- [ ] `[Common]` **`FileSink`** — O_APPEND 파일 쓰기
+  - [ ] **로그 로테이션** — 크기 기반 (`max_size`) + 시간 기반 (`daily`) 자동 rotate
+  - [ ] 압축 아카이브 (gzip)
+  - [ ] 최대 보관 파일 수 설정
+- [ ] `[Linux]`  **`SyslogSink`** — `openlog` / `syslog(3)` 연동
+- [ ] `[Common]` **`NetworkSink`** — UDP/TCP로 로그 집계 서버 전송
+  - [ ] Loki HTTP API 호환 출력 (JSON labels + log stream)
+  - [ ] Fluentd Forward 프로토콜 지원
+  - [ ] 전송 실패 시 로컬 파일로 fallback
+- [ ] `[Common]` **`MultiSink`** — 복수 싱크 동시 출력 (Fan-out)
+- [ ] `[Common]` **`SampledSink`** — 고빈도 로그 샘플링 (1/N 비율 기록, 오버헤드 억제)
+- [ ] `[Common]` **`NullSink`** — 테스트/벤치마크용 `/dev/null` 등가
+
+---
+
+## 🟠 Phase 25: 캐시 & 메시지 브로커 추상화
+
+> 목표: `ICache` / `IQueue` 인터페이스 기반 — 인메모리 ↔ Redis ↔ Kafka 교체 가능
+
+### 캐시 (`draco/cache/`)
+
+- [ ] `[Common]` **`ICache`** 인터페이스
+  - [ ] `co_await get(key) → optional<string>`
+  - [ ] `co_await set(key, value, ttl)` / `co_await del(key)`
+  - [ ] `co_await exists(key) → bool`
+  - [ ] `co_await incr(key) → int64_t` — atomic increment (rate limiting 활용)
+  - [ ] `co_await mget(keys) → map<string, optional<string>>` — multi-key 조회
+- [ ] `[Common]` **`LruCache`** — 인프로세스 LRU 캐시
+  - [ ] 샤딩 (`N` shard, 각 shard 독립 mutex) — lock contention 최소화
+  - [ ] 메모리 한도 (`max_bytes`) 설정 — LRU eviction
+  - [ ] TTL 지원 (lazy expiry)
+  - [ ] `ICache` 인터페이스 구현
+- [ ] `[Common]` **`RedisCache`** — Phase 23 `draco::db_redis` 기반 캐시 어댑터
+- [ ] `[Common]` **`TwoLevelCache`** — L1(인메모리) + L2(Redis) 계층 캐시 자동 fill
+
+### 메시지 브로커 (`draco/queue/`)
+
+- [ ] `[Common]` **`IPublisher`** / **`ISubscriber`** 인터페이스
+- [ ] `[Common]` **`InMemoryBus`** — 인프로세스 Pub/Sub
+  - [ ] lock-free MPMC 링 버퍼 기반
+  - [ ] 토픽 와일드카드 (`events.*`)
+  - [ ] 백프레셔: 구독자 처리 지연 시 publisher 일시 정지
+- [ ] `[Common]` **`RedisPubSub`** — Redis Pub/Sub 어댑터 (Phase 23 드라이버 활용)
+- [ ] `[Common]` **`KafkaDriver`** (`draco::queue_kafka`) — librdkafka 기반
+  - [ ] `IPublisher` 구현 (exactly-once semantics 옵션)
+  - [ ] `ISubscriber` 구현 (consumer group, offset commit)
+  - [ ] 배치 전송 (linger.ms 설정)
+- [ ] `[Common]` **`ITaskQueue`** — 백그라운드 작업 큐 인터페이스
+  - [ ] `co_await queue.enqueue(job)` — 작업 예약
+  - [ ] 재시도 정책 (최대 횟수, 지수 백오프)
+  - [ ] 작업 우선순위 (priority queue)
+  - [ ] Dead-letter queue (실패 작업 보관)
+
+---
+
+## 🟠 Phase 26: 제네릭 커넥션 풀 & 서킷 브레이커
+
+> 목표: DB·Redis·외부 API 등 모든 외부 자원에 재사용 가능한 복원력 패턴
+
+### 제네릭 커넥션 풀 (`draco/pool/`)
+
+- [ ] `[Common]` **`AsyncPool<T, Factory>`** 템플릿
+  - [ ] `Factory` — `co_await create() → T`, `co_await destroy(T)`, `co_await validate(T) → bool`
+  - [ ] Min/Max 크기, Idle timeout, Max lifetime 설정
+  - [ ] 풀 소진 시 대기 큐 (`co_await acquire()` — 연결 가용 시 재개)
+  - [ ] 대기 timeout (`co_await acquire_for(5s)`)
+  - [ ] Per-reactor 분산 풀 (phase 22 Container 통합)
+- [ ] `[Common]` **`PooledResource<T>`** — RAII 래퍼 (소멸 시 자동 release 또는 destroy)
+- [ ] `[Common]` **풀 메트릭 익스포트** — Prometheus gauge (active, idle, waiting, created, destroyed)
+
+### 서킷 브레이커 (`draco/resilience/`)
+
+- [ ] `[Common]` **`CircuitBreaker`** — 3-state 상태 기계
+  - [ ] Closed (정상) → Open (차단) → Half-Open (탐지) 전환
+  - [ ] 실패율 임계치 설정 (`failure_rate_threshold`)
+  - [ ] Open → Half-Open 대기 시간 (`recovery_timeout`)
+  - [ ] Half-Open 성공 횟수 → Closed 복귀 (`success_threshold`)
+  - [ ] `co_await breaker.call(fn)` — 차단 시 `CircuitOpenError` 즉시 반환
+- [ ] `[Common]` **`RetryPolicy`** — 재시도 정책
+  - [ ] 최대 횟수 (`max_attempts`)
+  - [ ] 지수 백오프 + Jitter (`base_delay`, `max_delay`)
+  - [ ] 재시도 가능 에러 필터 (`retryable_errors`)
+  - [ ] `co_await retry(policy, fn)` 헬퍼
+- [ ] `[Common]` **`Bulkhead`** — 동시 실행 수 제한 (세마포어 기반)
+  - [ ] DB 쿼리 동시 실행 최대 N개 제한
+  - [ ] 초과 시 `co_await` 대기 or `BulkheadFullError` 즉시 반환 선택
+- [ ] `[Common]` **`Timeout`** 컴비네이터 — `co_await draco::with_timeout(task, 3s)` 글로벌 헬퍼
+
+---
+
+## 🟡 Phase 27: WAS 공용 유틸리티 라이브러리
+
+> 목표: 핫 패스에서 heap 할당 없이 사용 가능한 고성능 유틸리티 (`draco/util/`)
+
+### 고유 식별자
+
+- [ ] `[Common]` **`draco::uuid::v4()`** — CSPRNG 기반 RFC 4122 UUID (no heap)
+- [ ] `[Common]` **`draco::uuid::v7()`** — 시간 정렬 UUID v7 (단조 증가, DB 인덱스 친화)
+- [ ] `[Common]` **`draco::uuid::to_string(uuid)`** — 하이픈 포맷 변환 (stack buffer)
+
+### 인코딩 / 해시
+
+- [ ] `[Common]` **`draco::base64::encode/decode`** — SIMD(AVX2/NEON) 가속 Base64
+- [ ] `[Common]` **`draco::hex::encode/decode`** — 이진 ↔ 16진수 변환 (look-up table)
+- [ ] `[Common]` **`draco::hash::xxhash64(data)`** — 비암호 초고속 해시 (라우팅, 샤딩)
+- [ ] `[Common]` **`draco::hash::fnv1a(data)`** — 컴파일 타임 상수 해시 (`constexpr`)
+
+### 암호 유틸리티
+
+- [ ] `[Common]` **`draco::crypto::sha256(data)`** — OpenSSL/BoringSSL SHA-256
+- [ ] `[Common]` **`draco::crypto::hmac_sha256(key, data)`** — HMAC-SHA256 (JWT, Webhook 서명)
+- [ ] `[Common]` **`draco::crypto::bcrypt(password, cost)`** — 패스워드 해싱 (thread pool offload)
+- [ ] `[Common]` **`draco::crypto::constant_time_eq(a, b)`** — timing attack 방지 비교
+- [ ] `[Common]` **`draco::crypto::random_bytes(n)`** — CSPRNG (`getrandom`/`arc4random`)
+
+### 시간 & 날짜
+
+- [ ] `[Common]` **`draco::time::now_ns()`** — vDSO 기반 나노초 단조 시간 (syscall 없음)
+- [ ] `[Common]` **`draco::time::iso8601()`** — ISO 8601 포맷 (stack buffer, `strftime` 미사용)
+- [ ] `[Common]` **`draco::time::http_date()`** — HTTP `Date:` 헤더 포맷 (1초 단위 캐시)
+- [ ] `[Common]` **`draco::time::parse_http_date(str)`** — HTTP 날짜 문자열 → `time_point`
+
+### 직렬화 / 역직렬화
+
+- [ ] `[Common]` **Beast JSON** — 이미 통합 완료 (Phase 3)
+- [ ] `[Common]` **`draco::msgpack`** — MessagePack 직렬화 (`ISerializer` 구현)
+  - [ ] `msgpack::serialize(obj) → bytes` / `msgpack::deserialize<T>(bytes)`
+- [ ] `[Common]` **`draco::cbor`** — CBOR (RFC 8949) 직렬화 (IoT, CoAP 친화)
+- [ ] `[Common]` **`draco::csv`** — CSV 스트리밍 파서 (데이터 임포트용)
+
+### 검증
+
+- [ ] `[Common]` **`draco::validate::email(str)`** — RFC 5321 이메일 형식 검증
+- [ ] `[Common]` **`draco::validate::url(str)`** — URL 형식 검증
+- [ ] `[Common]` **`draco::validate::json_schema(json, schema)`** — JSON Schema Draft 7 lite
+- [ ] `[Common]` **`draco::validate::ip(str)`** — IPv4 / IPv6 형식 검증
+
+### 에러 처리 (예외 없는 패턴)
+
+- [ ] `[Common]` **`draco::Result<T, E>`** — `std::expected<T, E>` (C++23) 기반
+  - [ ] `.map(fn)` / `.and_then(fn)` / `.or_else(fn)` 체이닝
+  - [ ] `DRACO_TRY(expr)` — `co_await` 없이 Result 전파 매크로
+- [ ] `[Common]` **`draco::Error`** — `std::error_code` 기반 도메인 에러 (heap 미사용)
+- [ ] `[Common]` **에러 도메인 정의** — `draco::db_error_category`, `draco::http_error_category` 등
+
+### 문자열 유틸리티
+
+- [ ] `[Common]` **`draco::str::split(sv, delim)`** — `string_view` 기반 zero-copy 분할
+- [ ] `[Common]` **`draco::str::trim(sv)`** — 앞뒤 공백 제거 (복사 없음)
+- [ ] `[Common]` **`draco::str::to_lower/to_upper(sv)`** — ASCII 범위 제자리 변환
+- [ ] `[Common]` **`draco::str::starts_with / ends_with / contains`** — C++23 보완
+- [ ] `[Common]` **`draco::str::format(fmt, args...)`** — `std::format` (C++23) 래퍼
+
+### 템플릿 엔진 (선택적)
+
+- [ ] `[Common]` **`draco::template::render(tmpl, vars)`** — Mustache `{{key}}` 치환
+  - [ ] `{{#section}}` 조건부 블록 / `{{#list}}` 반복 블록
+  - [ ] 컴파일 타임 템플릿 파싱 (`consteval`)
+  - [ ] HTML escape 자동 처리 (XSS 방지)
+
+---
+
+## 🟡 Phase 28: 고급 동시성 프리미티브
+
+> 목표: `co_await` 기반 Go-style 동시성 — lock-free, zero-heap 프리미티브
+
+### 비동기 채널 (`draco/concurrency/`)
+
+- [ ] `[Common]` **`draco::Channel<T, N>`** — bounded SPSC 채널 (N=0이면 unbounded MPSC)
+  - [ ] `co_await ch.send(value)` — 버퍼 포화 시 coroutine 일시 정지
+  - [ ] `co_await ch.recv() → optional<T>` — 빈 채널 시 일시 정지
+  - [ ] `ch.close()` — 채널 닫기 (수신자 `nullopt` 반환)
+  - [ ] lock-free ring buffer 내부 구현
+
+### Fan-out / Fan-in
+
+- [ ] `[Common]` **`draco::WaitGroup`** — Go `sync.WaitGroup` 등가
+  - [ ] `wg.add(n)` / `wg.done()` / `co_await wg.wait()`
+  - [ ] 여러 coroutine 완료 대기
+- [ ] `[Common]` **`draco::select(awaiters...)`** — 가장 먼저 완료되는 awaiter 선택
+  - [ ] `auto [idx, val] = co_await draco::select(ch1.recv(), ch2.recv(), timer)`
+- [ ] `[Common]` **`draco::gather(tasks...)`** — 모든 coroutine 완료 후 결과 튜플 반환
+  - [ ] `auto [a, b, c] = co_await draco::gather(task_a, task_b, task_c)`
+- [ ] `[Common]` **`draco::race(tasks...)`** — 가장 빠른 하나만 취하고 나머지 취소
+
+### 취소 & 타임아웃
+
+- [ ] `[Common]` **`draco::CancellationToken`** — 협력적 취소
+  - [ ] `token.cancel()` → 대상 coroutine에 취소 신호
+  - [ ] `co_await token.wait()` — 취소 대기
+  - [ ] `token.is_cancelled()` — 폴링
+- [ ] `[Common]` **`draco::with_timeout(task, duration)`** — deadline 초과 시 자동 취소
+- [ ] `[Common]` **`draco::with_cancel(task, token)`** — 외부 토큰 기반 취소
+
+### 동기화 프리미티브
+
+- [ ] `[Common]` **`draco::AsyncSemaphore`** — `co_await sem.acquire()` / `sem.release()`
+  - [ ] DB 동시 쿼리 수 제한, 파일 동시 쓰기 수 제한 등 활용
+- [ ] `[Common]` **`draco::AsyncMutex`** — `co_await mutex.lock()` / `mutex.unlock()`
+  - [ ] 코루틴 컨텍스트에서 안전한 상호 배제 (OS mutex보다 가벼움)
+- [ ] `[Common]` **`draco::AsyncRwLock`** — 다중 읽기 / 단일 쓰기 lock (`co_await rw.read_lock()`)
+- [ ] `[Common]` **`draco::Once`** — 한 번만 실행 보장 (`co_await once.do_once(fn)`)
+
+### Lock-free 자료구조
+
+- [ ] `[Common]` **`draco::SPSC<T, N>`** — lock-free single-producer single-consumer 링 큐
+- [ ] `[Common]` **`draco::MPSC<T>`** — lock-free multi-producer single-consumer 큐 (io_uring 완료 큐)
+- [ ] `[Common]` **`draco::MPMC<T, N>`** — lock-free multi-producer multi-consumer 큐
+- [ ] `[Common]` **`draco::AtomicHashMap<K, V>`** — 읽기 lock-free 해시맵 (RCU 패턴)
+  - [ ] 라우팅 테이블, 세션 맵 등 읽기 다수 / 쓰기 희소 워크로드
+
+---
+
+## 🟡 Phase 29: 최대 동시접속 한계 & 수평 확장
+
+> 목표: 버티는 수준에서 최대 동시 접속 — OS 한도까지 쥐어짜고 초과 시 우아하게 거부
+
+### 동시접속 한계 최적화
+
+- [ ] `[Common]` **연결당 메모리 예산 분석 & 측정**
+  - [ ] `Connection` 구조체 크기 측정 (`sizeof` + cache-line padding)
+  - [ ] Arena per-connection 메모리 추적 (목표: < 1KB)
+  - [ ] 최대 연결 수 = `min(ulimit -n, available_mem / conn_budget)` 자동 계산
+- [ ] `[Common]` **Admission Control** — 허용 가능 연결 수 도달 시 신규 연결 즉시 503
+  - [ ] `503 Service Unavailable` + `Retry-After` 헤더 반환
+  - [ ] Accept 큐에서 드롭 (SYN 단계 거부 vs TCP 이후 거부 선택)
+  - [ ] `SO_RCVBUF` 조정으로 accept 큐 백프레셔
+- [ ] `[Linux]`  **`SO_REUSEPORT` + BPF 소켓 배분** — 다중 프로세스 accept, CPU 낭비 없음
+- [ ] `[Linux]`  **파일 디스크립터 한도 자동 조정** — `setrlimit(RLIMIT_NOFILE)` 시작 시 최대값 설정
+- [ ] `[Linux]`  **`net.core.somaxconn`** / **`net.ipv4.tcp_max_syn_backlog`** 튜닝 스크립트
+- [ ] `[Common]` **Graceful Degradation** — 메모리/CPU 임계치 초과 시 비필수 미들웨어 비활성화
+
+### 부하 측정 & 자동 조절
+
+- [ ] `[Common]` **실시간 부하 지표** — `active_connections`, `queue_depth`, `cpu_usage` 실시간 측정
+- [ ] `[Common]` **자동 backpressure 피드백** — 부하 지표 기반 Rate Limit 임계치 동적 조정
+- [ ] `[Common]` **슬로우 클라이언트 감지** — 읽기/쓰기 속도 < 임계치 연결 강제 종료
+- [ ] `[Common]` **요청 우선순위** — API 키 등급 기반 처리 우선순위 (`co_await` 재개 순서)
+
+### 클러스터 & 수평 확장
+
+- [ ] `[Common]` **멀티 프로세스 클러스터 모드**
+  - [ ] `SO_REUSEPORT` 기반 워커 프로세스 분산 (Nginx worker 방식)
+  - [ ] Master → Worker 시그널 기반 롤링 재시작 (Zero-downtime deploy)
+  - [ ] Worker 크래시 시 Master 자동 재시작
+- [ ] `[Common]` **헬스체크 & 로드밸런서 연동**
+  - [ ] `GET /health` — `{"status":"ok","connections":N,"uptime":T}` (상세 상태)
+  - [ ] `GET /ready` — 트래픽 수신 준비 여부 (DB 연결 등 체크)
+  - [ ] `GET /live` — 프로세스 생존 여부 (Kubernetes liveness probe)
+- [ ] `[Common]` **서비스 디스커버리 클라이언트**
+  - [ ] DNS SRV 레코드 주기적 갱신
+  - [ ] Kubernetes Endpoint Watch (kube API)
+  - [ ] Consul 헬스체크 등록 / 디스커버리
+- [ ] `[Common]` **일관된 해싱 (Consistent Hashing)** — Sticky session 라우팅 (Rendezvous hash)
+- [ ] `[Common]` **분산 Rate Limiting** — Redis `INCR` 기반 전역 카운터 (Phase 25 RedisCache 활용)
+
+---
+
 ## 📌 Phase 우선순위 요약
 
 | Phase | 핵심 내용 | 플랫폼 | 중요도 |
@@ -526,12 +939,20 @@ Draco WAS는 **Zero Latency · Zero Cost · Low Memory · Low CPU** 를 4대 핵
 | **13** | WebSocket RFC 6455 (per-message deflate, Broadcast) | Common | 🟠 High |
 | **14** | Streaming / SSE / Backpressure | Common | 🟠 High |
 | **15** | gRPC (Protobuf, 4가지 스트리밍 모드, gRPC-Web) | Common | 🟠 High |
-| **16** | 네트워크 심화 (IPv6, UDS, 비동기 HTTP 클라이언트, NUMA) | Common + Linux + macOS | 🟡 Medium |
-| **17** | Observability (Prometheus, OpenTelemetry, 비동기 로거) | Common | 🟡 Medium |
+| **16** | 네트워크 심화 (IPv6, UDS, 비동기 HTTP 클라이언트, NUMA) | Common + Linux + macOS | 🟠 High |
+| **17** | Observability (Prometheus, OpenTelemetry, 비동기 로거) | Common | 🟠 High |
 | **18** | URL / Request 유틸리티 | Common | 🟡 Medium |
 | **19** | 성능 & 벤치마킹 (C10M, TechEmpower, PGO, BOLT) | Common + Linux + macOS | 🟡 Medium |
 | **20** | 테스트 & CI/CD (Fuzzing, MSan, Nightly Regression) | Common + Linux + macOS | 🟡 Medium |
 | **21** | 문서화 & DX (API Ref, OS 튜닝 스크립트, 보안 가이드) | Common | 🟢 Low |
+| **22** | SOLID 설계 & 확장 인터페이스 (ISP, DIP, DI Container, CMake 모듈 분리) | Common | 🔴 Critical |
+| **23** | DB 추상화 & 드라이버 (PostgreSQL, MySQL, SQLite, Redis) | Common | 🔴 Critical |
+| **24** | 로깅 시스템 심화 (ILogSink, FileSink/Loki/Fluentd, 비동기 로테이션) | Common | 🔴 Critical |
+| **25** | 캐시 & 메시지 브로커 (LruCache, RedisPubSub, Kafka, TaskQueue) | Common | 🟠 High |
+| **26** | 커넥션 풀 & 복원력 (CircuitBreaker, RetryPolicy, Bulkhead, Timeout) | Common | 🟠 High |
+| **27** | WAS 공용 유틸리티 (UUID, SIMD Base64, HMAC, Result<T,E>, Msgpack) | Common | 🟠 High |
+| **28** | 고급 동시성 (Channel, WaitGroup, Select, SPSC/MPSC, AtomicHashMap) | Common | 🟡 Medium |
+| **29** | 최대 동시접속 & 수평 확장 (Admission Control, Cluster, K8s probe, 서비스 디스커버리) | Common + Linux | 🟡 Medium |
 
 ---
 
