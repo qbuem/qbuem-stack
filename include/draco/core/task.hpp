@@ -2,44 +2,48 @@
 
 #include <coroutine>
 #include <exception>
-#include <iostream>
 #include <utility>
 
 namespace draco {
 
 /**
  * @brief A Coroutine Task type with symmetric transfer support.
+ *
+ * Lifecycle rules:
+ *  - When owned by a Task object, the Task destructor destroys the frame.
+ *  - When detach() is called the Task releases ownership. The coroutine frame
+ *    is then responsible for destroying itself when it completes (no
+ *    continuation). This avoids leaking fire-and-forget coroutines.
  */
 template <typename T = void> struct Task {
   struct promise_type {
     T value;
     std::coroutine_handle<> continuation;
-
-    promise_type() { std::cout << "[Debug] Task Promise created" << std::endl; }
-    ~promise_type() {
-      std::cout << "[Debug] Task Promise destroyed" << std::endl;
-    }
+    bool detached = false;
 
     Task get_return_object() {
       return Task{std::coroutine_handle<promise_type>::from_promise(*this)};
     }
     std::suspend_always initial_suspend() { return {}; }
+
     auto final_suspend() noexcept {
       struct final_awaiter {
         bool await_ready() noexcept { return false; }
         std::coroutine_handle<>
         await_suspend(std::coroutine_handle<promise_type> h) noexcept {
-          std::cout << "[Debug] Task final_suspend, kont: "
-                    << (h.promise().continuation ? "exists" : "null")
-                    << std::endl;
           if (h.promise().continuation)
             return h.promise().continuation;
+          if (h.promise().detached) {
+            h.destroy();
+            return std::noop_coroutine();
+          }
           return std::noop_coroutine();
         }
         void await_resume() noexcept {}
       };
       return final_awaiter{};
     }
+
     void unhandled_exception() { std::terminate(); }
     void return_value(T v) { value = std::move(v); }
   };
@@ -48,10 +52,8 @@ template <typename T = void> struct Task {
 
   explicit Task(std::coroutine_handle<promise_type> h) : handle(h) {}
   ~Task() {
-    if (handle) {
-      std::cout << "[Debug] Task destructor destroying handle" << std::endl;
+    if (handle && !handle.promise().detached)
       handle.destroy();
-    }
   }
 
   Task(const Task &) = delete;
@@ -60,7 +62,7 @@ template <typename T = void> struct Task {
   Task(Task &&other) noexcept : handle(other.handle) { other.handle = nullptr; }
   Task &operator=(Task &&other) noexcept {
     if (this != &other) {
-      if (handle)
+      if (handle && !handle.promise().detached)
         handle.destroy();
       handle = other.handle;
       other.handle = nullptr;
@@ -71,23 +73,27 @@ template <typename T = void> struct Task {
   bool resume() {
     if (!handle || handle.done())
       return false;
-    std::cout << "[Debug] Resuming Task" << std::endl;
     handle.resume();
     return handle && !handle.done();
   }
 
-  std::coroutine_handle<promise_type> detach() {
-    std::cout << "[Debug] Detaching Task" << std::endl;
-    auto h = handle;
-    handle = nullptr;
-    return h;
+  /**
+   * @brief Release ownership of the coroutine frame.
+   *
+   * After detach() the frame is self-managed: it destroys itself when the
+   * coroutine completes with no continuation.
+   */
+  void detach() {
+    if (handle) {
+      handle.promise().detached = true;
+      handle = nullptr;
+    }
   }
 
   // Awaiter interface
   bool await_ready() const noexcept { return !handle || handle.done(); }
   std::coroutine_handle<>
   await_suspend(std::coroutine_handle<> awaiting) noexcept {
-    std::cout << "[Debug] Task await_suspend" << std::endl;
     handle.promise().continuation = awaiting;
     return handle;
   }
@@ -97,34 +103,31 @@ template <typename T = void> struct Task {
 template <> struct Task<void> {
   struct promise_type {
     std::coroutine_handle<> continuation;
-
-    promise_type() {
-      std::cout << "[Debug] Task<void> Promise created" << std::endl;
-    }
-    ~promise_type() {
-      std::cout << "[Debug] Task<void> Promise destroyed" << std::endl;
-    }
+    bool detached = false;
 
     Task get_return_object() {
       return Task{std::coroutine_handle<promise_type>::from_promise(*this)};
     }
     std::suspend_always initial_suspend() { return {}; }
+
     auto final_suspend() noexcept {
       struct final_awaiter {
         bool await_ready() noexcept { return false; }
         std::coroutine_handle<>
         await_suspend(std::coroutine_handle<promise_type> h) noexcept {
-          std::cout << "[Debug] Task<void> final_suspend, kont: "
-                    << (h.promise().continuation ? "exists" : "null")
-                    << std::endl;
           if (h.promise().continuation)
             return h.promise().continuation;
+          if (h.promise().detached) {
+            h.destroy();
+            return std::noop_coroutine();
+          }
           return std::noop_coroutine();
         }
         void await_resume() noexcept {}
       };
       return final_awaiter{};
     }
+
     void unhandled_exception() { std::terminate(); }
     void return_void() {}
   };
@@ -133,11 +136,8 @@ template <> struct Task<void> {
 
   explicit Task(std::coroutine_handle<promise_type> h) : handle(h) {}
   ~Task() {
-    if (handle) {
-      std::cout << "[Debug] Task<void> destructor destroying handle"
-                << std::endl;
+    if (handle && !handle.promise().detached)
       handle.destroy();
-    }
   }
 
   Task(const Task &) = delete;
@@ -146,7 +146,7 @@ template <> struct Task<void> {
   Task(Task &&other) noexcept : handle(other.handle) { other.handle = nullptr; }
   Task &operator=(Task &&other) noexcept {
     if (this != &other) {
-      if (handle)
+      if (handle && !handle.promise().detached)
         handle.destroy();
       handle = other.handle;
       other.handle = nullptr;
@@ -157,23 +157,27 @@ template <> struct Task<void> {
   bool resume() {
     if (!handle || handle.done())
       return false;
-    std::cout << "[Debug] Resuming Task<void>" << std::endl;
     handle.resume();
     return handle && !handle.done();
   }
 
-  std::coroutine_handle<promise_type> detach() {
-    std::cout << "[Debug] Detaching Task<void>" << std::endl;
-    auto h = handle;
-    handle = nullptr;
-    return h;
+  /**
+   * @brief Release ownership of the coroutine frame.
+   *
+   * After detach() the frame is self-managed: it destroys itself when the
+   * coroutine completes with no continuation.
+   */
+  void detach() {
+    if (handle) {
+      handle.promise().detached = true;
+      handle = nullptr;
+    }
   }
 
   // Awaiter interface
   bool await_ready() const noexcept { return !handle || handle.done(); }
   std::coroutine_handle<>
   await_suspend(std::coroutine_handle<> awaiting) noexcept {
-    std::cout << "[Debug] Task<void> await_suspend" << std::endl;
     handle.promise().continuation = awaiting;
     return handle;
   }

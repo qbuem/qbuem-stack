@@ -14,13 +14,12 @@ Draco WAS is built for high-performance environments (HFT, real-time analytics, 
 ## 🚀 Current Implementation Status
 
 Draco is evolving rapidly. Currently:
-- **Phase 1-3 Completed**: Core Reactor, Dispatcher, Router (Radix Tree), and Coroutine `Task` foundation are implemented.
-- **Beast JSON Integration**: Fully integrated into `Request` and `Response` objects.
+- **Phase 1-4 Completed**: Core Reactor, Dispatcher, Router (Radix Tree), Coroutine `Task`, robust Async I/O with `io_uring` (Linux) / `kqueue` (macOS), and coroutine lifecycle hardening.
+- **Beast JSON Integration**: Fully integrated into `Request` and `Response` objects. Safe `SafeValue` access via `.get()` supported.
 - **Async Awaiters**: `AsyncRead`, `AsyncWrite`, and `AsyncSleep` (timer-based) are available.
 
 ## 🛠 Features Roadmap
 
-*   **Phase 4 (In Progress)**: Robust Async I/O, Performance Hardening, and Awaiter optimization.
 *   **Phase 5 (Next)**: Zero-copy Serialization Optimizations and C10M stress testing.
 
 ## 📦 Build Instructions
@@ -40,8 +39,7 @@ make -j$(sysctl -n hw.ncpu)
 
 ## ⚠️ Known Issues & Technical Gotchas
 
-- **Beast JSON Mutations**: When using `beast::Value`, use `.insert("key", value)` to add new keys. Using `operator[]` on a non-existent key returns a null handle and will cause a segfault upon assignment.
-- **Async Lifecycle**: The async handler wrapper in `App::listen` manages coroutine status. Ensure `task.detach()` is called for suspended tasks to prevent premature destruction.
+- **Beast JSON Mutations**: To add a new key to a `beast::Value` object, use `.insert("key", value)`. `operator[]` on a non-existent key returns an invalid `Value{}` — since beast-json v0.x (fix #61), assigning through it is a safe silent no-op rather than a segfault, but the key is still **not** inserted. Use `.get("key")` (returns `beast::SafeValue`) for safe optional-propagating read access on untrusted data.
 - **Reactor Callbacks**: Avoid recursive event registration within the same callback without careful state management.
 
 ## 📦 Build Requirements

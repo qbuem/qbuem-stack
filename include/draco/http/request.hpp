@@ -64,8 +64,9 @@ public:
 
   /**
    * @brief Access the request body as JSON.
+   * Returns an invalid Value{} if the body is empty or not valid JSON.
    */
-  beast::Value json();
+  beast::Value json() const;
 
 private:
   Method method_ = Method::Unknown;
@@ -78,9 +79,9 @@ private:
       params_; // Changed from std::unordered_map<std::string_view,
                // std::string_view>
 
-  // Cached JSON view
-  beast::Document json_doc_;
-  std::optional<beast::Value> cached_json_;
+  // Cached JSON view (mutable to allow lazy init from const json())
+  mutable beast::Document json_doc_;
+  mutable std::optional<beast::Value> cached_json_;
 };
 
 } // namespace draco

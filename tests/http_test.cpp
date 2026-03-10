@@ -22,27 +22,35 @@ TEST(RouterTest, BasicMatch) {
   Router router;
   bool called = false;
   router.add_route(Method::Get, "/hello",
-                   [&](const Request &, Response &) { called = true; });
+                   Handler([&](const Request &, Response &) { called = true; }));
 
   std::unordered_map<std::string, std::string> params;
   auto handler = router.match(Method::Get, "/hello", params);
-  ASSERT_NE(handler, nullptr);
+  ASSERT_TRUE(std::holds_alternative<Handler>(handler));
 
   Request req;
   Response res;
-  handler(req, res);
+  std::get<Handler>(handler)(req, res);
   EXPECT_TRUE(called);
 }
 
 TEST(RouterTest, ParamMatch) {
   Router router;
   router.add_route(Method::Get, "/user/:id",
-                   [&](const Request &, Response &) {});
+                   Handler([](const Request &, Response &) {}));
 
   std::unordered_map<std::string, std::string> params;
   auto handler = router.match(Method::Get, "/user/123", params);
-  ASSERT_NE(handler, nullptr);
+  ASSERT_TRUE(std::holds_alternative<Handler>(handler));
   EXPECT_EQ(params["id"], "123");
+}
+
+TEST(RouterTest, NoMatch) {
+  Router router;
+
+  std::unordered_map<std::string, std::string> params;
+  auto handler = router.match(Method::Get, "/nonexistent", params);
+  EXPECT_TRUE(std::holds_alternative<std::monostate>(handler));
 }
 
 int main(int argc, char **argv) {

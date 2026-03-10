@@ -7,10 +7,6 @@ using namespace draco;
 Task<void> async_handler(const Request &req, Response &res) {
   std::cout << "[Async] Handling request for: " << req.path() << std::endl;
 
-  // Simulate some async work (in Phase 3 this is still synchronous execution
-  // but using Coroutine interface) In Phase 4, we'll add real async awaiters
-  // for I/O and timers.
-
   beast::Document doc;
   auto response_data = beast::parse(doc, "{}");
   response_data.insert("message", "Hello from Draco Async Coroutines!");
@@ -24,14 +20,36 @@ Task<void> async_handler(const Request &req, Response &res) {
   co_return;
 }
 
+// POST /echo — demonstrates safe JSON body access using beast::SafeValue.
+// req.json() is now safe even for empty or malformed bodies (returns invalid
+// Value{}). .get() propagates nullopt through missing keys without throwing.
+Task<void> echo_handler(const Request &req, Response &res) {
+  beast::Value body = req.json();
+
+  std::string msg = body.get("message") | std::string("(no message)");
+  std::string name = body.get("name") | std::string("(anonymous)");
+
+  beast::Document doc;
+  auto out = beast::parse(doc, "{}");
+  out.insert("echo_message", msg);
+  out.insert("echo_name", name);
+  out.insert("ok", true);
+
+  res.status(200).json(out);
+  co_return;
+}
+
 int main() {
   App app;
 
   // Async handler registration
   app.get("/user/:id", AsyncHandler(async_handler));
 
+  // POST /echo — safe JSON body parsing demo (beast_json SafeValue)
+  app.post("/echo", AsyncHandler(echo_handler));
+
   // Sync handler registration (for comparison)
-  app.get("/", Handler([](const Request &, Response &res) {
+  app.get("/", Handler([](const draco::Request &, draco::Response &res) {
             res.status(200).body("Welcome to Draco WAS Phase 3!");
           }));
 

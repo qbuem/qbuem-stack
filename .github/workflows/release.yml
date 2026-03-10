@@ -1,0 +1,211 @@
+name: Release
+
+# Triggered by a version tag push: git tag v0.3.0 && git push origin v0.3.0
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write   # create GitHub releases and upload assets
+
+# ============================================================================
+# Job graph:
+#
+#   analyze ──┐
+#             ├─► build/macos-arm64    ──┐
+#   test    ──┤   build/linux-x86_64   ──┼─► publish (single release upload)
+#             └─► build/linux-aarch64  ──┘
+#
+# Each build job saves its tarball as a GitHub Actions artifact.
+# The publish job downloads all three and creates the GitHub Release in one
+# shot — no race condition on the release body.
+# ============================================================================
+
+jobs:
+  # ── 1. Static analysis (clang-tidy) ─────────────────────────────────────────
+  analyze:
+    name: Static Analysis (clang-tidy)
+    runs-on: ubuntu-22.04
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y clang clang-tidy liburing-dev
+
+      - name: Configure (generate compile_commands.json)
+        run: |
+          cmake -B build \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_CXX_COMPILER=clang++ \
+            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+            -DDRACO_BUILD_TESTS=OFF \
+            -DDRACO_BUILD_EXAMPLES=OFF
+
+      # Build library targets so FetchContent headers are materialised and
+      # clang-tidy can resolve all includes.
+      - name: Materialise FetchContent headers
+        run: cmake --build build --target draco_core --target draco_http --target draco -j$(nproc) || true
+
+      - name: Run clang-tidy
+        run: |
+          run-clang-tidy \
+            -p build \
+            -config-file .clang-tidy \
+            -j$(nproc) \
+            $(find src -name '*.cpp' | sort)
+
+  # ── 2. Test (all release platforms) ─────────────────────────────────────────
+  test:
+    name: Test / ${{ matrix.platform }}
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            platform: macos-arm64
+          - os: ubuntu-22.04
+            platform: linux-x86_64
+          - os: ubuntu-24.04-arm
+            platform: linux-aarch64
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install liburing (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update -q && sudo apt-get install -y liburing-dev
+
+      - name: Configure
+        run: |
+          cmake -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DDRACO_BUILD_TESTS=ON \
+            -DDRACO_BUILD_EXAMPLES=ON
+
+      - name: Build
+        run: cmake --build build -j$(nproc 2>/dev/null || sysctl -n hw.logicalcpu)
+
+      - name: Test
+        working-directory: build
+        run: ctest --output-on-failure -C Release
+
+  # ── 3. Build release artifacts ───────────────────────────────────────────────
+  build:
+    name: Build / ${{ matrix.platform }}
+    runs-on: ${{ matrix.os }}
+    needs: [analyze, test]
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            platform: macos-arm64
+          - os: ubuntu-22.04
+            platform: linux-x86_64
+          - os: ubuntu-24.04-arm
+            platform: linux-aarch64
+
+    outputs:
+      beast_tag: ${{ steps.beast_tag.outputs.tag }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install liburing (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update -q && sudo apt-get install -y liburing-dev
+
+      # Resolve at release time so the baked tag is reproducible.
+      - name: Resolve beast_json latest tag
+        id: beast_tag
+        run: |
+          TAG=$(git ls-remote --tags --refs https://github.com/the-lkb/beast-json.git \
+                | awk '{print $2}' \
+                | sed 's|refs/tags/||' \
+                | grep -E '^v?[0-9]+\.[0-9]+' \
+                | sort -V \
+                | tail -1)
+          TAG=${TAG:-main}
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "Pinning beast_json to: $TAG"
+
+      - name: Configure
+        run: |
+          cmake -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DDRACO_BUILD_TESTS=OFF \
+            -DDRACO_BUILD_EXAMPLES=OFF \
+            -DDRACO_BEAST_JSON_TAG=${{ steps.beast_tag.outputs.tag }}
+
+      - name: Build
+        run: cmake --build build -j$(nproc 2>/dev/null || sysctl -n hw.logicalcpu)
+
+      - name: Install
+        run: cmake --install build --prefix dist
+
+      - name: Package
+        run: |
+          ARCHIVE="draco-${GITHUB_REF_NAME}-${{ matrix.platform }}.tar.gz"
+          tar -czf "${ARCHIVE}" -C dist .
+          echo "ARCHIVE=${ARCHIVE}" >> "$GITHUB_ENV"
+
+      # Store tarball as a GitHub Actions artifact so the publish job can
+      # collect all three and upload them in a single release API call.
+      - name: Save artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ARCHIVE }}
+          path: ${{ env.ARCHIVE }}
+          retention-days: 1
+
+  # ── 4. Publish GitHub Release (single job — no race condition) ───────────────
+  publish:
+    name: Publish GitHub Release
+    runs-on: ubuntu-22.04
+    needs: [build]
+
+    steps:
+      - name: Download all platform tarballs
+        uses: actions/download-artifact@v4
+        with:
+          pattern: draco-*
+          merge-multiple: true   # flatten into cwd
+
+      - name: List artifacts
+        run: ls -lh draco-*.tar.gz
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: draco-*.tar.gz
+          body: |
+            ## draco ${{ github.ref_name }}
+
+            ### Platforms
+            | Artifact | OS | Arch |
+            |----------|----|------|
+            | `draco-*-macos-arm64.tar.gz`   | macOS 14     | Apple Silicon (arm64) |
+            | `draco-*-linux-x86_64.tar.gz`  | Ubuntu 22.04 | x86-64 |
+            | `draco-*-linux-aarch64.tar.gz` | Ubuntu 24.04 | AArch64 |
+
+            ### Usage
+            Download the tarball for your platform, extract it, then:
+
+            ```cmake
+            list(APPEND CMAKE_PREFIX_PATH "/path/to/draco-dist")
+            find_package(draco REQUIRED)
+
+            target_link_libraries(myapp PRIVATE draco::draco)  # full (App + HTTP + core)
+            target_link_libraries(myapp PRIVATE draco::http)   # HTTP + core
+            target_link_libraries(myapp PRIVATE draco::core)   # reactor only
+            ```
+
+            > **beast_json** is fetched automatically at configure time — no manual setup needed.
+          generate_release_notes: true

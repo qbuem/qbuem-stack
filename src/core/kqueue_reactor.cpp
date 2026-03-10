@@ -1,6 +1,7 @@
 #include <draco/core/kqueue_reactor.hpp>
 
-#include <iostream>
+#include <cerrno>
+#include <stdexcept>
 #include <sys/event.h>
 #include <unistd.h>
 
@@ -42,8 +43,6 @@ Result<void> KqueueReactor::unregister_event(int fd, EventType type) {
   struct kevent ev;
   int16_t filter = (type == EventType::Read) ? EVFILT_READ : EVFILT_WRITE;
   EV_SET(&ev, fd, filter, EV_DELETE, 0, 0, nullptr);
-
-  // We ignore error here since it might already be deleted or closed
   kevent(kq_fd_, &ev, 1, nullptr, 0, nullptr);
 
   auto it = callbacks_.find(fd);
@@ -86,7 +85,7 @@ Result<void> KqueueReactor::unregister_timer(int timer_id) {
 
 Result<int> KqueueReactor::poll(int timeout_ms) {
   struct kevent events[64];
-  struct timespec ts;
+  struct timespec ts{};
   struct timespec *timeout_ptr = nullptr;
 
   if (timeout_ms >= 0) {
@@ -108,14 +107,15 @@ Result<int> KqueueReactor::poll(int timeout_ms) {
 
     auto callback_it = callbacks_.find(ident);
     if (callback_it != callbacks_.end()) {
-      auto cbs =
-          callback_it->second; // Copy to avoid UAF if callback erases itself
+      // Copy callbacks to avoid UAF if a callback unregisters itself.
+      auto cbs = callback_it->second;
       if (filter == EVFILT_READ && cbs.read_cb) {
         cbs.read_cb(ident);
       } else if (filter == EVFILT_WRITE && cbs.write_cb) {
         cbs.write_cb(ident);
       } else if (filter == EVFILT_TIMER && cbs.timer_cb) {
-        std::cout << "[Debug] Timer fired for ID: " << ident << std::endl;
+        // EV_ONESHOT: the timer fires once and is already removed from kqueue.
+        callbacks_.erase(ident);
         cbs.timer_cb(ident);
       }
     }
