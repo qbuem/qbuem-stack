@@ -21,11 +21,11 @@ Draco WAS는 **Zero Latency · Zero Cost · Low Memory · Low CPU** 를 4대 핵
 - [x] `[Common]` **Modern Routing**: Radix Tree for fast route matching
 - [x] `[Common]` **Library Infrastructure**: Header + source distribution (modern CMake)
 
-## ✅ Phase 3: Coroutines & Beast JSON (완료)
+## ✅ Phase 3: Coroutines (완료)
 
 - [x] `[Common]` Custom `draco::Task<T>` with symmetric transfer for nested coroutines
-- [x] `[Common]` Beast JSON native integration in `Request`/`Response`
-- [x] `[Common]` `SafeValue` / `.get()` pattern for untrusted JSON data
+- [x] `[Common]` Beast JSON 의존성 **프레임워크 코어에서 제거** — `body()`는 raw bytes, JSON 파싱은 애플리케이션 책임
+- [x] `[Common]` beast_json은 `examples/` 전용 — `CONTRIBUTING.md`에 버그 리포팅 가이드 명시
 
 ## ✅ Phase 4: Async I/O & Hardening (완료)
 
@@ -72,7 +72,7 @@ Draco WAS는 **Zero Latency · Zero Cost · Low Memory · Low CPU** 를 4대 핵
 ### 공통
 
 - [ ] `[Common]` Reactor 추상 인터페이스에 `batch_submit()` / `batch_wait()` 추가
-- [ ] `[Common]` **`AsyncAccept` awaiter** — accept loop 완전 비동기화
+- [x] `[Common]` **`AsyncAccept` awaiter** — `awaiters.hpp`에 구현 완료
 - [ ] `[Common]` **`writev` / `sendmsg` scatter-gather** — 헤더 + body를 단일 syscall로 전송
 
 ---
@@ -127,29 +127,29 @@ Draco WAS는 **Zero Latency · Zero Cost · Low Memory · Low CPU** 를 4대 핵
 
 ---
 
-## 🔴 Phase 7: HTTP/1.1 완전 준수
+## 🟡 Phase 7: HTTP/1.1 완전 준수 (부분 완료)
 
 > 목표: RFC 7230/7231/7234 완전 지원
 
-- [ ] `[Common]` **Keep-Alive / Connection Reuse**
-  - [ ] `Connection: keep-alive` 헤더 파싱 및 응답
-  - [ ] keep-alive timeout & max-requests per connection 설정
-  - [ ] per-connection state machine (Idle → Reading → Processing → Writing → Idle)
+- [x] `[Common]` **Keep-Alive / Connection Reuse**
+  - [x] `Connection: keep-alive` / `Connection: close` 헤더 파싱 및 응답
+  - [x] keep-alive timeout (30s) & max-requests (100) per connection
+  - [x] per-connection accumulation buffer (partial read 지원)
 - [ ] `[Common]` **Chunked Transfer Encoding** (송수신 모두)
   - [ ] 청크 파싱 (요청 body)
   - [ ] 청크 직렬화 (응답 body streaming)
 - [ ] `[Common]` **Pipelining** — 순서 보장 응답 큐 (head-of-line 유지)
-- [ ] `[Common]` **Content-Length 자동 계산** — 응답 직렬화 시 자동 삽입
+- [x] `[Common]` **Content-Length 자동 계산** — 응답 직렬화 시 자동 삽입
 - [ ] `[Common]` **100 Continue** 처리 (`Expect: 100-continue`)
 - [ ] `[Common]` **Request body 크기 제한** — configurable `max_body_size`
-- [ ] `[Common]` **Connection Timeout**
-  - [ ] Idle timeout (keep-alive 유휴 시간)
+- [x] `[Common]` **Connection Timeout**
+  - [x] Idle timeout (keep-alive 유휴 시간) — 30s, timer 기반
   - [ ] Read timeout (헤더 수신 최대 시간)
   - [ ] Write timeout (응답 전송 최대 시간)
-- [ ] `[Common]` **Graceful Shutdown** — 진행 중 요청 완료 후 종료
-  - [ ] `SIGTERM` / `SIGINT` 핸들러 등록
+- [x] `[Common]` **Graceful Shutdown** — SIGTERM / SIGINT → `App::stop()` 호출
+  - [x] `SIGTERM` / `SIGINT` 핸들러 등록
   - [ ] drain 모드: 신규 accept 중단, 기존 연결 완료 대기
-- [ ] `[Common]` **`Date` 헤더** — atomic cached 포맷 (1초 단위 갱신, lock-free)
+- [x] `[Common]` **`Date` 헤더** — atomic cached 포맷 (1초 단위 갱신, double-checked locking)
 - [ ] `[Common]` **Conditional Requests** — `ETag`, `Last-Modified`, `If-None-Match`, `If-Modified-Since`
 - [ ] `[Common]` **Range Requests** — `Range` 헤더, 206 Partial Content
 - [ ] `[Common]` **`TCP_QUICKACK`** — ACK 즉시 전송으로 RTT 단축

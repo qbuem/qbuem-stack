@@ -22,26 +22,31 @@ public:
    */
   explicit App(size_t thread_count = std::thread::hardware_concurrency());
 
-  /**
-   * @brief Register a global middleware.
-   */
+  /** @brief Register a global middleware. */
   void use(Middleware mw);
 
-  /**
-   * @brief Register a GET route.
-   */
+  /** @brief Register a GET route. */
   void get(std::string_view path, HandlerVariant handler);
 
-  /**
-   * @brief Register a POST route.
-   */
+  /** @brief Register a POST route. */
   void post(std::string_view path, HandlerVariant handler);
 
   /**
-   * @brief Start listening on a port.
-   * @param port Port number to listen on.
+   * @brief Start listening on a port (blocks until stop() is called).
+   *
+   * SIGTERM and SIGINT are handled automatically: they trigger a graceful
+   * drain — no new connections are accepted, and the server exits after the
+   * current poll cycle finishes (≤100 ms).
    */
   Result<void> listen(int port);
+
+  /**
+   * @brief Request graceful shutdown.
+   *
+   * Safe to call from a signal handler (async-signal-safe: sets an atomic).
+   * listen() will return after the next reactor poll cycle.
+   */
+  void stop();
 
 private:
   Dispatcher dispatcher_;

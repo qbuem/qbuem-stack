@@ -1,7 +1,5 @@
 #include <draco/http/parser.hpp>
 
-#include <beast_json/beast_json.hpp>
-#include <iostream>
 #include <string>
 
 namespace draco {
