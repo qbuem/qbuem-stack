@@ -171,7 +171,7 @@ Draco WAS는 **Zero Latency · Zero Cost · Low Memory · Low CPU** 를 4대 핵
 
 ### 필수 미들웨어
 
-- [ ] `[Common]` **Request ID 미들웨어** — UUID v4 자동 생성 (lock-free), `X-Request-ID` 헤더
+- [x] `[Common]` **Request ID 미들웨어** — UUID v4 자동 생성 (thread_local mt19937_64, lock-free), `X-Request-ID` 헤더 echo/generate (`include/draco/middleware/request_id.hpp`)
 - [ ] `[Common]` **Logging 미들웨어**
   - [ ] Combined Log Format (Apache/Nginx 호환)
   - [ ] JSON structured log 옵션
@@ -185,10 +185,10 @@ Draco WAS는 **Zero Latency · Zero Cost · Low Memory · Low CPU** 를 4대 핵
   - [ ] `application/json` → JSON 파싱 (라이브러리 독립적)
   - [x] `application/x-www-form-urlencoded` 파싱 — `Request::form(key)` (no-alloc)
   - [ ] `multipart/form-data` 파싱 (파일 업로드)
-- [ ] `[Common]` **Rate Limiting 미들웨어**
-  - [ ] 토큰 버킷 알고리즘 (thread-local per reactor, lock-free)
-  - [ ] IP 기반 / API key 기반 제한
-  - [ ] `X-RateLimit-*` 응답 헤더
+- [x] `[Common]` **Rate Limiting 미들웨어** — `include/draco/middleware/rate_limit.hpp`
+  - [x] 토큰 버킷 알고리즘 (thread-local per reactor, lock-free)
+  - [x] IP 기반 (`X-Forwarded-For` / `X-Real-IP`) / 커스텀 key_fn 제한
+  - [x] `X-RateLimit-Limit` / `X-RateLimit-Remaining` / `Retry-After` 헤더
 - [ ] `[Common]` **Compression 미들웨어**
   - [ ] `Content-Encoding: gzip` (zlib, streaming 압축)
   - [ ] `Content-Encoding: br` (brotli, optional)
@@ -225,10 +225,11 @@ Draco WAS는 **Zero Latency · Zero Cost · Low Memory · Low CPU** 를 4대 핵
 
 ### 보안 헤더 헬퍼
 
-- [ ] `[Common]` **HSTS** — `Strict-Transport-Security` 헬퍼
-- [ ] `[Common]` **CSP** — `Content-Security-Policy` 빌더 API
-- [ ] `[Common]` **X-Frame-Options** / **X-Content-Type-Options** / **Referrer-Policy** 헬퍼
-- [ ] `[Common]` **Permissions-Policy** 헤더 빌더
+- [x] `[Common]` **HSTS** — `hsts()` 미들웨어 (`include/draco/middleware/security.hpp`)
+- [x] `[Common]` **CSP** — `csp()` 미들웨어 API
+- [x] `[Common]` **X-Frame-Options** / **X-Content-Type-Options** / **Referrer-Policy** 헬퍼
+- [x] `[Common]` **Permissions-Policy** 헤더 빌더
+- [x] `[Common]` **`secure_headers()`** — HSTS + CSP + X-Frame-Options + nosniff + Referrer-Policy 번들 미들웨어
 
 ### 암호화
 

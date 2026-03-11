@@ -1,5 +1,8 @@
 #include <draco/http/parser.hpp>
 #include <draco/http/router.hpp>
+#include <draco/middleware/rate_limit.hpp>
+#include <draco/middleware/request_id.hpp>
+#include <draco/middleware/security.hpp>
 #include <gtest/gtest.h>
 
 using namespace draco;
@@ -270,6 +273,152 @@ TEST(RouterTest, NoMatch) {
   std::unordered_map<std::string, std::string> params;
   auto handler = router.match(Method::Get, "/nonexistent", params);
   EXPECT_TRUE(std::holds_alternative<std::monostate>(handler));
+}
+
+// ─── RequestIdTest ────────────────────────────────────────────────────────────
+
+TEST(RequestIdTest, EchosIncoming) {
+  auto mw = draco::middleware::request_id();
+
+  Request req;
+  req.add_header("X-Request-ID", "existing-id-abc");
+  Response res;
+  bool cont = mw(req, res);
+
+  EXPECT_TRUE(cont);
+  // The existing ID is echoed back in the response
+  std::string raw = res.serialize();
+  EXPECT_NE(raw.find("X-Request-ID: existing-id-abc"), std::string::npos);
+}
+
+TEST(RequestIdTest, GeneratesNew) {
+  auto mw = draco::middleware::request_id();
+
+  Request req;  // no X-Request-ID header
+  Response res;
+  bool cont = mw(req, res);
+
+  EXPECT_TRUE(cont);
+  // A UUID v4 was generated (format: 8-4-4-4-12 hex chars)
+  std::string raw = res.serialize();
+  EXPECT_NE(raw.find("X-Request-ID: "), std::string::npos);
+}
+
+TEST(RequestIdTest, CustomHeaderName) {
+  auto mw = draco::middleware::request_id("X-Trace-ID");
+
+  Request req;
+  req.add_header("X-Trace-ID", "trace-xyz");
+  Response res;
+  mw(req, res);
+
+  EXPECT_NE(res.serialize().find("X-Trace-ID: trace-xyz"), std::string::npos);
+}
+
+// ─── RateLimitTest ────────────────────────────────────────────────────────────
+
+TEST(RateLimitTest, AllowsNormal) {
+  // burst=5: first 5 requests should all pass
+  auto mw = draco::middleware::rate_limit({.rate_per_sec = 10.0, .burst = 5.0});
+
+  for (int i = 0; i < 5; ++i) {
+    Request req;
+    req.add_header("X-Real-IP", "1.2.3.4");
+    Response res;
+    EXPECT_TRUE(mw(req, res)) << "request " << i << " should be allowed";
+  }
+}
+
+TEST(RateLimitTest, BlocksExcess) {
+  // burst=2: third request should be blocked
+  auto mw = draco::middleware::rate_limit({.rate_per_sec = 1.0, .burst = 2.0});
+
+  Request req;
+  req.add_header("X-Real-IP", "9.9.9.9");
+
+  Response r0, r1, r2;
+  EXPECT_TRUE(mw(req, r0));
+  EXPECT_TRUE(mw(req, r1));
+  EXPECT_FALSE(mw(req, r2));  // bucket empty → 429
+
+  std::string raw = r2.serialize();
+  EXPECT_NE(raw.find("429"), std::string::npos);
+  EXPECT_NE(raw.find("Retry-After"), std::string::npos);
+}
+
+TEST(RateLimitTest, SetsRateLimitHeaders) {
+  auto mw = draco::middleware::rate_limit({.rate_per_sec = 10.0, .burst = 10.0});
+
+  Request req;
+  Response res;
+  mw(req, res);
+
+  std::string raw = res.serialize();
+  EXPECT_NE(raw.find("X-RateLimit-Limit"), std::string::npos);
+  EXPECT_NE(raw.find("X-RateLimit-Remaining"), std::string::npos);
+}
+
+// ─── SecurityHeadersTest ──────────────────────────────────────────────────────
+
+TEST(SecurityHeadersTest, SecureHeadersBundle) {
+  auto mw = draco::middleware::secure_headers();
+
+  Request req;
+  Response res;
+  bool cont = mw(req, res);
+
+  EXPECT_TRUE(cont);
+  std::string raw = res.serialize();
+  EXPECT_NE(raw.find("Strict-Transport-Security:"), std::string::npos);
+  EXPECT_NE(raw.find("Content-Security-Policy:"),   std::string::npos);
+  EXPECT_NE(raw.find("X-Frame-Options:"),            std::string::npos);
+  EXPECT_NE(raw.find("X-Content-Type-Options: nosniff"), std::string::npos);
+  EXPECT_NE(raw.find("Referrer-Policy:"),            std::string::npos);
+}
+
+TEST(SecurityHeadersTest, HstsValues) {
+  auto mw = draco::middleware::hsts(3600, true, true);
+
+  Request req;
+  Response res;
+  mw(req, res);
+
+  std::string raw = res.serialize();
+  EXPECT_NE(raw.find("max-age=3600"),      std::string::npos);
+  EXPECT_NE(raw.find("includeSubDomains"), std::string::npos);
+  EXPECT_NE(raw.find("preload"),           std::string::npos);
+}
+
+TEST(SecurityHeadersTest, IndividualHelpers) {
+  {
+    Request req; Response res;
+    draco::middleware::csp("default-src 'none'")(req, res);
+    EXPECT_NE(res.serialize().find("Content-Security-Policy: default-src 'none'"),
+              std::string::npos);
+  }
+  {
+    Request req; Response res;
+    draco::middleware::x_frame_options("DENY")(req, res);
+    EXPECT_NE(res.serialize().find("X-Frame-Options: DENY"), std::string::npos);
+  }
+  {
+    Request req; Response res;
+    draco::middleware::x_content_type_options()(req, res);
+    EXPECT_NE(res.serialize().find("X-Content-Type-Options: nosniff"),
+              std::string::npos);
+  }
+  {
+    Request req; Response res;
+    draco::middleware::referrer_policy("no-referrer")(req, res);
+    EXPECT_NE(res.serialize().find("Referrer-Policy: no-referrer"),
+              std::string::npos);
+  }
+  {
+    Request req; Response res;
+    draco::middleware::permissions_policy("camera=()")(req, res);
+    EXPECT_NE(res.serialize().find("Permissions-Policy: camera=()"),
+              std::string::npos);
+  }
 }
 
 int main(int argc, char **argv) {
