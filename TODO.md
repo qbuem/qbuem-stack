@@ -13,7 +13,7 @@ Draco WAS는 **Zero Latency · Zero Cost · Low Memory · Low CPU** 를 4대 핵
 
 - [x] `[Common]` Expert architecture design (Shared-Nothing, io_uring, Coroutines)
 - [x] `[Common]` C++23 project foundation & directory structure
-- [x] `[Common]` Dependency management via `FetchContent` (Beast-JSON, GTest)
+- [x] `[Common]` Dependency management via `FetchContent` (GTest)
 - [x] `[Linux]`  **Reactor Core**: `epoll` reactor 구현
 - [x] `[macOS]`  **Reactor Core**: `kqueue` reactor 구현
 - [x] `[Common]` **Dispatcher**: Thread-per-core Dispatcher with CPU affinity
@@ -24,8 +24,7 @@ Draco WAS는 **Zero Latency · Zero Cost · Low Memory · Low CPU** 를 4대 핵
 ## ✅ Phase 3: Coroutines (완료)
 
 - [x] `[Common]` Custom `draco::Task<T>` with symmetric transfer for nested coroutines
-- [x] `[Common]` Beast JSON 의존성 **프레임워크 코어에서 제거** — `body()`는 raw bytes, JSON 파싱은 애플리케이션 책임
-- [x] `[Common]` beast_json은 `examples/` 전용 — `CONTRIBUTING.md`에 버그 리포팅 가이드 명시
+- [x] `[Common]` JSON 의존성 **프레임워크 코어에서 완전 제거** — `body()`는 raw bytes, JSON 파싱은 애플리케이션 책임
 
 ## ✅ Phase 4: Async I/O & Hardening (완료)
 
@@ -46,16 +45,16 @@ Draco WAS는 **Zero Latency · Zero Cost · Low Memory · Low CPU** 를 4대 핵
 
 ### Linux 전용
 
-- [ ] `[Linux]`  **io_uring Reactor 완성**: `io_uring_reactor.cpp` stub → 실제 구현
-  - [ ] `io_uring_setup` / `io_uring_enter` 기반 event loop
-  - [ ] SQE/CQE 배치 처리 (Submission Queue Batching)
-  - [ ] `IORING_OP_READ`, `IORING_OP_WRITE`, `IORING_OP_ACCEPT` 지원
-  - [ ] `IORING_OP_TIMEOUT` 으로 `AsyncSleep` 구현
+- [x] `[Linux]`  **io_uring Reactor 완성**: POLL_ADD 기반 event loop, TIMEOUT op, ASYNC_CANCEL
+  - [x] SQE/CQE 배치 처리 (batch drain)
+  - [x] `IORING_OP_POLL_ADD`, `IORING_OP_TIMEOUT`, `IORING_OP_ASYNC_CANCEL` 지원
+  - [x] Persistent-event 재제출 semantics
   - [ ] **Fixed buffers** (`io_uring_register_buffers`) — kernel이 직접 user buffer에 DMA write
   - [ ] **Buffer Ring** (`IORING_OP_PROVIDE_BUFFERS`) — kernel이 버퍼 선택, copy 제로
   - [ ] **SQPOLL 모드** (`IORING_SETUP_SQPOLL`) — kernel thread가 SQ 폴링, 정상 상태 syscall 0
   - [ ] Kernel 5.19+ `IORING_FEAT_CQE_SKIP` 활용
-  - [ ] `SO_REUSEPORT` + `IORING_OP_ACCEPT_DIRECT` 다중 수신 소켓
+  - [ ] `IORING_OP_ACCEPT_DIRECT` 다중 수신 소켓
+- [x] `[Common]`  **`SO_REUSEPORT`** — listen socket에 적용 (kernel 부하 분산)
 - [ ] `[Linux]`  **`MSG_ZEROCOPY`** (`SO_ZEROCOPY`) — 송신 시 kernel→user 복사 제거, CQE 완료 알림
 - [ ] `[Linux]`  **`sendfile(2)`** — 정적 파일 서빙 zero-copy 전송
 - [ ] `[Linux]`  **`splice(2)`** — pipe 경유 소켓→소켓 zero-copy 프록시
@@ -135,25 +134,25 @@ Draco WAS는 **Zero Latency · Zero Cost · Low Memory · Low CPU** 를 4대 핵
   - [x] `Connection: keep-alive` / `Connection: close` 헤더 파싱 및 응답
   - [x] keep-alive timeout (30s) & max-requests (100) per connection
   - [x] per-connection accumulation buffer (partial read 지원)
-- [ ] `[Common]` **Chunked Transfer Encoding** (송수신 모두)
-  - [ ] 청크 파싱 (요청 body)
+- [x] `[Common]` **Chunked Transfer Encoding** (요청 수신)
+  - [x] 청크 파싱 (요청 body) — 청크 확장자 무시, 멀티-청크, 부분 수신 지원
   - [ ] 청크 직렬화 (응답 body streaming)
 - [ ] `[Common]` **Pipelining** — 순서 보장 응답 큐 (head-of-line 유지)
 - [x] `[Common]` **Content-Length 자동 계산** — 응답 직렬화 시 자동 삽입
-- [ ] `[Common]` **100 Continue** 처리 (`Expect: 100-continue`)
-- [ ] `[Common]` **Request body 크기 제한** — configurable `max_body_size`
+- [x] `[Common]` **100 Continue** 처리 (`Expect: 100-continue`) — 헤더 완료 후 body 대기 시 자동 응답
+- [x] `[Common]` **Request body 크기 제한** — `MAX_BODY_SIZE` 1 MiB, 초과 시 413 응답
 - [x] `[Common]` **Connection Timeout**
   - [x] Idle timeout (keep-alive 유휴 시간) — 30s, timer 기반
-  - [ ] Read timeout (헤더 수신 최대 시간)
+  - [x] Read timeout (헤더 수신 최대 시간) — 10s per-request timer (`ConnCtx::read_timer_id`); Slowloris 완화
   - [ ] Write timeout (응답 전송 최대 시간)
 - [x] `[Common]` **Graceful Shutdown** — SIGTERM / SIGINT → `App::stop()` 호출
   - [x] `SIGTERM` / `SIGINT` 핸들러 등록
   - [ ] drain 모드: 신규 accept 중단, 기존 연결 완료 대기
 - [x] `[Common]` **`Date` 헤더** — atomic cached 포맷 (1초 단위 갱신, double-checked locking)
-- [ ] `[Common]` **Conditional Requests** — `ETag`, `Last-Modified`, `If-None-Match`, `If-Modified-Since`
-- [ ] `[Common]` **Range Requests** — `Range` 헤더, 206 Partial Content
-- [ ] `[Common]` **`TCP_QUICKACK`** — ACK 즉시 전송으로 RTT 단축
-- [ ] `[Common]` **`TCP_DEFER_ACCEPT`** — 데이터 도착 후 accept() 실행 (SYN flood 방어 겸용)
+- [x] `[Common]` **Conditional Requests** — `ETag` / `Last-Modified` / `If-None-Match` → 304 Not Modified (in finalize); `Response::etag()` + `Response::last_modified()` helpers
+- [x] `[Common]` **Range Requests** — `Range: bytes=N-M` 파싱, 206 Partial Content / 416 응답, `Accept-Ranges: bytes` 자동 광고, `Content-Range` 헤더 생성
+- [x] `[Linux]`  **`TCP_QUICKACK`** — 각 응답 후 ACK 즉시 전송으로 RTT 단축
+- [x] `[Linux]`  **`TCP_DEFER_ACCEPT`** — 데이터 도착 후 accept() 실행 (SYN flood 방어 겸용)
 - [ ] `[Common]` **`TCP_CORK` / `MSG_MORE`** — 헤더+body 단일 전송 배칭
 
 ---
@@ -172,40 +171,43 @@ Draco WAS는 **Zero Latency · Zero Cost · Low Memory · Low CPU** 를 4대 핵
 
 ### 필수 미들웨어
 
-- [ ] `[Common]` **Request ID 미들웨어** — UUID v4 자동 생성 (lock-free), `X-Request-ID` 헤더
-- [ ] `[Common]` **Logging 미들웨어**
-  - [ ] Combined Log Format (Apache/Nginx 호환)
+- [x] `[Common]` **Request ID 미들웨어** — UUID v4 자동 생성 (thread_local mt19937_64, lock-free), `X-Request-ID` 헤더 echo/generate (`include/draco/middleware/request_id.hpp`)
+- [x] `[Common]` **Logging 미들웨어**
+  - [x] Combined Log Format (Apache-like) — `App::enable_access_log()` stderr 출력
+  - [x] 커스텀 콜백 — `App::set_access_logger(fn)` (method, path, status, duration_us)
+  - [x] 응답 시간 측정 (µs 단위, `steady_clock`)
   - [ ] JSON structured log 옵션
-  - [ ] 응답 시간 측정 (ns 단위, `CLOCK_MONOTONIC`)
-  - [ ] **비동기 로그 링 버퍼** — 로그를 ring buffer에 enqueue, 별도 thread가 flush (hot path 블로킹 없음)
-- [ ] `[Common]` **CORS 미들웨어**
-  - [ ] `Access-Control-Allow-Origin` / `Methods` / `Headers` 설정
-  - [ ] Preflight (`OPTIONS`) 자동 처리
-  - [ ] 동적 Origin 화이트리스트 검사
+  - [ ] **비동기 로그 링 버퍼** — 로그를 ring buffer에 enqueue, 별도 thread가 flush
+- [x] `[Common]` **CORS 미들웨어** — `include/draco/middleware/cors.hpp`
+  - [x] `Access-Control-Allow-Origin` / `Methods` / `Headers` / `Max-Age` 설정
+  - [x] Preflight (`OPTIONS`) 자동 처리 — 204 응답 후 체인 중단
+  - [ ] 동적 Origin 화이트리스트 검사 (현재 단일 origin 지원)
 - [ ] `[Common]` **Body Parser 미들웨어**
-  - [ ] `application/json` → beast-json 파싱
-  - [ ] `application/x-www-form-urlencoded` 파싱
+  - [ ] `application/json` → JSON 파싱 (라이브러리 독립적)
+  - [x] `application/x-www-form-urlencoded` 파싱 — `Request::form(key)` (no-alloc)
   - [ ] `multipart/form-data` 파싱 (파일 업로드)
-- [ ] `[Common]` **Rate Limiting 미들웨어**
-  - [ ] 토큰 버킷 알고리즘 (thread-local per reactor, lock-free)
-  - [ ] IP 기반 / API key 기반 제한
-  - [ ] `X-RateLimit-*` 응답 헤더
+- [x] `[Common]` **Rate Limiting 미들웨어** — `include/draco/middleware/rate_limit.hpp`
+  - [x] 토큰 버킷 알고리즘 (thread-local per reactor, lock-free)
+  - [x] IP 기반 (`X-Forwarded-For` / `X-Real-IP`) / 커스텀 key_fn 제한
+  - [x] `X-RateLimit-Limit` / `X-RateLimit-Remaining` / `Retry-After` 헤더
 - [ ] `[Common]` **Compression 미들웨어**
   - [ ] `Content-Encoding: gzip` (zlib, streaming 압축)
   - [ ] `Content-Encoding: br` (brotli, optional)
   - [ ] `Accept-Encoding` 협상 (q-factor 파싱)
-- [ ] `[Common]` **Cookie 파싱** — `Cookie:` 헤더 파싱, `Set-Cookie:` 응답 빌더
+- [x] `[Common]` **Cookie 파싱** — `Request::cookie(key)` (no-alloc), `Response::set_cookie()` (Full Attribute 지원)
 - [ ] `[Common]` **Session 미들웨어** — lock-free 세션 맵 (per-reactor 분산)
 - [ ] `[Common]` **JWT 미들웨어**
   - [ ] HS256 / RS256 검증
   - [ ] `Authorization: Bearer <token>` 파싱
   - [ ] **상수 시간 서명 비교** (`CRYPTO_memcmp`) — timing attack 방지
-- [ ] `[Common]` **Static File Serving 미들웨어**
-  - [ ] MIME type 자동 감지
-  - [ ] `ETag` / `Last-Modified` 자동 생성
+- [x] `[Common]` **Static File Serving** — `App::serve_static(url_prefix, root_dir)`, `Router::add_prefix_route()` 와일드카드 확장
+  - [x] MIME type 자동 감지 (30+ 확장자, `include/draco/middleware/static_files.hpp`)
+  - [x] Weak ETag (`W/"size-mtime"`) + `Last-Modified` 자동 생성 → 304 지원
+  - [x] Path traversal 이중 방어 (서버 레벨 + serve_static 레벨)
+  - [x] Index file 폴백 (빈 suffix → index.html)
   - [ ] Directory listing (optional)
-- [ ] `[Common]` **Health Check** — `GET /health` → `{"status":"ok"}` 내장 핸들러 (컴파일 타임 상수 응답)
-- [ ] `[Common]` **Panic Recovery 미들웨어** — 핸들러 예외 catch → 500 응답 변환
+- [x] `[Common]` **Health Check** — `App::health_check(path)` → `{"status":"ok"}`, Content-Type: application/json
+- [x] `[Common]` **Panic Recovery** — sync/async 핸들러 예외 catch → 500 응답 변환 (try/catch in draco.cpp)
 
 ---
 
@@ -215,28 +217,29 @@ Draco WAS는 **Zero Latency · Zero Cost · Low Memory · Low CPU** 를 4대 핵
 
 ### 프로토콜 레벨 방어
 
-- [ ] `[Common]` **HTTP Request Smuggling 방지**
-  - [ ] `Transfer-Encoding` + `Content-Length` 동시 존재 시 400 거부
-  - [ ] 모호한 청크 헤더 파싱 엄격 모드 (`chunked` 외 무시)
-- [ ] `[Common]` **HTTP Header Injection 방지** — 헤더값 `\r\n` 포함 시 reject
-- [ ] `[Common]` **Slowloris 공격 완화** — Read timeout (Phase 7) + 헤더 최대 크기 제한 조합
+- [x] `[Common]` **HTTP Request Smuggling 방지**
+  - [x] `Transfer-Encoding` + `Content-Length` 동시 존재 시 400 거부
+  - [x] 모호한 청크 헤더 파싱 엄격 모드 (`chunked` 외 엄격 처리)
+- [x] `[Common]` **HTTP Header Injection 방지** — 헤더값 내 bare `\r`/`\n` 포함 시 400 reject
+- [x] `[Common]` **Slowloris 공격 완화** — Read timeout 10s (Phase 7에 구현) + 헤더 최대 크기 8KB 제한 조합
 - [ ] `[Common]` **Request Flood 방지** — Rate Limiting (Phase 8) + per-IP connection 수 제한
-- [ ] `[Common]` **Path Traversal 방지** — `../`, `%2e%2e` URL 정규화 후 거부
-- [ ] `[Common]` **Large Header Bomb 방지** — 단일 헤더 최대 크기 제한 (configurable, 기본 8KB)
+- [x] `[Common]` **Path Traversal 방지** — `../`, `%2e%2e`, `%2E%2E` 패턴 → 400 거부
+- [x] `[Common]` **Large Header Bomb 방지** — 총 헤더 8KB 초과 시 400 거부 (`MAX_HEADER_SIZE`)
 
 ### 보안 헤더 헬퍼
 
-- [ ] `[Common]` **HSTS** — `Strict-Transport-Security` 헬퍼
-- [ ] `[Common]` **CSP** — `Content-Security-Policy` 빌더 API
-- [ ] `[Common]` **X-Frame-Options** / **X-Content-Type-Options** / **Referrer-Policy** 헬퍼
-- [ ] `[Common]` **Permissions-Policy** 헤더 빌더
+- [x] `[Common]` **HSTS** — `hsts()` 미들웨어 (`include/draco/middleware/security.hpp`)
+- [x] `[Common]` **CSP** — `csp()` 미들웨어 API
+- [x] `[Common]` **X-Frame-Options** / **X-Content-Type-Options** / **Referrer-Policy** 헬퍼
+- [x] `[Common]` **Permissions-Policy** 헤더 빌더
+- [x] `[Common]` **`secure_headers()`** — HSTS + CSP + X-Frame-Options + nosniff + Referrer-Policy 번들 미들웨어
 
 ### 암호화
 
-- [ ] `[Common]` **상수 시간 문자열 비교** — timing attack 방지 (`crypto_memcmp` 유틸)
-- [ ] `[Common]` **CSRF 토큰 생성** — `CSPRNG`(`getrandom`/`arc4random`) 기반 안전 난수
-- [ ] `[Linux]`  **`getrandom(2)` syscall** — `/dev/urandom` 파일 open 없이 난수 획득
-- [ ] `[macOS]`  **`arc4random_buf()`** — macOS 커널 제공 CSPRNG
+- [x] `[Common]` **상수 시간 문자열 비교** — `draco::constant_time_equal()` (`include/draco/crypto.hpp`)
+- [x] `[Common]` **CSRF 토큰 생성** — `draco::csrf_token()` (Base64url, 128-bit entropy by default)
+- [x] `[Linux]`  **`getrandom(2)` syscall** — `draco::random_bytes()` on Linux uses getrandom(2)
+- [x] `[macOS]`  **`arc4random_buf()`** — `draco::random_bytes()` on macOS/BSD uses arc4random_buf()
 
 ---
 
@@ -360,7 +363,7 @@ Draco WAS는 **Zero Latency · Zero Cost · Low Memory · Low CPU** 를 4대 핵
 
 ### 공통
 
-- [ ] `[Common]` **IPv6 완전 지원** — `::1` 바인딩, dual-stack `IPV6_V6ONLY` 설정
+- [x] `[Common]` **IPv6 완전 지원** — `App::listen(port, ipv6=true)`, `AF_INET6` + `IPV6_V6ONLY=0` dual-stack
 - [ ] **Unix Domain Socket** — `app.listen("/tmp/draco.sock")` 지원
   - [ ] `[Linux]`  `AF_UNIX` SOCK_STREAM
   - [ ] `[macOS]`  `AF_UNIX` SOCK_STREAM
@@ -376,7 +379,7 @@ Draco WAS는 **Zero Latency · Zero Cost · Low Memory · Low CPU** 를 4대 핵
 
 ### Linux 전용
 
-- [ ] `[Linux]`  **`TCP_FASTOPEN`** — 3-way handshake 없이 첫 패킷에 데이터 전송
+- [x] `[Linux]`  **`TCP_FASTOPEN`** — listen socket에 `TCP_FASTOPEN` 적용 (`qlen=128`), 반복 클라이언트 RTT 1회 단축
 - [ ] `[Linux]`  **`SO_INCOMING_CPU`** — RSS 기반 CPU 친화성 소켓 배분
 - [ ] `[Linux]`  **NUMA 인식 스레드 배치** — `numa_alloc_onnode` / `set_mempolicy`
 - [ ] `[Linux]`  **NIC IRQ Affinity 가이드** — `/proc/irq/*/smp_affinity` 설정 스크립트
@@ -384,7 +387,7 @@ Draco WAS는 **Zero Latency · Zero Cost · Low Memory · Low CPU** 를 4대 핵
 ### macOS 전용
 
 - [ ] `[macOS]`  **`TCP_FASTOPEN`** — macOS 12+ 지원
-- [ ] `[macOS]`  **`SO_NOSIGPIPE`** — SIGPIPE 억제
+- [x] `[macOS]`  **`SO_NOSIGPIPE`** — accept() 후 클라이언트 소켓에 `SO_NOSIGPIPE` 적용, SIGPIPE 억제
 
 ---
 
@@ -392,14 +395,14 @@ Draco WAS는 **Zero Latency · Zero Cost · Low Memory · Low CPU** 를 4대 핵
 
 > 목표: 성능 페널티 없는 프로덕션 가시성 — lock-free atomic 카운터 기반
 
-- [ ] `[Common]` **Lock-free 내장 메트릭**
-  - [ ] `std::atomic<uint64_t>` per-reactor 카운터 (요청 수, 에러 수, 활성 연결 수)
+- [x] `[Common]` **Lock-free 내장 메트릭** — `App::Metrics` 구조체, `App::snapshot_metrics()`
+  - [x] `std::atomic<uint64_t>` 글로벌 카운터: requests_total, errors_total, active_connections, bytes_sent
+  - [x] active_connections: shared_ptr 커스텀 deleter로 정확한 증감 보장
   - [ ] 히스토그램 버킷 (레이턴시 분포 P50/P95/P99)
   - [ ] 메트릭 집계 — reactor별 카운터 → 원자적 합산
-- [ ] `[Common]` **Prometheus 메트릭 엔드포인트** — `GET /metrics` text exposition 포맷
-  - [ ] `draco_requests_total{method, status}` counter
+- [x] `[Common]` **Prometheus 메트릭 엔드포인트** — `App::metrics_endpoint(path)`, `GET /metrics` text exposition 포맷
+  - [x] `draco_requests_total` / `draco_errors_total` / `draco_active_connections` / `draco_bytes_sent` counter/gauge
   - [ ] `draco_request_duration_seconds` histogram
-  - [ ] `draco_connections_active` gauge
   - [ ] `draco_memory_arena_bytes` gauge
 - [ ] `[Common]` **OpenTelemetry 트레이싱**
   - [ ] `traceparent` / `tracestate` W3C 헤더 파싱
@@ -416,12 +419,13 @@ Draco WAS는 **Zero Latency · Zero Cost · Low Memory · Low CPU** 를 4대 핵
 ## 🟡 Phase 18: URL / Request 유틸리티
 
 - [ ] `[Common]` **URL 파싱** — path, query string, fragment 완전 분리
-- [ ] `[Common]` **Query String 파싱** — `?foo=bar&baz=1` → `req.query("foo")` API
-- [ ] `[Common]` **URL 인코딩/디코딩** — percent-encoding 유틸리티
+- [x] `[Common]` **Query String 파싱** — `?foo=bar&baz=1` → `req.query("key")` (no-alloc zero-copy 스캐너, `Request::query()` 구현)
+- [x] `[Common]` **URL 인코딩/디코딩** — `draco::url_encode()` / `draco::url_decode()` (`include/draco/url.hpp`; RFC 3986 unreserved 세트, `+` → space, `%XX` 처리)
 - [ ] `[Common]` **Path Normalization** — `..` / `.` 제거, 이중 슬래시 처리
-- [ ] `[Common]` **MIME Type 레지스트리** — 확장자 → Content-Type 자동 매핑 (컴파일 타임 해시맵)
+- [x] `[Common]` **MIME Type 레지스트리** — 확장자 → Content-Type 자동 매핑 (30+ 확장자, `include/draco/middleware/static_files.hpp`)
 - [ ] `[Common]` **Content Negotiation** — `Accept:` 헤더 q-factor 파싱 및 협상
-- [ ] `[Common]` **`req.ip()`** — 실제 클라이언트 IP 추출 (프록시 헤더 포함)
+- [x] `[Common]` **`req.remote_addr()`** — TCP 수락 시 `inet_ntop()` 으로 추출한 실제 피어 IP 저장 (`Request::remote_addr()` / `set_remote_addr()`)
+- [ ] `[Common]` **`req.ip()`** — 프록시 헤더(`X-Forwarded-For`, `X-Real-IP`) 까지 고려한 신뢰 클라이언트 IP 추출
 - [ ] `[Common]` **Multipart Form Data 파서** — 바이너리 파일 업로드 포함
 
 ---
@@ -443,7 +447,7 @@ Draco WAS는 **Zero Latency · Zero Cost · Low Memory · Low CPU** 를 4대 핵
 - [ ] `[Common]` **Flame Graph 통합** — 프로파일링 가이드 (`perf` / Instruments)
 - [ ] `[Common]` **Zero-copy Serialization 최적화**
   - [ ] 응답 헤더 iovec scatter-gather 직렬화 (writev)
-  - [ ] Beast JSON write buffer chain 최적화
+  - [ ] JSON write buffer chain 최적화
 - [ ] `[Common]` **Lock-free 라우팅 테이블** — 원자적 업데이트, RCU 패턴
 - [ ] `[Common]` **pre-serialized 정적 응답** — `200 OK` / `404 Not Found` 바이트 배열 컴파일 타임 생성
 
@@ -790,7 +794,7 @@ Draco WAS는 **Zero Latency · Zero Cost · Low Memory · Low CPU** 를 4대 핵
 
 ### 직렬화 / 역직렬화
 
-- [ ] `[Common]` **Beast JSON** — 이미 통합 완료 (Phase 3)
+- [ ] `[Common]` **JSON 지원** — 라이브러리 독립적, 애플리케이션에서 직접 선택
 - [ ] `[Common]` **`draco::msgpack`** — MessagePack 직렬화 (`ISerializer` 구현)
   - [ ] `msgpack::serialize(obj) → bytes` / `msgpack::deserialize<T>(bytes)`
 - [ ] `[Common]` **`draco::cbor`** — CBOR (RFC 8949) 직렬화 (IoT, CoAP 친화)
@@ -936,7 +940,6 @@ Draco WAS는 **Zero Latency · Zero Cost · Low Memory · Low CPU** 를 4대 핵
 
 | 라이브러리 | 최소 버전 | 라이선스 | 통합 방법 | 사용처 | 비고 |
 |-----------|---------|---------|---------|-------|------|
-| **Boost.JSON** (Beast JSON) | 1.85+ | BSL-1.0 | 🔧 FetchContent ✅ | HTTP JSON 파싱 | 이미 통합 완료 |
 | **GoogleTest** | 1.14+ | BSD-3 | 🔧 FetchContent ✅ | 단위/통합 테스트 | 이미 통합 완료 |
 | **zlib** | 1.3+ | zlib/libpng | 🔍 `find_package(ZLIB)` | gzip 압축(Phase 8), 로그 아카이브(Phase 24) | 거의 모든 시스템에 존재 |
 
@@ -962,7 +965,7 @@ Draco WAS는 **Zero Latency · Zero Cost · Low Memory · Low CPU** 를 4대 핵
 | **xxHash** | 0.8.2+ | BSD-2 | 🔧 FetchContent (단일 헤더) | 비암호 해시(Phase 27) |
 | **msgpack-cxx** | 6.1+ | BSL-1.0 | 🔧 FetchContent (헤더 전용) | MessagePack 직렬화(Phase 27) |
 | **tinycbor** | 0.6.0+ | MIT | 🔧 FetchContent | CBOR 직렬화(Phase 27) |
-| **nlohmann/json** | — | MIT | ❌ 불필요 | Beast JSON으로 대체 |
+| **nlohmann/json** | 3.11+ | MIT | 🔧 선택적 | JSON 파싱 (애플리케이션 책임) |
 
 #### 🟦 선택적 성능 의존성 (opt-in, 없어도 빌드 성공)
 

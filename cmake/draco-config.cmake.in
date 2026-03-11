@@ -11,27 +11,9 @@
 #   target_link_libraries(myapp PRIVATE draco::draco)  # everything
 #   target_link_libraries(myapp PRIVATE draco::http)   # HTTP only (+ core)
 #   target_link_libraries(myapp PRIVATE draco::core)   # reactor only
-#
-# beast_json is fetched automatically at the exact version this release
-# was built against — no manual setup required.
 # ============================================================================
 
 include(CMakeFindDependencyMacro)
-include(FetchContent)
-
-# ── beast_json (header-only) ─────────────────────────────────────────────────
-# Pinned to the tag that was current when this draco release was built.
-# Skipped if the caller has already made beast_json::beast_json available
-# (e.g. via their own FetchContent or add_subdirectory).
-if(NOT TARGET beast_json::beast_json)
-    set(BEAST_JSON_BUILD_TESTS OFF CACHE BOOL "" FORCE)
-    FetchContent_Declare(
-        beast_json
-        GIT_REPOSITORY https://github.com/the-lkb/beast-json.git
-        GIT_TAG        @DRACO_BEAST_JSON_TAG@
-    )
-    FetchContent_MakeAvailable(beast_json)
-endif()
 
 # ── draco targets ────────────────────────────────────────────────────────────
 include("${CMAKE_CURRENT_LIST_DIR}/dracoTargets.cmake")
