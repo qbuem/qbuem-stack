@@ -422,6 +422,43 @@ TEST(SecurityHeadersTest, IndividualHelpers) {
   }
 }
 
+// ─── RangeRequestTest ─────────────────────────────────────────────────────────
+// Range request logic lives in draco.cpp's finalize() lambda; we test the
+// Response accessors it depends on (get_body, status_code) here.
+
+TEST(RangeRequestTest, ResponseGetBody) {
+  Response res;
+  res.body("hello world");
+  EXPECT_EQ(res.get_body(), "hello world");
+}
+
+TEST(RangeRequestTest, ResponseStatusCode) {
+  Response res;
+  res.status(206);
+  EXPECT_EQ(res.status_code(), 206);
+}
+
+TEST(RangeRequestTest, ContentRangeHeader) {
+  // Verify a 206 response with Content-Range serializes correctly.
+  Response res;
+  res.status(206)
+     .header("Content-Range", "bytes 0-4/11")
+     .header("Accept-Ranges", "bytes")
+     .body("hello");
+  std::string raw = res.serialize();
+  EXPECT_NE(raw.find("206"), std::string::npos);
+  EXPECT_NE(raw.find("Content-Range: bytes 0-4/11"), std::string::npos);
+  EXPECT_EQ(res.get_body(), "hello");
+}
+
+TEST(RangeRequestTest, Status416) {
+  Response res;
+  res.status(416).header("Content-Range", "bytes */100").body("Range Not Satisfiable");
+  std::string raw = res.serialize();
+  EXPECT_NE(raw.find("416"), std::string::npos);
+  EXPECT_NE(raw.find("bytes */100"), std::string::npos);
+}
+
 // ─── CryptoTest ───────────────────────────────────────────────────────────────
 
 TEST(CryptoTest, ConstantTimeEqualSame) {

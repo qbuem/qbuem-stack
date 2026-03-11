@@ -85,6 +85,12 @@ public:
     return (it != headers_.end()) ? std::string_view(it->second) : std::string_view{};
   }
 
+  /** @brief Return the response body. */
+  std::string_view get_body() const { return body_; }
+
+  /** @brief Return the HTTP status code. */
+  int status_code() const { return status_code_; }
+
   std::string serialize() const;
 
 private:

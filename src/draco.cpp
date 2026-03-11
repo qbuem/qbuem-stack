@@ -66,13 +66,17 @@ static void on_shutdown_signal(int) {
 
 // ─── Per-connection keep-alive state ────────────────────────────────────────
 struct ConnCtx {
-  std::string buf;          // partial-read accumulation buffer
-  int handled       = 0;   // requests handled on this connection
-  int idle_timer_id = -1;  // current idle timer (-1 = none)
-  bool sent_100     = false; // already sent 100 Continue for current request
+  std::string buf;           // partial-read accumulation buffer
+  int handled        = 0;   // requests handled on this connection
+  int idle_timer_id  = -1;  // current idle timer (-1 = none)
+  int read_timer_id  = -1;  // per-request read timeout timer (-1 = none)
+  bool sent_100      = false; // already sent 100 Continue for current request
 
   static constexpr int MAX_REQUESTS    = 100;
   static constexpr int IDLE_TIMEOUT_MS = 30'000; // 30 s
+  // Max time to receive a complete request after the first byte arrives.
+  // Closes Slowloris-style attack vectors (very slow header delivery).
+  static constexpr int READ_TIMEOUT_MS = 10'000; // 10 s
 };
 
 } // namespace
@@ -218,12 +222,40 @@ Result<void> App::listen(int port) {
             ctx->idle_timer_id = *tres;
         };
 
+        // arm_read_timeout: start per-request read timer (not reset on partial
+        // reads).  Fires if a full request is not received within READ_TIMEOUT_MS.
+        // Call once when the first byte of a new request arrives.
+        auto arm_read_timeout = [ctx, reactor, client_fd]() {
+          if (ctx->read_timer_id != -1) return; // already armed
+          auto tres = reactor->register_timer(
+              ConnCtx::READ_TIMEOUT_MS, [reactor, client_fd, ctx](int) {
+                ctx->read_timer_id = -1;
+                // Send 408 and close
+                Response tout;
+                tout.status(408)
+                    .header("Connection", "close")
+                    .body("Request Timeout");
+                write_all(client_fd, tout.serialize());
+                reactor->unregister_event(client_fd, EventType::Read);
+                close(client_fd);
+              });
+          if (tres) ctx->read_timer_id = *tres;
+        };
+
+        auto cancel_read_timeout = [ctx, reactor]() {
+          if (ctx->read_timer_id != -1) {
+            reactor->unregister_timer(ctx->read_timer_id);
+            ctx->read_timer_id = -1;
+          }
+        };
+
         arm_idle(); // start idle timer before the first byte arrives
 
         // ── Per-connection read callback ──────────────────────────────────
         reactor->register_event(
             client_fd, EventType::Read,
-            [this, reactor, ctx, arm_idle](int cfd) mutable {
+            [this, reactor, ctx, arm_idle,
+             arm_read_timeout, cancel_read_timeout](int cfd) mutable {
               // Activity received — disarm idle timer
               if (ctx->idle_timer_id != -1) {
                 reactor->unregister_timer(ctx->idle_timer_id);
@@ -234,10 +266,15 @@ Result<void> App::listen(int port) {
               char tmp[8192];
               ssize_t n = read(cfd, tmp, sizeof(tmp));
               if (n <= 0) {
+                cancel_read_timeout();
                 reactor->unregister_event(cfd, EventType::Read);
                 close(cfd);
                 return;
               }
+
+              // Start per-request read timeout on first byte of a new request.
+              if (ctx->buf.empty()) arm_read_timeout();
+
               ctx->buf.append(tmp, static_cast<size_t>(n));
 
               // Re-parse accumulated buffer from the beginning each time.
@@ -248,6 +285,7 @@ Result<void> App::listen(int port) {
 
               // ── Hard parse error (400 / 413) ──────────────────────────
               if (!parsed) {
+                cancel_read_timeout();
                 int status = parser.error_status() ? parser.error_status() : 400;
                 Response err;
                 err.status(status)
@@ -282,7 +320,8 @@ Result<void> App::listen(int port) {
                 return;
               }
 
-              // Request is complete.  Reset 100-continue flag for next request.
+              // Request is complete.  Cancel read timeout and reset state.
+              cancel_read_timeout();
               ctx->sent_100 = false;
 
               // Consume parsed bytes; remainder stays for pipelining
@@ -352,6 +391,52 @@ Result<void> App::listen(int port) {
                     write_all(cfd, nm.serialize());
                     return;
                   }
+                }
+
+                // ── Range Request (RFC 7233) ────────────────────────────
+                // Only handle byte ranges on 200 OK responses with a body.
+                auto range_hdr = req.header("Range");
+                if (!range_hdr.empty() && r.status_code() == 200) {
+                  std::string_view body = r.get_body();
+                  size_t total = body.size();
+                  // Parse "bytes=N-M" (simple single-range, no multi-range)
+                  if (range_hdr.substr(0, 6) == "bytes=") {
+                    std::string_view spec = range_hdr.substr(6);
+                    size_t dash = spec.find('-');
+                    if (dash != std::string_view::npos) {
+                      size_t first = 0, last = total - 1;
+                      bool ok = true;
+                      std::string first_str(spec.substr(0, dash));
+                      std::string last_str(spec.substr(dash + 1));
+                      try {
+                        if (!first_str.empty()) first = std::stoul(first_str);
+                        if (!last_str.empty())  last  = std::stoul(last_str);
+                        else                    last  = total - 1;
+                        if (first > last || first >= total) ok = false;
+                        if (last >= total) last = total - 1;
+                      } catch (...) { ok = false; }
+
+                      if (ok) {
+                        std::string slice(body.substr(first, last - first + 1));
+                        r.status(206)
+                         .header("Content-Range",
+                                 "bytes " + std::to_string(first) + "-" +
+                                 std::to_string(last) + "/" +
+                                 std::to_string(total))
+                         .header("Accept-Ranges", "bytes")
+                         .body(slice);
+                      } else {
+                        // Unsatisfiable range → 416
+                        r.status(416)
+                         .header("Content-Range",
+                                 "bytes */" + std::to_string(total))
+                         .body("Range Not Satisfiable");
+                      }
+                    }
+                  }
+                } else if (range_hdr.empty() && r.status_code() == 200) {
+                  // Advertise range support on normal responses
+                  r.header("Accept-Ranges", "bytes");
                 }
 
                 r.header("Date", cached_http_date());

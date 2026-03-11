@@ -143,14 +143,14 @@ Draco WAS는 **Zero Latency · Zero Cost · Low Memory · Low CPU** 를 4대 핵
 - [x] `[Common]` **Request body 크기 제한** — `MAX_BODY_SIZE` 1 MiB, 초과 시 413 응답
 - [x] `[Common]` **Connection Timeout**
   - [x] Idle timeout (keep-alive 유휴 시간) — 30s, timer 기반
-  - [ ] Read timeout (헤더 수신 최대 시간)
+  - [x] Read timeout (헤더 수신 최대 시간) — 10s per-request timer (`ConnCtx::read_timer_id`); Slowloris 완화
   - [ ] Write timeout (응답 전송 최대 시간)
 - [x] `[Common]` **Graceful Shutdown** — SIGTERM / SIGINT → `App::stop()` 호출
   - [x] `SIGTERM` / `SIGINT` 핸들러 등록
   - [ ] drain 모드: 신규 accept 중단, 기존 연결 완료 대기
 - [x] `[Common]` **`Date` 헤더** — atomic cached 포맷 (1초 단위 갱신, double-checked locking)
 - [x] `[Common]` **Conditional Requests** — `ETag` / `Last-Modified` / `If-None-Match` → 304 Not Modified (in finalize); `Response::etag()` + `Response::last_modified()` helpers
-- [ ] `[Common]` **Range Requests** — `Range` 헤더, 206 Partial Content
+- [x] `[Common]` **Range Requests** — `Range: bytes=N-M` 파싱, 206 Partial Content / 416 응답, `Accept-Ranges: bytes` 자동 광고, `Content-Range` 헤더 생성
 - [x] `[Linux]`  **`TCP_QUICKACK`** — 각 응답 후 ACK 즉시 전송으로 RTT 단축
 - [x] `[Linux]`  **`TCP_DEFER_ACCEPT`** — 데이터 도착 후 accept() 실행 (SYN flood 방어 겸용)
 - [ ] `[Common]` **`TCP_CORK` / `MSG_MORE`** — 헤더+body 단일 전송 배칭
@@ -218,7 +218,7 @@ Draco WAS는 **Zero Latency · Zero Cost · Low Memory · Low CPU** 를 4대 핵
   - [x] `Transfer-Encoding` + `Content-Length` 동시 존재 시 400 거부
   - [x] 모호한 청크 헤더 파싱 엄격 모드 (`chunked` 외 엄격 처리)
 - [x] `[Common]` **HTTP Header Injection 방지** — 헤더값 내 bare `\r`/`\n` 포함 시 400 reject
-- [ ] `[Common]` **Slowloris 공격 완화** — Read timeout (Phase 7) + 헤더 최대 크기 제한 조합
+- [x] `[Common]` **Slowloris 공격 완화** — Read timeout 10s (Phase 7에 구현) + 헤더 최대 크기 8KB 제한 조합
 - [ ] `[Common]` **Request Flood 방지** — Rate Limiting (Phase 8) + per-IP connection 수 제한
 - [x] `[Common]` **Path Traversal 방지** — `../`, `%2e%2e`, `%2E%2E` 패턴 → 400 거부
 - [x] `[Common]` **Large Header Bomb 방지** — 총 헤더 8KB 초과 시 400 거부 (`MAX_HEADER_SIZE`)
