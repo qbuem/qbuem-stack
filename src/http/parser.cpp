@@ -74,10 +74,18 @@ std::optional<size_t> HttpParser::parse(std::string_view data, Request &req) {
         // Empty header line → end of headers
         headers_complete_ = true;
 
-        // Determine body mode
+        // ── HTTP Request Smuggling guard ──────────────────────────────────
+        // RFC 7230 §3.3.3 rule 3: if both TE and CL are present, reject.
         std::string_view te = req.header("Transfer-Encoding");
         std::string_view cl = req.header("Content-Length");
 
+        if (!te.empty() && !cl.empty()) {
+          error_status_ = 400;
+          state_        = State::Error;
+          return std::nullopt;
+        }
+
+        // Determine body mode
         if (te == "chunked") {
           chunked_ = true;
           state_   = State::ChunkSize;
@@ -93,6 +101,14 @@ std::optional<size_t> HttpParser::parse(std::string_view data, Request &req) {
           start  = pos + 1;
         } else {
           state_ = State::Complete;
+        }
+      } else {
+        // Track total header bytes for Large Header Bomb protection
+        ++header_bytes_;
+        if (header_bytes_ > MAX_HEADER_SIZE) {
+          error_status_ = 400;
+          state_        = State::Error;
+          return std::nullopt;
         }
       }
       // Ignore '\r'
@@ -110,6 +126,12 @@ std::optional<size_t> HttpParser::parse(std::string_view data, Request &req) {
             state_        = State::Error;
             return std::nullopt;
           }
+        }
+        header_bytes_ += current_header_key_.size() + value.size() + 4; // ": \r\n"
+        if (header_bytes_ > MAX_HEADER_SIZE) {
+          error_status_ = 400;
+          state_        = State::Error;
+          return std::nullopt;
         }
         req.add_header(current_header_key_, value);
         state_ = State::HeaderKey;

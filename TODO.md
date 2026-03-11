@@ -45,16 +45,16 @@ Draco WAS는 **Zero Latency · Zero Cost · Low Memory · Low CPU** 를 4대 핵
 
 ### Linux 전용
 
-- [ ] `[Linux]`  **io_uring Reactor 완성**: `io_uring_reactor.cpp` stub → 실제 구현
-  - [ ] `io_uring_setup` / `io_uring_enter` 기반 event loop
-  - [ ] SQE/CQE 배치 처리 (Submission Queue Batching)
-  - [ ] `IORING_OP_READ`, `IORING_OP_WRITE`, `IORING_OP_ACCEPT` 지원
-  - [ ] `IORING_OP_TIMEOUT` 으로 `AsyncSleep` 구현
+- [x] `[Linux]`  **io_uring Reactor 완성**: POLL_ADD 기반 event loop, TIMEOUT op, ASYNC_CANCEL
+  - [x] SQE/CQE 배치 처리 (batch drain)
+  - [x] `IORING_OP_POLL_ADD`, `IORING_OP_TIMEOUT`, `IORING_OP_ASYNC_CANCEL` 지원
+  - [x] Persistent-event 재제출 semantics
   - [ ] **Fixed buffers** (`io_uring_register_buffers`) — kernel이 직접 user buffer에 DMA write
   - [ ] **Buffer Ring** (`IORING_OP_PROVIDE_BUFFERS`) — kernel이 버퍼 선택, copy 제로
   - [ ] **SQPOLL 모드** (`IORING_SETUP_SQPOLL`) — kernel thread가 SQ 폴링, 정상 상태 syscall 0
   - [ ] Kernel 5.19+ `IORING_FEAT_CQE_SKIP` 활용
-  - [ ] `SO_REUSEPORT` + `IORING_OP_ACCEPT_DIRECT` 다중 수신 소켓
+  - [ ] `IORING_OP_ACCEPT_DIRECT` 다중 수신 소켓
+- [x] `[Common]`  **`SO_REUSEPORT`** — listen socket에 적용 (kernel 부하 분산)
 - [ ] `[Linux]`  **`MSG_ZEROCOPY`** (`SO_ZEROCOPY`) — 송신 시 kernel→user 복사 제거, CQE 완료 알림
 - [ ] `[Linux]`  **`sendfile(2)`** — 정적 파일 서빙 zero-copy 전송
 - [ ] `[Linux]`  **`splice(2)`** — pipe 경유 소켓→소켓 zero-copy 프록시
@@ -214,14 +214,14 @@ Draco WAS는 **Zero Latency · Zero Cost · Low Memory · Low CPU** 를 4대 핵
 
 ### 프로토콜 레벨 방어
 
-- [ ] `[Common]` **HTTP Request Smuggling 방지**
-  - [ ] `Transfer-Encoding` + `Content-Length` 동시 존재 시 400 거부
-  - [ ] 모호한 청크 헤더 파싱 엄격 모드 (`chunked` 외 무시)
+- [x] `[Common]` **HTTP Request Smuggling 방지**
+  - [x] `Transfer-Encoding` + `Content-Length` 동시 존재 시 400 거부
+  - [x] 모호한 청크 헤더 파싱 엄격 모드 (`chunked` 외 엄격 처리)
 - [x] `[Common]` **HTTP Header Injection 방지** — 헤더값 내 bare `\r`/`\n` 포함 시 400 reject
 - [ ] `[Common]` **Slowloris 공격 완화** — Read timeout (Phase 7) + 헤더 최대 크기 제한 조합
 - [ ] `[Common]` **Request Flood 방지** — Rate Limiting (Phase 8) + per-IP connection 수 제한
-- [ ] `[Common]` **Path Traversal 방지** — `../`, `%2e%2e` URL 정규화 후 거부
-- [ ] `[Common]` **Large Header Bomb 방지** — 단일 헤더 최대 크기 제한 (configurable, 기본 8KB)
+- [x] `[Common]` **Path Traversal 방지** — `../`, `%2e%2e`, `%2E%2E` 패턴 → 400 거부
+- [x] `[Common]` **Large Header Bomb 방지** — 총 헤더 8KB 초과 시 400 거부 (`MAX_HEADER_SIZE`)
 
 ### 보안 헤더 헬퍼
 

@@ -88,9 +88,23 @@ void App::use(Middleware mw) { router_.use(std::move(mw)); }
 void App::get(std::string_view path, HandlerVariant handler) {
   router_.add_route(Method::Get, path, std::move(handler));
 }
-
 void App::post(std::string_view path, HandlerVariant handler) {
   router_.add_route(Method::Post, path, std::move(handler));
+}
+void App::put(std::string_view path, HandlerVariant handler) {
+  router_.add_route(Method::Put, path, std::move(handler));
+}
+void App::del(std::string_view path, HandlerVariant handler) {
+  router_.add_route(Method::Delete, path, std::move(handler));
+}
+void App::patch(std::string_view path, HandlerVariant handler) {
+  router_.add_route(Method::Patch, path, std::move(handler));
+}
+void App::head(std::string_view path, HandlerVariant handler) {
+  router_.add_route(Method::Head, path, std::move(handler));
+}
+void App::options(std::string_view path, HandlerVariant handler) {
+  router_.add_route(Method::Options, path, std::move(handler));
 }
 
 void App::stop() { dispatcher_.stop(); }
@@ -109,6 +123,11 @@ Result<void> App::listen(int port) {
 
   int opt = 1;
   setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+#ifdef SO_REUSEPORT
+  // Allow the kernel to load-balance incoming connections across multiple
+  // listener sockets (one per reactor thread in future multi-socket mode).
+  setsockopt(server_fd, SOL_SOCKET, SO_REUSEPORT, &opt, sizeof(opt));
+#endif
 
 #ifdef __linux__
   // TCP_DEFER_ACCEPT: only wake up accept() once data has arrived.
@@ -263,6 +282,31 @@ Result<void> App::listen(int port) {
 
               ctx->handled++;
 
+              // ── Path traversal guard ────────────────────────────────────
+              {
+                std::string_view p = req.path();
+                // Check for ../ and common percent-encoded variants
+                bool bad = (p.find("/../") != std::string_view::npos ||
+                            p.find("/..") == p.size() - 3       ||
+                            p.find("%2e%2e") != std::string_view::npos ||
+                            p.find("%2E%2E") != std::string_view::npos ||
+                            p.find("%2e.") != std::string_view::npos  ||
+                            p.find(".%2e") != std::string_view::npos);
+                if (bad) {
+                  Response err;
+                  err.status(400).body("Bad Request");
+                  err.header("Date", cached_http_date());
+                  err.header("Connection", "close");
+#ifdef __linux__
+                  { int qa = 1; setsockopt(cfd, IPPROTO_TCP, TCP_QUICKACK, &qa, sizeof(qa)); }
+#endif
+                  write_all(cfd, err.serialize());
+                  reactor->unregister_event(cfd, EventType::Read);
+                  close(cfd);
+                  return;
+                }
+              }
+
               // ── Middleware chain ────────────────────────────────────────
               Response res;
               bool cont = true;
@@ -315,8 +359,20 @@ Result<void> App::listen(int port) {
               auto handler =
                   router_.match(req.method(), req.path(), params);
 
+              // HEAD fallback: if no explicit HEAD handler, try GET handler and
+              // strip the response body before sending.
+              bool head_fallback = false;
+              if (std::holds_alternative<std::monostate>(handler) &&
+                  req.method() == Method::Head) {
+                handler = router_.match(Method::Get, req.path(), params);
+                head_fallback = !std::holds_alternative<std::monostate>(handler);
+              }
+
               if (std::holds_alternative<std::monostate>(handler)) {
-                res.status(404).body("Not Found");
+                // Distinguish 404 (path unknown) from 405 (wrong method)
+                int status = router_.path_exists(req.path()) ? 405 : 404;
+                res.status(status).body(status == 405 ? "Method Not Allowed"
+                                                       : "Not Found");
                 finalize(res);
                 if (!keep_alive)
                   close_conn();
@@ -331,6 +387,7 @@ Result<void> App::listen(int port) {
               if (std::holds_alternative<Handler>(handler)) {
                 // ── Sync handler ──────────────────────────────────────────
                 std::get<Handler>(handler)(req, res);
+                if (head_fallback) res.body(""); // HEAD: suppress body
                 finalize(res);
                 if (!keep_alive)
                   close_conn();
@@ -341,15 +398,17 @@ Result<void> App::listen(int port) {
                 // ── Async handler (coroutine) ─────────────────────────────
                 // Capture everything by value into the coroutine frame so
                 // all state is valid for the lifetime of the co_await chain.
-                auto h  = std::get<AsyncHandler>(handler);
-                bool ka = keep_alive;
+                auto h   = std::get<AsyncHandler>(handler);
+                bool ka  = keep_alive;
+                bool hfb = head_fallback;
 
                 auto run_async =
                     [](AsyncHandler ah, Request areq, Response ares,
                        int fd, Reactor *r, std::shared_ptr<ConnCtx> c,
-                       bool ka_flag,
+                       bool ka_flag, bool head_fb,
                        std::function<void()> arm) -> Task<void> {
                   co_await ah(areq, ares);
+                  if (head_fb) ares.body(""); // HEAD: suppress body
 
                   ares.header("Date", cached_http_date());
                   ares.header("Connection",
@@ -375,7 +434,7 @@ Result<void> App::listen(int port) {
                 };
 
                 auto task = run_async(h, std::move(req), std::move(res),
-                                      cfd, reactor, ctx, ka, arm_idle);
+                                      cfd, reactor, ctx, ka, hfb, arm_idle);
                 task.resume();
                 task.detach(); // frame self-destructs on completion
               }

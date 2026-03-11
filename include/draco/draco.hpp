@@ -31,6 +31,32 @@ public:
   /** @brief Register a POST route. */
   void post(std::string_view path, HandlerVariant handler);
 
+  /** @brief Register a PUT route. */
+  void put(std::string_view path, HandlerVariant handler);
+
+  /**
+   * @brief Register a DELETE route.
+   * Named del() to avoid collision with the C keyword \c delete.
+   */
+  void del(std::string_view path, HandlerVariant handler);
+
+  /** @brief Register a PATCH route. */
+  void patch(std::string_view path, HandlerVariant handler);
+
+  /**
+   * @brief Register a HEAD route.
+   *
+   * If no explicit HEAD handler is registered but a GET handler exists for the
+   * same path, Draco automatically serves HEAD using the GET handler and strips
+   * the response body before sending.
+   */
+  void head(std::string_view path, HandlerVariant handler);
+
+  /**
+   * @brief Register an OPTIONS route (CORS preflight etc.).
+   */
+  void options(std::string_view path, HandlerVariant handler);
+
   /**
    * @brief Start listening on a port (blocks until stop() is called).
    *

@@ -58,6 +58,12 @@ public:
   match(Method method, std::string_view path,
         std::unordered_map<std::string, std::string> &params) const;
 
+  /**
+   * Return true if @p path is registered for ANY method.
+   * Used to distinguish 404 (path unknown) from 405 (method not allowed).
+   */
+  bool path_exists(std::string_view path) const;
+
   const std::vector<Middleware> &middlewares() const { return middlewares_; }
 
 private:

@@ -125,6 +125,56 @@ TEST(HttpParserTest, HeadersCompleteBeforeBody) {
   EXPECT_FALSE(parser.is_complete());
 }
 
+TEST(HttpParserTest, QueryStringSplit) {
+  std::string raw =
+      "GET /search?q=hello&page=2 HTTP/1.1\r\n"
+      "Host: example.com\r\n"
+      "\r\n";
+
+  HttpParser parser;
+  Request req;
+  auto result = parser.parse(raw, req);
+  ASSERT_TRUE(result.has_value());
+  EXPECT_EQ(req.path(), "/search");
+  EXPECT_EQ(req.query_string(), "q=hello&page=2");
+  EXPECT_EQ(req.query("q"), "hello");
+  EXPECT_EQ(req.query("page"), "2");
+  EXPECT_EQ(req.query("missing"), "");
+}
+
+TEST(HttpParserTest, RequestSmugglingRejected) {
+  // Both Transfer-Encoding and Content-Length → 400
+  std::string raw =
+      "POST /data HTTP/1.1\r\n"
+      "Content-Length: 5\r\n"
+      "Transfer-Encoding: chunked\r\n"
+      "\r\n";
+
+  HttpParser parser;
+  Request req;
+  auto result = parser.parse(raw, req);
+  EXPECT_FALSE(result.has_value());
+  EXPECT_EQ(parser.error_status(), 400);
+}
+
+TEST(RouterTest, MethodNotAllowed) {
+  Router router;
+  router.add_route(Method::Get, "/items",
+                   Handler([](const Request &, Response &) {}));
+
+  // GET /items exists → path_exists returns true
+  EXPECT_TRUE(router.path_exists("/items"));
+
+  // DELETE /items doesn't exist → match returns monostate, but path_exists true
+  std::unordered_map<std::string, std::string> params;
+  auto handler = router.match(Method::Delete, "/items", params);
+  EXPECT_TRUE(std::holds_alternative<std::monostate>(handler));
+  EXPECT_TRUE(router.path_exists("/items"));
+
+  // Unknown path → path_exists false
+  EXPECT_FALSE(router.path_exists("/nonexistent"));
+}
+
 TEST(RouterTest, BasicMatch) {
   Router router;
   bool called = false;

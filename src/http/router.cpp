@@ -90,4 +90,14 @@ Router::match(Method method, std::string_view path,
   return it->second.search(path, params);
 }
 
+bool Router::path_exists(std::string_view path) const {
+  std::unordered_map<std::string, std::string> dummy;
+  for (const auto &[method, tree] : routes_) {
+    if (!std::holds_alternative<std::monostate>(tree.search(path, dummy)))
+      return true;
+    dummy.clear();
+  }
+  return false;
+}
+
 } // namespace draco

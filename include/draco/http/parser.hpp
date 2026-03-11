@@ -37,7 +37,9 @@ public:
   };
 
   // Default max body size: 1 MiB
-  static constexpr size_t MAX_BODY_SIZE = 1u * 1024u * 1024u;
+  static constexpr size_t MAX_BODY_SIZE   = 1u * 1024u * 1024u;
+  // Default max total header section size: 8 KiB
+  static constexpr size_t MAX_HEADER_SIZE = 8u * 1024u;
 
   HttpParser() = default;
 
@@ -75,6 +77,7 @@ private:
   size_t      chunk_remaining_    = 0;  // bytes remaining in current chunk
   std::string chunk_body_;              // dechunked body accumulator
   int         error_status_       = 0;
+  size_t      header_bytes_       = 0; // total bytes consumed by headers so far
 };
 
 } // namespace draco
