@@ -334,6 +334,26 @@ Result<void> App::listen(int port) {
 
               // ── Helpers ─────────────────────────────────────────────────
               auto finalize = [&](Response &r) {
+                // ── Conditional request: If-None-Match / ETag ───────────
+                // If the handler set an ETag and the client already holds a
+                // matching version, respond 304 Not Modified (no body).
+                auto if_none_match = req.header("If-None-Match");
+                auto resp_etag     = r.get_header("ETag");
+                if (!if_none_match.empty() && !resp_etag.empty()) {
+                  if (if_none_match == "*" || if_none_match == resp_etag) {
+                    Response nm;
+                    nm.status(304)
+                      .header("ETag",       resp_etag)
+                      .header("Date",       cached_http_date())
+                      .header("Connection", keep_alive ? "keep-alive" : "close");
+#ifdef __linux__
+                    { int qa = 1; setsockopt(cfd, IPPROTO_TCP, TCP_QUICKACK, &qa, sizeof(qa)); }
+#endif
+                    write_all(cfd, nm.serialize());
+                    return;
+                  }
+                }
+
                 r.header("Date", cached_http_date());
                 r.header("Connection", keep_alive ? "keep-alive" : "close");
                 if (keep_alive) {

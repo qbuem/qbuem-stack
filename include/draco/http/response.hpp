@@ -2,6 +2,7 @@
 
 #include <draco/common.hpp>
 
+#include <ctime>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -45,6 +46,44 @@ public:
    */
   Response &set_cookie(std::string_view name, std::string_view value,
                        CookieOptions opts = CookieOptions{});
+
+  /**
+   * @brief Set the ETag response header.
+   *
+   * The value is wrapped in double-quotes to form a strong entity-tag per
+   * RFC 7232.  Pass an already-quoted string to use a weak ETag (W/"...").
+   *
+   * Example:
+   *   res.etag("abc123");         // ETag: "abc123"
+   *   res.etag("W/\"v2\"");       // ETag: W/"v2"  (weak, caller quotes)
+   */
+  Response &etag(std::string_view value) {
+    // If the caller already quoted the value, use as-is; otherwise wrap it.
+    if (!value.empty() && value.front() == '"')
+      return header("ETag", value);
+    if (value.size() >= 2 && value[0] == 'W' && value[1] == '/')
+      return header("ETag", value);
+    return header("ETag", "\"" + std::string(value) + "\"");
+  }
+
+  /**
+   * @brief Set the Last-Modified response header from a UTC time_t.
+   *
+   * Formats the timestamp as an HTTP-date (RFC 7231 §7.1.1.1).
+   */
+  Response &last_modified(std::time_t t) {
+    std::tm tm{};
+    gmtime_r(&t, &tm);
+    char buf[48];
+    std::strftime(buf, sizeof(buf), "%a, %d %b %Y %H:%M:%S GMT", &tm);
+    return header("Last-Modified", buf);
+  }
+
+  /** @brief Return the value of a response header (empty string_view if not set). */
+  std::string_view get_header(std::string_view key) const {
+    auto it = headers_.find(std::string(key));
+    return (it != headers_.end()) ? std::string_view(it->second) : std::string_view{};
+  }
 
   std::string serialize() const;
 

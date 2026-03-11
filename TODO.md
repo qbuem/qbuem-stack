@@ -149,7 +149,7 @@ Draco WAS는 **Zero Latency · Zero Cost · Low Memory · Low CPU** 를 4대 핵
   - [x] `SIGTERM` / `SIGINT` 핸들러 등록
   - [ ] drain 모드: 신규 accept 중단, 기존 연결 완료 대기
 - [x] `[Common]` **`Date` 헤더** — atomic cached 포맷 (1초 단위 갱신, double-checked locking)
-- [ ] `[Common]` **Conditional Requests** — `ETag`, `Last-Modified`, `If-None-Match`, `If-Modified-Since`
+- [x] `[Common]` **Conditional Requests** — `ETag` / `Last-Modified` / `If-None-Match` → 304 Not Modified (in finalize); `Response::etag()` + `Response::last_modified()` helpers
 - [ ] `[Common]` **Range Requests** — `Range` 헤더, 206 Partial Content
 - [x] `[Linux]`  **`TCP_QUICKACK`** — 각 응답 후 ACK 즉시 전송으로 RTT 단축
 - [x] `[Linux]`  **`TCP_DEFER_ACCEPT`** — 데이터 도착 후 accept() 실행 (SYN flood 방어 겸용)
@@ -233,10 +233,10 @@ Draco WAS는 **Zero Latency · Zero Cost · Low Memory · Low CPU** 를 4대 핵
 
 ### 암호화
 
-- [ ] `[Common]` **상수 시간 문자열 비교** — timing attack 방지 (`crypto_memcmp` 유틸)
-- [ ] `[Common]` **CSRF 토큰 생성** — `CSPRNG`(`getrandom`/`arc4random`) 기반 안전 난수
-- [ ] `[Linux]`  **`getrandom(2)` syscall** — `/dev/urandom` 파일 open 없이 난수 획득
-- [ ] `[macOS]`  **`arc4random_buf()`** — macOS 커널 제공 CSPRNG
+- [x] `[Common]` **상수 시간 문자열 비교** — `draco::constant_time_equal()` (`include/draco/crypto.hpp`)
+- [x] `[Common]` **CSRF 토큰 생성** — `draco::csrf_token()` (Base64url, 128-bit entropy by default)
+- [x] `[Linux]`  **`getrandom(2)` syscall** — `draco::random_bytes()` on Linux uses getrandom(2)
+- [x] `[macOS]`  **`arc4random_buf()`** — `draco::random_bytes()` on macOS/BSD uses arc4random_buf()
 
 ---
 

@@ -1,3 +1,4 @@
+#include <draco/crypto.hpp>
 #include <draco/http/parser.hpp>
 #include <draco/http/router.hpp>
 #include <draco/middleware/rate_limit.hpp>
@@ -419,6 +420,79 @@ TEST(SecurityHeadersTest, IndividualHelpers) {
     EXPECT_NE(res.serialize().find("Permissions-Policy: camera=()"),
               std::string::npos);
   }
+}
+
+// ─── CryptoTest ───────────────────────────────────────────────────────────────
+
+TEST(CryptoTest, ConstantTimeEqualSame) {
+  EXPECT_TRUE(draco::constant_time_equal("hello", "hello"));
+  EXPECT_TRUE(draco::constant_time_equal("", ""));
+}
+
+TEST(CryptoTest, ConstantTimeEqualDifferent) {
+  EXPECT_FALSE(draco::constant_time_equal("hello", "world"));
+  EXPECT_FALSE(draco::constant_time_equal("abc", "ab"));
+  EXPECT_FALSE(draco::constant_time_equal("", "x"));
+}
+
+TEST(CryptoTest, RandomBytesLength) {
+  auto r16 = draco::random_bytes(16);
+  EXPECT_EQ(r16.size(), 16u);
+  auto r32 = draco::random_bytes(32);
+  EXPECT_EQ(r32.size(), 32u);
+}
+
+TEST(CryptoTest, RandomBytesUnique) {
+  // Two 128-bit samples should not collide (astronomically unlikely)
+  auto a = draco::random_bytes(16);
+  auto b = draco::random_bytes(16);
+  EXPECT_NE(a, b);
+}
+
+TEST(CryptoTest, CsrfTokenFormat) {
+  auto tok = draco::csrf_token();
+  // 128 bits = 16 bytes → ceil(16*4/3) = 22 Base64url chars
+  EXPECT_GE(tok.size(), 21u);
+  // All characters must be Base64url alphabet (A-Z a-z 0-9 - _)
+  for (char c : tok) {
+    bool ok = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+              (c >= '0' && c <= '9') || c == '-' || c == '_';
+    EXPECT_TRUE(ok) << "unexpected char: " << c;
+  }
+}
+
+// ─── ResponseEtagTest ─────────────────────────────────────────────────────────
+
+TEST(ResponseEtagTest, EtagWrapsValue) {
+  Response res;
+  res.etag("abc123");
+  std::string raw = res.serialize();
+  EXPECT_NE(raw.find("ETag: \"abc123\""), std::string::npos);
+}
+
+TEST(ResponseEtagTest, EtagPreQuoted) {
+  Response res;
+  res.etag("\"already-quoted\"");
+  std::string raw = res.serialize();
+  // Should not double-wrap
+  EXPECT_EQ(raw.find("ETag: \"\""), std::string::npos);
+  EXPECT_NE(raw.find("ETag: \"already-quoted\""), std::string::npos);
+}
+
+TEST(ResponseEtagTest, GetHeaderAccessor) {
+  Response res;
+  res.header("X-Custom", "myval");
+  EXPECT_EQ(res.get_header("X-Custom"), "myval");
+  EXPECT_EQ(res.get_header("X-Missing"), "");
+}
+
+TEST(ResponseEtagTest, LastModifiedFormat) {
+  Response res;
+  std::time_t t = 0;  // 1970-01-01 00:00:00 UTC
+  res.last_modified(t);
+  std::string raw = res.serialize();
+  EXPECT_NE(raw.find("Last-Modified: Thu, 01 Jan 1970 00:00:00 GMT"),
+            std::string::npos);
 }
 
 int main(int argc, char **argv) {
