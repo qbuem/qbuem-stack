@@ -106,6 +106,14 @@ void App::head(std::string_view path, HandlerVariant handler) {
 void App::options(std::string_view path, HandlerVariant handler) {
   router_.add_route(Method::Options, path, std::move(handler));
 }
+void App::health_check(std::string_view path) {
+  router_.add_route(Method::Get, path,
+    Handler([](const Request &, Response &res) {
+      res.status(200)
+         .header("Content-Type", "application/json")
+         .body("{\"status\":\"ok\"}");
+    }));
+}
 
 void App::stop() { dispatcher_.stop(); }
 
@@ -386,8 +394,20 @@ Result<void> App::listen(int port) {
 
               if (std::holds_alternative<Handler>(handler)) {
                 // ── Sync handler ──────────────────────────────────────────
-                std::get<Handler>(handler)(req, res);
-                if (head_fallback) res.body(""); // HEAD: suppress body
+                // ── Panic recovery ────────────────────────────────────────
+                try {
+                  std::get<Handler>(handler)(req, res);
+                  if (head_fallback) res.body(""); // HEAD: suppress body
+                } catch (const std::exception &ex) {
+                  std::cerr << "[ERROR] handler exception: " << ex.what()
+                            << std::endl;
+                  res = Response{};
+                  res.status(500).body("Internal Server Error");
+                } catch (...) {
+                  std::cerr << "[ERROR] handler unknown exception" << std::endl;
+                  res = Response{};
+                  res.status(500).body("Internal Server Error");
+                }
                 finalize(res);
                 if (!keep_alive)
                   close_conn();
@@ -407,7 +427,19 @@ Result<void> App::listen(int port) {
                        int fd, Reactor *r, std::shared_ptr<ConnCtx> c,
                        bool ka_flag, bool head_fb,
                        std::function<void()> arm) -> Task<void> {
-                  co_await ah(areq, ares);
+                  try {
+                    co_await ah(areq, ares);
+                  } catch (const std::exception &ex) {
+                    std::cerr << "[ERROR] async handler exception: " << ex.what()
+                              << std::endl;
+                    ares = Response{};
+                    ares.status(500).body("Internal Server Error");
+                  } catch (...) {
+                    std::cerr << "[ERROR] async handler unknown exception"
+                              << std::endl;
+                    ares = Response{};
+                    ares.status(500).body("Internal Server Error");
+                  }
                   if (head_fb) ares.body(""); // HEAD: suppress body
 
                   ares.header("Date", cached_http_date());

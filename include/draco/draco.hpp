@@ -58,6 +58,17 @@ public:
   void options(std::string_view path, HandlerVariant handler);
 
   /**
+   * @brief Register a built-in health check endpoint.
+   *
+   * Responds with HTTP 200 and `{"status":"ok"}` (Content-Type: application/json).
+   * Defaults to GET /health if no path is given.
+   *
+   * Example: app.health_check();           // GET /health
+   *          app.health_check("/_ping");    // GET /_ping
+   */
+  void health_check(std::string_view path = "/health");
+
+  /**
    * @brief Start listening on a port (blocks until stop() is called).
    *
    * SIGTERM and SIGINT are handled automatically: they trigger a graceful

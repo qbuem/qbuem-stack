@@ -157,6 +157,68 @@ TEST(HttpParserTest, RequestSmugglingRejected) {
   EXPECT_EQ(parser.error_status(), 400);
 }
 
+TEST(HttpParserTest, CookieParsing) {
+  std::string raw =
+      "GET /profile HTTP/1.1\r\n"
+      "Cookie: session=abc123; theme=dark; lang=ko\r\n"
+      "\r\n";
+
+  HttpParser parser;
+  Request req;
+  auto result = parser.parse(raw, req);
+  ASSERT_TRUE(result.has_value());
+  EXPECT_EQ(req.cookie("session"), "abc123");
+  EXPECT_EQ(req.cookie("theme"),   "dark");
+  EXPECT_EQ(req.cookie("lang"),    "ko");
+  EXPECT_EQ(req.cookie("missing"), "");
+}
+
+TEST(HttpParserTest, FormBodyParsing) {
+  std::string raw =
+      "POST /login HTTP/1.1\r\n"
+      "Content-Type: application/x-www-form-urlencoded\r\n"
+      "Content-Length: 28\r\n"
+      "\r\n"
+      "username=alice&password=s3cr";  // 28 bytes
+
+  HttpParser parser;
+  Request req;
+  auto result = parser.parse(raw, req);
+  ASSERT_TRUE(result.has_value());
+  EXPECT_EQ(req.form("username"), "alice");
+  EXPECT_EQ(req.form("password"), "s3cr");
+  EXPECT_EQ(req.form("missing"),  "");
+
+  // form() returns empty for wrong Content-Type
+  std::string raw2 =
+      "POST /data HTTP/1.1\r\n"
+      "Content-Type: application/json\r\n"
+      "Content-Length: 2\r\n"
+      "\r\n"
+      "{}";
+  HttpParser p2;
+  Request r2;
+  p2.parse(raw2, r2);
+  EXPECT_EQ(r2.form("key"), "");
+}
+
+TEST(ResponseTest, SetCookieBuilder) {
+  Response res;
+  res.status(200)
+     .set_cookie("session", "tok123",
+                 {.path = "/", .domain = "", .same_site = "Lax",
+                  .max_age = 3600, .http_only = true, .secure = true})
+     .set_cookie("pref", "dark");
+
+  std::string raw = res.serialize();
+  EXPECT_NE(raw.find("Set-Cookie: session=tok123"), std::string::npos);
+  EXPECT_NE(raw.find("HttpOnly"), std::string::npos);
+  EXPECT_NE(raw.find("Secure"), std::string::npos);
+  EXPECT_NE(raw.find("Max-Age=3600"), std::string::npos);
+  EXPECT_NE(raw.find("SameSite=Lax"), std::string::npos);
+  EXPECT_NE(raw.find("Set-Cookie: pref=dark"), std::string::npos);
+}
+
 TEST(RouterTest, MethodNotAllowed) {
   Router router;
   router.add_route(Method::Get, "/items",

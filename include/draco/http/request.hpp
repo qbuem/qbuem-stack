@@ -28,17 +28,22 @@ inline Method string_to_method(std::string_view m) {
  * responsibility — use your preferred library (simdjson, nlohmann/json, glaze,
  * …) directly on body().
  *
- * Query string parameters are available via query(key).
+ * Convenience accessors:
+ *   query(key)  — URL query parameter (?key=val)
+ *   cookie(key) — Cookie header field (Cookie: key=val; ...)
+ *   form(key)   — application/x-www-form-urlencoded body field
+ *   param(key)  — URL path parameter (:name segments)
+ *
  * The path() accessor returns only the path component (before '?').
  */
 class Request {
 public:
   Request() = default;
 
-  Method          method()       const { return method_; }
-  std::string_view path()        const { return path_; }
-  std::string_view body()        const { return body_; }
-  std::string_view query_string() const { return query_string_; }
+  Method           method()        const { return method_; }
+  std::string_view path()          const { return path_; }
+  std::string_view body()          const { return body_; }
+  std::string_view query_string()  const { return query_string_; }
 
   std::string_view header(std::string_view key) const {
     auto it = headers_.find(std::string(key));
@@ -51,41 +56,43 @@ public:
   }
 
   /**
-   * @brief Return the value of a URL query parameter.
-   *
-   * Scans the raw query string (no allocation).
-   * Returns empty string_view when the key is absent.
-   * Values are returned as-is (percent-encoded); callers that need decoded
-   * values must decode themselves.
+   * Return the value of a URL query parameter (?key=val&...).
+   * Scans the raw query string without allocation.
+   * Values are returned percent-encoded; decode if needed.
    */
   std::string_view query(std::string_view key) const {
-    std::string_view qs = query_string_;
-    while (!qs.empty()) {
-      size_t amp  = qs.find('&');
-      std::string_view pair = (amp == std::string_view::npos) ? qs
-                                                               : qs.substr(0, amp);
-      size_t eq = pair.find('=');
-      if (eq != std::string_view::npos && pair.substr(0, eq) == key)
-        return pair.substr(eq + 1);
-
-      if (amp == std::string_view::npos) break;
-      qs = qs.substr(amp + 1);
-    }
-    return {};
+    return scan_kv(query_string_, '&', key);
   }
 
-  // Setters used by the parser / router
-  void set_method(Method m) { method_ = m; }
+  /**
+   * Return the value of a named cookie from the Cookie request header.
+   * Format: "name=val; name2=val2"
+   */
+  std::string_view cookie(std::string_view key) const {
+    return scan_kv(header("Cookie"), ';', key);
+  }
 
   /**
-   * Split the raw request-target at '?' and store path and query string
-   * separately.  Routing uses only the path component.
+   * Return the value of a field from an application/x-www-form-urlencoded body.
+   * Returns empty when Content-Type does not match or the key is absent.
    */
+  std::string_view form(std::string_view key) const {
+    if (header("Content-Type").find("application/x-www-form-urlencoded")
+        == std::string_view::npos)
+      return {};
+    return scan_kv(body_, '&', key);
+  }
+
+  // ── Setters used by the parser / router ────────────────────────────────────
+
+  void set_method(Method m) { method_ = m; }
+
+  /** Split the raw request-target at '?'; routing uses only path_. */
   void set_path(std::string_view raw) {
     size_t q = raw.find('?');
     if (q == std::string_view::npos) {
       path_         = std::string(raw);
-      query_string_ = {};
+      query_string_.clear();
     } else {
       path_         = std::string(raw.substr(0, q));
       query_string_ = std::string(raw.substr(q + 1));
@@ -102,6 +109,35 @@ public:
   }
 
 private:
+  /**
+   * Shared key=value scanner used by query(), cookie(), and form().
+   *
+   * @param src   The string to scan (query string, Cookie header, or body).
+   * @param sep   Pair separator ('&' for query/form, ';' for cookies).
+   * @param key   The key to search for.
+   */
+  static std::string_view scan_kv(std::string_view src, char sep,
+                                   std::string_view key) {
+    while (!src.empty()) {
+      // Skip leading whitespace (cookie values have "; " with a space)
+      while (!src.empty() && src[0] == ' ')
+        src.remove_prefix(1);
+
+      size_t delim = src.find(sep);
+      std::string_view pair = (delim == std::string_view::npos)
+                                  ? src
+                                  : src.substr(0, delim);
+
+      size_t eq = pair.find('=');
+      if (eq != std::string_view::npos && pair.substr(0, eq) == key)
+        return pair.substr(eq + 1);
+
+      if (delim == std::string_view::npos) break;
+      src = src.substr(delim + 1);
+    }
+    return {};
+  }
+
   Method      method_       = Method::Unknown;
   std::string path_;
   std::string query_string_;

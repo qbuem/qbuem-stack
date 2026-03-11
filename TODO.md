@@ -177,13 +177,13 @@ Draco WAS는 **Zero Latency · Zero Cost · Low Memory · Low CPU** 를 4대 핵
   - [ ] JSON structured log 옵션
   - [ ] 응답 시간 측정 (ns 단위, `CLOCK_MONOTONIC`)
   - [ ] **비동기 로그 링 버퍼** — 로그를 ring buffer에 enqueue, 별도 thread가 flush (hot path 블로킹 없음)
-- [ ] `[Common]` **CORS 미들웨어**
-  - [ ] `Access-Control-Allow-Origin` / `Methods` / `Headers` 설정
-  - [ ] Preflight (`OPTIONS`) 자동 처리
-  - [ ] 동적 Origin 화이트리스트 검사
+- [x] `[Common]` **CORS 미들웨어** — `include/draco/middleware/cors.hpp`
+  - [x] `Access-Control-Allow-Origin` / `Methods` / `Headers` / `Max-Age` 설정
+  - [x] Preflight (`OPTIONS`) 자동 처리 — 204 응답 후 체인 중단
+  - [ ] 동적 Origin 화이트리스트 검사 (현재 단일 origin 지원)
 - [ ] `[Common]` **Body Parser 미들웨어**
   - [ ] `application/json` → JSON 파싱 (라이브러리 독립적)
-  - [ ] `application/x-www-form-urlencoded` 파싱
+  - [x] `application/x-www-form-urlencoded` 파싱 — `Request::form(key)` (no-alloc)
   - [ ] `multipart/form-data` 파싱 (파일 업로드)
 - [ ] `[Common]` **Rate Limiting 미들웨어**
   - [ ] 토큰 버킷 알고리즘 (thread-local per reactor, lock-free)
@@ -193,7 +193,7 @@ Draco WAS는 **Zero Latency · Zero Cost · Low Memory · Low CPU** 를 4대 핵
   - [ ] `Content-Encoding: gzip` (zlib, streaming 압축)
   - [ ] `Content-Encoding: br` (brotli, optional)
   - [ ] `Accept-Encoding` 협상 (q-factor 파싱)
-- [ ] `[Common]` **Cookie 파싱** — `Cookie:` 헤더 파싱, `Set-Cookie:` 응답 빌더
+- [x] `[Common]` **Cookie 파싱** — `Request::cookie(key)` (no-alloc), `Response::set_cookie()` (Full Attribute 지원)
 - [ ] `[Common]` **Session 미들웨어** — lock-free 세션 맵 (per-reactor 분산)
 - [ ] `[Common]` **JWT 미들웨어**
   - [ ] HS256 / RS256 검증
@@ -203,8 +203,8 @@ Draco WAS는 **Zero Latency · Zero Cost · Low Memory · Low CPU** 를 4대 핵
   - [ ] MIME type 자동 감지
   - [ ] `ETag` / `Last-Modified` 자동 생성
   - [ ] Directory listing (optional)
-- [ ] `[Common]` **Health Check** — `GET /health` → `{"status":"ok"}` 내장 핸들러 (컴파일 타임 상수 응답)
-- [ ] `[Common]` **Panic Recovery 미들웨어** — 핸들러 예외 catch → 500 응답 변환
+- [x] `[Common]` **Health Check** — `App::health_check(path)` → `{"status":"ok"}`, Content-Type: application/json
+- [x] `[Common]` **Panic Recovery** — sync/async 핸들러 예외 catch → 500 응답 변환 (try/catch in draco.cpp)
 
 ---
 
