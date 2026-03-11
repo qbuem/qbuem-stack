@@ -13,7 +13,7 @@ Draco WAS는 **Zero Latency · Zero Cost · Low Memory · Low CPU** 를 4대 핵
 
 - [x] `[Common]` Expert architecture design (Shared-Nothing, io_uring, Coroutines)
 - [x] `[Common]` C++23 project foundation & directory structure
-- [x] `[Common]` Dependency management via `FetchContent` (Beast-JSON, GTest)
+- [x] `[Common]` Dependency management via `FetchContent` (GTest)
 - [x] `[Linux]`  **Reactor Core**: `epoll` reactor 구현
 - [x] `[macOS]`  **Reactor Core**: `kqueue` reactor 구현
 - [x] `[Common]` **Dispatcher**: Thread-per-core Dispatcher with CPU affinity
@@ -24,8 +24,7 @@ Draco WAS는 **Zero Latency · Zero Cost · Low Memory · Low CPU** 를 4대 핵
 ## ✅ Phase 3: Coroutines (완료)
 
 - [x] `[Common]` Custom `draco::Task<T>` with symmetric transfer for nested coroutines
-- [x] `[Common]` Beast JSON 의존성 **프레임워크 코어에서 제거** — `body()`는 raw bytes, JSON 파싱은 애플리케이션 책임
-- [x] `[Common]` beast_json은 `examples/` 전용 — `CONTRIBUTING.md`에 버그 리포팅 가이드 명시
+- [x] `[Common]` JSON 의존성 **프레임워크 코어에서 완전 제거** — `body()`는 raw bytes, JSON 파싱은 애플리케이션 책임
 
 ## ✅ Phase 4: Async I/O & Hardening (완료)
 
@@ -183,7 +182,7 @@ Draco WAS는 **Zero Latency · Zero Cost · Low Memory · Low CPU** 를 4대 핵
   - [ ] Preflight (`OPTIONS`) 자동 처리
   - [ ] 동적 Origin 화이트리스트 검사
 - [ ] `[Common]` **Body Parser 미들웨어**
-  - [ ] `application/json` → beast-json 파싱
+  - [ ] `application/json` → JSON 파싱 (라이브러리 독립적)
   - [ ] `application/x-www-form-urlencoded` 파싱
   - [ ] `multipart/form-data` 파싱 (파일 업로드)
 - [ ] `[Common]` **Rate Limiting 미들웨어**
@@ -443,7 +442,7 @@ Draco WAS는 **Zero Latency · Zero Cost · Low Memory · Low CPU** 를 4대 핵
 - [ ] `[Common]` **Flame Graph 통합** — 프로파일링 가이드 (`perf` / Instruments)
 - [ ] `[Common]` **Zero-copy Serialization 최적화**
   - [ ] 응답 헤더 iovec scatter-gather 직렬화 (writev)
-  - [ ] Beast JSON write buffer chain 최적화
+  - [ ] JSON write buffer chain 최적화
 - [ ] `[Common]` **Lock-free 라우팅 테이블** — 원자적 업데이트, RCU 패턴
 - [ ] `[Common]` **pre-serialized 정적 응답** — `200 OK` / `404 Not Found` 바이트 배열 컴파일 타임 생성
 
@@ -790,7 +789,7 @@ Draco WAS는 **Zero Latency · Zero Cost · Low Memory · Low CPU** 를 4대 핵
 
 ### 직렬화 / 역직렬화
 
-- [ ] `[Common]` **Beast JSON** — 이미 통합 완료 (Phase 3)
+- [ ] `[Common]` **JSON 지원** — 라이브러리 독립적, 애플리케이션에서 직접 선택
 - [ ] `[Common]` **`draco::msgpack`** — MessagePack 직렬화 (`ISerializer` 구현)
   - [ ] `msgpack::serialize(obj) → bytes` / `msgpack::deserialize<T>(bytes)`
 - [ ] `[Common]` **`draco::cbor`** — CBOR (RFC 8949) 직렬화 (IoT, CoAP 친화)
@@ -936,7 +935,6 @@ Draco WAS는 **Zero Latency · Zero Cost · Low Memory · Low CPU** 를 4대 핵
 
 | 라이브러리 | 최소 버전 | 라이선스 | 통합 방법 | 사용처 | 비고 |
 |-----------|---------|---------|---------|-------|------|
-| **Boost.JSON** (Beast JSON) | 1.85+ | BSL-1.0 | 🔧 FetchContent ✅ | HTTP JSON 파싱 | 이미 통합 완료 |
 | **GoogleTest** | 1.14+ | BSD-3 | 🔧 FetchContent ✅ | 단위/통합 테스트 | 이미 통합 완료 |
 | **zlib** | 1.3+ | zlib/libpng | 🔍 `find_package(ZLIB)` | gzip 압축(Phase 8), 로그 아카이브(Phase 24) | 거의 모든 시스템에 존재 |
 
@@ -962,7 +960,7 @@ Draco WAS는 **Zero Latency · Zero Cost · Low Memory · Low CPU** 를 4대 핵
 | **xxHash** | 0.8.2+ | BSD-2 | 🔧 FetchContent (단일 헤더) | 비암호 해시(Phase 27) |
 | **msgpack-cxx** | 6.1+ | BSL-1.0 | 🔧 FetchContent (헤더 전용) | MessagePack 직렬화(Phase 27) |
 | **tinycbor** | 0.6.0+ | MIT | 🔧 FetchContent | CBOR 직렬화(Phase 27) |
-| **nlohmann/json** | — | MIT | ❌ 불필요 | Beast JSON으로 대체 |
+| **nlohmann/json** | 3.11+ | MIT | 🔧 선택적 | JSON 파싱 (애플리케이션 책임) |
 
 #### 🟦 선택적 성능 의존성 (opt-in, 없어도 빌드 성공)
 

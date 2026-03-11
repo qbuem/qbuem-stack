@@ -32,8 +32,8 @@ inline Method string_to_method(std::string_view m) {
  * @brief HTTP Request.
  *
  * Body is exposed as raw bytes via body(). JSON parsing is the application's
- * responsibility — use your preferred library (beast_json, simdjson,
- * nlohmann/json, …) directly on body(). See examples/coro_json.cpp.
+ * responsibility — use your preferred library (simdjson, nlohmann/json, glaze,
+ * …) directly on body().
  */
 class Request {
 public:

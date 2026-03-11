@@ -27,26 +27,12 @@ option(DRACO_BUILD_TESTS    "Build Draco unit tests"   ON)
 option(DRACO_BUILD_EXAMPLES "Build Draco examples"     ON)
 option(DRACO_INSTALL        "Generate install targets"  ON)
 
-# Tag that gets baked into the installed draco-config.cmake so downstream
-# consumers fetch exactly the same beast_json version that this release
-# was built and tested against.  CI overrides this via -DDRACO_BEAST_JSON_TAG.
-set(DRACO_BEAST_JSON_TAG "main" CACHE STRING
-    "beast_json git tag to embed in the installed package config")
-
 # ============================================================================
 # Dependencies (FetchContent — build-time only)
 # ============================================================================
 include(FetchContent)
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
-
-set(BEAST_JSON_BUILD_TESTS OFF CACHE BOOL "" FORCE)
-FetchContent_Declare(
-    beast_json
-    GIT_REPOSITORY https://github.com/the-lkb/beast-json.git
-    GIT_TAG        ${DRACO_BEAST_JSON_TAG}
-)
-FetchContent_MakeAvailable(beast_json)
 
 # ============================================================================
 # Helper: shared compile options (PRIVATE — never leak into consumers)
@@ -107,7 +93,7 @@ endif()
 # Target: draco::http
 #   HTTP parser, Request, Response, Router.
 #   No JSON library dependency — body() is raw bytes; callers choose their
-#   own JSON library (see examples/ which use beast_json directly).
+#   own JSON library.
 # ============================================================================
 add_library(draco_http STATIC
     src/http/parser.cpp
