@@ -10,6 +10,7 @@
 #include <iostream>
 #include <mutex>
 #include <netinet/in.h>
+#include <netinet/tcp.h>
 #include <sys/socket.h>
 #include <unistd.h>
 #include <variant>
@@ -68,6 +69,7 @@ struct ConnCtx {
   std::string buf;          // partial-read accumulation buffer
   int handled       = 0;   // requests handled on this connection
   int idle_timer_id = -1;  // current idle timer (-1 = none)
+  bool sent_100     = false; // already sent 100 Continue for current request
 
   static constexpr int MAX_REQUESTS    = 100;
   static constexpr int IDLE_TIMEOUT_MS = 30'000; // 30 s
@@ -108,6 +110,14 @@ Result<void> App::listen(int port) {
   int opt = 1;
   setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
 
+#ifdef __linux__
+  // TCP_DEFER_ACCEPT: only wake up accept() once data has arrived.
+  // Eliminates the accept → read → empty-read cycle for slow clients.
+  int defer_secs = 5;
+  setsockopt(server_fd, IPPROTO_TCP, TCP_DEFER_ACCEPT,
+             &defer_secs, sizeof(defer_secs));
+#endif
+
   struct sockaddr_in address{};
   address.sin_family      = AF_INET;
   address.sin_addr.s_addr = INADDR_ANY;
@@ -145,6 +155,20 @@ Result<void> App::listen(int port) {
         }
 
         fcntl(client_fd, F_SETFL, O_NONBLOCK);
+
+        // Disable Nagle algorithm — send data immediately without waiting to
+        // accumulate a full segment.  Critical for request-response latency.
+        int nodelay = 1;
+        setsockopt(client_fd, IPPROTO_TCP, TCP_NODELAY,
+                   &nodelay, sizeof(nodelay));
+
+#ifdef __linux__
+        // TCP_QUICKACK: send ACKs immediately instead of waiting for delayed
+        // ACK timer (40 ms).  Re-applied each time we write (kernel resets it).
+        int quickack = 1;
+        setsockopt(client_fd, IPPROTO_TCP, TCP_QUICKACK,
+                   &quickack, sizeof(quickack));
+#endif
 
         // Per-connection shared state (lives as long as any callback holds it)
         auto ctx = std::make_shared<ConnCtx>();
@@ -189,10 +213,41 @@ Result<void> App::listen(int port) {
               }
               ctx->buf.append(tmp, static_cast<size_t>(n));
 
-              // Attempt to parse one complete HTTP request from the buffer
+              // Re-parse accumulated buffer from the beginning each time.
+              // This is simple and correct for typical request sizes.
               HttpParser parser;
               Request req;
               auto parsed = parser.parse(ctx->buf, req);
+
+              // ── Hard parse error (400 / 413) ──────────────────────────
+              if (!parsed) {
+                int status = parser.error_status() ? parser.error_status() : 400;
+                Response err;
+                err.status(status)
+                   .header("Connection", "close")
+                   .header("Date", cached_http_date())
+                   .body(status == 413 ? "Payload Too Large" : "Bad Request");
+                write_all(cfd, err.serialize());
+                reactor->unregister_event(cfd, EventType::Read);
+                close(cfd);
+                return;
+              }
+
+              // ── Headers done, body still pending → Expect: 100-continue ─
+              if (parser.headers_complete() && !parser.is_complete()) {
+                if (!ctx->sent_100) {
+                  std::string_view expect = req.header("Expect");
+                  if (expect == "100-continue") {
+                    static constexpr char k100[] =
+                        "HTTP/1.1 100 Continue\r\n\r\n";
+                    [[maybe_unused]] ssize_t r100 =
+                        write(cfd, k100, sizeof(k100) - 1);
+                    ctx->sent_100 = true;
+                  }
+                }
+                arm_idle();
+                return;
+              }
 
               if (!parser.is_complete()) {
                 // Incomplete request — wait for more data
@@ -200,9 +255,11 @@ Result<void> App::listen(int port) {
                 return;
               }
 
+              // Request is complete.  Reset 100-continue flag for next request.
+              ctx->sent_100 = false;
+
               // Consume parsed bytes; remainder stays for pipelining
-              if (parsed)
-                ctx->buf.erase(0, *parsed);
+              ctx->buf.erase(0, *parsed);
 
               ctx->handled++;
 
@@ -233,6 +290,11 @@ Result<void> App::listen(int port) {
                                 std::to_string(ConnCtx::MAX_REQUESTS -
                                                ctx->handled));
                 }
+#ifdef __linux__
+                // Re-enable TCP_QUICKACK after each response write.
+                int qa = 1;
+                setsockopt(cfd, IPPROTO_TCP, TCP_QUICKACK, &qa, sizeof(qa));
+#endif
                 write_all(cfd, r.serialize());
               };
 
@@ -298,6 +360,10 @@ Result<void> App::listen(int port) {
                                      std::to_string(ConnCtx::MAX_REQUESTS -
                                                     c->handled));
                   }
+#ifdef __linux__
+                  int qa = 1;
+                  setsockopt(fd, IPPROTO_TCP, TCP_QUICKACK, &qa, sizeof(qa));
+#endif
                   write_all(fd, ares.serialize());
 
                   if (!ka_flag) {

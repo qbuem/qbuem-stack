@@ -18,6 +18,113 @@ TEST(HttpParserTest, BasicParse) {
   EXPECT_EQ(req.body(), "hello");
 }
 
+TEST(HttpParserTest, ChunkedBody) {
+  // Chunked transfer: "hello" (5) + " world" (6) + last chunk (0)
+  std::string raw =
+      "POST /upload HTTP/1.1\r\n"
+      "Transfer-Encoding: chunked\r\n"
+      "\r\n"
+      "5\r\nhello\r\n"
+      "6\r\n world\r\n"
+      "0\r\n"
+      "\r\n";
+
+  HttpParser parser;
+  Request req;
+  auto result = parser.parse(raw, req);
+  ASSERT_TRUE(result.has_value());
+  ASSERT_TRUE(parser.is_complete());
+  EXPECT_EQ(req.body(), "hello world");
+}
+
+TEST(HttpParserTest, ChunkedPartialBody) {
+  // Arrive in two parts; second call re-parses the full buffer
+  std::string part1 =
+      "POST /up HTTP/1.1\r\n"
+      "Transfer-Encoding: chunked\r\n"
+      "\r\n"
+      "5\r\nhel";   // chunk data split
+
+  HttpParser p1;
+  Request r1;
+  auto res1 = p1.parse(part1, r1);
+  ASSERT_TRUE(res1.has_value());  // partial → returns bytes consumed so far
+  EXPECT_FALSE(p1.is_complete());
+
+  // Full buffer now
+  std::string full = part1 + "lo\r\n0\r\n\r\n";
+  HttpParser p2;
+  Request r2;
+  auto res2 = p2.parse(full, r2);
+  ASSERT_TRUE(res2.has_value());
+  EXPECT_TRUE(p2.is_complete());
+  EXPECT_EQ(r2.body(), "hello");
+}
+
+TEST(HttpParserTest, ChunkedWithExtension) {
+  // Chunk extensions ("; name=value") must be silently ignored
+  std::string raw =
+      "POST / HTTP/1.1\r\n"
+      "Transfer-Encoding: chunked\r\n"
+      "\r\n"
+      "3;ext=val\r\nabc\r\n"
+      "0\r\n"
+      "\r\n";
+
+  HttpParser parser;
+  Request req;
+  auto result = parser.parse(raw, req);
+  ASSERT_TRUE(result.has_value());
+  EXPECT_TRUE(parser.is_complete());
+  EXPECT_EQ(req.body(), "abc");
+}
+
+TEST(HttpParserTest, PayloadTooLarge) {
+  // Content-Length larger than MAX_BODY_SIZE → error_status 413
+  std::string raw =
+      "POST /big HTTP/1.1\r\n"
+      "Content-Length: 2097152\r\n"  // 2 MiB > 1 MiB limit
+      "\r\n";
+
+  HttpParser parser;
+  Request req;
+  auto result = parser.parse(raw, req);
+  EXPECT_FALSE(result.has_value());
+  EXPECT_EQ(parser.error_status(), 413);
+}
+
+TEST(HttpParserTest, HeaderInjectionRejected) {
+  // A header value containing a bare \r (CR without immediately following LF
+  // as the terminator) must be rejected with status 400.
+  // Attack pattern: "X-Evil: foo\r bar" — the embedded CR could confuse
+  // downstream code that processes header values.
+  std::string raw =
+      "GET / HTTP/1.1\r\n"
+      "X-Evil: foo\r bar\r\n"   // bare \r embedded mid-value
+      "\r\n";
+
+  HttpParser parser;
+  Request req;
+  auto result = parser.parse(raw, req);
+  EXPECT_FALSE(result.has_value());
+  EXPECT_EQ(parser.error_status(), 400);
+}
+
+TEST(HttpParserTest, HeadersCompleteBeforeBody) {
+  // With Content-Length but no body data yet, headers_complete() == true
+  std::string raw =
+      "POST /data HTTP/1.1\r\n"
+      "Content-Length: 10\r\n"
+      "\r\n";  // body not included
+
+  HttpParser parser;
+  Request req;
+  auto result = parser.parse(raw, req);
+  ASSERT_TRUE(result.has_value());
+  EXPECT_TRUE(parser.headers_complete());
+  EXPECT_FALSE(parser.is_complete());
+}
+
 TEST(RouterTest, BasicMatch) {
   Router router;
   bool called = false;

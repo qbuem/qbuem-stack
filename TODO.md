@@ -134,13 +134,13 @@ Draco WAS는 **Zero Latency · Zero Cost · Low Memory · Low CPU** 를 4대 핵
   - [x] `Connection: keep-alive` / `Connection: close` 헤더 파싱 및 응답
   - [x] keep-alive timeout (30s) & max-requests (100) per connection
   - [x] per-connection accumulation buffer (partial read 지원)
-- [ ] `[Common]` **Chunked Transfer Encoding** (송수신 모두)
-  - [ ] 청크 파싱 (요청 body)
+- [x] `[Common]` **Chunked Transfer Encoding** (요청 수신)
+  - [x] 청크 파싱 (요청 body) — 청크 확장자 무시, 멀티-청크, 부분 수신 지원
   - [ ] 청크 직렬화 (응답 body streaming)
 - [ ] `[Common]` **Pipelining** — 순서 보장 응답 큐 (head-of-line 유지)
 - [x] `[Common]` **Content-Length 자동 계산** — 응답 직렬화 시 자동 삽입
-- [ ] `[Common]` **100 Continue** 처리 (`Expect: 100-continue`)
-- [ ] `[Common]` **Request body 크기 제한** — configurable `max_body_size`
+- [x] `[Common]` **100 Continue** 처리 (`Expect: 100-continue`) — 헤더 완료 후 body 대기 시 자동 응답
+- [x] `[Common]` **Request body 크기 제한** — `MAX_BODY_SIZE` 1 MiB, 초과 시 413 응답
 - [x] `[Common]` **Connection Timeout**
   - [x] Idle timeout (keep-alive 유휴 시간) — 30s, timer 기반
   - [ ] Read timeout (헤더 수신 최대 시간)
@@ -151,8 +151,8 @@ Draco WAS는 **Zero Latency · Zero Cost · Low Memory · Low CPU** 를 4대 핵
 - [x] `[Common]` **`Date` 헤더** — atomic cached 포맷 (1초 단위 갱신, double-checked locking)
 - [ ] `[Common]` **Conditional Requests** — `ETag`, `Last-Modified`, `If-None-Match`, `If-Modified-Since`
 - [ ] `[Common]` **Range Requests** — `Range` 헤더, 206 Partial Content
-- [ ] `[Common]` **`TCP_QUICKACK`** — ACK 즉시 전송으로 RTT 단축
-- [ ] `[Common]` **`TCP_DEFER_ACCEPT`** — 데이터 도착 후 accept() 실행 (SYN flood 방어 겸용)
+- [x] `[Linux]`  **`TCP_QUICKACK`** — 각 응답 후 ACK 즉시 전송으로 RTT 단축
+- [x] `[Linux]`  **`TCP_DEFER_ACCEPT`** — 데이터 도착 후 accept() 실행 (SYN flood 방어 겸용)
 - [ ] `[Common]` **`TCP_CORK` / `MSG_MORE`** — 헤더+body 단일 전송 배칭
 
 ---
@@ -217,7 +217,7 @@ Draco WAS는 **Zero Latency · Zero Cost · Low Memory · Low CPU** 를 4대 핵
 - [ ] `[Common]` **HTTP Request Smuggling 방지**
   - [ ] `Transfer-Encoding` + `Content-Length` 동시 존재 시 400 거부
   - [ ] 모호한 청크 헤더 파싱 엄격 모드 (`chunked` 외 무시)
-- [ ] `[Common]` **HTTP Header Injection 방지** — 헤더값 `\r\n` 포함 시 reject
+- [x] `[Common]` **HTTP Header Injection 방지** — 헤더값 내 bare `\r`/`\n` 포함 시 400 reject
 - [ ] `[Common]` **Slowloris 공격 완화** — Read timeout (Phase 7) + 헤더 최대 크기 제한 조합
 - [ ] `[Common]` **Request Flood 방지** — Rate Limiting (Phase 8) + per-IP connection 수 제한
 - [ ] `[Common]` **Path Traversal 방지** — `../`, `%2e%2e` URL 정규화 후 거부

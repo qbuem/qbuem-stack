@@ -13,7 +13,7 @@ namespace draco {
  *
  * Use body() with a pre-serialized string for structured data (JSON, etc.).
  * There is intentionally no built-in JSON method — serialize with whichever
- * library you choose and pass the result to body(). See examples/coro_json.cpp.
+ * library you choose and pass the result to body().
  */
 class Response {
 public:
