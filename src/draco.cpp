@@ -4,6 +4,7 @@
 
 #include <arpa/inet.h>
 #include <cerrno>
+#include <chrono>
 #include <csignal>
 #include <cstring>
 #include <ctime>
@@ -148,16 +149,70 @@ void App::health_check(std::string_view path) {
     }));
 }
 
+// ─── Metrics ─────────────────────────────────────────────────────────────────
+
+Metrics App::snapshot_metrics() const {
+  return {
+      cnt_requests_.load(std::memory_order_relaxed),
+      cnt_errors_.load(std::memory_order_relaxed),
+      cnt_active_.load(std::memory_order_relaxed),
+      cnt_bytes_sent_.load(std::memory_order_relaxed),
+  };
+}
+
+void App::metrics_endpoint(std::string_view path) {
+  router_.add_route(
+      Method::Get, path,
+      Handler([this](const Request &, Response &res) {
+        auto m = snapshot_metrics();
+        std::string body =
+            "draco_requests_total " + std::to_string(m.requests_total) + "\n" +
+            "draco_errors_total " + std::to_string(m.errors_total) + "\n" +
+            "draco_active_connections " +
+            std::to_string(m.active_connections) + "\n" +
+            "draco_bytes_sent " + std::to_string(m.bytes_sent) + "\n";
+        res.status(200)
+           .header("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+           .body(body);
+      }));
+}
+
+// ─── Access log ───────────────────────────────────────────────────────────────
+
+void App::set_access_logger(
+    std::function<void(std::string_view, std::string_view, int, long)> fn) {
+  logger_ = std::move(fn);
+}
+
+void App::enable_access_log() {
+  logger_ = [](std::string_view method, std::string_view path, int status,
+               long duration_us) {
+    // Format: [YYYY-MM-DDTHH:MM:SSZ] METHOD /path STATUS Xµs
+    std::time_t now = std::time(nullptr);
+    std::tm tm{};
+    gmtime_r(&now, &tm);
+    char ts[32];
+    std::strftime(ts, sizeof(ts), "%Y-%m-%dT%H:%M:%SZ", &tm);
+    std::fprintf(stderr, "[%s] %.*s %.*s %d %ldµs\n", ts,
+                 static_cast<int>(method.size()), method.data(),
+                 static_cast<int>(path.size()),   path.data(),
+                 status, duration_us);
+  };
+}
+
+// ─── App lifecycle ────────────────────────────────────────────────────────────
+
 void App::stop() { dispatcher_.stop(); }
 
-Result<void> App::listen(int port) {
+Result<void> App::listen(int port, bool ipv6) {
   // ── SIGTERM / SIGINT → graceful shutdown ──────────────────────────────────
   g_app_instance = this;
   std::signal(SIGTERM, on_shutdown_signal);
   std::signal(SIGINT,  on_shutdown_signal);
 
   // ── Listening socket ──────────────────────────────────────────────────────
-  int server_fd = socket(AF_INET, SOCK_STREAM, 0);
+  int af = ipv6 ? AF_INET6 : AF_INET;
+  int server_fd = socket(af, SOCK_STREAM, 0);
   if (server_fd == -1)
     return std::unexpected(
         std::make_error_code(std::errc::resource_unavailable_try_again));
@@ -170,6 +225,12 @@ Result<void> App::listen(int port) {
   setsockopt(server_fd, SOL_SOCKET, SO_REUSEPORT, &opt, sizeof(opt));
 #endif
 
+  if (ipv6) {
+    // IPV6_V6ONLY = 0: accept both IPv4 and IPv6 (dual-stack).
+    int v6only = 0;
+    setsockopt(server_fd, IPPROTO_IPV6, IPV6_V6ONLY, &v6only, sizeof(v6only));
+  }
+
 #ifdef __linux__
   // TCP_DEFER_ACCEPT: only wake up accept() once data has arrived.
   // Eliminates the accept → read → empty-read cycle for slow clients.
@@ -178,15 +239,27 @@ Result<void> App::listen(int port) {
              &defer_secs, sizeof(defer_secs));
 #endif
 
-  struct sockaddr_in address{};
-  address.sin_family      = AF_INET;
-  address.sin_addr.s_addr = INADDR_ANY;
-  address.sin_port        = htons(static_cast<uint16_t>(port));
-
-  if (bind(server_fd, reinterpret_cast<struct sockaddr *>(&address),
-           sizeof(address)) < 0) {
-    close(server_fd);
-    return std::unexpected(std::make_error_code(std::errc::address_in_use));
+  // Bind to INADDR_ANY / in6addr_any
+  if (ipv6) {
+    struct sockaddr_in6 addr6{};
+    addr6.sin6_family = AF_INET6;
+    addr6.sin6_addr   = in6addr_any;
+    addr6.sin6_port   = htons(static_cast<uint16_t>(port));
+    if (bind(server_fd, reinterpret_cast<struct sockaddr *>(&addr6),
+             sizeof(addr6)) < 0) {
+      close(server_fd);
+      return std::unexpected(std::make_error_code(std::errc::address_in_use));
+    }
+  } else {
+    struct sockaddr_in address{};
+    address.sin_family      = AF_INET;
+    address.sin_addr.s_addr = INADDR_ANY;
+    address.sin_port        = htons(static_cast<uint16_t>(port));
+    if (bind(server_fd, reinterpret_cast<struct sockaddr *>(&address),
+             sizeof(address)) < 0) {
+      close(server_fd);
+      return std::unexpected(std::make_error_code(std::errc::address_in_use));
+    }
   }
 
   if (::listen(server_fd, 1024) < 0) {
@@ -196,7 +269,8 @@ Result<void> App::listen(int port) {
 
   fcntl(server_fd, F_SETFL, O_NONBLOCK);
   std::cout << "Draco WAS v" << Version::string
-            << " listening on http://0.0.0.0:" << port << std::endl;
+            << " listening on http" << (ipv6 ? "://[::]:" : "://0.0.0.0:")
+            << port << std::endl;
 
   // ── Accept loop ───────────────────────────────────────────────────────────
   auto listen_res = dispatcher_.register_listener(
@@ -230,8 +304,16 @@ Result<void> App::listen(int port) {
                    &quickack, sizeof(quickack));
 #endif
 
-        // Per-connection shared state (lives as long as any callback holds it)
-        auto ctx = std::make_shared<ConnCtx>();
+        // Per-connection shared state (lives as long as any callback holds it).
+        // Custom deleter: decrement active-connection counter when the last
+        // reference is released (which happens after all callbacks for this
+        // fd are removed from the reactor).
+        cnt_active_.fetch_add(1, std::memory_order_relaxed);
+        auto ctx = std::shared_ptr<ConnCtx>(new ConnCtx{},
+            [this](ConnCtx *c) {
+              cnt_active_.fetch_sub(1, std::memory_order_relaxed);
+              delete c;
+            });
 
         // arm_idle: cancel current idle timer and start a fresh one.
         // All callbacks for a given fd run on the same reactor thread,
@@ -353,10 +435,14 @@ Result<void> App::listen(int port) {
               cancel_read_timeout();
               ctx->sent_100 = false;
 
+              // Record request start time for access log duration.
+              auto req_start = std::chrono::steady_clock::now();
+
               // Consume parsed bytes; remainder stays for pipelining
               ctx->buf.erase(0, *parsed);
 
               ctx->handled++;
+              cnt_requests_.fetch_add(1, std::memory_order_relaxed);
 
               // ── Path traversal guard ────────────────────────────────────
               {
@@ -481,7 +567,27 @@ Result<void> App::listen(int port) {
                 int qa = 1;
                 setsockopt(cfd, IPPROTO_TCP, TCP_QUICKACK, &qa, sizeof(qa));
 #endif
-                write_all(cfd, r.serialize());
+                std::string serialized = r.serialize();
+                size_t bytes = serialized.size();
+                write_all(cfd, serialized);
+
+                // ── Metrics + access log ────────────────────────────────
+                cnt_bytes_sent_.fetch_add(bytes, std::memory_order_relaxed);
+                int sc = r.status_code();
+                if (sc >= 400)
+                  cnt_errors_.fetch_add(1, std::memory_order_relaxed);
+                if (logger_) {
+                  auto dur = std::chrono::duration_cast<std::chrono::microseconds>(
+                      std::chrono::steady_clock::now() - req_start).count();
+                  logger_(req.method() == Method::Get    ? "GET"    :
+                          req.method() == Method::Post   ? "POST"   :
+                          req.method() == Method::Put    ? "PUT"    :
+                          req.method() == Method::Delete ? "DELETE" :
+                          req.method() == Method::Patch  ? "PATCH"  :
+                          req.method() == Method::Head   ? "HEAD"   :
+                          req.method() == Method::Options? "OPTIONS": "UNKNOWN",
+                          req.path(), sc, dur);
+                }
               };
 
               auto close_conn = [&]() {

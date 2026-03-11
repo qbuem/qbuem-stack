@@ -1,4 +1,5 @@
 #include <draco/crypto.hpp>
+#include <draco/draco.hpp>
 #include <draco/http/parser.hpp>
 #include <draco/http/router.hpp>
 #include <draco/middleware/rate_limit.hpp>
@@ -620,6 +621,41 @@ TEST(RouterPrefixTest, ExactRouteBeforePrefix) {
   Request req; Response res;
   std::get<Handler>(h)(req, res);
   EXPECT_TRUE(exact_called); // exact match wins over prefix
+}
+
+// ─── MetricsTest ──────────────────────────────────────────────────────────────
+
+TEST(MetricsTest, SnapshotInitialValues) {
+  App app(1);
+  auto m = app.snapshot_metrics();
+  EXPECT_EQ(m.requests_total,     0u);
+  EXPECT_EQ(m.errors_total,       0u);
+  EXPECT_EQ(m.active_connections, 0u);
+  EXPECT_EQ(m.bytes_sent,         0u);
+}
+
+TEST(MetricsTest, AtomicCountersWritable) {
+  App app(1);
+  app.cnt_requests_.store(42, std::memory_order_relaxed);
+  app.cnt_errors_.store(3, std::memory_order_relaxed);
+  auto m = app.snapshot_metrics();
+  EXPECT_EQ(m.requests_total, 42u);
+  EXPECT_EQ(m.errors_total,   3u);
+}
+
+// ─── AccessLoggerTest ─────────────────────────────────────────────────────────
+
+TEST(AccessLoggerTest, SetLoggerCalled) {
+  // Access logger is a callback set via App::set_access_logger().
+  // We verify the App API compiles and accepts a lambda.
+  App app(1);
+  bool called = false;
+  app.set_access_logger([&](std::string_view, std::string_view, int, long) {
+    called = true;
+  });
+  // Logger is called inside listen() when requests are handled; we just verify
+  // the API is wired up by checking the App accepted the callback (no crash).
+  EXPECT_FALSE(called); // Not called until a request is processed
 }
 
 int main(int argc, char **argv) {

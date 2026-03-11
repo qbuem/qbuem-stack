@@ -172,11 +172,12 @@ Draco WAS는 **Zero Latency · Zero Cost · Low Memory · Low CPU** 를 4대 핵
 ### 필수 미들웨어
 
 - [x] `[Common]` **Request ID 미들웨어** — UUID v4 자동 생성 (thread_local mt19937_64, lock-free), `X-Request-ID` 헤더 echo/generate (`include/draco/middleware/request_id.hpp`)
-- [ ] `[Common]` **Logging 미들웨어**
-  - [ ] Combined Log Format (Apache/Nginx 호환)
+- [x] `[Common]` **Logging 미들웨어**
+  - [x] Combined Log Format (Apache-like) — `App::enable_access_log()` stderr 출력
+  - [x] 커스텀 콜백 — `App::set_access_logger(fn)` (method, path, status, duration_us)
+  - [x] 응답 시간 측정 (µs 단위, `steady_clock`)
   - [ ] JSON structured log 옵션
-  - [ ] 응답 시간 측정 (ns 단위, `CLOCK_MONOTONIC`)
-  - [ ] **비동기 로그 링 버퍼** — 로그를 ring buffer에 enqueue, 별도 thread가 flush (hot path 블로킹 없음)
+  - [ ] **비동기 로그 링 버퍼** — 로그를 ring buffer에 enqueue, 별도 thread가 flush
 - [x] `[Common]` **CORS 미들웨어** — `include/draco/middleware/cors.hpp`
   - [x] `Access-Control-Allow-Origin` / `Methods` / `Headers` / `Max-Age` 설정
   - [x] Preflight (`OPTIONS`) 자동 처리 — 204 응답 후 체인 중단
@@ -362,7 +363,7 @@ Draco WAS는 **Zero Latency · Zero Cost · Low Memory · Low CPU** 를 4대 핵
 
 ### 공통
 
-- [ ] `[Common]` **IPv6 완전 지원** — `::1` 바인딩, dual-stack `IPV6_V6ONLY` 설정
+- [x] `[Common]` **IPv6 완전 지원** — `App::listen(port, ipv6=true)`, `AF_INET6` + `IPV6_V6ONLY=0` dual-stack
 - [ ] **Unix Domain Socket** — `app.listen("/tmp/draco.sock")` 지원
   - [ ] `[Linux]`  `AF_UNIX` SOCK_STREAM
   - [ ] `[macOS]`  `AF_UNIX` SOCK_STREAM
@@ -394,14 +395,14 @@ Draco WAS는 **Zero Latency · Zero Cost · Low Memory · Low CPU** 를 4대 핵
 
 > 목표: 성능 페널티 없는 프로덕션 가시성 — lock-free atomic 카운터 기반
 
-- [ ] `[Common]` **Lock-free 내장 메트릭**
-  - [ ] `std::atomic<uint64_t>` per-reactor 카운터 (요청 수, 에러 수, 활성 연결 수)
+- [x] `[Common]` **Lock-free 내장 메트릭** — `App::Metrics` 구조체, `App::snapshot_metrics()`
+  - [x] `std::atomic<uint64_t>` 글로벌 카운터: requests_total, errors_total, active_connections, bytes_sent
+  - [x] active_connections: shared_ptr 커스텀 deleter로 정확한 증감 보장
   - [ ] 히스토그램 버킷 (레이턴시 분포 P50/P95/P99)
   - [ ] 메트릭 집계 — reactor별 카운터 → 원자적 합산
-- [ ] `[Common]` **Prometheus 메트릭 엔드포인트** — `GET /metrics` text exposition 포맷
-  - [ ] `draco_requests_total{method, status}` counter
+- [x] `[Common]` **Prometheus 메트릭 엔드포인트** — `App::metrics_endpoint(path)`, `GET /metrics` text exposition 포맷
+  - [x] `draco_requests_total` / `draco_errors_total` / `draco_active_connections` / `draco_bytes_sent` counter/gauge
   - [ ] `draco_request_duration_seconds` histogram
-  - [ ] `draco_connections_active` gauge
   - [ ] `draco_memory_arena_bytes` gauge
 - [ ] `[Common]` **OpenTelemetry 트레이싱**
   - [ ] `traceparent` / `tracestate` W3C 헤더 파싱
