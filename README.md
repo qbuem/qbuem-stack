@@ -64,20 +64,33 @@ AsyncWrite ──► (Keep-Alive? → Idle) / (Close → Arena free)
 
 ---
 
-## 현재 구현 상태 (v0.2.0)
+## 현재 구현 상태 (v0.3.0)
 
 | 구성요소 | 상태 | 비고 |
 |---------|------|------|
 | kqueue Reactor (macOS) | ✅ 완료 | `EVFILT_READ/WRITE/TIMER` |
 | epoll Reactor (Linux) | ✅ 완료 | `epoll` + `timerfd` |
-| io_uring Reactor (Linux) | 🔄 진행 중 | stub → 실제 구현 Phase 5 |
+| io_uring Reactor (Linux) | 🔄 진행 중 | POLL_ADD 기반 구현; SQPOLL은 Phase 5 |
 | Thread-per-core Dispatcher | ✅ 완료 | CPU affinity 포함 |
-| Radix Tree Router | ✅ 완료 | `/:param` 추출 |
-| HTTP/1.1 Parser | ✅ 기본 | Keep-Alive 등 RFC 완전 준수 Phase 7 |
+| Radix Tree Router | ✅ 완료 | `/:param` 추출 + Prefix 라우트 |
+| HTTP/1.1 Parser | ✅ 완료 | Keep-Alive, Chunked, 100-Continue, Pipelining |
 | `draco::Task<T>` Coroutine | ✅ 완료 | symmetric transfer |
 | AsyncRead / AsyncWrite | ✅ 완료 | |
 | AsyncSleep (timer) | ✅ 완료 | |
-| Beast JSON 통합 | ✅ 완료 | zero-copy parse/serialize |
+| Middleware Pipeline | ✅ 완료 | Request ID, Rate Limit, CORS, Security Headers, Cookie |
+| Static File Serving | ✅ 완료 | ETag, Last-Modified, Range, MIME 자동 감지 |
+| Health Check / Metrics | ✅ 완료 | `App::health_check()`, `App::metrics_endpoint()` |
+| Conditional Requests | ✅ 완료 | ETag / If-None-Match → 304 Not Modified |
+| Range Requests | ✅ 완료 | 206 Partial Content / 416 Range Not Satisfiable |
+| Slowloris 완화 | ✅ 완료 | Read timeout 10s (per-request) |
+| IPv6 dual-stack | ✅ 완료 | `App::listen(port, ipv6=true)` |
+| TCP_FASTOPEN | ✅ 완료 | Linux listen socket |
+| SO_NOSIGPIPE | ✅ 완료 | macOS client socket |
+| Remote Addr | ✅ 완료 | `req.remote_addr()` — `inet_ntop()` from accept() |
+| URL Encode / Decode | ✅ 완료 | `draco::url_encode()` / `url_decode()` |
+| Crypto Utils | ✅ 완료 | constant-time compare, CSPRNG, CSRF token |
+| Access Log | ✅ 완료 | `App::enable_access_log()`, `set_access_logger()` |
+| JSON (코어 의존 없음) | ✅ 완료 | 프레임워크 코어에서 완전 제거; 앱이 직접 처리 |
 | TLS/SSL | ❌ 예정 | Phase 10 |
 | HTTP/2 | ❌ 예정 | Phase 11 |
 | HTTP/3 / QUIC | ❌ 예정 | Phase 12 |
@@ -90,30 +103,52 @@ AsyncWrite ──► (Keep-Alive? → Idle) / (Close → Arena free)
 
 ```cpp
 #include <draco/draco.hpp>
+#include <draco/middleware/cors.hpp>
+#include <draco/middleware/request_id.hpp>
+#include <draco/middleware/rate_limit.hpp>
+#include <draco/middleware/security.hpp>
 
 int main() {
     draco::App app;
 
-    // 동기 핸들러
-    app.get("/hello", [](draco::Request& req, draco::Response& res) {
-        res.set_body("Hello, World!");
+    // ── 미들웨어 등록 ──────────────────────────────────────────────
+    app.use(draco::middleware::request_id());          // X-Request-ID 자동 생성
+    app.use(draco::middleware::secure_headers());      // HSTS, CSP, X-Frame-Options …
+    app.use(draco::middleware::cors());                // CORS preflight 자동 처리
+    app.use(draco::middleware::rate_limit());          // 토큰 버킷 (100 req/s, burst 20)
+
+    // ── 동기 핸들러 ────────────────────────────────────────────────
+    app.get("/hello", [](const draco::Request& req, draco::Response& res) {
+        res.status(200)
+           .header("Content-Type", "text/plain")
+           .body("Hello, Draco!");
     });
 
-    // 비동기 코루틴 핸들러
-    app.get("/user/:id", [](draco::Request& req, draco::Response& res)
+    // ── 비동기 코루틴 핸들러 ───────────────────────────────────────
+    app.get("/user/:id", [](const draco::Request& req, draco::Response& res)
         -> draco::Task<void> {
         auto id = req.param("id");
-        res.json({{"user_id", id}, {"status", "ok"}});
+        res.status(200)
+           .header("Content-Type", "application/json")
+           .body("{\"user_id\":\"" + std::string(id) + "\"}");
         co_return;
     });
 
-    // 글로벌 미들웨어
-    app.use([](draco::Request& req, draco::Response& res, auto next) {
-        res.set_header("X-Powered-By", "Draco");
-        next();
-    });
+    // ── 내장 엔드포인트 ────────────────────────────────────────────
+    app.health_check("/health");           // GET /health → {"status":"ok"}
+    app.metrics_endpoint("/metrics");      // GET /metrics → Prometheus 포맷
+    app.serve_static("/static", "./www");  // 정적 파일 서빙 (ETag + Range 지원)
 
-    app.listen(8080);
+    // ── 액세스 로그 활성화 ─────────────────────────────────────────
+    app.enable_access_log();   // stderr: [2024-…] GET /hello 200 123µs
+
+    // ── 서버 시작 (IPv4 / IPv6 dual-stack) ────────────────────────
+    auto result = app.listen(8080);   // IPv4
+    // auto result = app.listen(8080, true); // IPv6 dual-stack
+    if (!result) {
+        std::cerr << "listen failed: " << result.error().message() << "\n";
+        return 1;
+    }
 }
 ```
 

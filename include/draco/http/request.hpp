@@ -45,6 +45,15 @@ public:
   std::string_view body()          const { return body_; }
   std::string_view query_string()  const { return query_string_; }
 
+  /**
+   * Return the client IP address as seen by the server's accept() call.
+   *
+   * This is the immediate peer address (may be a load-balancer or proxy IP).
+   * For the originating client IP use req.header("X-Forwarded-For") or
+   * req.header("X-Real-IP") when behind a trusted reverse proxy.
+   */
+  std::string_view remote_addr()   const { return remote_addr_; }
+
   std::string_view header(std::string_view key) const {
     auto it = headers_.find(std::string(key));
     return (it != headers_.end()) ? it->second : std::string_view{};
@@ -108,6 +117,14 @@ public:
     params_[std::string(key)] = std::string(value);
   }
 
+  /**
+   * Store the remote (client) IP address as seen by the server.
+   * Called by the server after accept(); NOT based on request headers.
+   */
+  void set_remote_addr(std::string_view addr) {
+    remote_addr_ = std::string(addr);
+  }
+
 private:
   /**
    * Shared key=value scanner used by query(), cookie(), and form().
@@ -142,6 +159,7 @@ private:
   std::string path_;
   std::string query_string_;
   std::string body_;
+  std::string remote_addr_;  // client IP from socket (set by server, not headers)
   std::unordered_map<std::string, std::string> headers_;
   std::unordered_map<std::string, std::string> params_;
 };

@@ -69,6 +69,7 @@ static void on_shutdown_signal(int) {
 // ─── Per-connection keep-alive state ────────────────────────────────────────
 struct ConnCtx {
   std::string buf;           // partial-read accumulation buffer
+  std::string client_ip;     // remote peer address (dotted-decimal or IPv6)
   int handled        = 0;   // requests handled on this connection
   int idle_timer_id  = -1;  // current idle timer (-1 = none)
   int read_timer_id  = -1;  // per-request read timeout timer (-1 = none)
@@ -225,6 +226,13 @@ Result<void> App::listen(int port, bool ipv6) {
   setsockopt(server_fd, SOL_SOCKET, SO_REUSEPORT, &opt, sizeof(opt));
 #endif
 
+#if defined(__linux__) && defined(TCP_FASTOPEN)
+  // TCP Fast Open: allow data in the SYN packet for repeat clients,
+  // reducing connection latency by one RTT.
+  int tfo_qlen = 128;
+  setsockopt(server_fd, IPPROTO_TCP, TCP_FASTOPEN, &tfo_qlen, sizeof(tfo_qlen));
+#endif
+
   if (ipv6) {
     // IPV6_V6ONLY = 0: accept both IPv4 and IPv6 (dual-stack).
     int v6only = 0;
@@ -277,7 +285,7 @@ Result<void> App::listen(int port, bool ipv6) {
       server_fd, [this](int lfd) {
         Reactor *reactor = Reactor::current();
 
-        struct sockaddr_in client_addr{};
+        struct sockaddr_storage client_addr{};
         socklen_t client_len = sizeof(client_addr);
         int client_fd =
             accept(lfd, reinterpret_cast<struct sockaddr *>(&client_addr),
@@ -288,7 +296,23 @@ Result<void> App::listen(int port, bool ipv6) {
           return;
         }
 
+        // Extract remote peer IP address for use in Request::remote_addr().
+        char peer_ip[INET6_ADDRSTRLEN] = {};
+        if (client_addr.ss_family == AF_INET6) {
+          const auto *a6 = reinterpret_cast<const struct sockaddr_in6 *>(&client_addr);
+          inet_ntop(AF_INET6, &a6->sin6_addr, peer_ip, sizeof(peer_ip));
+        } else {
+          const auto *a4 = reinterpret_cast<const struct sockaddr_in *>(&client_addr);
+          inet_ntop(AF_INET, &a4->sin_addr, peer_ip, sizeof(peer_ip));
+        }
+
         fcntl(client_fd, F_SETFL, O_NONBLOCK);
+
+#ifdef SO_NOSIGPIPE
+        // macOS: prevent SIGPIPE on write to closed socket.
+        int nosig = 1;
+        setsockopt(client_fd, SOL_SOCKET, SO_NOSIGPIPE, &nosig, sizeof(nosig));
+#endif
 
         // Disable Nagle algorithm — send data immediately without waiting to
         // accumulate a full segment.  Critical for request-response latency.
@@ -314,6 +338,7 @@ Result<void> App::listen(int port, bool ipv6) {
               cnt_active_.fetch_sub(1, std::memory_order_relaxed);
               delete c;
             });
+        ctx->client_ip = peer_ip;
 
         // arm_idle: cancel current idle timer and start a fresh one.
         // All callbacks for a given fd run on the same reactor thread,
@@ -468,6 +493,9 @@ Result<void> App::listen(int port, bool ipv6) {
                   return;
                 }
               }
+
+              // Expose the remote peer IP via Request::remote_addr().
+              req.set_remote_addr(ctx->client_ip);
 
               // ── Middleware chain ────────────────────────────────────────
               Response res;

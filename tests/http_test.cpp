@@ -658,6 +658,59 @@ TEST(AccessLoggerTest, SetLoggerCalled) {
   EXPECT_FALSE(called); // Not called until a request is processed
 }
 
+// ─── UrlTest ──────────────────────────────────────────────────────────────────
+
+#include <draco/url.hpp>
+
+TEST(UrlTest, DecodePercent) {
+  EXPECT_EQ(draco::url_decode("Hello%20World"), "Hello World");
+  EXPECT_EQ(draco::url_decode("%2F"),           "/");
+  EXPECT_EQ(draco::url_decode("%2f"),           "/");
+  EXPECT_EQ(draco::url_decode("no+encoding"),   "no encoding"); // '+' → space
+}
+
+TEST(UrlTest, DecodeEmpty) {
+  EXPECT_EQ(draco::url_decode(""), "");
+}
+
+TEST(UrlTest, DecodeUnreserved) {
+  EXPECT_EQ(draco::url_decode("abcABC-_.~"), "abcABC-_.~");
+}
+
+TEST(UrlTest, EncodeSafeChars) {
+  EXPECT_EQ(draco::url_encode("abcABC-_.~"), "abcABC-_.~");
+}
+
+TEST(UrlTest, EncodeSpecialChars) {
+  EXPECT_EQ(draco::url_encode(" "),     "%20");
+  EXPECT_EQ(draco::url_encode("/"),     "%2F");
+  EXPECT_EQ(draco::url_encode("a b/c"), "a%20b%2Fc");
+}
+
+TEST(UrlTest, RoundTrip) {
+  std::string original = "hello world / test=1&foo=bar";
+  EXPECT_EQ(draco::url_decode(draco::url_encode(original)), original);
+}
+
+// ─── RemoteAddrTest ───────────────────────────────────────────────────────────
+
+TEST(RemoteAddrTest, DefaultEmpty) {
+  Request req;
+  EXPECT_EQ(req.remote_addr(), "");
+}
+
+TEST(RemoteAddrTest, SetAndGet) {
+  Request req;
+  req.set_remote_addr("192.168.1.1");
+  EXPECT_EQ(req.remote_addr(), "192.168.1.1");
+}
+
+TEST(RemoteAddrTest, IPv6Address) {
+  Request req;
+  req.set_remote_addr("::1");
+  EXPECT_EQ(req.remote_addr(), "::1");
+}
+
 int main(int argc, char **argv) {
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();

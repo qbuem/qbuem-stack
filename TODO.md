@@ -379,7 +379,7 @@ Draco WAS는 **Zero Latency · Zero Cost · Low Memory · Low CPU** 를 4대 핵
 
 ### Linux 전용
 
-- [ ] `[Linux]`  **`TCP_FASTOPEN`** — 3-way handshake 없이 첫 패킷에 데이터 전송
+- [x] `[Linux]`  **`TCP_FASTOPEN`** — listen socket에 `TCP_FASTOPEN` 적용 (`qlen=128`), 반복 클라이언트 RTT 1회 단축
 - [ ] `[Linux]`  **`SO_INCOMING_CPU`** — RSS 기반 CPU 친화성 소켓 배분
 - [ ] `[Linux]`  **NUMA 인식 스레드 배치** — `numa_alloc_onnode` / `set_mempolicy`
 - [ ] `[Linux]`  **NIC IRQ Affinity 가이드** — `/proc/irq/*/smp_affinity` 설정 스크립트
@@ -387,7 +387,7 @@ Draco WAS는 **Zero Latency · Zero Cost · Low Memory · Low CPU** 를 4대 핵
 ### macOS 전용
 
 - [ ] `[macOS]`  **`TCP_FASTOPEN`** — macOS 12+ 지원
-- [ ] `[macOS]`  **`SO_NOSIGPIPE`** — SIGPIPE 억제
+- [x] `[macOS]`  **`SO_NOSIGPIPE`** — accept() 후 클라이언트 소켓에 `SO_NOSIGPIPE` 적용, SIGPIPE 억제
 
 ---
 
@@ -419,12 +419,13 @@ Draco WAS는 **Zero Latency · Zero Cost · Low Memory · Low CPU** 를 4대 핵
 ## 🟡 Phase 18: URL / Request 유틸리티
 
 - [ ] `[Common]` **URL 파싱** — path, query string, fragment 완전 분리
-- [ ] `[Common]` **Query String 파싱** — `?foo=bar&baz=1` → `req.query("foo")` API
-- [ ] `[Common]` **URL 인코딩/디코딩** — percent-encoding 유틸리티
+- [x] `[Common]` **Query String 파싱** — `?foo=bar&baz=1` → `req.query("key")` (no-alloc zero-copy 스캐너, `Request::query()` 구현)
+- [x] `[Common]` **URL 인코딩/디코딩** — `draco::url_encode()` / `draco::url_decode()` (`include/draco/url.hpp`; RFC 3986 unreserved 세트, `+` → space, `%XX` 처리)
 - [ ] `[Common]` **Path Normalization** — `..` / `.` 제거, 이중 슬래시 처리
-- [ ] `[Common]` **MIME Type 레지스트리** — 확장자 → Content-Type 자동 매핑 (컴파일 타임 해시맵)
+- [x] `[Common]` **MIME Type 레지스트리** — 확장자 → Content-Type 자동 매핑 (30+ 확장자, `include/draco/middleware/static_files.hpp`)
 - [ ] `[Common]` **Content Negotiation** — `Accept:` 헤더 q-factor 파싱 및 협상
-- [ ] `[Common]` **`req.ip()`** — 실제 클라이언트 IP 추출 (프록시 헤더 포함)
+- [x] `[Common]` **`req.remote_addr()`** — TCP 수락 시 `inet_ntop()` 으로 추출한 실제 피어 IP 저장 (`Request::remote_addr()` / `set_remote_addr()`)
+- [ ] `[Common]` **`req.ip()`** — 프록시 헤더(`X-Forwarded-For`, `X-Real-IP`) 까지 고려한 신뢰 클라이언트 IP 추출
 - [ ] `[Common]` **Multipart Form Data 파서** — 바이너리 파일 업로드 포함
 
 ---
