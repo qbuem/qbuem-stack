@@ -58,6 +58,26 @@ public:
   void options(std::string_view path, HandlerVariant handler);
 
   /**
+   * @brief Serve static files from a filesystem directory.
+   *
+   * Registers a GET handler that serves all files under @p url_prefix by
+   * mapping the request path suffix to a file inside @p root_dir.
+   *
+   * Features:
+   *   - MIME type auto-detection from file extension
+   *   - Weak ETag (size + mtime) + Last-Modified headers → 304 support
+   *   - Path traversal prevention (/../, %2e%2e, …)
+   *
+   * Example:
+   *   app.serve_static("/static", "./public");
+   *   // GET /static/js/app.js → reads ./public/js/app.js
+   *
+   * @param url_prefix  URL path prefix, e.g., "/static".
+   * @param root_dir    Filesystem root directory, e.g., "./public".
+   */
+  void serve_static(std::string_view url_prefix, std::string_view root_dir);
+
+  /**
    * @brief Register a built-in health check endpoint.
    *
    * Responds with HTTP 200 and `{"status":"ok"}` (Content-Type: application/json).

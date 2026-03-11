@@ -59,6 +59,18 @@ public:
         std::unordered_map<std::string, std::string> &params) const;
 
   /**
+   * Register a prefix route that matches all paths beginning with @p prefix.
+   *
+   * The matched suffix (everything after the prefix) is available via
+   * req.param("**").
+   *
+   * Used internally by App::serve_static() to serve an entire directory tree
+   * without requiring wildcard support in the RadixTree.
+   */
+  void add_prefix_route(Method method, std::string_view prefix,
+                        HandlerVariant handler);
+
+  /**
    * Return true if @p path is registered for ANY method.
    * Used to distinguish 404 (path unknown) from 405 (method not allowed).
    */
@@ -67,8 +79,15 @@ public:
   const std::vector<Middleware> &middlewares() const { return middlewares_; }
 
 private:
+  struct PrefixRoute {
+    Method        method;
+    std::string   prefix;
+    HandlerVariant handler;
+  };
+
   std::unordered_map<Method, RadixTree> routes_;
-  std::vector<Middleware> middlewares_;
+  std::vector<Middleware>               middlewares_;
+  std::vector<PrefixRoute>             prefix_routes_;
 };
 
 } // namespace draco

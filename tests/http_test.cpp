@@ -4,6 +4,7 @@
 #include <draco/middleware/rate_limit.hpp>
 #include <draco/middleware/request_id.hpp>
 #include <draco/middleware/security.hpp>
+#include <draco/middleware/static_files.hpp>
 #include <gtest/gtest.h>
 
 using namespace draco;
@@ -530,6 +531,95 @@ TEST(ResponseEtagTest, LastModifiedFormat) {
   std::string raw = res.serialize();
   EXPECT_NE(raw.find("Last-Modified: Thu, 01 Jan 1970 00:00:00 GMT"),
             std::string::npos);
+}
+
+// ─── StaticFilesTest ──────────────────────────────────────────────────────────
+
+TEST(StaticFilesTest, MimeTypeDetection) {
+  using draco::middleware::mime_type;
+  EXPECT_EQ(mime_type(".html"),  "text/html; charset=utf-8");
+  EXPECT_EQ(mime_type(".js"),    "text/javascript; charset=utf-8");
+  EXPECT_EQ(mime_type(".css"),   "text/css; charset=utf-8");
+  EXPECT_EQ(mime_type(".json"),  "application/json");
+  EXPECT_EQ(mime_type(".png"),   "image/png");
+  EXPECT_EQ(mime_type(".woff2"), "font/woff2");
+  EXPECT_EQ(mime_type(".xyz"),   "application/octet-stream"); // unknown
+}
+
+TEST(StaticFilesTest, FileExtension) {
+  using draco::middleware::file_extension;
+  EXPECT_EQ(file_extension("/foo/bar.js"),  ".js");
+  EXPECT_EQ(file_extension("style.css"),    ".css");
+  EXPECT_EQ(file_extension("/noext"),       "");
+  EXPECT_EQ(file_extension("/a.b/noext"),   "");
+  EXPECT_EQ(file_extension("/a.b/c.d"),     ".d");
+}
+
+TEST(StaticFilesTest, ServeFileNotFound) {
+  Response res;
+  draco::middleware::serve_file("/nonexistent/path/file.txt", res);
+  EXPECT_EQ(res.status_code(), 404);
+}
+
+TEST(StaticFilesTest, ServeFileExists) {
+  // Write a temp file and serve it
+  const char *tmp = "/tmp/draco_static_test.html";
+  {
+    std::ofstream f(tmp);
+    f << "<h1>hello</h1>";
+  }
+  Response res;
+  draco::middleware::serve_file(tmp, res);
+  EXPECT_EQ(res.status_code(), 200);
+  EXPECT_NE(res.serialize().find("text/html"), std::string::npos);
+  EXPECT_NE(res.serialize().find("ETag"), std::string::npos);
+  EXPECT_NE(res.serialize().find("Last-Modified"), std::string::npos);
+  EXPECT_EQ(res.get_body(), "<h1>hello</h1>");
+  ::unlink(tmp);
+}
+
+// ─── RouterPrefixTest ─────────────────────────────────────────────────────────
+
+TEST(RouterPrefixTest, PrefixRouteMatchesSuffix) {
+  Router router;
+  std::string captured_suffix;
+  router.add_prefix_route(
+      Method::Get, "/static",
+      Handler([&](const Request &req, Response &) {
+        captured_suffix = std::string(req.param("**"));
+      }));
+
+  std::unordered_map<std::string, std::string> params;
+  auto h = router.match(Method::Get, "/static/js/app.js", params);
+  ASSERT_TRUE(std::holds_alternative<Handler>(h));
+  EXPECT_EQ(params["**"], "/js/app.js");
+}
+
+TEST(RouterPrefixTest, PrefixRoutePathExists) {
+  Router router;
+  router.add_prefix_route(Method::Get, "/assets",
+                           Handler([](const Request &, Response &) {}));
+
+  EXPECT_TRUE(router.path_exists("/assets/logo.png"));
+  EXPECT_FALSE(router.path_exists("/other"));
+}
+
+TEST(RouterPrefixTest, ExactRouteBeforePrefix) {
+  Router router;
+  bool exact_called = false;
+  router.add_route(Method::Get, "/static/special",
+                   Handler([&](const Request &, Response &) {
+                     exact_called = true;
+                   }));
+  router.add_prefix_route(Method::Get, "/static",
+                           Handler([](const Request &, Response &) {}));
+
+  std::unordered_map<std::string, std::string> params;
+  auto h = router.match(Method::Get, "/static/special", params);
+  ASSERT_TRUE(std::holds_alternative<Handler>(h));
+  Request req; Response res;
+  std::get<Handler>(h)(req, res);
+  EXPECT_TRUE(exact_called); // exact match wins over prefix
 }
 
 int main(int argc, char **argv) {

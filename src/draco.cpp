@@ -1,5 +1,6 @@
 #include <draco/draco.hpp>
 #include <draco/http/parser.hpp>
+#include <draco/middleware/static_files.hpp>
 
 #include <arpa/inet.h>
 #include <cerrno>
@@ -110,6 +111,34 @@ void App::head(std::string_view path, HandlerVariant handler) {
 void App::options(std::string_view path, HandlerVariant handler) {
   router_.add_route(Method::Options, path, std::move(handler));
 }
+void App::serve_static(std::string_view url_prefix, std::string_view root_dir) {
+  router_.add_prefix_route(
+      Method::Get, url_prefix,
+      Handler([prefix = std::string(url_prefix),
+               root   = std::string(root_dir)](const Request &req,
+                                               Response &res) {
+        // The router stores the path suffix (after the prefix) in param "**".
+        std::string rel = std::string(req.param("**"));
+
+        // Normalize: ensure leading '/' is stripped.
+        while (!rel.empty() && rel[0] == '/') rel = rel.substr(1);
+
+        // Index file fallback for empty suffix.
+        if (rel.empty()) rel = "index.html";
+
+        // ── Local path traversal guard ──────────────────────────────
+        // The server-level guard already caught %2e%2e before dispatch,
+        // but apply a defence-in-depth check on the reconstructed path.
+        if (rel.find("..") != std::string::npos) {
+          res.status(400).body("Bad Request");
+          return;
+        }
+
+        std::string fs_path = root + "/" + rel;
+        middleware::serve_file(fs_path, res);
+      }));
+}
+
 void App::health_check(std::string_view path) {
   router_.add_route(Method::Get, path,
     Handler([](const Request &, Response &res) {

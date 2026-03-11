@@ -199,9 +199,11 @@ Draco WAS는 **Zero Latency · Zero Cost · Low Memory · Low CPU** 를 4대 핵
   - [ ] HS256 / RS256 검증
   - [ ] `Authorization: Bearer <token>` 파싱
   - [ ] **상수 시간 서명 비교** (`CRYPTO_memcmp`) — timing attack 방지
-- [ ] `[Common]` **Static File Serving 미들웨어**
-  - [ ] MIME type 자동 감지
-  - [ ] `ETag` / `Last-Modified` 자동 생성
+- [x] `[Common]` **Static File Serving** — `App::serve_static(url_prefix, root_dir)`, `Router::add_prefix_route()` 와일드카드 확장
+  - [x] MIME type 자동 감지 (30+ 확장자, `include/draco/middleware/static_files.hpp`)
+  - [x] Weak ETag (`W/"size-mtime"`) + `Last-Modified` 자동 생성 → 304 지원
+  - [x] Path traversal 이중 방어 (서버 레벨 + serve_static 레벨)
+  - [x] Index file 폴백 (빈 suffix → index.html)
   - [ ] Directory listing (optional)
 - [x] `[Common]` **Health Check** — `App::health_check(path)` → `{"status":"ok"}`, Content-Type: application/json
 - [x] `[Common]` **Panic Recovery** — sync/async 핸들러 예외 catch → 500 응답 변환 (try/catch in draco.cpp)

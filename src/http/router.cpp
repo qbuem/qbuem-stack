@@ -80,14 +80,31 @@ void Router::add_route(Method method, std::string_view path,
 
 void Router::use(Middleware mw) { middlewares_.push_back(std::move(mw)); }
 
+void Router::add_prefix_route(Method method, std::string_view prefix,
+                              HandlerVariant handler) {
+  prefix_routes_.push_back({method, std::string(prefix), std::move(handler)});
+}
+
 HandlerVariant
 Router::match(Method method, std::string_view path,
               std::unordered_map<std::string, std::string> &params) const {
+  // 1. Exact / param match via RadixTree
   auto it = routes_.find(method);
-  if (it == routes_.end()) {
-    return std::monostate{};
+  if (it != routes_.end()) {
+    auto h = it->second.search(path, params);
+    if (!std::holds_alternative<std::monostate>(h))
+      return h;
   }
-  return it->second.search(path, params);
+
+  // 2. Prefix routes (e.g., for static file serving)
+  for (const auto &pr : prefix_routes_) {
+    if (pr.method == method && path.starts_with(pr.prefix)) {
+      params["**"] = std::string(path.substr(pr.prefix.size()));
+      return pr.handler;
+    }
+  }
+
+  return std::monostate{};
 }
 
 bool Router::path_exists(std::string_view path) const {
@@ -96,6 +113,11 @@ bool Router::path_exists(std::string_view path) const {
     if (!std::holds_alternative<std::monostate>(tree.search(path, dummy)))
       return true;
     dummy.clear();
+  }
+  // Also check prefix routes
+  for (const auto &pr : prefix_routes_) {
+    if (path.starts_with(pr.prefix))
+      return true;
   }
   return false;
 }
