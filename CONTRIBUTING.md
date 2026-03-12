@@ -1,4 +1,4 @@
-# Draco WAS — Contributing Guide
+# qbuem-stack — Contributing Guide
 
 ## JSON 라이브러리 정책
 

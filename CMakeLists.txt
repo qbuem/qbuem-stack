@@ -3,11 +3,12 @@ cmake_minimum_required(VERSION 3.20)
 # ============================================================================
 # Project Configuration
 # ============================================================================
-project(draco-was
-    VERSION 0.2.0
+project(qbuem-stack
+    VERSION 0.3.0
     LANGUAGES CXX
-    DESCRIPTION "High-performance WAS framework for C++23"
+    DESCRIPTION "High-performance Zenith WAS framework (qbuem-stack)"
 )
+
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)

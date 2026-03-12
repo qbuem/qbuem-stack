@@ -1,39 +1,48 @@
-# Draco WAS Development Roadmap (v0.2.0 → 1.0.0)
+# qbuem-stack Development Roadmap (v0.3.0 → 1.0.0)
 
-Draco WAS는 **Zero Latency · Zero Cost · Low Memory · Low CPU** 를 4대 핵심 원칙으로 삼는 C++23 초고성능 Web Application Server 라이브러리입니다.
-
-> **표기 규칙**
-> - `[Common]` — Linux / macOS 공통 작업
-> - `[Linux]`  — Linux 전용 (io_uring / epoll / sendfile 등)
-> - `[macOS]`  — macOS 전용 (kqueue / GCD 등)
+`qbuem-stack`은 **Zero Latency · Zero Cost · Low Memory · Low CPU** 를 4대 핵심 원칙으로 삼는 C++20 초고성능 Zenith WAS 라이브러리입니다.
 
 ---
 
-## ✅ Phase 0–2: Foundation & Core Engine (완료)
+## 🚀 The Foundation: Zenith-Common (L0) & Zenith-IO (L1)
 
-- [x] `[Common]` Expert architecture design (Shared-Nothing, io_uring, Coroutines)
-- [x] `[Common]` C++23 project foundation & directory structure
-- [x] `[Common]` Dependency management via `FetchContent` (GTest)
-- [x] `[Linux]`  **Reactor Core**: `epoll` reactor 구현
-- [x] `[macOS]`  **Reactor Core**: `kqueue` reactor 구현
-- [x] `[Common]` **Dispatcher**: Thread-per-core Dispatcher with CPU affinity
-- [x] `[Common]` **HTTP Abstractions**: Zero-copy HTTP Parser, `Request`/`Response` API
-- [x] `[Common]` **Modern Routing**: Radix Tree for fast route matching
-- [x] `[Common]` **Library Infrastructure**: Header + source distribution (modern CMake)
+- [ ] **Phase 1: Project Alignment**
+  - [ ] Rename namespaces from `draco` to `zenith`.
+  - [ ] Downgrade standard target to C++20 (while keeping zero-cost optimizations).
+  - [x] Implement `Status` and `Result<T>` (Exception-free).
+  - [x] Implement `ZENITH_TEST` (Internal macro engine).
+- [x] **Phase 2: Modern Memory Subsystem**
+  - [x] `MonotonicBufferResource` ($O(1)$) - Per-request Arena.
+  - [ ] `FixedPoolResource` ($O(1)$).
+  - [x] PMR-based lifetime management.
+- [x] **Phase 3: High-Performance Logging & Observability**
+  - [x] Async logger (v0.3.0 Access Log).
+  - [x] Core Metrics: Counter, Gauge (Prometheus format).
+- [x] **Phase 4: IO Core & Platform Abstraction**
+  - [x] `IReactor` abstraction for `epoll`(Linux) and `kqueue`(macOS).
+  - [x] Socket RAII and basic async primitives.
+  - [x] [Advanced] `io_uring` POLL_ADD based loop.
+  - [ ] [Advanced] `io_uring` SQPOLL/Fixed buffers optimizations.
 
-## ✅ Phase 3: Coroutines (완료)
+## ⚙️ The Engine: Zenith-WAS (L2) & Zenith-Pipeline (L3)
 
-- [x] `[Common]` Custom `draco::Task<T>` with symmetric transfer for nested coroutines
-- [x] `[Common]` JSON 의존성 **프레임워크 코어에서 완전 제거** — `body()`는 raw bytes, JSON 파싱은 애플리케이션 책임
+- [x] **Phase 5: Zero-Copy WAS Protocol**
+  - [x] FSM-based HTTP/1.1 incremental parser.
+  - [x] Radix Tree routing engine with Prefix support.
+  - [x] Range / Conditional requests support.
+- [x] **Phase 6: Async Pipeline & Scheduling**
+  - [x] `Task<T>` coroutine wrapper with symmetric transfer.
+  - [ ] `IAction` interface for modular execution units.
+  - [ ] [Advanced] Work-Stealing scheduler (Chase-Lev Deque).
 
-## ✅ Phase 4: Async I/O & Hardening (완료)
+## 🎛️ The Control: Zenith-Controller (L4)
 
-- [x] `[Common]` Multi-event support (Read/Write) per FD
-- [x] `[Common]` `AsyncRead`, `AsyncWrite`, `AsyncSleep` awaiters
-- [x] `[Linux]`  `EpollReactor` with `epoll` + `timerfd`
-- [x] `[Common]` Callback safety — copy-before-invoke, preventing UAF
-- [x] `[Common]` `Task::detach()` fire-and-forget coroutine lifecycle
-- [x] `[Common]` Async handler hardening with corrected `detach()` semantics
+- [ ] **Phase 7: Framework Control & Lifecycle**
+  - [ ] `StackController` for global lifecycle management.
+  - [x] Graceful shutdown (SIGTERM/SIGINT).
+  - [x] Basic Config Parser.
+  - [x] Middleware Pipeline (Request ID, Rate Limit, CORS, Security).
+ corrected `detach()` semantics
 - [x] `[Common]` Platform-specific conditional compilation (kqueue / epoll)
 - [x] `[Common]` Test suite: `http_test.cpp`, `reactor_test.cpp`
 
