@@ -13,7 +13,7 @@
   - [x] Implement `ZENITH_TEST` (Internal macro engine).
 - [x] **Phase 2: Modern Memory Subsystem**
   - [x] `MonotonicBufferResource` ($O(1)$) - Per-request Arena.
-  - [ ] `FixedPoolResource` ($O(1)$).
+  - [x] `FixedPoolResource` ($O(1)$).
   - [x] PMR-based lifetime management.
 - [x] **Phase 3: High-Performance Logging & Observability**
   - [x] Async logger (v0.3.0 Access Log).
@@ -38,7 +38,7 @@
 ## 🎛️ The Control: Zenith-Controller (L4)
 
 - [ ] **Phase 7: Framework Control & Lifecycle**
-  - [ ] `StackController` for global lifecycle management.
+  - [x] `StackController` for global lifecycle management.
   - [x] Graceful shutdown (SIGTERM/SIGINT).
   - [x] Basic Config Parser.
   - [x] Middleware Pipeline (Request ID, Rate Limit, CORS, Security).
@@ -81,7 +81,7 @@
 
 - [ ] `[Common]` Reactor 추상 인터페이스에 `batch_submit()` / `batch_wait()` 추가
 - [x] `[Common]` **`AsyncAccept` awaiter** — `awaiters.hpp`에 구현 완료
-- [ ] `[Common]` **`writev` / `sendmsg` scatter-gather** — 헤더 + body를 단일 syscall로 전송
+- [x] `[Common]` **`writev` / `sendmsg` scatter-gather** — 헤더 + body를 단일 syscall로 전송
 
 ---
 
@@ -99,13 +99,13 @@
   - [ ] 고정 경로(`/health`, `/metrics`)는 완전 컴파일 타임 resolve
 - [ ] `[Common]` **Policy-based Design** — 로깅/직렬화/할당자 전략을 템플릿 파라미터로 교체
 - [ ] `[Common]` **`[[always_inline]]` 어노테이션** — 핫 패스 함수 강제 인라인
-- [ ] `[Common]` **`[[likely]]` / `[[unlikely]]`** — 분기 예측 힌트 전면 적용
+- [x] `[Common]` **`[[likely]]` / `[[unlikely]]`** — 분기 예측 힌트 전면 적용
 - [ ] `[Common]` **`-fno-exceptions`** 빌드 옵션 지원 — 예외 핸들링 overhead 제거
 - [ ] `[Common]` **`-fno-rtti`** 빌드 옵션 지원 — RTTI 테이블 메모리 제거
 
 ### 링크 타임 / 바이너리 최적화
 
-- [ ] `[Common]` **LTO (Link-Time Optimization)** — `-flto=thin` whole-program 인라이닝
+- [x] `[Common]` **LTO (Link-Time Optimization)** — `-flto=thin` whole-program 인라이닝
 - [ ] `[Common]` **PGO (Profile-Guided Optimization)** 2-pass 빌드 가이드
   - [ ] Instrumented build → wrk 프로파일 수집 → Optimized build
 - [ ] `[Linux]`  **BOLT** (Binary Optimization and Layout Tool) — 핫 함수 재배치로 I-cache miss 감소
@@ -116,13 +116,13 @@
 - [ ] `[Common]` **SIMD 가속 HTTP 파서** — AVX2 (x86) / NEON (ARM) 벡터 연산으로 헤더 스캐닝
   - [ ] 개행(`\r\n`) 탐색: 16바이트 병렬 비교 (picohttpparser 기법 참고)
   - [ ] Method / 상태코드 매칭: SIMD 문자열 비교
-- [ ] `[Common]` **Cache Line 정렬** — 핫 데이터 구조에 `alignas(64)` 적용
+- [x] `[Common]` **Cache Line 정렬** — 핫 데이터 구조에 `alignas(64)` 적용
   - [ ] Reactor, Connection, Arena 헤더를 캐시라인에 맞게 패킹
   - [ ] `std::hardware_destructive_interference_size` 로 false sharing 방지
 - [ ] `[Common]` **프리패치 힌트** — `__builtin_prefetch` 로 다음 Connection 구조체 미리 로드
 - [ ] `[Common]` **소규모 버퍼 스택 할당** — 2KB 이하 요청 헤더는 힙 대신 스택 사용
 - [ ] `[Common]` **SSO (Small String Optimization)** — 짧은 헤더값 힙 할당 없이 인라인 저장
-- [ ] `[Common]` **vDSO 타이밍** — `clock_gettime(CLOCK_MONOTONIC_COARSE)` 로 syscall 없는 타임스탬프
+- [x] `[Common]` **vDSO 타이밍** — `clock_gettime(CLOCK_MONOTONIC_COARSE)` 로 syscall 없는 타임스탬프
 
 ### 메모리 서브시스템
 
@@ -162,7 +162,7 @@
 - [x] `[Common]` **Range Requests** — `Range: bytes=N-M` 파싱, 206 Partial Content / 416 응답, `Accept-Ranges: bytes` 자동 광고, `Content-Range` 헤더 생성
 - [x] `[Linux]`  **`TCP_QUICKACK`** — 각 응답 후 ACK 즉시 전송으로 RTT 단축
 - [x] `[Linux]`  **`TCP_DEFER_ACCEPT`** — 데이터 도착 후 accept() 실행 (SYN flood 방어 겸용)
-- [ ] `[Common]` **`TCP_CORK` / `MSG_MORE`** — 헤더+body 단일 전송 배칭
+- [x] `[Common]` **`TCP_CORK` / `MSG_MORE`** — 헤더+body 단일 전송 배칭
 
 ---
 

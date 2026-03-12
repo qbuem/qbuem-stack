@@ -153,7 +153,7 @@ Result<int> IOUringReactor::register_timer(int timeout_ms,
     if (!sqe) {
       impl_->ops.erase(token);
       impl_->timer_tokens.erase(timer_id);
-      return std::unexpected(
+      return unexpected(
           std::make_error_code(std::errc::resource_unavailable_try_again));
     }
   }
@@ -198,7 +198,7 @@ Result<int> IOUringReactor::poll(int timeout_ms) {
   if (ret == -ETIME || ret == -EINTR)
     return 0;
   if (ret < 0)
-    return std::unexpected(std::make_error_code(std::errc::io_error));
+    return unexpected(std::make_error_code(std::errc::io_error));
 
   // Collect and consume CQEs one at a time so every advance is accounted for.
   struct RawEvent {

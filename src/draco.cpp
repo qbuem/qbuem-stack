@@ -14,6 +14,7 @@
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <sys/socket.h>
+#include <sys/uio.h>
 #include <unistd.h>
 #include <variant>
 
@@ -27,8 +28,23 @@ std::atomic<std::time_t> g_date_ts{0};
 char                      g_date_buf[48] = {};
 std::mutex                g_date_mu;
 
+// vDSO fast monotonic second — no syscall overhead on Linux (CLOCK_MONOTONIC_COARSE
+// is served from the vDSO page without entering kernel mode on glibc 2.17+).
+static inline std::time_t fast_now() noexcept {
+#ifdef __linux__
+  struct timespec ts{};
+  clock_gettime(CLOCK_MONOTONIC_COARSE, &ts);
+  // Monotonic time gives elapsed seconds; add wall-clock epoch offset cached once.
+  // For the Date header we need wall-clock seconds, so fall back to CLOCK_REALTIME_COARSE.
+  clock_gettime(CLOCK_REALTIME_COARSE, &ts);
+  return static_cast<std::time_t>(ts.tv_sec);
+#else
+  return std::time(nullptr);
+#endif
+}
+
 std::string_view cached_http_date() noexcept {
-  std::time_t now = std::time(nullptr);
+  std::time_t now = fast_now();
   if (g_date_ts.load(std::memory_order_relaxed) != now) {
     std::lock_guard lk(g_date_mu);
     if (g_date_ts.load(std::memory_order_relaxed) != now) {
@@ -55,6 +71,44 @@ void write_all(int fd, const std::string &data) {
     }
     ptr += n;
     rem -= n;
+  }
+}
+
+// ─── writev_response ─────────────────────────────────────────────────────────
+// Send HTTP header + body in a single writev() syscall — no heap concat.
+// Falls back to write_all for the body if writev() is short.
+void writev_response(int fd, const std::string &hdr, std::string_view body) {
+  struct iovec iov[2];
+  iov[0].iov_base = const_cast<char *>(hdr.data());
+  iov[0].iov_len  = hdr.size();
+  iov[1].iov_base = const_cast<char *>(body.data());
+  iov[1].iov_len  = body.size();
+
+  int iov_cnt = body.empty() ? 1 : 2;
+  ssize_t total = static_cast<ssize_t>(hdr.size() + body.size());
+  ssize_t sent  = 0;
+  int     idx   = 0;
+
+  while (sent < total) {
+    ssize_t n = writev(fd, iov + idx, iov_cnt - idx);
+    if (n <= 0) {
+      if (errno == EINTR) continue;
+      break;
+    }
+    sent += n;
+    // Advance iovec pointers for partial writes
+    ssize_t remaining = n;
+    while (idx < iov_cnt && remaining > 0) {
+      if (static_cast<ssize_t>(iov[idx].iov_len) <= remaining) {
+        remaining -= static_cast<ssize_t>(iov[idx].iov_len);
+        iov[idx].iov_len = 0;
+        ++idx;
+      } else {
+        iov[idx].iov_base = static_cast<char *>(iov[idx].iov_base) + remaining;
+        iov[idx].iov_len -= static_cast<size_t>(remaining);
+        remaining = 0;
+      }
+    }
   }
 }
 
@@ -215,7 +269,7 @@ Result<void> App::listen(int port, bool ipv6) {
   int af = ipv6 ? AF_INET6 : AF_INET;
   int server_fd = socket(af, SOCK_STREAM, 0);
   if (server_fd == -1)
-    return std::unexpected(
+    return unexpected(
         std::make_error_code(std::errc::resource_unavailable_try_again));
 
   int opt = 1;
@@ -256,7 +310,7 @@ Result<void> App::listen(int port, bool ipv6) {
     if (bind(server_fd, reinterpret_cast<struct sockaddr *>(&addr6),
              sizeof(addr6)) < 0) {
       close(server_fd);
-      return std::unexpected(std::make_error_code(std::errc::address_in_use));
+      return unexpected(std::make_error_code(std::errc::address_in_use));
     }
   } else {
     struct sockaddr_in address{};
@@ -266,13 +320,13 @@ Result<void> App::listen(int port, bool ipv6) {
     if (bind(server_fd, reinterpret_cast<struct sockaddr *>(&address),
              sizeof(address)) < 0) {
       close(server_fd);
-      return std::unexpected(std::make_error_code(std::errc::address_in_use));
+      return unexpected(std::make_error_code(std::errc::address_in_use));
     }
   }
 
   if (::listen(server_fd, 1024) < 0) {
     close(server_fd);
-    return std::unexpected(std::make_error_code(std::errc::address_in_use));
+    return unexpected(std::make_error_code(std::errc::address_in_use));
   }
 
   fcntl(server_fd, F_SETFL, O_NONBLOCK);
@@ -401,7 +455,7 @@ Result<void> App::listen(int port, bool ipv6) {
               // Read available bytes into accumulation buffer
               char tmp[8192];
               ssize_t n = read(cfd, tmp, sizeof(tmp));
-              if (n <= 0) {
+              if (n <= 0) [[unlikely]] {
                 cancel_read_timeout();
                 reactor->unregister_event(cfd, EventType::Read);
                 close(cfd);
@@ -409,7 +463,7 @@ Result<void> App::listen(int port, bool ipv6) {
               }
 
               // Start per-request read timeout on first byte of a new request.
-              if (ctx->buf.empty()) arm_read_timeout();
+              if (ctx->buf.empty()) [[likely]] arm_read_timeout();
 
               ctx->buf.append(tmp, static_cast<size_t>(n));
 
@@ -420,7 +474,7 @@ Result<void> App::listen(int port, bool ipv6) {
               auto parsed = parser.parse(ctx->buf, req);
 
               // ── Hard parse error (400 / 413) ──────────────────────────
-              if (!parsed) {
+              if (!parsed) [[unlikely]] {
                 cancel_read_timeout();
                 int status = parser.error_status() ? parser.error_status() : 400;
                 Response err;
@@ -591,13 +645,18 @@ Result<void> App::listen(int port, bool ipv6) {
                                                ctx->handled));
                 }
 #ifdef __linux__
-                // Re-enable TCP_QUICKACK after each response write.
-                int qa = 1;
-                setsockopt(cfd, IPPROTO_TCP, TCP_QUICKACK, &qa, sizeof(qa));
+                // TCP_CORK: delay segment until uncorked, ensuring header+body
+                // go in one TCP segment.  TCP_QUICKACK re-enabled after send.
+                { int cork = 1; setsockopt(cfd, IPPROTO_TCP, TCP_CORK, &cork, sizeof(cork)); }
 #endif
-                std::string serialized = r.serialize();
-                size_t bytes = serialized.size();
-                write_all(cfd, serialized);
+                std::string hdr = r.serialize_header();
+                std::string_view bv = r.get_body();
+                size_t bytes = hdr.size() + bv.size();
+                writev_response(cfd, hdr, bv);
+#ifdef __linux__
+                { int cork = 0; setsockopt(cfd, IPPROTO_TCP, TCP_CORK, &cork, sizeof(cork)); }
+                { int qa = 1; setsockopt(cfd, IPPROTO_TCP, TCP_QUICKACK, &qa, sizeof(qa)); }
+#endif
 
                 // ── Metrics + access log ────────────────────────────────
                 cnt_bytes_sent_.fetch_add(bytes, std::memory_order_relaxed);
@@ -720,10 +779,16 @@ Result<void> App::listen(int port, bool ipv6) {
                                                     c->handled));
                   }
 #ifdef __linux__
-                  int qa = 1;
-                  setsockopt(fd, IPPROTO_TCP, TCP_QUICKACK, &qa, sizeof(qa));
+                  { int cork = 1; setsockopt(fd, IPPROTO_TCP, TCP_CORK, &cork, sizeof(cork)); }
 #endif
-                  write_all(fd, ares.serialize());
+                  {
+                    std::string ahdr = ares.serialize_header();
+                    writev_response(fd, ahdr, ares.get_body());
+                  }
+#ifdef __linux__
+                  { int cork = 0; setsockopt(fd, IPPROTO_TCP, TCP_CORK, &cork, sizeof(cork)); }
+                  { int qa = 1; setsockopt(fd, IPPROTO_TCP, TCP_QUICKACK, &qa, sizeof(qa)); }
+#endif
 
                   if (!ka_flag) {
                     r->unregister_event(fd, EventType::Read);
@@ -742,12 +807,49 @@ Result<void> App::listen(int port, bool ipv6) {
       });
 
   if (!listen_res)
-    return std::unexpected(listen_res.error());
+    return unexpected(listen_res.error());
 
   dispatcher_.run();
 
   close(server_fd);
   return {};
+}
+
+// ─── StackController ──────────────────────────────────────────────────────────
+
+void StackController::add(App &app, int port, bool ipv6) {
+  entries_.push_back({&app, port, ipv6});
+}
+
+void StackController::stop() {
+  if (stopping_.exchange(true, std::memory_order_relaxed))
+    return;
+  for (auto &e : entries_)
+    e.app->stop();
+}
+
+void StackController::run() {
+  // Install signal handlers — delegate to stop().
+  static StackController *g_ctrl = nullptr;
+  g_ctrl = this;
+  auto sig_handler = [](int) { if (g_ctrl) g_ctrl->stop(); };
+  std::signal(SIGTERM, sig_handler);
+  std::signal(SIGINT,  sig_handler);
+
+  // Start each app in its own thread.
+  std::vector<std::thread> threads;
+  threads.reserve(entries_.size());
+  for (auto &e : entries_) {
+    threads.emplace_back([&e]() {
+      if (auto r = e.app->listen(e.port, e.ipv6); !r) {
+        std::cerr << "[StackController] listen(" << e.port
+                  << ") failed: " << r.error().message() << "\n";
+      }
+    });
+  }
+
+  for (auto &t : threads)
+    if (t.joinable()) t.join();
 }
 
 } // namespace draco

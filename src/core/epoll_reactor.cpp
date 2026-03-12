@@ -86,7 +86,7 @@ Result<int> EpollReactor::register_timer(int timeout_ms,
                                          std::function<void(int)> callback) {
   int tfd = timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK | TFD_CLOEXEC);
   if (tfd == -1) {
-    return std::unexpected(std::make_error_code(std::errc::resource_unavailable_try_again));
+    return unexpected(std::make_error_code(std::errc::resource_unavailable_try_again));
   }
 
   struct itimerspec ts{};
@@ -96,7 +96,7 @@ Result<int> EpollReactor::register_timer(int timeout_ms,
 
   if (timerfd_settime(tfd, 0, &ts, nullptr) == -1) {
     close(tfd);
-    return std::unexpected(std::make_error_code(std::errc::invalid_argument));
+    return unexpected(std::make_error_code(std::errc::invalid_argument));
   }
 
   struct epoll_event ev{};
@@ -104,7 +104,7 @@ Result<int> EpollReactor::register_timer(int timeout_ms,
   ev.data.fd = tfd;
   if (epoll_ctl(epoll_fd_, EPOLL_CTL_ADD, tfd, &ev) == -1) {
     close(tfd);
-    return std::unexpected(std::make_error_code(std::errc::io_error));
+    return unexpected(std::make_error_code(std::errc::io_error));
   }
 
   int timer_id = next_timer_id_++;
@@ -132,7 +132,7 @@ Result<int> EpollReactor::poll(int timeout_ms) {
   if (nev == -1) {
     if (errno == EINTR)
       return 0;
-    return std::unexpected(std::make_error_code(std::errc::io_error));
+    return unexpected(std::make_error_code(std::errc::io_error));
   }
 
   for (int i = 0; i < nev; ++i) {

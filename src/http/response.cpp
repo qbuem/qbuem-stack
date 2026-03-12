@@ -39,20 +39,39 @@ Response &Response::set_cookie(std::string_view name, std::string_view value,
   return *this;
 }
 
-std::string Response::serialize() const {
-  std::stringstream ss;
-  ss << "HTTP/1.1 " << status_code_ << " " << status_to_string(status_code_)
-     << "\r\n";
+std::string Response::serialize_header() const {
+  // Pre-size: rough estimate to avoid reallocations in the common case.
+  // Status line (~20B) + ~4 headers * ~40B + Content-Length (~30B) + CRLF (2B)
+  std::string hdr;
+  hdr.reserve(256 + headers_.size() * 48);
+
+  hdr += "HTTP/1.1 ";
+  hdr += std::to_string(status_code_);
+  hdr += ' ';
+  hdr += status_to_string(status_code_);
+  hdr += "\r\n";
+
   for (const auto &[key, value] : headers_) {
-    ss << key << ": " << value << "\r\n";
+    hdr += key;
+    hdr += ": ";
+    hdr += value;
+    hdr += "\r\n";
   }
   for (const auto &c : cookies_) {
-    ss << "Set-Cookie: " << c << "\r\n";
+    hdr += "Set-Cookie: ";
+    hdr += c;
+    hdr += "\r\n";
   }
-  ss << "Content-Length: " << body_.size() << "\r\n";
-  ss << "\r\n";
-  ss << body_;
-  return ss.str();
+  hdr += "Content-Length: ";
+  hdr += std::to_string(body_.size());
+  hdr += "\r\n\r\n";
+  return hdr;
+}
+
+std::string Response::serialize() const {
+  std::string hdr = serialize_header();
+  hdr += body_;
+  return hdr;
 }
 
 std::string_view Response::status_to_string(int code) const {

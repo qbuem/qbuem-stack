@@ -93,6 +93,14 @@ public:
 
   std::string serialize() const;
 
+  /**
+   * @brief Build only the HTTP response header (status line + headers).
+   *
+   * Used with writev() scatter-gather to send header + body in one syscall
+   * without concatenating them into a single allocation.
+   */
+  std::string serialize_header() const;
+
 private:
   std::string_view status_to_string(int code) const;
 

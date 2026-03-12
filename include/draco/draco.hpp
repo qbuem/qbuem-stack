@@ -168,10 +168,12 @@ public:
   void stop();
 
   // ── Internal atomic counters (updated by reactor threads) ────────────────
-  std::atomic<uint64_t> cnt_requests_{0};
-  std::atomic<uint64_t> cnt_errors_{0};
-  std::atomic<uint64_t> cnt_active_{0};
-  std::atomic<uint64_t> cnt_bytes_sent_{0};
+  // Placed on separate 64-byte cache lines to prevent false sharing across cores.
+  static constexpr size_t kCacheLine = 64;
+  alignas(kCacheLine) std::atomic<uint64_t> cnt_requests_{0};
+  alignas(kCacheLine) std::atomic<uint64_t> cnt_errors_{0};
+  alignas(kCacheLine) std::atomic<uint64_t> cnt_active_{0};
+  alignas(kCacheLine) std::atomic<uint64_t> cnt_bytes_sent_{0};
 
 private:
   Dispatcher dispatcher_;
@@ -179,6 +181,62 @@ private:
 
   // Access logger callback (null = disabled).
   std::function<void(std::string_view, std::string_view, int, long)> logger_;
+};
+
+// ─── StackController ─────────────────────────────────────────────────────────
+/**
+ * @brief Global lifecycle controller for the Draco WAS framework.
+ *
+ * StackController owns one or more App instances and provides centralized
+ * startup, graceful shutdown, and signal handling.
+ *
+ * Usage:
+ *   StackController ctrl;
+ *   ctrl.add(app1, 8080);
+ *   ctrl.add(app2, 8081);
+ *   ctrl.run();           // blocks; handles SIGTERM/SIGINT automatically
+ */
+class StackController {
+public:
+  StackController() = default;
+  ~StackController() = default;
+
+  StackController(const StackController &) = delete;
+  StackController &operator=(const StackController &) = delete;
+
+  /**
+   * @brief Register an App to listen on a port.
+   *
+   * @param app   Reference to the App (must outlive StackController::run()).
+   * @param port  TCP port to bind.
+   * @param ipv6  Enable IPv6 dual-stack.
+   */
+  void add(App &app, int port, bool ipv6 = false);
+
+  /**
+   * @brief Start all registered apps and block until all are stopped.
+   *
+   * Installs SIGTERM/SIGINT handlers.  Each app listens on its configured
+   * port in its own thread; run() joins all threads before returning.
+   */
+  void run();
+
+  /**
+   * @brief Request graceful shutdown of all apps.
+   *
+   * Safe to call from a signal handler or another thread.
+   */
+  void stop();
+
+private:
+  struct Entry {
+    App *app;
+    int  port;
+    bool ipv6;
+  };
+
+  std::vector<Entry>      entries_;
+  std::atomic<bool>       stopping_{false};
 };
 
 } // namespace draco

@@ -96,4 +96,82 @@ private:
   uint8_t *current_block_end_ = nullptr;
 };
 
+// ─── FixedPoolResource ────────────────────────────────────────────────────────
+/**
+ * @brief O(1) fixed-size object pool for same-sized allocations.
+ *
+ * Uses a singly-linked free list embedded within pool slots.
+ * All allocations and deallocations are O(1). Not thread-safe by design;
+ * use one pool per thread or guard externally.
+ *
+ * Example:
+ *   FixedPoolResource<sizeof(MyCtx), alignof(MyCtx)> pool(256);
+ *   void *slot = pool.allocate();   // O(1), returns nullptr if exhausted
+ *   pool.deallocate(slot);          // O(1)
+ */
+template <size_t ObjectSize, size_t Alignment = alignof(std::max_align_t)>
+class FixedPoolResource {
+  static constexpr size_t kSlotSize =
+      (ObjectSize + Alignment - 1) & ~(Alignment - 1);
+
+  static_assert(kSlotSize >= sizeof(void *),
+                "ObjectSize must be >= sizeof(void*) to embed the free-list ptr");
+
+  struct AlignedDeleter {
+    void operator()(uint8_t *p) const noexcept {
+      ::operator delete[](p, std::align_val_t{Alignment});
+    }
+  };
+
+public:
+  explicit FixedPoolResource(size_t capacity)
+      : capacity_(capacity),
+        storage_(static_cast<uint8_t *>(
+            ::operator new[](kSlotSize * capacity, std::align_val_t{Alignment}))) {
+    // Build free list: each slot stores a pointer to the next slot.
+    for (size_t i = 0; i + 1 < capacity_; ++i) {
+      auto *slot = reinterpret_cast<void **>(storage_.get() + i * kSlotSize);
+      *slot = storage_.get() + (i + 1) * kSlotSize;
+    }
+    auto *last = reinterpret_cast<void **>(
+        storage_.get() + (capacity_ - 1) * kSlotSize);
+    *last = nullptr;
+    free_list_ = storage_.get();
+  }
+
+  ~FixedPoolResource() = default;
+
+  FixedPoolResource(const FixedPoolResource &) = delete;
+  FixedPoolResource &operator=(const FixedPoolResource &) = delete;
+  FixedPoolResource(FixedPoolResource &&) = default;
+  FixedPoolResource &operator=(FixedPoolResource &&) = default;
+
+  /** @brief Allocate one slot — O(1). Returns nullptr when pool is exhausted. */
+  [[nodiscard]] void *allocate() noexcept {
+    if (!free_list_) [[unlikely]]
+      return nullptr;
+    void *slot = free_list_;
+    free_list_ = *reinterpret_cast<void **>(free_list_);
+    ++used_;
+    return slot;
+  }
+
+  /** @brief Return a slot to the pool — O(1). */
+  void deallocate(void *ptr) noexcept {
+    *reinterpret_cast<void **>(ptr) = free_list_;
+    free_list_ = ptr;
+    --used_;
+  }
+
+  size_t capacity()  const noexcept { return capacity_; }
+  size_t used()      const noexcept { return used_; }
+  size_t available() const noexcept { return capacity_ - used_; }
+
+private:
+  size_t   capacity_;
+  size_t   used_ = 0;
+  void    *free_list_ = nullptr;
+  std::unique_ptr<uint8_t[], AlignedDeleter> storage_;
+};
+
 } // namespace draco
