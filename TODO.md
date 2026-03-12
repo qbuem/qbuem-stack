@@ -8,7 +8,7 @@
 
 - [ ] **Phase 1: Project Alignment**
   - [ ] Rename namespaces from `draco` to `zenith`.
-  - [ ] Downgrade standard target to C++20 (while keeping zero-cost optimizations).
+  - [x] Downgrade standard target to C++20 (while keeping zero-cost optimizations).
   - [x] Implement `Status` and `Result<T>` (Exception-free).
   - [x] Implement `ZENITH_TEST` (Internal macro engine).
 - [x] **Phase 2: Modern Memory Subsystem**
@@ -505,6 +505,7 @@
 - [ ] `[Common]` **API 레퍼런스 문서** — Doxygen + GitHub Pages 자동 배포
 - [ ] `[Common]` **Getting Started 가이드** — 5분 안에 Hello World 실행
 - [ ] `[Common]` **예제 확장**
+  - [x] 비동기 코루틴 + qbuem-json (`examples/coro_json.cpp`) — GET /user/:id, POST /echo
   - [ ] REST API 서버 (CRUD + JWT 인증)
   - [ ] WebSocket 채팅 서버
   - [ ] SSE 실시간 피드
@@ -974,7 +975,8 @@
 | **xxHash** | 0.8.2+ | BSD-2 | 🔧 FetchContent (단일 헤더) | 비암호 해시(Phase 27) |
 | **msgpack-cxx** | 6.1+ | BSL-1.0 | 🔧 FetchContent (헤더 전용) | MessagePack 직렬화(Phase 27) |
 | **tinycbor** | 0.6.0+ | MIT | 🔧 FetchContent | CBOR 직렬화(Phase 27) |
-| **nlohmann/json** | 3.11+ | MIT | 🔧 선택적 | JSON 파싱 (애플리케이션 책임) |
+| **qbuem-json** | latest | MIT | 🔧 FetchContent (선택적) | JSON 파싱 (애플리케이션 책임, 권장 라이브러리) |
+| **nlohmann/json** | 3.11+ | MIT | 🔧 선택적 | JSON 파싱 (애플리케이션 책임, 대안) |
 
 #### 🟦 선택적 성능 의존성 (opt-in, 없어도 빌드 성공)
 

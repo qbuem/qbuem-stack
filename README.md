@@ -101,39 +101,6 @@ AsyncWrite ──► (Keep-Alive? → Idle) / (Close → Arena free)
 ## 빠른 시작
 
 ```cpp
-#include <zenith/zenith.hpp>
-
-int main() {
-    auto controller = zenith::StackController::Create();
-
-    // 동기 핸들러
-    controller->Handle("/hello", [](const auto& req, auto& res) {
-        res.status(200).body("Hello, Zenith!");
-    });
-
-    // 비동기 코루틴 핸들러
-    controller->Handle("/user/:id", [](const auto& req, auto& res)
-        -> zenith::Task<void> {
-        auto id = req.param("id");
-        res.status(200).body("{\"user_id\":\"" + std::string(id) + "\"}");
-        co_return;
-    });
-
-    // 내장 엔드포인트 & 미들웨어
-    controller->Use(zenith::middleware::request_id());
-    controller->HealthCheck("/health");
-    controller->Metrics("/metrics");
-
-    return controller->Run(8080);
-}
-```
-
-
----
-
-## 빠른 시작
-
-```cpp
 #include <draco/draco.hpp>
 #include <draco/middleware/cors.hpp>
 #include <draco/middleware/request_id.hpp>
@@ -153,7 +120,7 @@ int main() {
     app.get("/hello", [](const draco::Request& req, draco::Response& res) {
         res.status(200)
            .header("Content-Type", "text/plain")
-           .body("Hello, Draco!");
+           .body("Hello, qbuem-stack!");
     });
 
     // ── 비동기 코루틴 핸들러 ───────────────────────────────────────
@@ -184,6 +151,50 @@ int main() {
 }
 ```
 
+### JSON 통합 (qbuem-json)
+
+qbuem-stack 코어는 JSON에 의존하지 않습니다. 앱이 직접 원하는 JSON 라이브러리를 선택합니다.
+권장 라이브러리는 **[qbuem-json](https://github.com/qbuem/qbuem-json)** (구 beast-json, 동일 팀 개발)입니다.
+
+```cpp
+#include <qbuem_json/qbuem_json.hpp>
+#include <draco/draco.hpp>
+
+// POST /echo — qbuem-json SafeValue 체인 시연
+draco::Task<void> echo_handler(const draco::Request& req, draco::Response& res) {
+    qbuem::Document doc;
+    auto body = qbuem::parse(doc, req.body());
+
+    // .get("key") | fallback — 키 없거나 타입 불일치 시 nullopt 전파
+    std::string msg  = body.get("message") | std::string("(no message)");
+    std::string name = body.get("name")    | std::string("(anonymous)");
+
+    qbuem::Document out_doc;
+    auto out = qbuem::parse(out_doc, "{}");
+    out.insert("echo_message", msg);
+    out.insert("echo_name",    name);
+    out.insert("ok", true);
+
+    res.status(200)
+       .header("Content-Type", "application/json")
+       .body(out.dump());
+    co_return;
+}
+```
+
+CMake 통합:
+
+```cmake
+include(FetchContent)
+FetchContent_Declare(qbuem_json
+    GIT_REPOSITORY https://github.com/qbuem/qbuem-json.git
+    GIT_TAG        main
+)
+FetchContent_MakeAvailable(qbuem_json)
+
+target_link_libraries(my_app PRIVATE draco::draco qbuem_json::qbuem_json)
+```
+
 ---
 
 ## 빌드
@@ -192,7 +203,7 @@ int main() {
 
 | 항목 | 최소 버전 | 비고 |
 |------|----------|------|
-| **컴파일러** | GCC 13+ / Clang 16+ | C++23 필수 |
+| **컴파일러** | GCC 13+ / Clang 16+ | C++20 필수 |
 | **CMake** | 3.20+ | FetchContent 사용 |
 | **OS** | Linux / macOS | Windows 미지원 |
 | **Linux 커널** | 5.11+ (io_uring) | SQPOLL은 5.19+ 권장 |
@@ -235,7 +246,7 @@ target_link_libraries(my_app
 
 ```bash
 ./examples/hello_world   # 기본 동기 핸들러
-./examples/coro_json     # 비동기 코루틴 + JSON
+./examples/coro_json     # 비동기 코루틴 + qbuem-json (JSON)
 ./examples/async_timer   # AsyncSleep 타이머
 ```
 
@@ -266,9 +277,10 @@ target_link_libraries(my_app
 
 ## 알려진 제한사항 & 주의사항
 
-**Beast JSON 사용 시:**
+**qbuem-json 사용 시:**
 - `operator[]` 로 존재하지 않는 키에 접근하면 삽입되지 않음 → `.insert("key", val)` 사용
 - 신뢰할 수 없는 데이터는 `.get("key")` (`SafeValue` 반환) 사용
+- qbuem-json은 구 beast-json과 동일한 API를 제공하며 네임스페이스만 `qbuem::`으로 변경됨
 
 **Reactor 콜백:**
 - 동일 콜백 내에서 재귀적 이벤트 등록 시 상태 관리 주의

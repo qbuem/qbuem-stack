@@ -10,7 +10,7 @@ project(qbuem-stack
 )
 
 
-set(CMAKE_CXX_STANDARD 23)
+set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
@@ -34,6 +34,9 @@ option(DRACO_INSTALL        "Generate install targets"  ON)
 include(FetchContent)
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
+
+# ── qbuem-json (optional — fetched lazily; only needed for coro_json example)
+set(QBUEM_JSON_TAG "main" CACHE STRING "qbuem-json git tag / branch / SHA")
 
 # ============================================================================
 # Helper: shared compile options (PRIVATE — never leak into consumers)
@@ -82,7 +85,7 @@ target_include_directories(draco_core
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
         $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
 )
-target_compile_features(draco_core PUBLIC cxx_std_23)
+target_compile_features(draco_core PUBLIC cxx_std_20)
 draco_compile_options(draco_core)
 
 if(DRACO_USE_IOURING)
@@ -138,7 +141,7 @@ if(DRACO_INSTALL)
         DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/draco
     )
 
-    # Substitute @DRACO_BEAST_JSON_TAG@ and @PACKAGE_INIT@ into the config.
+    # Substitute @PACKAGE_INIT@ into the config.
     configure_package_config_file(
         ${CMAKE_CURRENT_SOURCE_DIR}/cmake/draco-config.cmake.in
         ${CMAKE_CURRENT_BINARY_DIR}/draco-config.cmake
