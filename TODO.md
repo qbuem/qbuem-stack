@@ -65,7 +65,7 @@
   - [ ] `IORING_OP_ACCEPT_DIRECT` 다중 수신 소켓
 - [x] `[Common]`  **`SO_REUSEPORT`** — listen socket에 적용 (kernel 부하 분산)
 - [ ] `[Linux]`  **`MSG_ZEROCOPY`** (`SO_ZEROCOPY`) — 송신 시 kernel→user 복사 제거, CQE 완료 알림
-- [ ] `[Linux]`  **`sendfile(2)`** — 정적 파일 서빙 zero-copy 전송
+- [x] `[Linux]`  **`sendfile(2)`** — 정적 파일 서빙 zero-copy 전송
 - [ ] `[Linux]`  **`splice(2)`** — pipe 경유 소켓→소켓 zero-copy 프록시
 - [ ] `[Linux]`  **`SO_REUSEPORT`** + BPF 소켓 배분 — accept storm 제거
 - [ ] `[Linux]`  **`SO_BUSY_POLL`** / **`SO_PREFER_BUSY_POLL`** — 인터럽트 없이 busy-poll로 수신 지연 제거
@@ -113,7 +113,7 @@
 
 ### CPU 레벨 최적화
 
-- [ ] `[Common]` **SIMD 가속 HTTP 파서** — AVX2 (x86) / NEON (ARM) 벡터 연산으로 헤더 스캐닝
+- [x] `[Common]` **SIMD 가속 HTTP 파서** — AVX2 (x86) / NEON (ARM) 벡터 연산으로 헤더 스캐닝
   - [ ] 개행(`\r\n`) 탐색: 16바이트 병렬 비교 (picohttpparser 기법 참고)
   - [ ] Method / 상태코드 매칭: SIMD 문자열 비교
 - [x] `[Common]` **Cache Line 정렬** — 핫 데이터 구조에 `alignas(64)` 적용

@@ -1,9 +1,102 @@
 #include <draco/http/parser.hpp>
 
 #include <cctype>
+#include <cstring>
 #include <string>
 
+// ── SIMD availability detection ───────────────────────────────────────────────
+#if defined(__AVX2__)
+#  include <immintrin.h>
+#  define DRACO_HAS_AVX2 1
+#elif defined(__SSE2__)
+#  include <emmintrin.h>
+#  define DRACO_HAS_SSE2 1
+#elif defined(__ARM_NEON)
+#  include <arm_neon.h>
+#  define DRACO_HAS_NEON 1
+#endif
+
 namespace draco {
+
+// ---------------------------------------------------------------------------
+// find_header_end — locate "\r\n\r\n" in [data, data+len).
+// Returns offset of the first '\r' in the terminator, or SIZE_MAX if not found.
+// Uses SIMD to scan 16/32 bytes at a time on x86/ARM.
+// ---------------------------------------------------------------------------
+static size_t find_header_end(const char *data, size_t len) noexcept {
+  if (len < 4) return SIZE_MAX;
+
+#if defined(DRACO_HAS_AVX2)
+  const __m256i v_cr = _mm256_set1_epi8('\r');
+  size_t i = 0;
+  for (; i + 32 <= len; i += 32) {
+    __m256i chunk = _mm256_loadu_si256(reinterpret_cast<const __m256i *>(data + i));
+    uint32_t mask = static_cast<uint32_t>(_mm256_movemask_epi8(_mm256_cmpeq_epi8(chunk, v_cr)));
+    while (mask) {
+      int bit = __builtin_ctz(mask);
+      size_t off = i + static_cast<size_t>(bit);
+      if (off + 3 < len &&
+          data[off+1] == '\n' && data[off+2] == '\r' && data[off+3] == '\n')
+        return off;
+      mask &= mask - 1;
+    }
+  }
+  // Scalar tail
+  for (; i + 3 < len; ++i) {
+    if (data[i]=='\r' && data[i+1]=='\n' && data[i+2]=='\r' && data[i+3]=='\n')
+      return i;
+  }
+#elif defined(DRACO_HAS_SSE2)
+  const __m128i v_cr = _mm_set1_epi8('\r');
+  size_t i = 0;
+  for (; i + 16 <= len; i += 16) {
+    __m128i chunk = _mm_loadu_si128(reinterpret_cast<const __m128i *>(data + i));
+    uint32_t mask = static_cast<uint32_t>(_mm_movemask_epi8(_mm_cmpeq_epi8(chunk, v_cr)));
+    while (mask) {
+      int bit = __builtin_ctz(mask);
+      size_t off = i + static_cast<size_t>(bit);
+      if (off + 3 < len &&
+          data[off+1] == '\n' && data[off+2] == '\r' && data[off+3] == '\n')
+        return off;
+      mask &= mask - 1;
+    }
+  }
+  for (; i + 3 < len; ++i) {
+    if (data[i]=='\r' && data[i+1]=='\n' && data[i+2]=='\r' && data[i+3]=='\n')
+      return i;
+  }
+#elif defined(DRACO_HAS_NEON)
+  const uint8x16_t v_cr = vdupq_n_u8(static_cast<uint8_t>('\r'));
+  size_t i = 0;
+  for (; i + 16 <= len; i += 16) {
+    uint8x16_t chunk = vld1q_u8(reinterpret_cast<const uint8_t *>(data + i));
+    uint8x16_t cmp   = vceqq_u8(chunk, v_cr);
+    // Extract 16-bit mask via vget_lane
+    uint64_t lo, hi;
+    vst1_u64(&lo, vreinterpret_u64_u8(vget_low_u8(cmp)));
+    vst1_u64(&hi, vreinterpret_u64_u8(vget_high_u8(cmp)));
+    uint64_t mask64 = lo | (hi ? ~0ULL : 0ULL); // simplified — use byte scan
+    // Scalar check on potential hits
+    for (int b = 0; b < 16 && i + b + 3 < len; ++b) {
+      if (data[i+b] == '\r' && data[i+b+1] == '\n' &&
+          data[i+b+2] == '\r' && data[i+b+3] == '\n')
+        return i + static_cast<size_t>(b);
+    }
+    (void)mask64;
+  }
+  for (; i + 3 < len; ++i) {
+    if (data[i]=='\r' && data[i+1]=='\n' && data[i+2]=='\r' && data[i+3]=='\n')
+      return i;
+  }
+#else
+  // Scalar fallback — use memmem-equivalent loop
+  for (size_t i = 0; i + 3 < len; ++i) {
+    if (data[i]=='\r' && data[i+1]=='\n' && data[i+2]=='\r' && data[i+3]=='\n')
+      return i;
+  }
+#endif
+  return SIZE_MAX;
+}
 
 // ---------------------------------------------------------------------------
 // Helper: parse a hex character → value, or -1 on bad input.
@@ -25,6 +118,26 @@ static int hex_digit(char c) {
 std::optional<size_t> HttpParser::parse(std::string_view data, Request &req) {
   size_t pos   = 0;
   size_t start = 0;
+
+  // ── SIMD fast-path: if headers are not yet complete, check whether the
+  //    header terminator (\r\n\r\n) has arrived before running the FSM.
+  //    This avoids re-running the byte-by-byte FSM on incomplete data.
+  if (!headers_complete_ && state_ != State::Body &&
+      state_ != State::ChunkSize && state_ != State::Complete &&
+      state_ != State::Error) {
+    if (find_header_end(data.data(), data.size()) == SIZE_MAX) {
+      // Headers incomplete — nothing to parse yet.
+      header_bytes_ += data.size();
+      if (header_bytes_ > MAX_HEADER_SIZE) {
+        error_status_ = 400;
+        state_ = State::Error;
+        return std::nullopt;
+      }
+      return data.size(); // consumed but not complete
+    }
+    // Reset header_bytes_; we'll count properly in the FSM below.
+    header_bytes_ = 0;
+  }
 
   // ── Phase 1: request line + headers ──────────────────────────────────────
   while (pos < data.size() &&

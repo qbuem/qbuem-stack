@@ -101,6 +101,27 @@ public:
    */
   std::string serialize_header() const;
 
+  /**
+   * @brief Opt-in zero-copy file serving via sendfile(2) on Linux.
+   *
+   * Instead of reading the file into body(), stores the filesystem path.
+   * The send loop calls sendfile() after sending the HTTP header,
+   * transferring file data directly from page-cache to socket — no user-space
+   * copy and no heap allocation for the file body.
+   *
+   * Content-Length must be set before calling this if the file size is known.
+   * On non-Linux platforms the caller is responsible for setting body() instead.
+   *
+   * @param path   Absolute or relative filesystem path to the file.
+   * @param size   File size in bytes (used for Content-Length).
+   */
+  Response &sendfile_path(std::string_view path, size_t size);
+
+  /** @brief True when send should use sendfile() rather than write(). */
+  bool has_sendfile() const noexcept { return !sendfile_path_.empty(); }
+  const std::string &get_sendfile_path() const noexcept { return sendfile_path_; }
+  size_t sendfile_size() const noexcept { return sendfile_size_; }
+
 private:
   std::string_view status_to_string(int code) const;
 
@@ -108,6 +129,10 @@ private:
   std::unordered_map<std::string, std::string> headers_;
   std::vector<std::string> cookies_; // raw Set-Cookie values
   std::string body_;
+
+  // Zero-copy sendfile path (empty = not set)
+  std::string sendfile_path_;
+  size_t      sendfile_size_ = 0;
 };
 
 } // namespace draco

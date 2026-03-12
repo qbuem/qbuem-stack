@@ -18,6 +18,10 @@
 #include <string_view>
 #include <sys/stat.h>
 #include <unordered_map>
+#ifdef __linux__
+#  include <fcntl.h>
+#  include <sys/sendfile.h>
+#endif
 
 namespace draco::middleware {
 
@@ -94,8 +98,9 @@ inline std::string_view file_extension(std::string_view path) {
  * The ETag is a weak tag of the form W/"<size>-<mtime>".
  */
 inline void serve_file(std::string_view fs_path, Response &res) {
+  std::string path_str(fs_path);
   struct ::stat st{};
-  if (::stat(std::string(fs_path).c_str(), &st) != 0) {
+  if (::stat(path_str.c_str(), &st) != 0) {
     res.status(404).body("Not Found");
     return;
   }
@@ -105,15 +110,6 @@ inline void serve_file(std::string_view fs_path, Response &res) {
     res.status(404).body("Not Found");
     return;
   }
-
-  // Read file contents.
-  std::ifstream f(std::string(fs_path), std::ios::binary);
-  if (!f) {
-    res.status(500).body("Internal Server Error");
-    return;
-  }
-  std::string content((std::istreambuf_iterator<char>(f)),
-                       std::istreambuf_iterator<char>());
 
   // Build weak ETag: W/"<size>-<mtime>"
   std::string etag_val = "W/\"" + std::to_string(st.st_size) + "-" +
@@ -126,8 +122,22 @@ inline void serve_file(std::string_view fs_path, Response &res) {
   res.status(200)
      .header("Content-Type", mime)
      .header("ETag", etag_val)
-     .last_modified(static_cast<std::time_t>(st.st_mtime))
-     .body(content);
+     .last_modified(static_cast<std::time_t>(st.st_mtime));
+
+#ifdef __linux__
+  // Zero-copy path: store file path; draco.cpp send loop will use sendfile(2).
+  res.sendfile_path(path_str, static_cast<size_t>(st.st_size));
+#else
+  // Portable fallback: read into body.
+  std::ifstream f(path_str, std::ios::binary);
+  if (!f) {
+    res.status(500).body("Internal Server Error");
+    return;
+  }
+  std::string content((std::istreambuf_iterator<char>(f)),
+                       std::istreambuf_iterator<char>());
+  res.body(content);
+#endif
 }
 
 } // namespace draco::middleware

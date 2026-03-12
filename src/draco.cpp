@@ -17,6 +17,10 @@
 #include <sys/uio.h>
 #include <unistd.h>
 #include <variant>
+#ifdef __linux__
+#  include <fcntl.h>
+#  include <sys/sendfile.h>
+#endif
 
 namespace draco {
 
@@ -73,6 +77,27 @@ void write_all(int fd, const std::string &data) {
     rem -= n;
   }
 }
+
+// ─── send_file_body ──────────────────────────────────────────────────────────
+// Linux sendfile(2): zero-copy transfer from page-cache to socket.
+#ifdef __linux__
+static void send_file_body(int sock_fd, std::string_view path, size_t size) noexcept {
+  int file_fd = ::open(path.data(), O_RDONLY | O_CLOEXEC);
+  if (file_fd < 0) return;
+  off_t offset = 0;
+  size_t remaining = size;
+  while (remaining > 0) {
+    ssize_t n = ::sendfile(sock_fd, file_fd, &offset,
+                           std::min(remaining, static_cast<size_t>(2147483647)));
+    if (n <= 0) {
+      if (errno == EINTR) continue;
+      break;
+    }
+    remaining -= static_cast<size_t>(n);
+  }
+  ::close(file_fd);
+}
+#endif
 
 // ─── writev_response ─────────────────────────────────────────────────────────
 // Send HTTP header + body in a single writev() syscall — no heap concat.
@@ -650,12 +675,26 @@ Result<void> App::listen(int port, bool ipv6) {
                 { int cork = 1; setsockopt(cfd, IPPROTO_TCP, TCP_CORK, &cork, sizeof(cork)); }
 #endif
                 std::string hdr = r.serialize_header();
-                std::string_view bv = r.get_body();
-                size_t bytes = hdr.size() + bv.size();
-                writev_response(cfd, hdr, bv);
+                size_t bytes = hdr.size();
 #ifdef __linux__
+                if (r.has_sendfile()) {
+                  // Zero-copy: write header, then sendfile() body.
+                  bytes += r.sendfile_size();
+                  write_all(cfd, hdr);
+                  send_file_body(cfd, r.get_sendfile_path(), r.sendfile_size());
+                } else {
+                  std::string_view bv = r.get_body();
+                  bytes += bv.size();
+                  writev_response(cfd, hdr, bv);
+                }
                 { int cork = 0; setsockopt(cfd, IPPROTO_TCP, TCP_CORK, &cork, sizeof(cork)); }
                 { int qa = 1; setsockopt(cfd, IPPROTO_TCP, TCP_QUICKACK, &qa, sizeof(qa)); }
+#else
+                {
+                  std::string_view bv = r.get_body();
+                  bytes += bv.size();
+                  writev_response(cfd, hdr, bv);
+                }
 #endif
 
                 // ── Metrics + access log ────────────────────────────────

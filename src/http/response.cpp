@@ -63,7 +63,7 @@ std::string Response::serialize_header() const {
     hdr += "\r\n";
   }
   hdr += "Content-Length: ";
-  hdr += std::to_string(body_.size());
+  hdr += std::to_string(sendfile_path_.empty() ? body_.size() : sendfile_size_);
   hdr += "\r\n\r\n";
   return hdr;
 }
@@ -72,6 +72,12 @@ std::string Response::serialize() const {
   std::string hdr = serialize_header();
   hdr += body_;
   return hdr;
+}
+
+Response &Response::sendfile_path(std::string_view path, size_t size) {
+  sendfile_path_ = std::string(path);
+  sendfile_size_ = size;
+  return *this;
 }
 
 std::string_view Response::status_to_string(int code) const {
