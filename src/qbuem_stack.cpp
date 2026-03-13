@@ -187,15 +187,48 @@ struct ConnCtx {
   static constexpr int READ_TIMEOUT_MS = 10'000; // 10 s
 };
 
+// ─── Async middleware chain runner ───────────────────────────────────────────
+// Executes the slice mws[idx..end) as a coroutine with next() semantics.
+// req_ptr / res_ptr are shared so each middleware can inspect the response
+// after co_await next() returns (post-processing pattern).
+// tail() is invoked once all middlewares have run; it executes the route handler
+// and finalizes the response.
+static Task<bool> run_mw_chain(
+    const std::vector<AnyMiddleware> *mws, // pointer to app-owned vector (stable)
+    size_t idx,
+    std::shared_ptr<Request>  req_ptr,
+    std::shared_ptr<Response> res_ptr,
+    std::function<Task<void>(std::shared_ptr<Request>, std::shared_ptr<Response>)> tail)
+{
+  if (idx >= mws->size()) {
+    co_await tail(req_ptr, res_ptr);
+    co_return true;
+  }
+
+  const auto &mw = (*mws)[idx];
+  if (std::holds_alternative<Middleware>(mw)) {
+    if (!std::get<Middleware>(mw)(*req_ptr, *res_ptr)) co_return false;
+    co_return co_await run_mw_chain(mws, idx + 1, req_ptr, res_ptr, tail);
+  } else {
+    // AsyncMiddleware: provide next() as a coroutine that runs the rest of chain.
+    // Capturing req_ptr/res_ptr by value keeps them alive across suspension.
+    NextFn next_fn = [mws, idx, req_ptr, res_ptr, tail]() mutable -> Task<void> {
+      co_await run_mw_chain(mws, idx + 1, req_ptr, res_ptr, tail);
+    };
+    co_return co_await std::get<AsyncMiddleware>(mw)(*req_ptr, *res_ptr, next_fn);
+  }
+}
+
 } // namespace
 
 // ─── App ─────────────────────────────────────────────────────────────────────
 App::App(size_t thread_count) : dispatcher_(thread_count) {
-  std::cout << "Draco WAS v" << Version::string << " initializing ("
+  std::cout << "qbuem-stack v" << Version::string << " initializing ("
             << thread_count << " reactor threads)..." << std::endl;
 }
 
 void App::use(Middleware mw) { router_.use(std::move(mw)); }
+void App::use_async(AsyncMiddleware mw) { router_.use_async(std::move(mw)); }
 
 void App::on_error(ErrorHandler handler) { error_handler_ = std::move(handler); }
 
@@ -331,6 +364,33 @@ void App::set_access_logger(
   logger_ = std::move(fn);
 }
 
+void App::set_structured_logger(
+    std::function<void(const StructuredLogRecord &)> fn) {
+  structured_logger_ = std::move(fn);
+}
+
+void App::enable_structured_log() {
+  structured_logger_ = [](const StructuredLogRecord &r) {
+    std::time_t now = std::time(nullptr);
+    std::tm tm{};
+    gmtime_r(&now, &tm);
+    char ts[32];
+    std::strftime(ts, sizeof(ts), "%Y-%m-%dT%H:%M:%SZ", &tm);
+    std::fprintf(stderr,
+                 "{\"ts\":\"%s\",\"method\":\"%.*s\",\"path\":\"%.*s\","
+                 "\"status\":%d,\"duration_us\":%ld,"
+                 "\"remote_addr\":\"%.*s\",\"request_id\":\"%.*s\","
+                 "\"trace_id\":\"%.*s\"}\n",
+                 ts,
+                 static_cast<int>(r.method.size()),      r.method.data(),
+                 static_cast<int>(r.path.size()),        r.path.data(),
+                 r.status, r.duration_us,
+                 static_cast<int>(r.remote_addr.size()), r.remote_addr.data(),
+                 static_cast<int>(r.request_id.size()),  r.request_id.data(),
+                 static_cast<int>(r.trace_id.size()),    r.trace_id.data());
+  };
+}
+
 void App::enable_access_log() {
   logger_ = [](std::string_view method, std::string_view path, int status,
                long duration_us) {
@@ -371,9 +431,89 @@ void App::set_max_connections(uint64_t max) {
 
 // ─── App lifecycle ────────────────────────────────────────────────────────────
 
-void App::stop() {
-  draining_.store(true, std::memory_order_relaxed);
+void App::stop(int drain_timeout_ms) {
+  // Step 1: enter drain mode → readiness probe returns 503 immediately.
+  draining_.store(true, std::memory_order_release);
+
+  // Step 2: close all listen sockets so the kernel stops queueing new SYNs.
+  // Reactor callbacks for the listen fds will return EBADF / POLLHUP and
+  // auto-remove themselves from the event loop.
+  for (int fd : listen_fds_) {
+    ::shutdown(fd, SHUT_RDWR);
+    ::close(fd);
+  }
+  listen_fds_.clear();
+
+  if (drain_timeout_ms <= 0) {
+    // Immediate shutdown — matches the original behaviour.
+    dispatcher_.stop();
+    return;
+  }
+
+  // Step 3: wait for active connections to drain naturally.
+  // Poll with 10 ms granularity; reactors keep running so idle-timers fire.
+  auto deadline = std::chrono::steady_clock::now() +
+                  std::chrono::milliseconds(drain_timeout_ms);
+  while (cnt_active_.load(std::memory_order_acquire) > 0 &&
+         std::chrono::steady_clock::now() < deadline) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+
+  // Step 4: stop reactor threads regardless of remaining active connections.
   dispatcher_.stop();
+}
+
+// ─── make_listen_socket ───────────────────────────────────────────────────────
+// Creates, configures, binds and listens a single TCP socket for the given port.
+// With SO_REUSEPORT every socket can share the same port; the kernel load-balances
+// incoming connections across all sockets without lock contention (accept storm free).
+static int make_listen_socket(int port, bool ipv6) noexcept {
+  int af = ipv6 ? AF_INET6 : AF_INET;
+  int fd  = ::socket(af, SOCK_STREAM, 0);
+  if (fd < 0) return -1;
+
+  int opt = 1;
+  setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+#ifdef SO_REUSEPORT
+  setsockopt(fd, SOL_SOCKET, SO_REUSEPORT, &opt, sizeof(opt));
+#endif
+
+#if defined(__linux__) && defined(TCP_FASTOPEN)
+  int tfo_qlen = 128;
+  setsockopt(fd, IPPROTO_TCP, TCP_FASTOPEN, &tfo_qlen, sizeof(tfo_qlen));
+#endif
+
+  if (ipv6) {
+    int v6only = 0;
+    setsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY, &v6only, sizeof(v6only));
+  }
+
+#ifdef __linux__
+  int defer_secs = 5;
+  setsockopt(fd, IPPROTO_TCP, TCP_DEFER_ACCEPT, &defer_secs, sizeof(defer_secs));
+#endif
+
+  if (ipv6) {
+    struct sockaddr_in6 a{};
+    a.sin6_family = AF_INET6;
+    a.sin6_addr   = in6addr_any;
+    a.sin6_port   = htons(static_cast<uint16_t>(port));
+    if (bind(fd, reinterpret_cast<struct sockaddr *>(&a), sizeof(a)) < 0) {
+      ::close(fd); return -1;
+    }
+  } else {
+    struct sockaddr_in a{};
+    a.sin_family      = AF_INET;
+    a.sin_addr.s_addr = INADDR_ANY;
+    a.sin_port        = htons(static_cast<uint16_t>(port));
+    if (bind(fd, reinterpret_cast<struct sockaddr *>(&a), sizeof(a)) < 0) {
+      ::close(fd); return -1;
+    }
+  }
+
+  if (::listen(fd, 1024) < 0) { ::close(fd); return -1; }
+  fcntl(fd, F_SETFL, O_NONBLOCK);
+  return fd;
 }
 
 Result<void> App::listen(int port, bool ipv6) {
@@ -384,82 +524,40 @@ Result<void> App::listen(int port, bool ipv6) {
   std::signal(SIGTERM, on_shutdown_signal);
   std::signal(SIGINT,  on_shutdown_signal);
 
-  // ── Listening socket ──────────────────────────────────────────────────────
-  int af = ipv6 ? AF_INET6 : AF_INET;
-  int server_fd = socket(af, SOCK_STREAM, 0);
-  if (server_fd == -1)
-    return unexpected(
-        std::make_error_code(std::errc::resource_unavailable_try_again));
+  // ── SO_REUSEPORT per-reactor listening sockets ────────────────────────────
+  // Create one listening socket per reactor thread.  The kernel distributes
+  // incoming SYNs across all N sockets without a shared accept lock, eliminating
+  // the "accept storm" / "thundering herd" problem seen with a single socket.
+  // Each reactor thread calls accept() only on its own dedicated socket, so
+  // there is zero inter-thread contention in the accept path.
+  size_t N = dispatcher_.thread_count();
+  std::vector<int> server_fds;
+  server_fds.reserve(N);
 
-  int opt = 1;
-  setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
-#ifdef SO_REUSEPORT
-  // Allow the kernel to load-balance incoming connections across multiple
-  // listener sockets (one per reactor thread in future multi-socket mode).
-  setsockopt(server_fd, SOL_SOCKET, SO_REUSEPORT, &opt, sizeof(opt));
-#endif
-
-#if defined(__linux__) && defined(TCP_FASTOPEN)
-  // TCP Fast Open: allow data in the SYN packet for repeat clients,
-  // reducing connection latency by one RTT.
-  int tfo_qlen = 128;
-  setsockopt(server_fd, IPPROTO_TCP, TCP_FASTOPEN, &tfo_qlen, sizeof(tfo_qlen));
-#endif
-
-  if (ipv6) {
-    // IPV6_V6ONLY = 0: accept both IPv4 and IPv6 (dual-stack).
-    int v6only = 0;
-    setsockopt(server_fd, IPPROTO_IPV6, IPV6_V6ONLY, &v6only, sizeof(v6only));
-  }
-
-#ifdef __linux__
-  // TCP_DEFER_ACCEPT: only wake up accept() once data has arrived.
-  // Eliminates the accept → read → empty-read cycle for slow clients.
-  int defer_secs = 5;
-  setsockopt(server_fd, IPPROTO_TCP, TCP_DEFER_ACCEPT,
-             &defer_secs, sizeof(defer_secs));
-#endif
-
-  // Bind to INADDR_ANY / in6addr_any
-  if (ipv6) {
-    struct sockaddr_in6 addr6{};
-    addr6.sin6_family = AF_INET6;
-    addr6.sin6_addr   = in6addr_any;
-    addr6.sin6_port   = htons(static_cast<uint16_t>(port));
-    if (bind(server_fd, reinterpret_cast<struct sockaddr *>(&addr6),
-             sizeof(addr6)) < 0) {
-      close(server_fd);
+  for (size_t i = 0; i < N; ++i) {
+    int fd = make_listen_socket(port, ipv6);
+    if (fd < 0) {
+      for (int sfd : server_fds) ::close(sfd);
       return unexpected(std::make_error_code(std::errc::address_in_use));
     }
-  } else {
-    struct sockaddr_in address{};
-    address.sin_family      = AF_INET;
-    address.sin_addr.s_addr = INADDR_ANY;
-    address.sin_port        = htons(static_cast<uint16_t>(port));
-    if (bind(server_fd, reinterpret_cast<struct sockaddr *>(&address),
-             sizeof(address)) < 0) {
-      close(server_fd);
-      return unexpected(std::make_error_code(std::errc::address_in_use));
-    }
+    server_fds.push_back(fd);
   }
 
-  if (::listen(server_fd, 1024) < 0) {
-    close(server_fd);
-    return unexpected(std::make_error_code(std::errc::address_in_use));
-  }
-
-  fcntl(server_fd, F_SETFL, O_NONBLOCK);
-  std::cout << "Draco WAS v" << Version::string
+  std::cout << "qbuem-stack v" << Version::string
             << " listening on http" << (ipv6 ? "://[::]:" : "://0.0.0.0:")
-            << port << std::endl;
+            << port << " (" << N << " reactors, SO_REUSEPORT)" << std::endl;
 
-  // ── Accept loop ───────────────────────────────────────────────────────────
-  auto listen_res = dispatcher_.register_listener(
-      server_fd, [this](int lfd) {
+  // ── Accept loop — one accept-callback per reactor ─────────────────────────
+  for (size_t i = 0; i < N; ++i) {
+    auto listen_res = dispatcher_.register_listener_at(
+        server_fds[i], i, [this](int lfd) {
         Reactor *reactor = Reactor::current();
 
         struct sockaddr_storage client_addr{};
         socklen_t client_len = sizeof(client_addr);
+        // Drain mode: stop accepting new connections.
+        if (draining_.load(std::memory_order_acquire)) return;
+
         int client_fd =
             accept(lfd, reinterpret_cast<struct sockaddr *>(&client_addr),
                    &client_len);
@@ -712,29 +810,24 @@ Result<void> App::listen(int port, bool ipv6) {
               // Expose the remote peer IP via Request::remote_addr().
               req.set_remote_addr(ctx->client_ip);
 
-              // ── Middleware chain ────────────────────────────────────────
-              Response res;
-              bool cont = true;
-              for (const auto &mw : router_.middlewares()) {
-                if (!mw(req, res)) {
-                  cont = false;
-                  break;
-                }
-              }
-
               // ── Keep-alive decision ─────────────────────────────────────
-              // HTTP/1.1 defaults to keep-alive; honour explicit "close".
               auto conn_hdr  = req.header("Connection");
               bool keep_alive =
                   (conn_hdr != "close" &&
                    ctx->handled < ConnCtx::MAX_REQUESTS);
 
-              // ── Helpers ─────────────────────────────────────────────────
-              auto finalize = [&](Response &r) {
-                // ── Conditional request: If-None-Match / ETag ───────────
-                // If the handler set an ETag and the client already holds a
-                // matching version, respond 304 Not Modified (no body).
-                auto if_none_match = req.header("If-None-Match");
+              auto close_conn_fn = [reactor, cfd]() {
+                reactor->unregister_event(cfd, EventType::Read);
+                close(cfd);
+              };
+
+              // ── send_response: ETag / Range / Cork / write ───────────────
+              // Used by both sync and async paths.  All args by value so it's
+              // safe to capture into a coroutine frame.
+              auto send_response = [this, cfd, keep_alive, &ctx,
+                                    req_start](const Request &rq,
+                                               Response &r) mutable {
+                auto if_none_match = rq.header("If-None-Match");
                 auto resp_etag     = r.get_header("ETag");
                 if (!if_none_match.empty() && !resp_etag.empty()) {
                   if (if_none_match == "*" || if_none_match == resp_etag) {
@@ -751,13 +844,10 @@ Result<void> App::listen(int port, bool ipv6) {
                   }
                 }
 
-                // ── Range Request (RFC 7233) ────────────────────────────
-                // Only handle byte ranges on 200 OK responses with a body.
-                auto range_hdr = req.header("Range");
+                auto range_hdr = rq.header("Range");
                 if (!range_hdr.empty() && r.status_code() == 200) {
                   std::string_view body = r.get_body();
                   size_t total = body.size();
-                  // Parse "bytes=N-M" (simple single-range, no multi-range)
                   if (range_hdr.substr(0, 6) == "bytes=") {
                     std::string_view spec = range_hdr.substr(6);
                     size_t dash = spec.find('-');
@@ -773,27 +863,22 @@ Result<void> App::listen(int port, bool ipv6) {
                         if (first > last || first >= total) ok = false;
                         if (last >= total) last = total - 1;
                       } catch (...) { ok = false; }
-
                       if (ok) {
-                        std::string slice(body.substr(first, last - first + 1));
                         r.status(206)
                          .header("Content-Range",
                                  "bytes " + std::to_string(first) + "-" +
                                  std::to_string(last) + "/" +
                                  std::to_string(total))
                          .header("Accept-Ranges", "bytes")
-                         .body(slice);
+                         .body(std::string(body.substr(first, last - first + 1)));
                       } else {
-                        // Unsatisfiable range → 416
                         r.status(416)
-                         .header("Content-Range",
-                                 "bytes */" + std::to_string(total))
+                         .header("Content-Range", "bytes */" + std::to_string(total))
                          .body("Range Not Satisfiable");
                       }
                     }
                   }
                 } else if (range_hdr.empty() && r.status_code() == 200) {
-                  // Advertise range support on normal responses
                   r.header("Accept-Ranges", "bytes");
                 }
 
@@ -802,21 +887,16 @@ Result<void> App::listen(int port, bool ipv6) {
                 if (keep_alive) {
                   r.header("Keep-Alive",
                             "timeout=30, max=" +
-                                std::to_string(ConnCtx::MAX_REQUESTS -
-                                               ctx->handled));
+                                std::to_string(ConnCtx::MAX_REQUESTS - ctx->handled));
                 }
 #ifdef __linux__
-                // TCP_CORK: delay segment until uncorked, ensuring header+body
-                // go in one TCP segment.  TCP_QUICKACK re-enabled after send.
                 { int cork = 1; setsockopt(cfd, IPPROTO_TCP, TCP_CORK, &cork, sizeof(cork)); }
 #endif
                 std::string hdr = r.serialize_header();
-                size_t bytes = hdr.size();
-                std::string_view body_view =
-                    r.is_chunked() ? r.chunk_buf() : r.get_body();
+                size_t bytes    = hdr.size();
+                std::string_view body_view = r.is_chunked() ? r.chunk_buf() : r.get_body();
 #ifdef __linux__
                 if (r.has_sendfile()) {
-                  // Zero-copy: write header, then sendfile() body.
                   bytes += r.sendfile_size();
                   write_all(cfd, hdr);
                   send_file_body(cfd, r.get_sendfile_path(), r.sendfile_size());
@@ -824,38 +904,155 @@ Result<void> App::listen(int port, bool ipv6) {
                   bytes += body_view.size();
                   writev_response(cfd, hdr, body_view);
                 }
+                // Append HTTP Trailers after last chunk (chunked encoding only).
+                if (r.is_chunked() && r.has_trailers()) {
+                  std::string tr = r.encode_trailers();
+                  bytes += tr.size();
+                  write_all(cfd, tr);
+                }
                 { int cork = 0; setsockopt(cfd, IPPROTO_TCP, TCP_CORK, &cork, sizeof(cork)); }
-                { int qa = 1; setsockopt(cfd, IPPROTO_TCP, TCP_QUICKACK, &qa, sizeof(qa)); }
+                { int qa   = 1; setsockopt(cfd, IPPROTO_TCP, TCP_QUICKACK, &qa, sizeof(qa)); }
 #else
                 {
                   bytes += body_view.size();
                   writev_response(cfd, hdr, body_view);
+                  if (r.is_chunked() && r.has_trailers()) {
+                    std::string tr = r.encode_trailers();
+                    bytes += tr.size();
+                    write_all(cfd, tr);
+                  }
                 }
 #endif
-
-                // ── Metrics + access log ────────────────────────────────
                 cnt_bytes_sent_.fetch_add(bytes, std::memory_order_relaxed);
                 int sc = r.status_code();
-                if (sc >= 400)
-                  cnt_errors_.fetch_add(1, std::memory_order_relaxed);
-                if (logger_) {
+                if (sc >= 400) cnt_errors_.fetch_add(1, std::memory_order_relaxed);
+                if (structured_logger_ || logger_) {
                   auto dur = std::chrono::duration_cast<std::chrono::microseconds>(
                       std::chrono::steady_clock::now() - req_start).count();
-                  logger_(req.method() == Method::Get    ? "GET"    :
-                          req.method() == Method::Post   ? "POST"   :
-                          req.method() == Method::Put    ? "PUT"    :
-                          req.method() == Method::Delete ? "DELETE" :
-                          req.method() == Method::Patch  ? "PATCH"  :
-                          req.method() == Method::Head   ? "HEAD"   :
-                          req.method() == Method::Options? "OPTIONS": "UNKNOWN",
-                          req.path(), sc, dur);
+                  const char *method_str =
+                      rq.method() == Method::Get    ? "GET"    :
+                      rq.method() == Method::Post   ? "POST"   :
+                      rq.method() == Method::Put    ? "PUT"    :
+                      rq.method() == Method::Delete ? "DELETE" :
+                      rq.method() == Method::Patch  ? "PATCH"  :
+                      rq.method() == Method::Head   ? "HEAD"   :
+                      rq.method() == Method::Options? "OPTIONS": "UNKNOWN";
+                  if (structured_logger_) {
+                    StructuredLogRecord rec;
+                    rec.method      = method_str;
+                    rec.path        = rq.path();
+                    rec.status      = sc;
+                    rec.duration_us = dur;
+                    rec.remote_addr = rq.remote_addr();
+                    rec.request_id  = rq.header("X-Request-Id");
+                    // Support both B3 tracing and W3C traceparent
+                    rec.trace_id    = rq.header("X-B3-TraceId");
+                    if (rec.trace_id.empty())
+                      rec.trace_id = rq.header("traceparent");
+                    structured_logger_(rec);
+                  } else if (logger_) {
+                    logger_(method_str, rq.path(), sc, dur);
+                  }
                 }
               };
 
-              auto close_conn = [&]() {
-                reactor->unregister_event(cfd, EventType::Read);
-                close(cfd);
-              };
+              // ── sync finalize (wraps send_response) ─────────────────────
+              auto finalize = [&](Response &r) { send_response(req, r); };
+              auto close_conn = close_conn_fn;
+
+              // ── Route dispatch (shared by both sync and async paths) ─────
+              std::unordered_map<std::string, std::string> params;
+              auto handler = router_.match(req.method(), req.path(), params);
+
+              bool head_fallback = false;
+              if (std::holds_alternative<std::monostate>(handler) &&
+                  req.method() == Method::Head) {
+                handler = router_.match(Method::Get, req.path(), params);
+                head_fallback = !std::holds_alternative<std::monostate>(handler);
+              }
+
+              // ── ASYNC PATH: any AsyncMiddleware registered ───────────────
+              if (router_.has_async_middlewares()) {
+                // 404 / 405 short-circuit before spawning coroutine
+                if (std::holds_alternative<std::monostate>(handler)) {
+                  Response err;
+                  int st = router_.path_exists(req.path()) ? 405 : 404;
+                  err.status(st).body(st == 405 ? "Method Not Allowed" : "Not Found");
+                  send_response(req, err);
+                  if (!keep_alive) close_conn(); else arm_idle();
+                  return;
+                }
+                for (auto const &[k, v] : params) req.set_param(k, v);
+
+                // Build the tail coroutine: runs route handler + sends response.
+                // All state captured by value so the frame owns its data.
+                auto async_tail = [handler, head_fallback, ka = keep_alive,
+                                   fd = cfd, r = reactor, c = ctx,
+                                   arm = arm_idle, eh = error_handler_,
+                                   sr = send_response](
+                    std::shared_ptr<Request>  rqp,
+                    std::shared_ptr<Response> rsp) mutable -> Task<void> {
+                  if (std::holds_alternative<Handler>(handler)) {
+                    try {
+                      std::get<Handler>(handler)(*rqp, *rsp);
+                      if (head_fallback) rsp->body("");
+                    } catch (...) {
+                      auto ep = std::current_exception();
+                      *rsp = Response{};
+                      if (eh) { try { eh(ep, *rqp, *rsp); } catch (...) {} }
+                      else {
+                        try { std::rethrow_exception(ep); }
+                        catch (const std::exception &ex) {
+                          std::cerr << "[ERROR] handler: " << ex.what() << "\n";
+                        } catch (...) {}
+                        rsp->status(500).body("Internal Server Error");
+                      }
+                    }
+                  } else {
+                    auto &ah = std::get<AsyncHandler>(handler);
+                    try { co_await ah(*rqp, *rsp); }
+                    catch (const std::exception &ex) {
+                      std::cerr << "[ERROR] async handler: " << ex.what() << "\n";
+                      *rsp = Response{}; rsp->status(500).body("Internal Server Error");
+                    } catch (...) {
+                      std::cerr << "[ERROR] async handler unknown exception\n";
+                      *rsp = Response{}; rsp->status(500).body("Internal Server Error");
+                    }
+                    if (head_fallback) rsp->body("");
+                  }
+                  sr(*rqp, *rsp);
+                  if (!ka) {
+                    r->unregister_event(fd, EventType::Read);
+                    close(fd);
+                  } else {
+                    arm();
+                  }
+                };
+
+                auto rqp = std::make_shared<Request>(std::move(req));
+                auto rsp = std::make_shared<Response>();
+                auto chain_task = [](
+                    const std::vector<AnyMiddleware> *mws,
+                    std::shared_ptr<Request>  rqp,
+                    std::shared_ptr<Response> rsp,
+                    decltype(async_tail) tail) -> Task<void> {
+                  co_await run_mw_chain(mws, 0, rqp, rsp, std::move(tail));
+                }(&router_.middlewares(), rqp, rsp, std::move(async_tail));
+                chain_task.resume();
+                chain_task.detach();
+                return; // sync callback done; coroutine owns everything
+              }
+
+              // ── SYNC FAST PATH ───────────────────────────────────────────
+              Response res;
+              bool cont = true;
+              for (const auto &any_mw : router_.middlewares()) {
+                // Safe: has_async_middlewares() is false here.
+                if (!std::get<Middleware>(any_mw)(req, res)) {
+                  cont = false;
+                  break;
+                }
+              }
 
               if (!cont) {
                 keep_alive = false;
@@ -864,30 +1061,12 @@ Result<void> App::listen(int port, bool ipv6) {
                 return;
               }
 
-              // ── Route dispatch ──────────────────────────────────────────
-              std::unordered_map<std::string, std::string> params;
-              auto handler =
-                  router_.match(req.method(), req.path(), params);
-
-              // HEAD fallback: if no explicit HEAD handler, try GET handler and
-              // strip the response body before sending.
-              bool head_fallback = false;
-              if (std::holds_alternative<std::monostate>(handler) &&
-                  req.method() == Method::Head) {
-                handler = router_.match(Method::Get, req.path(), params);
-                head_fallback = !std::holds_alternative<std::monostate>(handler);
-              }
-
               if (std::holds_alternative<std::monostate>(handler)) {
-                // Distinguish 404 (path unknown) from 405 (wrong method)
                 int status = router_.path_exists(req.path()) ? 405 : 404;
                 res.status(status).body(status == 405 ? "Method Not Allowed"
                                                        : "Not Found");
                 finalize(res);
-                if (!keep_alive)
-                  close_conn();
-                else
-                  arm_idle();
+                if (!keep_alive) close_conn(); else arm_idle();
                 return;
               }
 
@@ -895,11 +1074,9 @@ Result<void> App::listen(int port, bool ipv6) {
                 req.set_param(key, val);
 
               if (std::holds_alternative<Handler>(handler)) {
-                // ── Sync handler ──────────────────────────────────────────
-                // ── Panic recovery ────────────────────────────────────────
                 try {
                   std::get<Handler>(handler)(req, res);
-                  if (head_fallback) res.body(""); // HEAD: suppress body
+                  if (head_fallback) res.body("");
                 } catch (...) {
                   auto ep = std::current_exception();
                   res = Response{};
@@ -916,82 +1093,62 @@ Result<void> App::listen(int port, bool ipv6) {
                   }
                 }
                 finalize(res);
-                if (!keep_alive)
-                  close_conn();
-                else
-                  arm_idle();
+                if (!keep_alive) close_conn(); else arm_idle();
 
               } else {
-                // ── Async handler (coroutine) ─────────────────────────────
-                // Capture everything by value into the coroutine frame so
-                // all state is valid for the lifetime of the co_await chain.
+                // ── Async handler (no async MWs — lean coroutine) ────────
                 auto h   = std::get<AsyncHandler>(handler);
                 bool ka  = keep_alive;
                 bool hfb = head_fallback;
+                auto sr  = send_response;
 
                 auto run_async =
                     [](AsyncHandler ah, Request areq, Response ares,
-                       int fd, Reactor *r, std::shared_ptr<ConnCtx> c,
+                       int fd, Reactor *r, [[maybe_unused]] std::shared_ptr<ConnCtx> c,
                        bool ka_flag, bool head_fb,
-                       std::function<void()> arm) -> Task<void> {
+                       std::function<void()> arm,
+                       decltype(send_response) sr_fn) -> Task<void> {
                   try {
                     co_await ah(areq, ares);
                   } catch (const std::exception &ex) {
-                    std::cerr << "[ERROR] async handler exception: " << ex.what()
-                              << std::endl;
-                    ares = Response{};
-                    ares.status(500).body("Internal Server Error");
+                    std::cerr << "[ERROR] async handler exception: " << ex.what() << "\n";
+                    ares = Response{}; ares.status(500).body("Internal Server Error");
                   } catch (...) {
-                    std::cerr << "[ERROR] async handler unknown exception"
-                              << std::endl;
-                    ares = Response{};
-                    ares.status(500).body("Internal Server Error");
+                    std::cerr << "[ERROR] async handler unknown exception\n";
+                    ares = Response{}; ares.status(500).body("Internal Server Error");
                   }
-                  if (head_fb) ares.body(""); // HEAD: suppress body
-
-                  ares.header("Date", cached_http_date());
-                  ares.header("Connection",
-                               ka_flag ? "keep-alive" : "close");
-                  if (ka_flag) {
-                    ares.header("Keep-Alive",
-                                 "timeout=30, max=" +
-                                     std::to_string(ConnCtx::MAX_REQUESTS -
-                                                    c->handled));
-                  }
-#ifdef __linux__
-                  { int cork = 1; setsockopt(fd, IPPROTO_TCP, TCP_CORK, &cork, sizeof(cork)); }
-#endif
-                  {
-                    std::string ahdr = ares.serialize_header();
-                    writev_response(fd, ahdr, ares.get_body());
-                  }
-#ifdef __linux__
-                  { int cork = 0; setsockopt(fd, IPPROTO_TCP, TCP_CORK, &cork, sizeof(cork)); }
-                  { int qa = 1; setsockopt(fd, IPPROTO_TCP, TCP_QUICKACK, &qa, sizeof(qa)); }
-#endif
-
+                  if (head_fb) ares.body("");
+                  sr_fn(areq, ares);
                   if (!ka_flag) {
                     r->unregister_event(fd, EventType::Read);
                     close(fd);
                   } else {
-                    arm(); // restart idle timer for next request
+                    arm();
                   }
                 };
 
                 auto task = run_async(h, std::move(req), std::move(res),
-                                      cfd, reactor, ctx, ka, hfb, arm_idle);
+                                      cfd, reactor, ctx, ka, hfb, arm_idle, sr);
                 task.resume();
-                task.detach(); // frame self-destructs on completion
+                task.detach();
               }
             });
-      });
+      }); // register_listener_at
 
-  if (!listen_res)
-    return unexpected(listen_res.error());
+    if (!listen_res) {
+      for (int sfd : server_fds) ::close(sfd);
+      return unexpected(listen_res.error());
+    }
+  } // for each reactor
+
+  // Store listen fds so stop() can close them for drain mode.
+  listen_fds_ = server_fds;
 
   dispatcher_.run();
 
-  close(server_fd);
+  // Close any listen fds that stop() didn't already close.
+  for (int sfd : listen_fds_) ::close(sfd);
+  listen_fds_.clear();
   return {};
 }
 
@@ -1145,9 +1302,11 @@ Result<void> App::listen_unix(std::string_view path) {
               Response res;
               bool cont = true;
               for (const auto &mw : router_.middlewares()) {
-                if (!mw(req, res)) {
-                  cont = false;
-                  break;
+                if (std::holds_alternative<Middleware>(mw)) {
+                  if (!std::get<Middleware>(mw)(req, res)) {
+                    cont = false;
+                    break;
+                  }
                 }
               }
 

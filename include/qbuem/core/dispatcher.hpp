@@ -114,6 +114,28 @@ public:
    */
   Reactor *get_worker_reactor(int fd);
 
+  /**
+   * @brief 워커 스레드 수(=Reactor 수)를 반환합니다.
+   *
+   * SO_REUSEPORT 멀티 소켓 accept 패턴에서 리액터별 리스닝 소켓을 생성할 때
+   * 필요한 수를 알기 위해 사용합니다.
+   */
+  size_t thread_count() const noexcept { return reactors_.size(); }
+
+  /**
+   * @brief 특정 인덱스의 워커 Reactor에 수신 fd를 등록합니다.
+   *
+   * SO_REUSEPORT 멀티 소켓 모드에서 각 리액터 스레드가 전용 리스닝 소켓을
+   * 소유하도록 할 때 사용합니다. reactor_idx 가 범위를 벗어나면 에러를 반환합니다.
+   *
+   * @param fd          감시할 파일 디스크립터 (리스닝 소켓).
+   * @param reactor_idx 등록할 워커 인덱스 (0 ~ thread_count()-1).
+   * @param callback    이벤트 발생 시 호출될 콜백.
+   * @returns 성공 시 `Result<void>::ok()`, 실패 시 에러 코드.
+   */
+  Result<void> register_listener_at(int fd, size_t reactor_idx,
+                                    std::function<void(int)> callback);
+
 private:
   /** @brief 실행 상태 플래그. `run()`과 `stop()` 사이의 동기화에 사용됩니다. */
   std::atomic<bool> running_{false};

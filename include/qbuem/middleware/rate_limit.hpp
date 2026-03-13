@@ -5,9 +5,11 @@
 #include <chrono>
 #include <cmath>
 #include <functional>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <utility>
 
 namespace qbuem::middleware {
 
@@ -40,6 +42,22 @@ struct RateLimitConfig {
    * X-Real-IP, then falls back to "__global__" (single shared bucket).
    */
   std::function<std::string(const Request &)> key_fn;
+
+  /**
+   * @brief 동적 IP별 설정 오버라이드 콜백.
+   *
+   * 특정 키(IP 등)에 대해 전역 rate/burst 대신 다른 값을 적용할 때 사용합니다.
+   * 반환값 `std::nullopt` 이면 전역 설정을 사용합니다.
+   *
+   * 예시 (특정 IP 화이트리스트):
+   *   cfg.per_key_override = [](const std::string& key)
+   *       -> std::optional<std::pair<double,double>> {
+   *     if (key == "10.0.0.1") return std::make_pair(1000.0, 200.0);
+   *     return std::nullopt;
+   *   };
+   */
+  std::function<std::optional<std::pair<double, double>>(const std::string &key)>
+      per_key_override;
 };
 
 /**
@@ -74,15 +92,27 @@ inline Middleware rate_limit(RateLimitConfig cfg = {}) {
     };
   }
 
-  double rate  = cfg.rate_per_sec;
-  double burst = cfg.burst;
+  double default_rate  = cfg.rate_per_sec;
+  double default_burst = cfg.burst;
 
-  return [rate, burst, key_fn = std::move(cfg.key_fn)](
+  return [default_rate, default_burst,
+          key_fn       = std::move(cfg.key_fn),
+          override_fn  = std::move(cfg.per_key_override)](
              const Request &req, Response &res) -> bool {
     thread_local std::unordered_map<std::string, detail::Bucket> buckets;
 
     std::string key = key_fn(req);
     auto now = std::chrono::steady_clock::now();
+
+    // Per-key dynamic override: allows whitelist / custom limits per IP.
+    double rate  = default_rate;
+    double burst = default_burst;
+    if (override_fn) {
+      if (auto ov = override_fn(key)) {
+        rate  = ov->first;
+        burst = ov->second;
+      }
+    }
 
     auto [it, inserted] = buckets.emplace(key, detail::Bucket{burst, now});
     detail::Bucket &b   = it->second;
@@ -97,13 +127,10 @@ inline Middleware rate_limit(RateLimitConfig cfg = {}) {
     long limit_long = static_cast<long>(burst);
     long remaining  = static_cast<long>(b.tokens);
 
-    res.header("X-RateLimit-Limit",
-               std::to_string(limit_long));
-    res.header("X-RateLimit-Remaining",
-               std::to_string(remaining > 0 ? remaining - 1 : 0));
+    res.header("X-RateLimit-Limit",     std::to_string(limit_long));
+    res.header("X-RateLimit-Remaining", std::to_string(remaining > 0 ? remaining - 1 : 0));
 
     if (b.tokens < 1.0) {
-      // Compute seconds until one token is available.
       double retry_secs = (1.0 - b.tokens) / rate;
       res.status(429)
          .header("Retry-After",

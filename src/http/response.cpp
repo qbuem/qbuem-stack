@@ -32,9 +32,46 @@ Response &Response::chunk(std::string_view data) {
 }
 
 Response &Response::end_chunks() {
-  chunk_buf_ += "0\r\n\r\n"; // terminal chunk
+  // Terminal zero-length chunk. If trailers are present the CRLF after "0\r\n"
+  // is replaced by the trailer block; encode_trailers() provides the correct
+  // closing sequence. Until then we write the full terminator here; the send
+  // loop overwrites the last two bytes if trailers are appended.
+  chunk_buf_ += "0\r\n"; // terminal chunk header (trailers or CRLF follow)
   chunked_ = true;
   return *this;
+}
+
+// ── HTTP Trailers (RFC 7230 §4.1.2) ──────────────────────────────────────────
+
+Response &Response::trailer(std::string_view key, std::string_view value) {
+  if (!chunked_) return *this; // trailers only meaningful with chunked encoding
+
+  // Announce trailer names in the Trailer: header so clients can prepare.
+  auto it = headers_.find("Trailer");
+  if (it == headers_.end())
+    headers_["Trailer"] = std::string(key);
+  else {
+    it->second += ", ";
+    it->second += key;
+  }
+
+  trailers_.emplace_back(std::string(key), std::string(value));
+  return *this;
+}
+
+std::string Response::encode_trailers() const {
+  if (trailers_.empty()) return "\r\n"; // plain end-of-chunks CRLF
+  // Format: "<name>: <value>\r\n" for each trailer, terminated by "\r\n"
+  std::string out;
+  out.reserve(64 * trailers_.size() + 2);
+  for (const auto &[k, v] : trailers_) {
+    out += k;
+    out += ": ";
+    out += v;
+    out += "\r\n";
+  }
+  out += "\r\n"; // final empty line closes chunked body
+  return out;
 }
 
 Response &Response::set_cookie(std::string_view name, std::string_view value,

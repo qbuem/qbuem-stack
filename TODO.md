@@ -4,6 +4,24 @@
 
 ---
 
+## 완료 (v0.4.0)
+
+### IO Core 고도화
+- [x] io_uring SQPOLL 모드 (`IORING_SETUP_SQPOLL`) — 권한 있으면 활성화, graceful fallback
+- [x] `SO_REUSEPORT` per-reactor accept socket — accept storm 제거 (reactor당 전용 listen socket)
+- [x] `Dispatcher::thread_count()` / `register_listener_at()` API 추가
+
+### HTTP
+- [x] Drain mode: 신규 accept 중단 후 기존 연결 자연 종료 대기 (`stop(drain_ms)`)
+- [x] HTTP Trailer 지원 (Chunked Transfer 종료 후 헤더 추가 — `res.trailer(k, v)`)
+
+### Middleware
+- [x] `next()` 기반 async 미들웨어 (`AsyncMiddleware` 타입, `App::use_async()`)
+- [x] Structured logging — `remote_addr`, `request_id`, `trace_id` 포함 (`enable_structured_log()`)
+- [x] 동적 Rate Limit — IP별 설정 오버라이드 (`RateLimitConfig::per_key_override`)
+
+---
+
 ## 완료 (v0.3.0)
 
 ### 문서화 (Doxygen)
@@ -16,15 +34,15 @@
 - [x] `middleware/body_encoder.hpp`, `middleware/token_auth.hpp` 완료
 - [x] `middleware/cors.hpp`, `middleware/rate_limit.hpp`, `middleware/security.hpp` 완료
 - [x] `middleware/sse.hpp`, `middleware/static_files.hpp` 완료
-- [x] `draco.hpp`, `crypto.hpp`, `url.hpp` 완료
+- [x] `qbuem-stack.hpp`, `crypto.hpp`, `url.hpp` 완료
 
 ### Layer 0: Common
 - [x] `Result<T>` + `unexpected<E>` — C++20 예외 없는 에러 처리
 - [x] `FixedPoolResource<Size>` — O(1) slab allocator (embedded free-list)
 - [x] `MonotonicBufferResource` — per-request arena
-- [x] `draco::constant_time_equal()` — timing-safe 비교
-- [x] `draco::csrf_token()` — CSPRNG 기반 128-bit 토큰
-- [x] `draco::random_bytes()` — getrandom(2) / arc4random_buf()
+- [x] `qbuem::constant_time_equal()` — timing-safe 비교
+- [x] `qbuem::csrf_token()` — CSPRNG 기반 128-bit 토큰
+- [x] `qbuem::random_bytes()` — getrandom(2) / arc4random_buf()
 
 ### Layer 1: IO Core
 - [x] `IReactor` 추상 인터페이스 (epoll / kqueue / io_uring)
@@ -82,24 +100,15 @@
 
 ## 진행 예정
 
-### 단기 (v0.4.0)
+### 단기 (v0.5.0)
 
 #### IO Core 고도화
-- [ ] io_uring SQPOLL 모드 (`IORING_SETUP_SQPOLL`) — steady-state syscall 0
 - [ ] io_uring Fixed Buffers (`io_uring_register_buffers`) — DMA 직접 쓰기
 - [ ] io_uring Buffer Ring (`IORING_OP_PROVIDE_BUFFERS`) — 커널 버퍼 선택
-- [ ] `SO_REUSEPORT` per-reactor accept socket — accept storm 제거
 - [ ] macOS `EVFILT_USER` 기반 wakeup (cross-thread notification)
 
 #### HTTP
 - [ ] Write timeout 타이머 (응답 전송 최대 시간, 현재 SO_SNDTIMEO로 대체)
-- [ ] Drain mode: 신규 accept 중단 후 기존 연결 자연 종료 대기
-- [ ] HTTP Trailer 지원 (Chunked Transfer 종료 후 헤더 추가)
-
-#### Middleware
-- [ ] `next()` 기반 async 미들웨어 (`AsyncMiddleware` 타입)
-- [ ] Structured logging — remote_addr, request_id, trace_id 포함
-- [ ] 동적 Rate Limit (IP별 설정 오버라이드)
 
 ### 중기 (v0.5.0)
 

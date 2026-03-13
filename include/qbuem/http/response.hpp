@@ -72,6 +72,33 @@ public:
   Response &end_chunks();
 
   /**
+   * @brief Add an HTTP Trailer header field (RFC 7230 §4.1.2).
+   *
+   * Trailers are header-like fields sent AFTER the last chunk in a
+   * chunked-encoded response.  They allow including metadata (e.g. checksums,
+   * server timing, digital signatures) that is only known after the body has
+   * been generated.
+   *
+   * Must be used together with chunked transfer encoding (chunk() / end_chunks()).
+   * The `Trailer` header is added automatically to announce the trailer names.
+   *
+   * Example:
+   *   res.chunk("data...").end_chunks()
+   *      .trailer("X-Checksum", "sha256=abc123")
+   *      .trailer("Server-Timing", "db;dur=12");
+   *
+   * @param key   Trailer field name (must not be Transfer-Encoding / Content-Length).
+   * @param value Trailer field value.
+   */
+  Response &trailer(std::string_view key, std::string_view value);
+
+  /** @brief True when at least one trailer has been added. */
+  bool has_trailers() const noexcept { return !trailers_.empty(); }
+
+  /** @brief Return the encoded trailer block (including terminal CRLF). */
+  std::string encode_trailers() const;
+
+  /**
    * @brief Append a Set-Cookie response header.
    *
    * Multiple cookies are supported; each call appends one Set-Cookie line.
@@ -174,6 +201,9 @@ private:
   // Chunked transfer encoding accumulator
   bool        chunked_      = false;
   std::string chunk_buf_;   // encoded chunked body (framing included)
+
+  // HTTP Trailers (RFC 7230 §4.1.2) — sent after last chunk
+  std::vector<std::pair<std::string, std::string>> trailers_;
 };
 
 } // namespace qbuem

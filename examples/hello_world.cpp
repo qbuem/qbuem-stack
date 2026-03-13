@@ -12,7 +12,7 @@ int main() {
   });
 
   app.get("/", [](const qbuem::Request &, qbuem::Response &res) {
-    res.status(200).body("Hello from Draco WAS Phase 2!");
+    res.status(200).body("Hello from qbuem-stack!");
   });
 
   app.get("/user/:id", [](const qbuem::Request &req, qbuem::Response &res) {
