@@ -182,6 +182,29 @@ public:
   void enable_access_log();
 
   /**
+   * @brief Enable JSON-structured access log.
+   *
+   * Writes one JSON object per line to stderr (logfmt / ECS-compatible):
+   *   {"ts":"2024-…","method":"GET","path":"/…","status":200,"duration_us":N}
+   *
+   * Suitable for log aggregation pipelines (Loki, Elasticsearch, etc.).
+   */
+  void enable_json_log();
+
+  /**
+   * @brief Set maximum number of concurrent connections.
+   *
+   * When the limit is reached, new connections are accepted and immediately
+   * closed after sending a 503 Service Unavailable response with a
+   * Retry-After: 1 header.
+   *
+   * Default: 0 (unlimited).
+   *
+   * @param max  Maximum simultaneous open connections.
+   */
+  void set_max_connections(uint64_t max);
+
+  /**
    * @brief Register a GET /metrics endpoint returning a text snapshot.
    *
    * Returns Prometheus-compatible plain-text exposition:
@@ -251,6 +274,9 @@ private:
 
   // Drain flag: set on SIGTERM/SIGINT; readiness probe returns 503 when true.
   std::atomic<bool> draining_{false};
+
+  // Max concurrent connections (0 = unlimited).
+  std::atomic<uint64_t> max_connections_{0};
 
   // Server start time (set on listen()/listen_unix()).
   std::chrono::steady_clock::time_point start_time_{std::chrono::steady_clock::now()};

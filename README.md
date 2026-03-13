@@ -92,13 +92,17 @@ AsyncWrite ──► (Keep-Alive? → Idle) / (Close → Arena free)
 | sendfile(2) | ✅ 완료 | Linux + macOS 제로카피 정적 파일 전송 |
 | Remote Addr | ✅ 완료 | `req.remote_addr()` 지원 |
 | Crypto Utils | ✅ 완료 | constant-time compare, CSPRNG, CSRF token |
-| Access Log | ✅ 완료 | Combined Log Format 지원 (SPSC ring-buffer 비동기) |
-| Async Logger | ✅ 완료 | Lock-free SPSC 큐 기반 비동기 로거 |
+| Access Log | ✅ 완료 | Text / JSON 포맷 선택 (`enable_access_log` / `enable_json_log`) |
+| Async Logger | ✅ 완료 | Lock-free SPSC 큐, `LogFormat::Text` / `LogFormat::Json` |
 | Chunked Transfer | ✅ 완료 | `Response::chunk()` / `end_chunks()` |
 | Server-Sent Events | ✅ 완료 | `SseStream` — text/event-stream 스트리밍 |
 | gzip 압축 | ✅ 완료 | `compress()` 미들웨어 (zlib) |
 | JWT 인증 | ✅ 완료 | HS256 검증, exp/nbf/iss/aud 클레임, timing-safe |
 | StackController | ✅ 완료 | 다중 App 라이프사이클 통합 관리 |
+| 연결 수 제한 | ✅ 완료 | `set_max_connections(N)` — 초과 시 503 + Retry-After |
+| 에러 핸들러 | ✅ 완료 | `on_error(ErrorHandler)` — 핸들러 예외 커스텀 처리 |
+| K8s Probe | ✅ 완료 | `/live` liveness, `/ready` readiness (drain 중 503) |
+| 상세 헬스체크 | ✅ 완료 | `health_check_detailed()` — connections/uptime/requests |
 | JSON (코어 의존 없음) | ✅ 완료 | 프레임워크 코어에서 완전 제거; 앱이 직접 처리 |
 | TLS/SSL | ❌ 예정 | Phase 8 |
 | HTTP/2 | ❌ 예정 | Phase 9 |
@@ -144,12 +148,28 @@ int main() {
     });
 
     // ── 내장 엔드포인트 ────────────────────────────────────────────
-    app.health_check("/health");           // GET /health → {"status":"ok"}
-    app.metrics_endpoint("/metrics");      // GET /metrics → Prometheus 포맷
-    app.serve_static("/static", "./www");  // 정적 파일 서빙 (ETag + Range 지원)
+    app.health_check("/health");                  // {"status":"ok"}
+    app.health_check_detailed("/health/detail");  // 연결 수 + 업타임 포함
+    app.liveness_endpoint("/live");               // Kubernetes liveness probe
+    app.readiness_endpoint("/ready");             // Kubernetes readiness probe (drain 시 503)
+    app.metrics_endpoint("/metrics");             // Prometheus 포맷
+    app.serve_static("/static", "./www");         // ETag + Range + sendfile
+
+    // ── 연결 수 제한 (초과 시 503 + Retry-After) ──────────────────
+    app.set_max_connections(10000);
+
+    // ── 에러 핸들러 ────────────────────────────────────────────────
+    app.on_error([](std::exception_ptr ep, const draco::Request&, draco::Response& res) {
+        try { std::rethrow_exception(ep); }
+        catch (const std::exception& e) {
+            res.status(500).header("Content-Type", "application/json")
+               .body(std::string("{\"error\":\"") + e.what() + "\"}");
+        }
+    });
 
     // ── 액세스 로그 활성화 ─────────────────────────────────────────
-    app.enable_access_log();   // stderr: [2024-…] GET /hello 200 123µs
+    app.enable_access_log();   // [ISO8601] GET /hello 200 123µs
+    // app.enable_json_log();  // {"ts":"…","method":"GET","path":"/…","status":200,"duration_us":123}
 
     // ── 서버 시작 (IPv4 / IPv6 dual-stack) ────────────────────────
     auto result = app.listen(8080);   // IPv4

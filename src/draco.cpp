@@ -347,6 +347,28 @@ void App::enable_access_log() {
   };
 }
 
+void App::enable_json_log() {
+  logger_ = [](std::string_view method, std::string_view path, int status,
+               long duration_us) {
+    std::time_t now = std::time(nullptr);
+    std::tm tm{};
+    gmtime_r(&now, &tm);
+    char ts[32];
+    std::strftime(ts, sizeof(ts), "%Y-%m-%dT%H:%M:%SZ", &tm);
+    std::fprintf(stderr,
+                 "{\"ts\":\"%s\",\"method\":\"%.*s\","
+                 "\"path\":\"%.*s\",\"status\":%d,\"duration_us\":%ld}\n",
+                 ts,
+                 static_cast<int>(method.size()), method.data(),
+                 static_cast<int>(path.size()),   path.data(),
+                 status, duration_us);
+  };
+}
+
+void App::set_max_connections(uint64_t max) {
+  max_connections_.store(max, std::memory_order_relaxed);
+}
+
 // ─── App lifecycle ────────────────────────────────────────────────────────────
 
 void App::stop() {
@@ -458,6 +480,27 @@ Result<void> App::listen(int port, bool ipv6) {
         }
 
         fcntl(client_fd, F_SETFL, O_NONBLOCK);
+
+        // ── Connection limit guard ────────────────────────────────────────
+        // If max_connections_ is set and active count has reached the limit,
+        // send 503 Service Unavailable and close immediately.
+        {
+          uint64_t mx = max_connections_.load(std::memory_order_relaxed);
+          if (mx > 0 && cnt_active_.load(std::memory_order_relaxed) >= mx) {
+            static constexpr std::string_view kOverload =
+                "HTTP/1.1 503 Service Unavailable\r\n"
+                "Content-Type: application/json\r\n"
+                "Retry-After: 1\r\n"
+                "Content-Length: 37\r\n"
+                "Connection: close\r\n\r\n"
+                "{\"error\":\"too many connections\"}    ";
+            // best-effort send (ignore partial write — connection closing anyway)
+            [[maybe_unused]] auto _ =
+                ::write(client_fd, kOverload.data(), kOverload.size() - 4);
+            ::close(client_fd);
+            return;
+          }
+        }
 
 #ifdef SO_NOSIGPIPE
         // macOS: prevent SIGPIPE on write to closed socket.

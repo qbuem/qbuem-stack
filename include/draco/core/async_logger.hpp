@@ -71,15 +71,25 @@ struct LogEntry {
  * dequeue().  Only safe for a single producer and a single consumer.
  * For multi-reactor use, create one AsyncLogger per reactor thread.
  */
+/**
+ * @brief Output format for AsyncLogger entries.
+ */
+enum class LogFormat {
+  Text, ///< [ISO8601] METHOD /path STATUS Xµs  (default)
+  Json, ///< {"ts":"…","method":"…","path":"…","status":N,"duration_us":N}
+};
+
 class AsyncLogger {
 public:
   /**
    * @param capacity  Ring buffer size (must be a power of two).
    *                  Excess entries are silently dropped if the buffer is full.
    * @param out       Output file (default: stderr).
+   * @param fmt       Output format (Text or Json).
    */
-  explicit AsyncLogger(size_t capacity = 4096, FILE *out = stderr)
-      : mask_(capacity - 1), out_(out), buf_(capacity) {
+  explicit AsyncLogger(size_t capacity = 4096, FILE *out = stderr,
+                       LogFormat fmt = LogFormat::Text)
+      : mask_(capacity - 1), out_(out), fmt_(fmt), buf_(capacity) {
     // Capacity must be a power of two.
   }
 
@@ -165,17 +175,27 @@ private:
     char ts_buf[24];
     std::strftime(ts_buf, sizeof(ts_buf), "%Y-%m-%dT%H:%M:%SZ", &tm);
 
-    // Format: [YYYY-MM-DDTHH:MM:SSZ] METHOD /path STATUS Xµs\n
-    char line[512];
-    int len = std::snprintf(line, sizeof(line),
-                            "[%s] %s %s %d %ldµs\n",
-                            ts_buf, e.method, e.path, e.status, e.duration_us);
+    char line[640];
+    int len;
+    if (fmt_ == LogFormat::Json) {
+      // {"ts":"2024-…","method":"GET","path":"/…","status":200,"duration_us":123}
+      len = std::snprintf(line, sizeof(line),
+                          "{\"ts\":\"%s\",\"method\":\"%s\","
+                          "\"path\":\"%s\",\"status\":%d,\"duration_us\":%ld}\n",
+                          ts_buf, e.method, e.path, e.status, e.duration_us);
+    } else {
+      // [YYYY-MM-DDTHH:MM:SSZ] METHOD /path STATUS Xµs\n
+      len = std::snprintf(line, sizeof(line),
+                          "[%s] %s %s %d %ldµs\n",
+                          ts_buf, e.method, e.path, e.status, e.duration_us);
+    }
     if (len > 0)
       std::fwrite(line, 1, static_cast<size_t>(len), out_);
   }
 
-  size_t mask_;                          // capacity - 1
-  FILE  *out_;
+  size_t    mask_;                       // capacity - 1
+  FILE     *out_;
+  LogFormat fmt_;
   std::vector<LogEntry> buf_;
 
   alignas(64) std::atomic<size_t> head_{0}; // producer writes
