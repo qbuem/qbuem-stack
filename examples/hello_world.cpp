@@ -1,4 +1,4 @@
-#include <qbuem/qbuem.hpp>
+#include <qbuem/qbuem-stack.hpp>
 #include <iostream>
 
 int main() {

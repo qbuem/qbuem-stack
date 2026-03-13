@@ -19,7 +19,7 @@
  */
 #include <qbuem_json/qbuem_json.hpp>
 #include <qbuem/core/awaiters.hpp>
-#include <qbuem/qbuem.hpp>
+#include <qbuem/qbuem-stack.hpp>
 #include <iostream>
 #include <string>
 
