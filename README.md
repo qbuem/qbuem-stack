@@ -80,29 +80,29 @@ target_link_libraries(my_service
 ## 빠른 시작
 
 ```cpp
-#include <draco/draco.hpp>
-#include <draco/middleware/cors.hpp>
-#include <draco/middleware/rate_limit.hpp>
-#include <draco/middleware/security.hpp>
-#include <draco/middleware/request_id.hpp>
+#include <qbuem/qbuem-stack.hpp>
+#include <qbuem/middleware/cors.hpp>
+#include <qbuem/middleware/rate_limit.hpp>
+#include <qbuem/middleware/security.hpp>
+#include <qbuem/middleware/request_id.hpp>
 
 int main() {
-    draco::App app;
+    qbuem::App app;
 
     // ── 미들웨어 ─────────────────────────────────────────────────────────
-    app.use(draco::middleware::request_id());
-    app.use(draco::middleware::secure_headers());
-    app.use(draco::middleware::cors());
-    app.use(draco::middleware::rate_limit({.rate_per_sec = 1000, .burst = 50}));
+    app.use(qbuem::middleware::request_id());
+    app.use(qbuem::middleware::secure_headers());
+    app.use(qbuem::middleware::cors());
+    app.use(qbuem::middleware::rate_limit({.rate_per_sec = 1000, .burst = 50}));
 
     // ── 동기 핸들러 ──────────────────────────────────────────────────────
-    app.get("/hello", [](const draco::Request& req, draco::Response& res) {
+    app.get("/hello", [](const qbuem::Request& req, qbuem::Response& res) {
         res.status(200).body("hello");
     });
 
     // ── 비동기 코루틴 핸들러 ─────────────────────────────────────────────
-    app.get("/user/:id", [](const draco::Request& req, draco::Response& res)
-        -> draco::Task<void> {
+    app.get("/user/:id", [](const qbuem::Request& req, qbuem::Response& res)
+        -> qbuem::Task<void> {
         auto id = req.param("id");
         res.status(200)
            .header("Content-Type", "application/json")
@@ -119,7 +119,7 @@ int main() {
     app.serve_static("/static", "./www");
 
     // ── 글로벌 에러 핸들러 ───────────────────────────────────────────────
-    app.on_error([](std::exception_ptr ep, const draco::Request&, draco::Response& res) {
+    app.on_error([](std::exception_ptr ep, const qbuem::Request&, qbuem::Response& res) {
         try { std::rethrow_exception(ep); }
         catch (const std::exception& e) {
             res.status(500)
@@ -145,9 +145,9 @@ int main() {
 
 ```cpp
 #include <zlib.h>
-#include <draco/middleware/body_encoder.hpp>
+#include <qbuem/middleware/body_encoder.hpp>
 
-class GzipEncoder : public draco::middleware::IBodyEncoder {
+class GzipEncoder : public qbuem::middleware::IBodyEncoder {
 public:
     bool encode(std::string_view src, std::string &dst) noexcept override {
         // zlib deflateInit2(...) + deflate + deflateEnd
@@ -160,20 +160,20 @@ public:
 
 // 사용:
 GzipEncoder gzip;
-app.get("/data", [&gzip](const draco::Request& req, draco::Response& res) {
+app.get("/data", [&gzip](const qbuem::Request& req, qbuem::Response& res) {
     res.status(200).header("Content-Type", "application/json").body(big_json);
-    draco::middleware::compress_response(gzip, req, res);
+    qbuem::middleware::compress_response(gzip, req, res);
 });
 ```
 
 ### 인증 (`ITokenVerifier`)
 
 ```cpp
-#include <draco/middleware/token_auth.hpp>
+#include <qbuem/middleware/token_auth.hpp>
 
-class MyJwtVerifier : public draco::middleware::ITokenVerifier {
+class MyJwtVerifier : public qbuem::middleware::ITokenVerifier {
 public:
-    std::optional<draco::middleware::TokenClaims>
+    std::optional<qbuem::middleware::TokenClaims>
     verify(std::string_view token) noexcept override {
         // 1. base64url 분리 → header.payload.sig
         // 2. HMAC-SHA256 서명 검증 (constant_time_equal)
@@ -185,9 +185,9 @@ public:
 
 // 사용:
 MyJwtVerifier verifier;
-app.use(draco::middleware::bearer_auth(verifier));
+app.use(qbuem::middleware::bearer_auth(verifier));
 
-app.get("/me", [](const draco::Request&, draco::Response& res) {
+app.get("/me", [](const qbuem::Request&, qbuem::Response& res) {
     auto sub = res.get_header("X-Auth-Sub"); // 검증된 subject 클레임
     res.status(200).body(sub);
 });
@@ -196,10 +196,10 @@ app.get("/me", [](const draco::Request&, draco::Response& res) {
 ### SSE (Server-Sent Events)
 
 ```cpp
-#include <draco/middleware/sse.hpp>
+#include <qbuem/middleware/sse.hpp>
 
-app.get("/events", draco::Handler([](const draco::Request&, draco::Response& res) {
-    draco::SseStream sse(res);
+app.get("/events", qbuem::Handler([](const qbuem::Request&, qbuem::Response& res) {
+    qbuem::SseStream sse(res);
     sse.send("connected", "status");
     sse.send("42",        "counter", "1");
     sse.heartbeat();
@@ -217,10 +217,10 @@ auto result = app.listen_unix("/run/myapp.sock");
 ### StackController (다중 App)
 
 ```cpp
-draco::App api, admin;
+qbuem::App api, admin;
 // ... 라우트 등록 ...
 
-draco::StackController ctrl;
+qbuem::StackController ctrl;
 ctrl.add(api,   8080);
 ctrl.add(admin, 9090);
 ctrl.run();   // SIGTERM/SIGINT 자동 처리
@@ -235,9 +235,9 @@ ctrl.run();   // SIGTERM/SIGINT 자동 처리
 
 ```cpp
 #include <qbuem_json/qbuem_json.hpp>
-#include <draco/draco.hpp>
+#include <qbuem/qbuem-stack.hpp>
 
-app.post("/echo", draco::Handler([](const draco::Request& req, draco::Response& res) {
+app.post("/echo", qbuem::Handler([](const qbuem::Request& req, qbuem::Response& res) {
     qbuem::Document doc;
     auto body = qbuem::parse(doc, req.body());
 
@@ -318,7 +318,7 @@ cmake -B build && cmake --build build --parallel
 ctest --test-dir build -V
 
 # 개별 실행
-./build/tests/draco_tests       # 코어 + HTTP (60 tests)
+./build/tests/qbuem_tests       # 코어 + HTTP (60 tests)
 ./build/tests/qbuem_json_tests  # qbuem-json 통합 (네트워크 필요)
 ```
 
