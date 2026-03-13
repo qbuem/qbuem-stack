@@ -17,6 +17,7 @@ namespace qbuem {
 struct IOUringReactor::Impl {
   struct io_uring ring;
   bool running = true;
+  bool sqpoll_enabled = false; // true when IORING_SETUP_SQPOLL was accepted
   uint64_t next_token = 1; // Per-op unique ID used as SQE user_data
   int next_timer_id = 1;
 
@@ -71,12 +72,19 @@ struct IOUringReactor::Impl {
 // Constructor / Destructor
 // ---------------------------------------------------------------------------
 IOUringReactor::IOUringReactor() : impl_(new Impl{}) {
-  // Plain init — no SINGLE_ISSUER: the Dispatcher calls register_event from
-  // the main thread (for the listen socket) before the reactor thread exists,
-  // so we cannot promise a single issuer.  SINGLE_ISSUER would cause the kernel
-  // to silently reject timeout SQEs submitted from the reactor thread, breaking
-  // io_uring_wait_cqe_timeout.
-  int ret = io_uring_queue_init(IOUringReactor::QUEUE_DEPTH, &impl_->ring, 0);
+  // Attempt SQPOLL mode first (steady-state syscall-free polling).
+  // IORING_SETUP_SQPOLL requires either CAP_SYS_ADMIN or a recent kernel
+  // with unprivileged SQPOLL support.  We fall back gracefully if unavailable.
+  // Note: SINGLE_ISSUER is intentionally omitted — the Dispatcher may call
+  // register_event from the main thread before the reactor thread starts.
+  int ret = io_uring_queue_init(IOUringReactor::QUEUE_DEPTH, &impl_->ring,
+                                IORING_SETUP_SQPOLL);
+  if (ret == -EPERM || ret == -EINVAL) {
+    // Kernel doesn't support SQPOLL or insufficient privileges — use plain mode.
+    ret = io_uring_queue_init(IOUringReactor::QUEUE_DEPTH, &impl_->ring, 0);
+  } else if (ret == 0) {
+    impl_->sqpoll_enabled = true;
+  }
   if (ret < 0)
     throw std::runtime_error(std::string("io_uring_queue_init failed: ") +
                              strerror(-ret));
@@ -265,6 +273,8 @@ Result<int> IOUringReactor::poll(int timeout_ms) {
   }
 
   // Submit SQEs accumulated by callbacks (resubmit_poll, register_event…).
+  // In SQPOLL mode the kernel thread polls the SQ ring autonomously, but we
+  // still call submit() to wake a sleeping SQPOLL thread (IORING_SQ_NEED_WAKEUP).
   io_uring_submit(&impl_->ring);
 
   return (int)events.size();
@@ -272,5 +282,6 @@ Result<int> IOUringReactor::poll(int timeout_ms) {
 
 void IOUringReactor::stop() { impl_->running = false; }
 bool IOUringReactor::is_running() const { return impl_->running; }
+bool IOUringReactor::is_sqpoll() const noexcept { return impl_->sqpoll_enabled; }
 
 } // namespace qbuem

@@ -80,6 +80,11 @@ void Router::add_route(Method method, std::string_view path,
 
 void Router::use(Middleware mw) { middlewares_.push_back(std::move(mw)); }
 
+void Router::use_async(AsyncMiddleware mw) {
+  middlewares_.push_back(std::move(mw));
+  has_async_mw_ = true;
+}
+
 void Router::add_prefix_route(Method method, std::string_view prefix,
                               HandlerVariant handler) {
   prefix_routes_.push_back({method, std::string(prefix), std::move(handler)});

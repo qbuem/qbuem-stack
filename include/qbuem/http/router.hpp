@@ -17,7 +17,32 @@ namespace qbuem {
 using Handler = std::function<void(const Request &, Response &)>;
 using AsyncHandler = std::function<Task<void>(const Request &, Response &)>;
 using HandlerVariant = std::variant<std::monostate, Handler, AsyncHandler>;
+
+/** @brief 동기 미들웨어 — false 반환 시 체인 중단. */
 using Middleware = std::function<bool(const Request &, Response &)>;
+
+/**
+ * @brief next() 기반 비동기 미들웨어.
+ *
+ * `next()`를 co_await 하면 체인의 나머지(다음 미들웨어 또는 라우트 핸들러)가
+ * 실행됩니다.  next()를 호출하지 않으면 체인이 중단됩니다.
+ *
+ * 예시:
+ * @code
+ * app.use_async([](const qbuem::Request& req, qbuem::Response& res,
+ *                  qbuem::NextFn next) -> qbuem::Task<bool> {
+ *   // 전처리
+ *   co_await next();
+ *   // 후처리 (응답이 채워진 후)
+ *   co_return true;
+ * });
+ * @endcode
+ */
+using NextFn = std::function<Task<void>()>;
+using AsyncMiddleware = std::function<Task<bool>(const Request &, Response &, NextFn)>;
+
+/** @brief 동기 / 비동기 미들웨어를 하나의 타입으로 저장하는 Variant. */
+using AnyMiddleware = std::variant<Middleware, AsyncMiddleware>;
 
 /**
  * @brief Error handler called when a route handler throws an exception.
@@ -69,7 +94,12 @@ private:
 class Router {
 public:
   void add_route(Method method, std::string_view path, HandlerVariant handler);
+
+  /** @brief 동기 미들웨어를 체인에 추가합니다. */
   void use(Middleware mw);
+
+  /** @brief next() 기반 비동기 미들웨어를 체인에 추가합니다. */
+  void use_async(AsyncMiddleware mw);
 
   HandlerVariant
   match(Method method, std::string_view path,
@@ -93,7 +123,10 @@ public:
    */
   bool path_exists(std::string_view path) const;
 
-  const std::vector<Middleware> &middlewares() const { return middlewares_; }
+  const std::vector<AnyMiddleware> &middlewares() const { return middlewares_; }
+
+  /** @brief 비동기 미들웨어가 하나라도 등록되어 있으면 true. */
+  bool has_async_middlewares() const { return has_async_mw_; }
 
 private:
   struct PrefixRoute {
@@ -103,8 +136,9 @@ private:
   };
 
   std::unordered_map<Method, RadixTree> routes_;
-  std::vector<Middleware>               middlewares_;
+  std::vector<AnyMiddleware>            middlewares_;
   std::vector<PrefixRoute>             prefix_routes_;
+  bool                                  has_async_mw_ = false;
 };
 
 } // namespace qbuem

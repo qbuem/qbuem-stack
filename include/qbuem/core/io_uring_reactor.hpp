@@ -24,6 +24,14 @@ class IOUringReactor final : public Reactor {
 public:
   static constexpr unsigned QUEUE_DEPTH = 256;
 
+  /**
+   * @brief SQPOLL 모드 활성화 여부를 반환합니다.
+   *
+   * 커널이 IORING_SETUP_SQPOLL을 수락하면 true.
+   * 권한 부족 등으로 일반 모드로 폴백된 경우 false.
+   */
+  bool is_sqpoll() const noexcept;
+
   IOUringReactor();
   ~IOUringReactor() override;
 

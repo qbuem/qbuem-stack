@@ -12,7 +12,7 @@
  * ### 버전 이력
  * - 0.1.0: 최초 공개 릴리스
  * - 0.2.0: 비동기 로거(AsyncLogger), 코루틴 Task 추가
- * - 0.3.0: AsyncConnect awaiter, FixedPoolResource, 전반적 API 안정화
+ * - 0.4.0: AsyncConnect awaiter, FixedPoolResource, 전반적 API 안정화
  */
 
 /**
@@ -42,7 +42,7 @@ namespace draco {
  *
  * @code
  * static_assert(draco::Version::major >= 0, "버전 확인");
- * std::cout << draco::Version::string << '\n'; // "0.3.0"
+ * std::cout << draco::Version::string << '\n'; // "0.4.0"
  * @endcode
  */
 struct Version {
@@ -50,13 +50,13 @@ struct Version {
   static constexpr int major = 0;
 
   /** @brief Minor 버전 번호. 하위 호환을 유지하며 새 기능이 추가될 때 증가합니다. */
-  static constexpr int minor = 3;
+  static constexpr int minor = 4;
 
   /** @brief Patch 버전 번호. 버그 수정만 이루어질 때 증가합니다. */
   static constexpr int patch = 0;
 
   /** @brief "major.minor.patch" 형식의 버전 문자열 (null-terminated 보장). */
-  static constexpr std::string_view string = "0.3.0";
+  static constexpr std::string_view string = "0.4.0";
 };
 
 } // namespace draco
@@ -65,12 +65,12 @@ struct Version {
 #define DRACO_VERSION_MAJOR 0
 
 /** @brief Minor 버전 번호 (전처리기 조건 분기용). */
-#define DRACO_VERSION_MINOR 3
+#define DRACO_VERSION_MINOR 4
 
 /** @brief Patch 버전 번호 (전처리기 조건 분기용). */
 #define DRACO_VERSION_PATCH 0
 
 /** @brief "major.minor.patch" 형식의 버전 문자열 리터럴 (전처리기 조건 분기용). */
-#define DRACO_VERSION_STRING "0.3.0"
+#define DRACO_VERSION_STRING "0.4.0"
 
 /** @} */ // end of qbuem_version

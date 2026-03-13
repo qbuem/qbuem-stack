@@ -57,6 +57,15 @@ Result<void> Dispatcher::register_listener(int fd,
   return reactors_[0]->register_event(fd, EventType::Read, std::move(callback));
 }
 
+Result<void> Dispatcher::register_listener_at(int fd, size_t reactor_idx,
+                                               std::function<void(int)> callback) {
+  if (reactor_idx >= reactors_.size()) {
+    return unexpected(std::make_error_code(std::errc::invalid_argument));
+  }
+  return reactors_[reactor_idx]->register_event(fd, EventType::Read,
+                                                 std::move(callback));
+}
+
 Reactor *Dispatcher::get_worker_reactor(int fd) {
   return reactors_[fd % reactors_.size()].get();
 }

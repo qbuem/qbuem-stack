@@ -39,8 +39,25 @@ public:
    */
   explicit App(size_t thread_count = std::thread::hardware_concurrency());
 
-  /** @brief Register a global middleware. */
+  /** @brief Register a global synchronous middleware. */
   void use(Middleware mw);
+
+  /**
+   * @brief Register a global next() 기반 비동기 미들웨어.
+   *
+   * 미들웨어 내부에서 `co_await next()`를 호출하면 체인의 나머지가 실행됩니다.
+   * next()를 호출하지 않으면 체인이 중단되며, false를 co_return 해야 합니다.
+   *
+   * Example:
+   *   app.use_async([](const qbuem::Request& req, qbuem::Response& res,
+   *                    qbuem::NextFn next) -> qbuem::Task<bool> {
+   *     // 전처리 로직
+   *     co_await next();
+   *     // 후처리 로직 (응답 완성 후)
+   *     co_return true;
+   *   });
+   */
+  void use_async(AsyncMiddleware mw);
 
   /**
    * @brief Register a global error handler.
@@ -192,6 +209,49 @@ public:
   void enable_json_log();
 
   /**
+   * @brief Structured log record — passed to the structured logger callback.
+   *
+   * Contains all fields needed for structured observability including
+   * remote_addr, request_id (X-Request-Id), and trace_id (X-B3-TraceId /
+   * traceparent).
+   */
+  struct StructuredLogRecord {
+    std::string_view method;       ///< HTTP method ("GET", "POST", …)
+    std::string_view path;         ///< Request path (without query string)
+    int              status  = 0;  ///< HTTP response status code
+    long             duration_us = 0; ///< Request duration in microseconds
+    std::string_view remote_addr;  ///< Client IP address
+    std::string_view request_id;   ///< X-Request-Id header value (may be empty)
+    std::string_view trace_id;     ///< X-B3-TraceId / traceparent (may be empty)
+  };
+
+  /**
+   * @brief Set a structured access logger.
+   *
+   * Called after each response is sent.  All fields in StructuredLogRecord
+   * are populated from the request/response context.
+   *
+   * Example:
+   *   app.set_structured_logger([](const qbuem::App::StructuredLogRecord& r) {
+   *     fprintf(stderr, "method=%s path=%s status=%d dur=%ldµs ip=%s rid=%s\n",
+   *             r.method.data(), r.path.data(), r.status, r.duration_us,
+   *             r.remote_addr.data(), r.request_id.data());
+   *   });
+   */
+  void set_structured_logger(
+      std::function<void(const StructuredLogRecord &)> fn);
+
+  /**
+   * @brief Enable built-in JSON structured log (includes remote_addr, request_id,
+   * trace_id).
+   *
+   * Writes one JSON object per line to stderr:
+   *   {"ts":"…","method":"…","path":"…","status":N,"duration_us":N,
+   *    "remote_addr":"…","request_id":"…","trace_id":"…"}
+   */
+  void enable_structured_log();
+
+  /**
    * @brief Set maximum number of concurrent connections.
    *
    * When the limit is reached, new connections are accepted and immediately
@@ -247,12 +307,23 @@ public:
   Result<void> listen_unix(std::string_view path);
 
   /**
-   * @brief Request graceful shutdown.
+   * @brief Request graceful shutdown (drain mode).
    *
    * Safe to call from a signal handler (async-signal-safe: sets an atomic).
-   * listen() will return after the next reactor poll cycle.
+   *
+   * Behaviour:
+   *   1. Sets the drain flag — readiness probe immediately returns 503 so that
+   *      load balancers stop routing new traffic.
+   *   2. Unregisters all listen sockets so no new TCP connections are accepted.
+   *   3. Waits up to @p drain_timeout_ms for active connections to finish
+   *      naturally (idle-timeout will close keep-alive connections within 30 s).
+   *   4. Calls dispatcher_.stop() to terminate the reactor threads.
+   *
+   * @param drain_timeout_ms Maximum time to wait for active connections to close
+   *                         before forcing shutdown. 0 = stop immediately (old
+   *                         behaviour). Default: 5000 ms.
    */
-  void stop();
+  void stop(int drain_timeout_ms = 5000);
 
   // ── Internal atomic counters (updated by reactor threads) ────────────────
   // Placed on separate 64-byte cache lines to prevent false sharing across cores.
@@ -269,6 +340,9 @@ private:
   // Access logger callback (null = disabled).
   std::function<void(std::string_view, std::string_view, int, long)> logger_;
 
+  // Structured logger callback (null = disabled). Takes priority over logger_.
+  std::function<void(const StructuredLogRecord &)> structured_logger_;
+
   // Error handler callback (null = default 500 response).
   ErrorHandler error_handler_;
 
@@ -277,6 +351,12 @@ private:
 
   // Max concurrent connections (0 = unlimited).
   std::atomic<uint64_t> max_connections_{0};
+
+  // Listen socket fds — stored so stop() can close them to halt new accepts.
+  // Written once by listen() before reactors start; read by stop() from any
+  // thread.  Atomic vector not needed: stop() is called at most once after
+  // listen() returns from setup (protected by draining_ CAS).
+  std::vector<int> listen_fds_;
 
   // Server start time (set on listen()/listen_unix()).
   std::chrono::steady_clock::time_point start_time_{std::chrono::steady_clock::now()};
