@@ -1,21 +1,21 @@
-#include <draco/draco.hpp>
+#include <qbuem/qbuem-stack.hpp>
 #include <iostream>
 
 int main() {
-  draco::App app;
+  qbuem::App app;
 
   // Logging middleware
-  app.use([](const draco::Request &req, draco::Response &) {
+  app.use([](const qbuem::Request &req, qbuem::Response &) {
     std::cout << "[LOG] " << (int)req.method() << " " << req.path()
               << std::endl;
     return true;
   });
 
-  app.get("/", [](const draco::Request &, draco::Response &res) {
+  app.get("/", [](const qbuem::Request &, qbuem::Response &res) {
     res.status(200).body("Hello from Draco WAS Phase 2!");
   });
 
-  app.get("/user/:id", [](const draco::Request &req, draco::Response &res) {
+  app.get("/user/:id", [](const qbuem::Request &req, qbuem::Response &res) {
     (void)req;
     // In a real app, we'd extract params. For now, just a proof of concept.
     res.status(200).body("User profile requested");

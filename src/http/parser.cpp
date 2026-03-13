@@ -1,4 +1,4 @@
-#include <draco/http/parser.hpp>
+#include <qbuem/http/parser.hpp>
 
 #include <cctype>
 #include <cstring>
@@ -7,16 +7,16 @@
 // ── SIMD availability detection ───────────────────────────────────────────────
 #if defined(__AVX2__)
 #  include <immintrin.h>
-#  define DRACO_HAS_AVX2 1
+#  define QBUEM_HAS_AVX2 1
 #elif defined(__SSE2__)
 #  include <emmintrin.h>
-#  define DRACO_HAS_SSE2 1
+#  define QBUEM_HAS_SSE2 1
 #elif defined(__ARM_NEON)
 #  include <arm_neon.h>
-#  define DRACO_HAS_NEON 1
+#  define QBUEM_HAS_NEON 1
 #endif
 
-namespace draco {
+namespace qbuem {
 
 // ---------------------------------------------------------------------------
 // find_header_end — locate "\r\n\r\n" in [data, data+len).
@@ -26,7 +26,7 @@ namespace draco {
 static size_t find_header_end(const char *data, size_t len) noexcept {
   if (len < 4) return SIZE_MAX;
 
-#if defined(DRACO_HAS_AVX2)
+#if defined(QBUEM_HAS_AVX2)
   const __m256i v_cr = _mm256_set1_epi8('\r');
   size_t i = 0;
   for (; i + 32 <= len; i += 32) {
@@ -46,7 +46,7 @@ static size_t find_header_end(const char *data, size_t len) noexcept {
     if (data[i]=='\r' && data[i+1]=='\n' && data[i+2]=='\r' && data[i+3]=='\n')
       return i;
   }
-#elif defined(DRACO_HAS_SSE2)
+#elif defined(QBUEM_HAS_SSE2)
   const __m128i v_cr = _mm_set1_epi8('\r');
   size_t i = 0;
   for (; i + 16 <= len; i += 16) {
@@ -65,7 +65,7 @@ static size_t find_header_end(const char *data, size_t len) noexcept {
     if (data[i]=='\r' && data[i+1]=='\n' && data[i+2]=='\r' && data[i+3]=='\n')
       return i;
   }
-#elif defined(DRACO_HAS_NEON)
+#elif defined(QBUEM_HAS_NEON)
   const uint8x16_t v_cr = vdupq_n_u8(static_cast<uint8_t>('\r'));
   size_t i = 0;
   for (; i + 16 <= len; i += 16) {
@@ -377,4 +377,4 @@ std::optional<size_t> HttpParser::parse(std::string_view data, Request &req) {
   return pos;
 }
 
-} // namespace draco
+} // namespace qbuem

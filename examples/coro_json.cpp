@@ -8,7 +8,7 @@
  * req.body() 는 raw bytes(std::string_view) 로 전달되며, 앱이 직접 파싱합니다.
  *
  * 빌드:
- *   cmake -DDRACO_BUILD_EXAMPLES=ON ..
+ *   cmake -DQBUEM_BUILD_EXAMPLES=ON ..
  *   make coro_json
  *
  * 테스트:
@@ -18,12 +18,12 @@
  *        -d '{"message":"hello","name":"qbuem"}'
  */
 #include <qbuem_json/qbuem_json.hpp>
-#include <draco/core/awaiters.hpp>
-#include <draco/draco.hpp>
+#include <qbuem/core/awaiters.hpp>
+#include <qbuem/qbuem-stack.hpp>
 #include <iostream>
 #include <string>
 
-using namespace draco;
+using namespace qbuem;
 
 // ─── JSON 파싱 헬퍼 ──────────────────────────────────────────────────────────
 // req.body() 는 raw bytes(std::string_view) 입니다.

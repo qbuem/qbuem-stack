@@ -16,13 +16,13 @@
 
 #include <qbuem_json/qbuem_json.hpp>
 
-#include <draco/http/parser.hpp>
-#include <draco/http/request.hpp>
-#include <draco/http/response.hpp>
+#include <qbuem/http/parser.hpp>
+#include <qbuem/http/request.hpp>
+#include <qbuem/http/response.hpp>
 
 // ─── Helper: build a minimal POST Request with a JSON body ───────────────────
 
-static draco::Request make_post_request(std::string_view body) {
+static qbuem::Request make_post_request(std::string_view body) {
   std::string raw =
       "POST /echo HTTP/1.1\r\n"
       "Host: localhost\r\n"
@@ -30,8 +30,8 @@ static draco::Request make_post_request(std::string_view body) {
       "Content-Length: " + std::to_string(body.size()) + "\r\n"
       "\r\n" + std::string(body);
 
-  draco::HttpParser parser;
-  draco::Request req;
+  qbuem::HttpParser parser;
+  qbuem::Request req;
   parser.parse(raw, req);
   return req;
 }
@@ -119,7 +119,7 @@ TEST(QbuemJsonTest, SerializeToResponse) {
   out.insert("status", "ok");
   out.insert("code",   200);
 
-  draco::Response res;
+  qbuem::Response res;
   res.status(200)
      .header("Content-Type", "application/json")
      .body(out.dump());
@@ -145,7 +145,7 @@ TEST(QbuemJsonTest, RoundTrip) {
   out.insert("echo",      msg + "!");
   out.insert("n_plus_one", n + 1);
 
-  draco::Response res;
+  qbuem::Response res;
   res.status(200)
      .header("Content-Type", "application/json")
      .body(out.dump());
