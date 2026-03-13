@@ -6,6 +6,7 @@
 #include <draco/version.hpp>
 
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <functional>
 #include <string_view>
@@ -40,6 +41,26 @@ public:
 
   /** @brief Register a global middleware. */
   void use(Middleware mw);
+
+  /**
+   * @brief Register a global error handler.
+   *
+   * Called when a sync handler throws an exception.  If not set, a generic
+   * 500 response is sent.  Only one error handler can be registered; the
+   * last call to on_error() wins.
+   *
+   * Example:
+   *   app.on_error([](std::exception_ptr ep, const draco::Request& req,
+   *                   draco::Response& res) {
+   *     try { std::rethrow_exception(ep); }
+   *     catch (const std::runtime_error& e) {
+   *       res.status(500)
+   *          .header("Content-Type", "application/json")
+   *          .body(std::string("{\"error\":\"") + e.what() + "\"}");
+   *     }
+   *   });
+   */
+  void on_error(ErrorHandler handler);
 
   /** @brief Register a GET route. */
   void get(std::string_view path, HandlerVariant handler);
@@ -103,6 +124,36 @@ public:
    *          app.health_check("/_ping");    // GET /_ping
    */
   void health_check(std::string_view path = "/health");
+
+  /**
+   * @brief Register a detailed health check endpoint.
+   *
+   * Returns JSON with active connections and uptime:
+   *   {"status":"ok","connections":N,"uptime_s":T,"requests_total":N}
+   *
+   * @param path  URL path (default: "/health/detail").
+   */
+  void health_check_detailed(std::string_view path = "/health/detail");
+
+  /**
+   * @brief Register a Kubernetes liveness probe endpoint.
+   *
+   * Returns 200 while the process is alive (always succeeds unless killed).
+   * Kubernetes uses this to decide whether to restart the container.
+   *
+   * @param path  URL path (default: "/live").
+   */
+  void liveness_endpoint(std::string_view path = "/live");
+
+  /**
+   * @brief Register a Kubernetes readiness probe endpoint.
+   *
+   * Returns 200 when the server is ready to accept traffic, 503 during drain.
+   * Kubernetes stops routing traffic to the pod when this returns non-2xx.
+   *
+   * @param path  URL path (default: "/ready").
+   */
+  void readiness_endpoint(std::string_view path = "/ready");
 
   /**
    * @brief Set a custom access-log callback.
@@ -194,6 +245,15 @@ private:
 
   // Access logger callback (null = disabled).
   std::function<void(std::string_view, std::string_view, int, long)> logger_;
+
+  // Error handler callback (null = default 500 response).
+  ErrorHandler error_handler_;
+
+  // Drain flag: set on SIGTERM/SIGINT; readiness probe returns 503 when true.
+  std::atomic<bool> draining_{false};
+
+  // Server start time (set on listen()/listen_unix()).
+  std::chrono::steady_clock::time_point start_time_{std::chrono::steady_clock::now()};
 };
 
 // ─── StackController ─────────────────────────────────────────────────────────

@@ -190,6 +190,8 @@ App::App(size_t thread_count) : dispatcher_(thread_count) {
 
 void App::use(Middleware mw) { router_.use(std::move(mw)); }
 
+void App::on_error(ErrorHandler handler) { error_handler_ = std::move(handler); }
+
 void App::get(std::string_view path, HandlerVariant handler) {
   router_.add_route(Method::Get, path, std::move(handler));
 }
@@ -248,6 +250,45 @@ void App::health_check(std::string_view path) {
     }));
 }
 
+void App::health_check_detailed(std::string_view path) {
+  router_.add_route(Method::Get, path,
+    Handler([this](const Request &, Response &res) {
+      auto m = snapshot_metrics();
+      auto uptime = std::chrono::duration_cast<std::chrono::seconds>(
+          std::chrono::steady_clock::now() - start_time_).count();
+      std::string body = "{\"status\":\"ok\","
+          "\"connections\":" + std::to_string(m.active_connections) + ","
+          "\"uptime_s\":"    + std::to_string(uptime) + ","
+          "\"requests_total\":" + std::to_string(m.requests_total) + "}";
+      res.status(200).header("Content-Type", "application/json").body(body);
+    }));
+}
+
+void App::liveness_endpoint(std::string_view path) {
+  router_.add_route(Method::Get, path,
+    Handler([](const Request &, Response &res) {
+      res.status(200)
+         .header("Content-Type", "application/json")
+         .body("{\"alive\":true}");
+    }));
+}
+
+void App::readiness_endpoint(std::string_view path) {
+  router_.add_route(Method::Get, path,
+    Handler([this](const Request &, Response &res) {
+      if (draining_.load(std::memory_order_relaxed)) {
+        res.status(503)
+           .header("Content-Type", "application/json")
+           .header("Retry-After", "5")
+           .body("{\"ready\":false,\"reason\":\"draining\"}");
+      } else {
+        res.status(200)
+           .header("Content-Type", "application/json")
+           .body("{\"ready\":true}");
+      }
+    }));
+}
+
 // ─── Metrics ─────────────────────────────────────────────────────────────────
 
 Metrics App::snapshot_metrics() const {
@@ -301,9 +342,14 @@ void App::enable_access_log() {
 
 // ─── App lifecycle ────────────────────────────────────────────────────────────
 
-void App::stop() { dispatcher_.stop(); }
+void App::stop() {
+  draining_.store(true, std::memory_order_relaxed);
+  dispatcher_.stop();
+}
 
 Result<void> App::listen(int port, bool ipv6) {
+  start_time_ = std::chrono::steady_clock::now();
+  draining_.store(false, std::memory_order_relaxed);
   // ── SIGTERM / SIGINT → graceful shutdown ──────────────────────────────────
   g_app_instance = this;
   std::signal(SIGTERM, on_shutdown_signal);
@@ -804,15 +850,20 @@ Result<void> App::listen(int port, bool ipv6) {
                 try {
                   std::get<Handler>(handler)(req, res);
                   if (head_fallback) res.body(""); // HEAD: suppress body
-                } catch (const std::exception &ex) {
-                  std::cerr << "[ERROR] handler exception: " << ex.what()
-                            << std::endl;
-                  res = Response{};
-                  res.status(500).body("Internal Server Error");
                 } catch (...) {
-                  std::cerr << "[ERROR] handler unknown exception" << std::endl;
+                  auto ep = std::current_exception();
                   res = Response{};
-                  res.status(500).body("Internal Server Error");
+                  if (error_handler_) {
+                    try { error_handler_(ep, req, res); } catch (...) {}
+                  } else {
+                    try { std::rethrow_exception(ep); }
+                    catch (const std::exception &ex) {
+                      std::cerr << "[ERROR] handler exception: " << ex.what() << "\n";
+                    } catch (...) {
+                      std::cerr << "[ERROR] handler unknown exception\n";
+                    }
+                    res.status(500).body("Internal Server Error");
+                  }
                 }
                 finalize(res);
                 if (!keep_alive)
