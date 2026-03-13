@@ -1,47 +1,48 @@
 cmake_minimum_required(VERSION 3.20)
 
 # ============================================================================
-# Project Configuration
+# qbuem-stack — Zero Latency · Zero Cost · Zero Dependency WAS Layer
 # ============================================================================
 project(qbuem-stack
     VERSION 0.3.0
     LANGUAGES CXX
-    DESCRIPTION "High-performance Zenith WAS framework (qbuem-stack)"
+    DESCRIPTION "qbuem-stack: zero-dependency C++20 WAS layer (HTTP core + async IO)"
 )
-
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 # ============================================================================
-# Platform Check (Linux/macOS Only)
+# Platform Check
 # ============================================================================
 if(WIN32 OR MSVC)
-    message(FATAL_ERROR "Draco WAS does not support Windows.")
+    message(FATAL_ERROR "qbuem-stack does not support Windows (POSIX only).")
 endif()
 
 # ============================================================================
 # Build Options
 # ============================================================================
-option(DRACO_BUILD_TESTS    "Build Draco unit tests"   ON)
-option(DRACO_BUILD_EXAMPLES "Build Draco examples"     ON)
-option(DRACO_INSTALL        "Generate install targets"  ON)
+option(QBUEM_BUILD_TESTS    "Build unit tests"      ON)
+option(QBUEM_BUILD_EXAMPLES "Build examples"        ON)
+option(QBUEM_INSTALL        "Generate install rules" ON)
 
-# ============================================================================
-# Dependencies (FetchContent — build-time only)
+# Legacy aliases (backward compat for CI scripts using DRACO_ prefix)
+option(DRACO_BUILD_TESTS    "" ${QBUEM_BUILD_TESTS})
+option(DRACO_BUILD_EXAMPLES "" ${QBUEM_BUILD_EXAMPLES})
+option(DRACO_INSTALL        "" ${QBUEM_INSTALL})
+
 # ============================================================================
 include(FetchContent)
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
 
-# ── qbuem-json (optional — fetched lazily; only needed for coro_json example)
-set(QBUEM_JSON_TAG "main" CACHE STRING "qbuem-json git tag / branch / SHA")
+set(QBUEM_JSON_TAG "main" CACHE STRING "qbuem-json git tag / SHA (tests only)")
 
 # ============================================================================
-# Helper: shared compile options (PRIVATE — never leak into consumers)
+# Helper: compile options (PRIVATE — never leak to consumers)
 # ============================================================================
-function(draco_compile_options target)
+function(qbuem_compile_options target)
     if(NOT MSVC)
         target_compile_options(${target} PRIVATE
             -Wall -Wextra -Wpedantic -Werror
@@ -52,122 +53,121 @@ function(draco_compile_options target)
 endfunction()
 
 # ============================================================================
-# Target: draco::core
-#   Reactor + Dispatcher + platform I/O backend (io_uring / kqueue / epoll)
-#   No HTTP, no JSON dependency.
+# Layer 0+1: qbuem-stack::core
+#   Platform IO: io_uring (Linux) / kqueue (macOS) / epoll fallback
+#   Async reactor, thread dispatcher, arena allocator, Task coroutine,
+#   SPSC async logger.  Zero external dependency.
 # ============================================================================
-set(DRACO_CORE_SOURCES
+set(CORE_SOURCES
     src/core/reactor.cpp
     src/core/dispatcher.cpp
 )
 
 if(APPLE)
-    list(APPEND DRACO_CORE_SOURCES src/core/kqueue_reactor.cpp)
+    list(APPEND CORE_SOURCES src/core/kqueue_reactor.cpp)
 else()
     find_path(LIBURING_INCLUDE_DIR liburing.h)
     find_library(LIBURING_LIB NAMES uring)
-
     if(LIBURING_INCLUDE_DIR AND LIBURING_LIB)
-        message(STATUS "io_uring found — using IOUringReactor")
-        set(DRACO_USE_IOURING TRUE)
-        list(APPEND DRACO_CORE_SOURCES src/core/io_uring_reactor.cpp)
+        message(STATUS "[qbuem-stack] io_uring found -> IOUringReactor")
+        set(QBUEM_HAS_IOURING TRUE)
+        list(APPEND CORE_SOURCES src/core/io_uring_reactor.cpp)
     else()
-        message(STATUS "io_uring not found — falling back to EpollReactor")
-        list(APPEND DRACO_CORE_SOURCES src/core/epoll_reactor.cpp)
+        message(STATUS "[qbuem-stack] io_uring not found -> EpollReactor fallback")
+        list(APPEND CORE_SOURCES src/core/epoll_reactor.cpp)
     endif()
 endif()
 
-add_library(draco_core STATIC ${DRACO_CORE_SOURCES})
-add_library(draco::core ALIAS draco_core)
+add_library(qbuem_core STATIC ${CORE_SOURCES})
+add_library(qbuem-stack::core ALIAS qbuem_core)
+add_library(draco_core ALIAS qbuem_core)
+add_library(draco::core ALIAS qbuem_core)
 
-target_include_directories(draco_core
+target_include_directories(qbuem_core
     PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
         $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
 )
-target_compile_features(draco_core PUBLIC cxx_std_20)
-draco_compile_options(draco_core)
+target_compile_features(qbuem_core PUBLIC cxx_std_20)
+qbuem_compile_options(qbuem_core)
 
-if(DRACO_USE_IOURING)
-    target_compile_definitions(draco_core PUBLIC DRACO_HAS_IOURING)
-    target_link_libraries(draco_core PUBLIC ${LIBURING_LIB})
+if(QBUEM_HAS_IOURING)
+    target_compile_definitions(qbuem_core PUBLIC DRACO_HAS_IOURING)
+    target_link_libraries(qbuem_core PUBLIC ${LIBURING_LIB})
 endif()
 
 # ============================================================================
-# Target: draco::http
-#   HTTP parser, Request, Response, Router.
-#   No JSON library dependency — body() is raw bytes; callers choose their
-#   own JSON library.
+# Layer 2: qbuem-stack::http
+#   SIMD HTTP/1.1 FSM parser, Radix Tree router, middleware pipeline,
+#   Request/Response value types.  Zero external dependency.
 # ============================================================================
-add_library(draco_http STATIC
+add_library(qbuem_http STATIC
     src/http/parser.cpp
     src/http/request.cpp
     src/http/response.cpp
     src/http/router.cpp
 )
-add_library(draco::http ALIAS draco_http)
+add_library(qbuem-stack::http ALIAS qbuem_http)
+add_library(draco_http ALIAS qbuem_http)
+add_library(draco::http ALIAS qbuem_http)
 
-target_link_libraries(draco_http PUBLIC draco_core)
-draco_compile_options(draco_http)
-
-# ============================================================================
-# Target: draco::draco  (full — App glue)
-#   Links draco::core + draco::http.  This is what most users want.
-# ============================================================================
-add_library(draco STATIC src/draco.cpp)
-add_library(draco::draco ALIAS draco)
-
-target_link_libraries(draco PUBLIC draco_core draco_http)
-draco_compile_options(draco)
+target_link_libraries(qbuem_http PUBLIC qbuem_core)
+qbuem_compile_options(qbuem_http)
 
 # ============================================================================
-# Installation & CMake Package Export
+# Layer 3+4: qbuem-stack (full — App + built-in middleware + lifecycle)
+#   All extension points (compression, auth, DB) are abstract interfaces.
+#   Zero external dependency.
 # ============================================================================
-if(DRACO_INSTALL)
-    install(TARGETS draco_core draco_http draco
-        EXPORT  dracoTargets
+add_library(qbuem STATIC src/draco.cpp)
+add_library(qbuem-stack::qbuem ALIAS qbuem)
+add_library(draco ALIAS qbuem)
+add_library(draco::draco ALIAS qbuem)
+
+target_link_libraries(qbuem PUBLIC qbuem_core qbuem_http)
+qbuem_compile_options(qbuem)
+
+# ============================================================================
+# Install & CMake Package Export
+# ============================================================================
+if(QBUEM_INSTALL)
+    install(TARGETS qbuem_core qbuem_http qbuem
+        EXPORT  qbuemTargets
         ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
         LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
         RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
     )
-
     install(DIRECTORY include/draco
         DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
     )
-
-    install(EXPORT dracoTargets
-        FILE      dracoTargets.cmake
-        NAMESPACE draco::
-        DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/draco
+    install(EXPORT qbuemTargets
+        FILE      qbuem-stack-targets.cmake
+        NAMESPACE qbuem-stack::
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/qbuem-stack
     )
-
-    # Substitute @PACKAGE_INIT@ into the config.
     configure_package_config_file(
         ${CMAKE_CURRENT_SOURCE_DIR}/cmake/draco-config.cmake.in
-        ${CMAKE_CURRENT_BINARY_DIR}/draco-config.cmake
-        INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/draco
+        ${CMAKE_CURRENT_BINARY_DIR}/qbuem-stack-config.cmake
+        INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/qbuem-stack
     )
-
     write_basic_package_version_file(
-        ${CMAKE_CURRENT_BINARY_DIR}/draco-config-version.cmake
+        ${CMAKE_CURRENT_BINARY_DIR}/qbuem-stack-config-version.cmake
         VERSION     ${PROJECT_VERSION}
         COMPATIBILITY SameMajorVersion
     )
-
     install(FILES
-        ${CMAKE_CURRENT_BINARY_DIR}/draco-config.cmake
-        ${CMAKE_CURRENT_BINARY_DIR}/draco-config-version.cmake
-        DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/draco
+        ${CMAKE_CURRENT_BINARY_DIR}/qbuem-stack-config.cmake
+        ${CMAKE_CURRENT_BINARY_DIR}/qbuem-stack-config-version.cmake
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/qbuem-stack
     )
 endif()
 
 # ============================================================================
-# Subdirectories (Tests / Examples)
+# Tests & Examples
 # ============================================================================
-if(DRACO_BUILD_TESTS)
+if(QBUEM_BUILD_TESTS OR DRACO_BUILD_TESTS)
     enable_testing()
-    FetchContent_Declare(
-        googletest
+    FetchContent_Declare(googletest
         GIT_REPOSITORY https://github.com/google/googletest.git
         GIT_TAG        v1.14.0
     )
@@ -176,6 +176,6 @@ if(DRACO_BUILD_TESTS)
     add_subdirectory(tests)
 endif()
 
-if(DRACO_BUILD_EXAMPLES)
+if(QBUEM_BUILD_EXAMPLES OR DRACO_BUILD_EXAMPLES)
     add_subdirectory(examples)
 endif()
