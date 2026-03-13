@@ -1,8 +1,8 @@
 # qbuem Pipeline System — 기술 설계 문서
 
-> **버전**: 0.1.0-draft
+> **버전**: 0.2.0-draft
 > **대상 브랜치**: `claude/continue-work-p2NeA`
-> **검토 기준**: 기존 코드베이스 전체 분석 + 분산 시스템 / C++20 코루틴 / Lock-free / 시스템 설계 관점 교차 검토
+> **검토 관점**: 분산 시스템 / C++20 코루틴 / Lock-free / 시스템 설계 / Observability / 컴파일러 최적화
 
 ---
 
@@ -10,20 +10,29 @@
 
 1. [요구사항](#1-요구사항)
 2. [코드베이스 분석 — 전제 조건 및 제약](#2-코드베이스-분석--전제-조건-및-제약)
-3. [이전 검토에서 수정된 기술적 오류](#3-이전-검토에서-수정된-기술적-오류)
-4. [핵심 추상화 계층](#4-핵심-추상화-계층)
-5. [Layer 0: Reactor::post() — 가장 중요한 인프라 전제조건](#5-layer-0-reactorpost--가장-중요한-인프라-전제조건)
-6. [Layer 1: AsyncChannel](#6-layer-1-asyncchannelt)
-7. [Layer 2: Stream](#7-layer-2-streamt)
-8. [Layer 3: Action](#8-layer-3-actionin-out)
-9. [Layer 4: Pipeline](#9-layer-4-pipelinein-out)
-10. [Layer 5: PipelineGraph](#10-layer-5-pipelinegraph)
-11. [메시지 패턴 (gRPC 스타일)](#11-메시지-패턴-grpc-스타일)
-12. [복원력 패턴](#12-복원력-패턴)
-13. [관찰 가능성 (Observability)](#13-관찰-가능성-observability)
-14. [추가 개념 — 놓쳤던 부분](#14-추가-개념--놓쳤던-부분)
-15. [파일 구조](#15-파일-구조)
-16. [구현 순서 (의존성 그래프)](#16-구현-순서-의존성-그래프)
+3. [기술적 오류 수정 사항](#3-기술적-오류-수정-사항)
+4. [정적 파이프라인 vs 동적 파이프라인](#4-정적-파이프라인-vs-동적-파이프라인)
+5. [정적 액션 추가 vs 동적 액션 추가](#5-정적-액션-추가-vs-동적-액션-추가)
+6. [파이프라인 상태 머신](#6-파이프라인-상태-머신)
+7. [핵심 추상화 계층](#7-핵심-추상화-계층)
+8. [Layer 0: Reactor::post() + Dispatcher::spawn()](#8-layer-0-reactorpost--dispatcherspawn)
+9. [Layer 1: AsyncChannel](#9-layer-1-asyncchannelt)
+10. [Layer 2: Stream](#10-layer-2-streamt)
+11. [Layer 3: Action (정적 / 동적)](#11-layer-3-action-정적--동적)
+12. [Layer 4: StaticPipeline / DynamicPipeline](#12-layer-4-staticpipeline--dynamicpipeline)
+13. [Layer 5: PipelineGraph](#13-layer-5-pipelinegraph)
+14. [메시지 패턴 (gRPC 스타일)](#14-메시지-패턴-grpc-스타일)
+15. [분산 트레이싱 (OpenTelemetry 호환)](#15-분산-트레이싱-opentelemetry-호환)
+16. [복원력 패턴](#16-복원력-패턴)
+17. [Hot-swap Action (무중단 교체)](#17-hot-swap-action-무중단-교체)
+18. [우선순위 채널](#18-우선순위-채널)
+19. [Config-driven Pipeline (설정 주도)](#19-config-driven-pipeline-설정-주도)
+20. [Pipeline Composition (파이프라인 합성)](#20-pipeline-composition-파이프라인-합성)
+21. [Arena 통합 (제로카피 아이템 할당)](#21-arena-통합-제로카피-아이템-할당)
+22. [관찰 가능성 — 메트릭](#22-관찰-가능성--메트릭)
+23. [파일 구조](#23-파일-구조)
+24. [구현 순서 (의존성 그래프)](#24-구현-순서-의존성-그래프)
+25. [부록: 기술 결정 요약](#25-부록-기술-결정-요약)
 
 ---
 
@@ -31,299 +40,430 @@
 
 | # | 요구사항 | 비고 |
 |---|----------|------|
-| R1 | 파이프라인 = Action의 체인 | 각 Action이 독립적으로 처리 단위 |
-| R2 | Action 단위 scale-in / scale-out | 워커 수를 런타임에 조정 가능 |
+| R1 | 파이프라인 = Action의 체인 | 각 Action이 독립 처리 단위 |
+| R2 | Action 단위 scale-in / scale-out | 워커 수를 런타임에 조정 |
 | R3 | 파이프라인 간 메시지 송수신 | 이름 기반 채널 레지스트리 |
 | R4 | gRPC 스타일 메시지 패턴 | Unary, Server-stream, Client-stream, Bidi-stream |
 | R5 | 파이프라인 완료 → 후속 파이프라인 트리거 | fan-out, fan-in, 조건부 포함 |
+| R6 | **정적 파이프라인 / 동적 파이프라인** | 컴파일타임 vs 런타임 구성 |
+| R7 | **정적 / 동적 액션 추가** | 빌드타임 체인 vs 런타임 삽입/교체 |
+| R8 | **분산 트레이싱** | W3C Trace Context, OpenTelemetry 호환 |
+| R9 | **복원력 패턴** | Retry, CircuitBreaker, DLQ, Bulkhead |
+| R10 | **무중단 액션 교체 (Hot-swap)** | 드레인 후 교체 |
 
 ---
 
 ## 2. 코드베이스 분석 — 전제 조건 및 제약
 
-### 2.1 Task<T> 특성 (task.hpp)
+### 2.1 Task\<T\> 핵심 특성
 
 ```
-initial_suspend() → std::suspend_always     ← Lazy start (직접 resume() 필요)
-unhandled_exception() → std::terminate()    ← ★ CRITICAL: 예외 = 프로세스 종료
-promise.continuation = single handle<>     ← 단일 연속(single-continuation)
+initial_suspend() → std::suspend_always     Lazy: 생성 즉시 suspended
+unhandled_exception() → std::terminate()   ★ CRITICAL: 예외 = 프로세스 종료
+promise.continuation = 단일 handle<>       채널 wait_queue는 외부 intrusive list 필요
+final_suspend() → symmetric transfer       스택 오버플로 없는 깊은 체인 가능
 ```
 
-**파이프라인 영향**:
-- Action 워커 함수는 반드시 `Task<Result<Out>>` 를 반환해야 함. `Task<Out>`로 하면 처리 실패 시 `std::terminate` 호출.
-- 채널의 대기 큐는 `Task<T>` 외부에 별도 intrusive list 로 관리해야 함. promise에 continuation이 하나뿐이라 multiple-waiter 패턴 불가.
-- 새 워커 코루틴을 spawn하면 suspended 상태로 생성됨. 올바른 reactor thread에서 `.resume()` 해야 함.
+**파이프라인 규칙**:
+- 모든 Action 처리 함수는 `Task<Result<Out>>` 반환 (예외 금지)
+- 채널 wait_queue → `{Reactor*, coroutine_handle<>}` 쌍의 intrusive list
+- 새 워커 spawn → `Dispatcher::spawn()` 경유 (suspended Task를 올바른 reactor에서 kick-off)
 
-### 2.2 Reactor 특성 (reactor.hpp)
-
-```
-Shared-nothing: 각 인스턴스는 전용 스레드에서만 실행
-thread-local Reactor::current() 로 접근
-cross-thread 작업 주입 API 없음   ← ★ 파이프라인의 가장 큰 블로커
-```
-
-**구현된 Reactor 3종**:
-- `EpollReactor`: Linux epoll + timerfd
-- `IOUringReactor`: io_uring POLL_ADD + IORING_OP_TIMEOUT (Pimpl)
-- `KqueueReactor`: macOS/BSD kqueue
-
-**파이프라인 영향**:
-- Action A (reactor thread 1) → Action B (reactor thread 2) 데이터 전달 시, thread 2를 깨울 수단이 없음.
-- `Reactor::post(fn)` 가 없으면 cross-reactor 채널이 원천적으로 불가능.
-
-### 2.3 Dispatcher 특성 (dispatcher.hpp)
+### 2.2 Reactor / Dispatcher 갭
 
 ```
-register_listener(fd, cb)           ← fd 이벤트 등록만 가능
-get_worker_reactor(fd)              ← fd % thread_count 해시로 reactor 반환
-post_to(idx, fn) 없음               ← 특정 reactor에 작업 주입 불가
+cross-thread 작업 주입 API 없음   →  Reactor::post(fn) 추가 필수
+Dispatcher::spawn() 없음         →  추가 필수
 ```
 
-### 2.4 Result<T> 에러 타입 (common.hpp)
+구현 3종:
+- `EpollReactor` (Linux): eventfd 기반
+- `IOUringReactor` (Linux): IORING_OP_MSG_RING 또는 eventfd 폴백
+- `KqueueReactor` (macOS/BSD): EVFILT_USER 기반
+
+### 2.3 기존 에러 타입
+
+```cpp
+Result<T>  →  variant<monostate, T, error_code>
+```
+
+파이프라인 전체에서 이 타입으로 에러를 값으로 전달.
+
+### 2.4 Arena (arena.hpp)
 
 ```
-variant<monostate, T, error_code>   ← 파이프라인 전체의 에러 전달 타입
+bump-pointer 할당: O(1)
+FixedPoolResource: 동일 크기 객체 free-list, O(1)
+스레드-비안전 (shared-nothing 설계, reactor당 하나)
 ```
 
-Action 반환 타입: `Task<Result<Out>>` (not `Task<Out>`)
-
-### 2.5 Arena (arena.hpp)
-
-메모리 Arena 존재. 대용량 파이프라인 아이템은 Arena 기반 할당으로 GC 압박 줄일 수 있음.
+→ 파이프라인 아이템 래퍼(`PipelineItem<T>`)를 reactor-local Arena에서 할당 가능.
 
 ---
 
-## 3. 이전 검토에서 수정된 기술적 오류
+## 3. 기술적 오류 수정 사항
 
-### ❌ 오류 1: fan_out 타입 서명
+### ❌ 수정 1: fan_out 타입 서명
 
-**이전**:
 ```cpp
-Pipeline& fan_out({Pipeline<Out,?>& p1, p2, p3});  // '?'는 유효하지 않은 C++
+// 이전 (잘못됨): ? 는 C++에서 유효하지 않음
+Pipeline& fan_out({Pipeline<Out,?>& p1, p2, p3});
+
+// 수정: 타입 소거 인터페이스
+Pipeline& fan_out(std::vector<std::shared_ptr<IPipelineInput<Out>>>);
 ```
 
-**수정**:
+### ❌ 수정 2: Cross-reactor 코루틴 재개 — 데이터 레이스
+
 ```cpp
-// Type-erased 인터페이스 필요
-Pipeline& fan_out(std::vector<std::shared_ptr<IPipelineInput<Out>>> targets);
+// 이전 (잘못됨): 다른 reactor 스레드의 coroutine을 직접 resume → 데이터 레이스
+waiter.handle.resume();
+
+// 수정: waiter가 속한 reactor에 post로 전달
+waiter.reactor->post([h = waiter.handle]() { h.resume(); });
 ```
 
-모든 `Pipeline<Out, AnyOut>` 은 `IPipelineInput<Out>` 을 구현. `PipelineGraph`는 이 인터페이스로 fan-out 배선.
+### ❌ 수정 3: Scale-in 시 poison pill 신뢰성
 
----
-
-### ❌ 오류 2: Cross-reactor 코루틴 재개 — 데이터 레이스
-
-**이전 (잘못됨)**:
 ```cpp
-// channel send() 내부
-if (!wait_queue.empty()) {
-    auto waiter = wait_queue.pop();
-    waiter.handle.resume();   // ← 잘못됨: 다른 reactor 스레드의 coroutine을 직접 resume
-}
+// 이전: MPMC에서 어떤 워커가 pill을 받을지 보장 불가
+
+// 수정: atomic target_workers + 워커 인덱스 비교
+std::atomic<size_t> target_workers;
+// 각 워커가 루프 상단에서 my_idx >= target_workers 이면 자발적 종료
 ```
 
-**수정**:
+### ❌ 수정 4: Unary 요청-응답 채널
+
 ```cpp
-// waiter는 {reactor*, coroutine_handle<>} 쌍으로 저장
-if (!wait_queue.empty()) {
-    auto waiter = wait_queue.pop();
-    waiter.reactor->post([h = waiter.handle]() { h.resume(); });
-    // waiter가 속한 reactor 스레드에서 resume 실행 → 안전
-}
-```
+// 이전: Channel<Req, Res> 단일 채널 → 동시 요청 demux 불가
 
-`post()` 없이 직접 `resume()`하면 두 스레드가 같은 coroutine frame에 동시 접근 → 정의되지 않은 동작.
-
----
-
-### ❌ 오류 3: scale-in 시 poison pill 신뢰성
-
-**이전**:
-```cpp
-// poison pill N개 전송으로 N개 워커 중단
-```
-
-**문제**: MPMC에서 poison pill이 어떤 워커에 도달할지 보장 불가. 특히 여러 poison pill이 한 워커에 몰릴 수 있음.
-
-**수정**:
-```cpp
-struct ActionWorkerContext {
-    std::atomic<size_t> target_workers;   // 목표 워커 수
+// 수정: Envelope + per-request reply channel
+struct RequestEnvelope<Req, Res> {
+    Req                                        request;
+    shared_ptr<AsyncChannel<Result<Res>>>      reply;  // capacity=1
 };
-
-// 각 워커는 자신의 인덱스와 비교
-Task<Result<void>> worker_loop(size_t my_index, ...) {
-    while (!stop.stop_requested()) {
-        if (my_index >= ctx.target_workers.load(std::memory_order_acquire))
-            co_return Result<void>::ok();  // 자발적 종료
-        auto item = co_await in_channel.recv();
-        // ...
-    }
-}
 ```
 
----
+### ❌ 수정 5: Stream<T>와 move-only 타입
 
-### ❌ 오류 4: Unary 요청-응답 채널 설계
-
-**이전**:
-```
-Channel<Req, Res>  ← 단일 채널로 양방향 처리 시도
-```
-
-**문제**: 단일 채널은 요청-응답 매핑이 불가. 동시에 여러 요청이 있을 때 어떤 응답이 어떤 요청에 대응하는지 알 수 없음.
-
-**수정 (Envelope 패턴)**:
 ```cpp
-template<typename Req, typename Res>
-struct RequestEnvelope {
-    Req request;
-    std::shared_ptr<AsyncChannel<Result<Res>>> reply_channel;  // 1개의 응답만 올 채널
-};
+// 이전: AsyncChannel<optional<T>> → optional의 일부 연산이 copy 요구
 
-// 요청 보내는 쪽
-auto reply_ch = std::make_shared<AsyncChannel<Result<Res>>>(1);
-co_await request_channel.send(RequestEnvelope<Req,Res>{req, reply_ch});
-auto result = co_await reply_ch->recv();
-
-// 처리하는 쪽
-auto env = co_await request_channel.recv();
-auto res = co_await process(env.request);
-co_await env.reply_channel->send(res);
-```
-
----
-
-### ❌ 오류 5: Stream<T> 와 move-only 타입
-
-**이전**:
-```cpp
-AsyncChannel<std::optional<T>>  // optional<T>는 일부 연산에서 T의 copy constructible 요구
-```
-
-**수정**:
-```cpp
+// 수정: variant로 move-only 완전 지원
 struct StreamEnd {};
-
 template<typename T>
 using StreamItem = std::variant<T, StreamEnd>;
-
-// AsyncChannel<StreamItem<T>> 사용
-// StreamItem<T>는 T가 move-only여도 동작
 ```
 
----
+### ❌ 수정 6: Task<T> lazy start와 워커 spawn
 
-### ❌ 오류 6: Task<T> lazy start와 워커 spawn
-
-**이전**: 새 워커를 spawn하면 자동으로 실행됨을 암묵적으로 가정.
-
-**실제**: `initial_suspend() → std::suspend_always` 이므로 suspend 상태로 생성됨. 다음 중 하나 필요:
 ```cpp
-// 방법 A: 올바른 reactor에서 post로 kick-off
-reactor->post([task = std::move(worker_task)]() mutable {
-    task.detach();   // fire-and-forget으로 전환
-    // resume은 detach 내부에서... 아니다, 별도로 필요
-});
+// 이전: spawn 후 자동 실행 가정
 
-// 방법 B: Dispatcher에 spawn 인터페이스 추가
-dispatcher.spawn(std::move(worker_task));  // 내부에서 적절한 reactor에 post
-
-// 방법 C: 별도 SpawnAwaiter
-co_await SpawnOn{reactor, std::move(worker_task)};
-```
-
-`Dispatcher::spawn(task)` 추가가 가장 깔끔.
-
----
-
-## 4. 핵심 추상화 계층
-
-```
-┌──────────────────────────────────────────────────────────────┐
-│ Layer 5: PipelineGraph                                        │
-│   DAG 오케스트레이션, 트리거 배선, 사이클 감지, fan-out/in    │
-├──────────────────────────────────────────────────────────────┤
-│ Layer 4: Pipeline<In, Out>                                    │
-│   Action 체인, 완료 트리거, drain, 메트릭 집계               │
-├────────────────────────────┬─────────────────────────────────┤
-│ Layer 3: Action<In, Out>   │  복원력: Retry, CircuitBreaker  │
-│   코루틴 워커 풀, scale     │  DLQ, Bulkhead                  │
-│   stop_token, 배치 옵션    │                                  │
-├────────────────────────────┴─────────────────────────────────┤
-│ Layer 2: Stream<T>                                            │
-│   StreamItem<T> = variant<T, StreamEnd>                       │
-│   async range-for 지원, fan-out stream                        │
-├──────────────────────────────────────────────────────────────┤
-│ Layer 1: AsyncChannel<T>                                      │
-│   Lock-free MPMC ring buffer                                  │
-│   Intrusive waiter list (reactor* + coroutine_handle<>)       │
-│   close() / is_closed() — EOS 전파                            │
-├──────────────────────────────────────────────────────────────┤
-│ Layer 0: Reactor::post(fn) + Dispatcher::spawn(task)          │
-│   Cross-thread 작업 주입 — 파이프라인 전체의 기반             │
-│   EpollReactor: eventfd  IOUringReactor: MSG_RING  Kqueue: EVFILT_USER │
-└──────────────────────────────────────────────────────────────┘
+// 실제: initial_suspend=always → suspended 상태 생성
+// 수정: Dispatcher::spawn()으로 올바른 reactor에서 kick-off
+dispatcher.spawn(std::move(worker_task));
 ```
 
 ---
 
-## 5. Layer 0: Reactor::post() — 가장 중요한 인프라 전제조건
+## 4. 정적 파이프라인 vs 동적 파이프라인
 
-**나머지 모든 것이 이 위에 올라간다.**
+이것이 파이프라인 시스템의 가장 중요한 설계 분기점.
 
-### 5.1 Reactor 인터페이스 추가
+### 4.1 정적 파이프라인 (StaticPipeline)
+
+**특징**: 타입 체인이 컴파일 타임에 완전히 결정. `build()` 호출 후 구조 변경 불가.
+
+```cpp
+// PipelineBuilder<In>은 add()마다 새로운 타입을 반환 (타입 체인)
+auto pipeline =
+    PipelineBuilder<HttpRequest>{}
+        .add(auth_action)       // Action<HttpRequest, AuthedReq>  → Builder<AuthedReq>
+        .add(parse_action)      // Action<AuthedReq, ParsedReq>    → Builder<ParsedReq>
+        .add(process_action)    // Action<ParsedReq, Response>     → Builder<Response>
+        .build();               // → StaticPipeline<HttpRequest, Response>
+
+// 컴파일 타임 타입 체크: 타입 불일치 시 컴파일 에러
+// add(Action<ParsedReq, X>) 뒤에 add(Action<Y, Z>) 시 Y != X면 에러
+```
+
+**장점**:
+- 타입 불일치 → 컴파일 에러 (런타임 패닉 없음)
+- 컴파일러가 전체 체인을 알아 인라이닝 / 데브버추얼라이제이션 가능
+- 가상 함수 디스패치 없음
+
+**단점**:
+- 구조 변경 불가 (재컴파일 필요)
+- Action 타입이 코드에 하드코딩됨
+
+**사용 사례**: HTTP 요청 처리, 핵심 비즈니스 로직 파이프라인
+
+```cpp
+template<typename In>
+class PipelineBuilder {
+public:
+    template<typename Out>
+    PipelineBuilder<Out> add(std::shared_ptr<Action<In, Out>> action) && {
+        // 기존 actions_ + 새 action을 담은 Builder<Out> 반환
+        return PipelineBuilder<Out>{std::move(actions_), std::move(action)};
+    }
+
+    [[nodiscard]] StaticPipeline<OrigIn, In> build() && {
+        return StaticPipeline<OrigIn, In>{std::move(actions_)};
+    }
+};
+```
+
+---
+
+### 4.2 동적 파이프라인 (DynamicPipeline)
+
+**특징**: 런타임에 Action을 추가/제거/교체 가능. 타입 소거.
+
+```cpp
+DynamicPipeline pipeline;
+pipeline.add_action("parse",   make_dynamic_action(parse_fn));   // 뒤에 추가
+pipeline.add_action("enrich",  make_dynamic_action(enrich_fn));
+pipeline.add_action("output",  make_dynamic_action(output_fn));
+pipeline.start(dispatcher);
+
+// 런타임 구조 변경 (running 중: hot-swap만 가능)
+// stopped 상태:
+pipeline.insert_before("enrich", "validate", make_dynamic_action(validate_fn));
+pipeline.remove_action("enrich");
+
+// running 중:
+co_await pipeline.hot_swap("enrich", make_dynamic_action(new_enrich_fn));
+```
+
+**타입 안전성**: `ActionSchema`로 런타임 호환성 검사
+
+```cpp
+struct ActionSchema {
+    std::string input_type;    // typeid(In).name()
+    std::string output_type;   // typeid(Out).name()
+};
+// add_action 시: new_action.input_type == prev_action.output_type 체크
+// 불일치 → Result::err(errc::invalid_argument)
+```
+
+**장점**:
+- Config 파일(JSON/YAML)에서 파이프라인 정의
+- 플러그인 시스템: `.so` / `.dylib` 에서 Action 동적 로드
+- Hot-swap: 재시작 없이 로직 교체
+- A/B 테스트: 특정 % 트래픽에만 새 Action 적용
+
+**단점**:
+- 타입 소거 오버헤드 (가상 함수)
+- 런타임 스키마 체크 필요
+- 컴파일러 최적화 제한
+
+**사용 사례**: ETL 파이프라인, 데이터 처리 워크플로우, 설정 주도 파이프라인
+
+---
+
+### 4.3 선택 기준
+
+| 기준 | StaticPipeline | DynamicPipeline |
+|------|----------------|-----------------|
+| 타입 안전성 | 컴파일 타임 | 런타임 스키마 체크 |
+| 성능 | 최대 최적화 | 가상 함수 오버헤드 |
+| 유연성 | 없음 (재컴파일) | 런타임 변경 가능 |
+| Config 주도 | 불가 | 가능 |
+| Hot-swap | 불가 | 가능 |
+| 적합 | 핵심 처리 파이프라인 | ETL, 운영 파이프라인 |
+
+---
+
+## 5. 정적 액션 추가 vs 동적 액션 추가
+
+### 5.1 정적 액션 추가
+
+컴파일 타임 체인. `PipelineBuilder::add<Out>(action)`.
+
+```cpp
+// 타입 체인이 컴파일 타임에 완전히 결정됨
+auto p = PipelineBuilder<int>{}
+    .add(int_to_float_action)    // Action<int, float>
+    .add(float_to_str_action)    // Action<float, std::string>
+    .build();
+// decltype(p) = StaticPipeline<int, std::string>
+```
+
+`build()` 후에는 액션 추가/제거 불가. `[[nodiscard]]` 로 `build()` 결과 강제 사용.
+
+---
+
+### 5.2 동적 액션 추가 — 4가지 모드
+
+#### 모드 A: 뒤에 추가 (Append) — stopped 상태만
+
+```cpp
+pipeline.add_action("new_step", make_dynamic_action(fn));
+// 스키마 호환성 체크 후 마지막에 삽입
+```
+
+#### 모드 B: 특정 위치 삽입 (Insert) — stopped 상태만
+
+```cpp
+pipeline.insert_before("step_b", "new_step", make_dynamic_action(fn));
+pipeline.insert_after ("step_a", "new_step", make_dynamic_action(fn));
+```
+
+#### 모드 C: 제거 (Remove) — stopped 상태만
+
+```cpp
+pipeline.remove_action("step_name");
+// 제거 시 인접 액션의 스키마 호환성 재확인 필요
+```
+
+#### 모드 D: Hot-swap (Replace) — running 중 가능
+
+```cpp
+// 가장 복잡: 현재 액션의 in-flight 아이템을 drain 후 교체
+co_await pipeline.hot_swap("step_name", make_dynamic_action(new_fn));
+// 내부 절차:
+//   1. 이 액션의 입력 채널을 "sealed" 상태로 전환 (새 아이템 수신 중단)
+//   2. 기존 워커들이 큐 비울 때까지 대기
+//   3. 새 Action으로 교체 후 워커 재시작
+//   4. "sealed" 해제
+```
+
+---
+
+## 6. 파이프라인 상태 머신
+
+### 6.1 StaticPipeline 상태
+
+```
+     build()          start()         close()+drain     drain 완료
+Created ──────► Built ──────► Running ──────────────► Draining ──────► Stopped
+                                 │                                         │
+                                 │ stop()                                  │
+                                 └──────────────── Stopped ◄───────────────┘
+                                 │
+                                 ▼
+                               Error  (Action 내부 치명적 오류 시)
+```
+
+### 6.2 DynamicPipeline 상태
+
+```
+         add_action()        start()
+Created ─────────────► Configured ──────► Running ──────► Draining ──► Stopped
+              ▲               ▲               │                            │
+              │               │ restart()     │ hot_swap()                 │
+              └───────────────┘               ▼                            │
+                                         Reconfiguring                     │
+                                              │                            │
+                                              └──────────────► Running ◄───┘
+```
+
+### 6.3 상태 전이 규칙
+
+```cpp
+enum class PipelineState {
+    Created,
+    Configured,       // DynamicPipeline 전용: action 추가 완료
+    Starting,
+    Running,
+    Reconfiguring,    // DynamicPipeline 전용: hot-swap 중
+    Draining,
+    Stopped,
+    Error,
+};
+
+// 상태에 따른 허용 연산
+// Created/Configured: add_action, remove_action, insert_action
+// Running:            push, scale_to, hot_swap (Dynamic만), drain, stop
+// Draining:           stop (강제 즉시 정지)
+// Stopped:            start (재시작), add_action (Dynamic만)
+```
+
+---
+
+## 7. 핵심 추상화 계층
+
+```
+┌──────────────────────────────────────────────────────────────────────┐
+│ Layer 5: PipelineGraph                                                │
+│   DAG 오케스트레이션, 트리거 배선, 사이클 감지, fan-out/in            │
+├──────────────────────────────────────────────────────────────────────┤
+│ Layer 4a: StaticPipeline<In,Out>   │  Layer 4b: DynamicPipeline      │
+│   컴파일타임 타입 체인              │    런타임 타입 소거 체인          │
+│   최대 최적화, 구조 고정            │    Hot-swap, Config 주도          │
+├──────────────────────────────────┬─┴────────────────────────────────┤
+│ Layer 3a: Action<In,Out> (정적)  │  Layer 3b: DynamicAction (동적)  │
+│   코루틴 워커 풀, scale           │    타입 소거, ActionSchema        │
+│   stop_token, Retry, CB          │    hot-swap 지원                  │
+├──────────────────────────────────┴─────────────────────────────────-┤
+│ Layer 2: Stream<T>   StreamItem<T> = variant<T, StreamEnd>           │
+├──────────────────────────────────────────────────────────────────────┤
+│ Layer 1: AsyncChannel<T>                                              │
+│   MPMC ring buffer, intrusive waiter list, close()/EOS               │
+│   PriorityChannel<T> (선택적 고우선순위 레인)                         │
+├──────────────────────────────────────────────────────────────────────┤
+│ Layer 0: Reactor::post() + Dispatcher::spawn()   ← 전제 조건         │
+└──────────────────────────────────────────────────────────────────────┘
+
+━━━ 횡단 관심사 (Cross-cutting) ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  Tracing: TraceContext → Span per item (sampled), W3C 호환
+  Metrics: ActionMetrics, PipelineMetrics, PipelineObserver
+  Resilience: RetryPolicy, CircuitBreaker, DeadLetterQueue
+  Arena: reactor-local 아이템 할당 (제로카피)
+```
+
+---
+
+## 8. Layer 0: Reactor::post() + Dispatcher::spawn()
+
+### 8.1 Reactor 인터페이스 추가
 
 ```cpp
 class Reactor {
 public:
-    // ... 기존 메서드 ...
-
-    // ★ 신규: 다른 스레드에서 이 reactor 스레드로 fn을 안전하게 주입
+    // 다른 스레드에서 이 reactor 스레드로 fn을 안전하게 주입
+    // 스레드 안전: 어느 스레드에서나 호출 가능
     virtual void post(std::function<void()> fn) = 0;
 };
 ```
 
-### 5.2 구현별 전략
+### 8.2 구현별 전략
 
-**EpollReactor** (Linux):
+**EpollReactor**:
 ```
-eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC) 생성
-epoll에 EPOLLIN으로 등록
-post(fn):
-    mutex lock → work_queue_.push_back(fn) → unlock
-    eventfd_write(efd_, 1)  ← epoll_wait 깨움
-poll() 루프:
-    efd 이벤트 도착 시 → eventfd_read(drain) → work_queue_ flush
+생성 시: eventfd(0, EFD_NONBLOCK|EFD_CLOEXEC) 생성, epoll EPOLLIN 등록
+post(fn): mutex lock → work_queue_.push_back(fn) → unlock → eventfd_write(1)
+poll() 루프: efd 이벤트 → eventfd_read(drain) → work_queue_ flush
 ```
 
-**IOUringReactor** (Linux 6.0+):
+**IOUringReactor**:
 ```
-IORING_OP_MSG_RING 사용: 다른 ring의 CQE를 직접 트리거
-또는 EpollReactor와 동일하게 eventfd 기반 폴백 (호환성)
-```
-
-**KqueueReactor** (macOS/BSD):
-```
-EVFILT_USER 필터: kevent(kq, {ident, EVFILT_USER, EV_ADD|EV_CLEAR, ...}, ...)
-post(fn): mutex → queue → kevent(kq, {ident, EVFILT_USER, 0, NOTE_TRIGGER, ...})
+Linux 6.0+: IORING_OP_MSG_RING (ring 간 직접 CQE 트리거, zero-copy)
+< 6.0 폴백: EpollReactor와 동일하게 eventfd 사용
 ```
 
-### 5.3 Dispatcher 추가
+**KqueueReactor**:
+```
+EVFILT_USER 필터 등록
+post(fn): mutex → queue → kevent(kq, NOTE_TRIGGER)
+```
+
+### 8.3 Dispatcher 추가 API
 
 ```cpp
 class Dispatcher {
 public:
-    // ... 기존 메서드 ...
-
-    // ★ 신규: 임의의 워커 reactor에 작업 주입 (load balance)
+    // 임의의 워커 reactor에 작업 주입 (round-robin load balance)
     void post(std::function<void()> fn);
 
-    // ★ 신규: 특정 인덱스의 워커에 작업 주입
+    // 특정 인덱스의 워커에 작업 주입
     void post_to(size_t reactor_idx, std::function<void()> fn);
 
-    // ★ 신규: coroutine Task를 적절한 reactor에서 시작
+    // coroutine Task를 reactor에서 시작 (fire-and-forget)
+    // 내부: task.detach() + reactor->post([&task]{ task.handle.resume(); })
     void spawn(Task<void>&& task);
     void spawn_on(size_t reactor_idx, Task<void>&& task);
 };
@@ -331,686 +471,891 @@ public:
 
 ---
 
-## 6. Layer 1: AsyncChannel<T>
+## 9. Layer 1: AsyncChannel\<T\>
 
-### 6.1 인터페이스
+### 9.1 인터페이스
 
 ```cpp
 template<typename T>
 class AsyncChannel {
 public:
-    explicit AsyncChannel(size_t capacity);  // capacity는 power-of-2 권장
+    explicit AsyncChannel(size_t capacity);  // power-of-2
 
-    // 보내기: 가득 찼으면 co_await 대기 (back-pressure 자동 전파)
-    Task<Result<void>> send(T item);
+    Task<Result<void>> send(T item);         // backpressure: 가득 차면 co_await 대기
+    Task<Result<T>>    recv();               // 비면 co_await 대기
+    bool               try_send(T item);     // lock-free, 가득 차면 false
+    std::optional<T>   try_recv();           // lock-free, 비면 nullopt
 
-    // 받기: 비었으면 co_await 대기
-    Task<Result<T>> recv();
-
-    // try 변형 (non-blocking, 코루틴 아님)
-    bool try_send(T item);              // 가득 찼으면 false
-    std::optional<T> try_recv();        // 비었으면 nullopt
-
-    // EOS 제어
-    void close();                       // 채널 닫기: 이후 recv() → errc::connection_reset
-    bool is_closed() const noexcept;
-
-    // 상태 조회
-    size_t size() const noexcept;
+    void   close() noexcept;                // EOS 신호
+    bool   is_closed() const noexcept;
+    size_t size()     const noexcept;
     size_t capacity() const noexcept;
-    bool empty() const noexcept;
-    bool full() const noexcept;
 };
 ```
 
-### 6.2 내부 구조
+### 9.2 내부 구조
 
 ```
-ring_buffer[capacity]        ← 실제 데이터 (atomic<uint64_t> head/tail)
-                               Dmitry Vyukov의 MPMC bounded queue 알고리즘 적용
-                               head/tail은 cache-line 분리 (false sharing 방지)
+ring_buffer[capacity]          Dmitry Vyukov MPMC 알고리즘
+                               head_/tail_ 각각 cache-line 분리 (alignas(64))
+                               ABA-free: sequence number 사용
 
 struct WaiterEntry {
-    Reactor*              reactor;  // waiter가 속한 reactor
-    coroutine_handle<>    handle;   // 재개할 coroutine
-    T*                    slot;     // recv 대기 시 결과 저장 위치 (송신 완료 후 fill)
+    Reactor*           reactor;   // waiter 소속 reactor
+    coroutine_handle<> handle;    // 재개할 코루틴
+    T*                 out_slot;  // recv 대기 시: 아이템 저장 위치
+    WaiterEntry*       next;      // intrusive linked list
 };
 
-intrusive_list<WaiterEntry> recv_waiters_;  // 비어서 대기 중인 receiver들
-intrusive_list<WaiterEntry> send_waiters_;  // 가득 차서 대기 중인 sender들
-std::mutex                  waiter_lock_;   // waiter list 보호 (경로: 큐 비거나 찰 때만 진입)
+intrusive_list<WaiterEntry> recv_waiters_;
+intrusive_list<WaiterEntry> send_waiters_;
+std::mutex                  waiter_lock_;   // 큐 empty/full 경계에서만 진입
 std::atomic<bool>           closed_{false};
 ```
 
-**wakeup 경로**:
-```
-send(item) 성공 시:
-    recv_waiters_ 에 대기자 있으면:
-        waiter.reactor->post([h = waiter.handle]{ h.resume(); })
-    else:
-        ring_buffer에 push
+**정상 흐름 (큐 not-empty, not-full)**: lock-free (waiter_lock_ 불필요)
+**대기 흐름**: waiter_lock_ 획득 → intrusive list 삽입 → co_await 중단
+**wakeup**: `waiter.reactor->post([h]{h.resume();})` — cross-reactor 안전
 
-recv() 성공 시:
-    send_waiters_ 에 대기자 있으면:
-        ring_buffer에서 아이템 꺼냄 → send_waiters_[0].reactor->post(resume_sender)
-    else:
-        ring_buffer에서 pop
-```
-
-### 6.3 성능 고려사항
-
-- `head_` 와 `tail_` 은 각각 별도 캐시라인에 정렬 (`alignas(64)`)
-- waiter lock 진입은 큐가 가득 차거나 비어있을 때만 발생 → 정상 흐름에서 lock-free
-- `try_send` / `try_recv` 는 완전 lock-free
-
----
-
-## 7. Layer 2: Stream<T>
-
-### 7.1 StreamItem 타입 (move-only 지원)
+### 9.3 PriorityChannel
 
 ```cpp
-struct StreamEnd {};   // EOS sentinel
+// 고우선순위 레인을 추가한 채널
+// 내부: high_priority_ring + normal_priority_ring, 두 개 관리
+// recv()는 항상 high_priority 먼저 소진 후 normal 처리
 
 template<typename T>
-using StreamItem = std::variant<T, StreamEnd>;
-```
-
-### 7.2 인터페이스
-
-```cpp
-template<typename T>
-class Stream {
+class PriorityChannel {
 public:
-    // 생산자 API
-    Task<Result<void>> yield(T item);    // 아이템 발행
-    void finish();                        // EOS 신호
+    enum class Priority { High, Normal, Low };
 
-    // 소비자 API
-    // 다음 아이템. std::nullopt = EOS
-    Task<std::optional<T>> next();
-
-    // range-for 지원 (C++20 coroutine ranges)
-    AsyncIterator<T>  begin();
-    AsyncSentinel     end();
-
-    // 분기: 동일 stream을 여러 소비자에게 (tee)
-    std::pair<Stream<T>, Stream<T>> tee();
+    Task<Result<void>> send(T item, Priority p = Priority::Normal);
+    Task<Result<T>>    recv();  // High → Normal → Low 순서 보장
 };
 ```
 
-### 7.3 내부
-
-`Stream<T>` 는 `shared_ptr<AsyncChannel<StreamItem<T>>>` 를 공유.
-`finish()` → `channel.close()` 또는 `channel.send(StreamEnd{})` 로 EOS 전파.
+**스타베이션 방지**: Low가 N번 연속 skip되면 다음 recv에서 강제 처리 (aging 카운터).
 
 ---
 
-## 8. Layer 3: Action<In, Out>
+## 10. Layer 2: Stream\<T\>
 
-### 8.1 인터페이스
+```cpp
+struct StreamEnd {};
+
+template<typename T>
+using StreamItem = std::variant<T, StreamEnd>;  // move-only 타입 완전 지원
+
+template<typename T>
+class Stream {
+public:
+    // 생산자
+    Task<Result<void>> yield(T item);
+    void               finish();          // StreamEnd 전송
+
+    // 소비자
+    Task<std::optional<T>> next();        // nullopt = EOS
+
+    // async range-for 지원
+    AsyncIterator<T> begin();
+    AsyncSentinel    end();
+
+    // Tee: 동일 스트림을 두 소비자에게 분기
+    std::pair<Stream<T>, Stream<T>> tee();
+};
+// 내부: shared_ptr<AsyncChannel<StreamItem<T>>> 공유
+```
+
+---
+
+## 11. Layer 3: Action (정적 / 동적)
+
+### 11.1 정적 Action\<In, Out\>
 
 ```cpp
 template<typename In, typename Out>
 class Action {
 public:
-    // 처리 함수 타입: Result<Out> 반환 필수 (exception 금지)
+    // Task<Result<Out>> 반환 필수 (exception 금지 — unhandled_exception=terminate)
     using Fn = std::function<Task<Result<Out>>(In, std::stop_token)>;
 
     struct Config {
-        size_t min_workers    = 1;
-        size_t max_workers    = 16;
-        size_t channel_cap    = 256;    // 입력 채널 용량 (backpressure 경계)
-        bool   auto_scale     = false;
-        RetryPolicy   retry   = RetryPolicy::none();
-        CircuitBreaker circuit_breaker;  // 기본: disabled
-        bool   keyed_ordering = false;   // true면 key 기반 consistent hash 배정
+        size_t        min_workers    = 1;
+        size_t        max_workers    = 16;
+        size_t        channel_cap    = 256;
+        bool          auto_scale     = false;
+        bool          keyed_ordering = false;   // per-key consistent hash 배정
+        RetryPolicy   retry          = RetryPolicy::none();
+        CircuitBreaker circuit_breaker;
     };
 
     explicit Action(Fn fn, Config cfg = {});
 
-    // 런타임 스케일 조정
-    // 목표 워커 수 갱신 → 각 워커가 자신의 인덱스 vs target 비교 후 자발적 종료/생성
-    void scale_to(size_t n);
-    void scale_in (size_t delta = 1);
-    void scale_out(size_t delta = 1);
+    void   scale_to(size_t n);
+    void   scale_in (size_t delta = 1);
+    void   scale_out(size_t delta = 1);
     size_t worker_count() const noexcept;
 
-    // 메트릭
-    ActionMetrics metrics() const;
-
-    // 내부 (Pipeline이 배선에 사용)
-    std::shared_ptr<AsyncChannel<In>>  input_channel();
-    std::shared_ptr<AsyncChannel<Out>> output_channel();
+    shared_ptr<AsyncChannel<In>>  input_channel();
+    shared_ptr<AsyncChannel<Out>> output_channel();
+    ActionMetrics                 metrics() const;
 };
 ```
 
-### 8.2 워커 루프 (의사 코드)
-
+**워커 루프 (의사코드)**:
 ```cpp
-Task<void> worker_loop(size_t my_idx, ActionWorkerContext& ctx,
-                       AsyncChannel<In>& in, AsyncChannel<Out>& out,
-                       Fn fn, std::stop_source& stop_src) {
-    std::stop_token stop = stop_src.get_token();
+Task<void> worker_loop(size_t my_idx, ActionContext& ctx) {
+    while (!ctx.stop.stop_requested()) {
+        if (my_idx >= ctx.target_workers.load(acquire)) co_return; // scale-in
 
-    while (!stop.stop_requested()) {
-        // scale-in 체크: 목표보다 인덱스가 크면 자발적 종료
-        if (my_idx >= ctx.target_workers.load(std::memory_order_acquire))
-            co_return;
+        auto item_r = co_await ctx.in->recv();
+        if (!item_r) co_return;  // channel closed
 
-        auto item_result = co_await in.recv();
-        if (!item_result) co_return;  // channel closed
+        auto span = ctx.tracer.start_span(my_idx);  // 트레이싱
 
-        // Retry + Circuit Breaker 래퍼
-        auto out_result = co_await ctx.retry_wrapper(fn, *item_result, stop);
+        auto out_r = co_await ctx.retry.execute(ctx.fn, *item_r, ctx.stop);
 
-        if (!out_result) {
-            // 최종 실패 → DLQ
-            co_await ctx.dlq_channel->send({*item_result, out_result.error()});
-            ctx.metrics.errors.fetch_add(1);
+        ctx.tracer.end_span(span, out_r);
+
+        if (!out_r) {
+            co_await ctx.dlq->send({*item_r, out_r.error()});
+            ctx.metrics.errors.fetch_add(1, relaxed);
             continue;
         }
-
-        co_await out.send(std::move(*out_result));
-        ctx.metrics.processed.fetch_add(1);
+        co_await ctx.out->send(std::move(*out_r));
+        ctx.metrics.processed.fetch_add(1, relaxed);
     }
 }
 ```
 
-### 8.3 Auto-scale 정책
-
-```
-check_interval: 100ms (timer 기반)
-
-scale-out 조건: in.size() / in.capacity() > 0.75 AND worker_count < max_workers
-scale-in  조건: in.size() / in.capacity() < 0.20 AND worker_count > min_workers
-hysteresis: 연속 3번 조건 충족 시 스케일 (flapping 방지)
-```
-
-### 8.4 Per-key Ordering
+### 11.2 동적 DynamicAction
 
 ```cpp
-// Config.keyed_ordering = true 시
-// key extractor 등록
-action.set_key_extractor([](const In& item) -> size_t { return item.user_id; });
+class IDynamicAction {
+public:
+    virtual ~IDynamicAction() = default;
+    virtual ActionSchema  schema()   const = 0;
+    virtual std::string   name()     const = 0;
 
-// 내부: dispatch 시 key % worker_count 로 특정 워커 채널에 직접 전달
-// 각 워커가 개별 input channel 보유 (worker-specific channel 배열)
+    // 타입 소거된 처리: void* in → void* out
+    virtual Task<Result<void>> process_erased(
+        void* in, void* out, std::stop_token) = 0;
+
+    virtual void scale_to(size_t n) = 0;
+    virtual ActionMetrics metrics() const = 0;
+};
+
+// 정적 Action을 동적으로 래핑하는 어댑터
+template<typename In, typename Out>
+auto make_dynamic_action(std::shared_ptr<Action<In, Out>> action)
+    -> std::shared_ptr<IDynamicAction>;
 ```
 
 ---
 
-## 9. Layer 4: Pipeline<In, Out>
+## 12. Layer 4: StaticPipeline / DynamicPipeline
 
-### 9.1 인터페이스
-
-```cpp
-template<typename In, typename Out>
-class Pipeline : public IPipelineInput<In> {
-public:
-    // Action 추가 (타입 체인)
-    template<typename Mid>
-    Pipeline<In, Out>& add(std::shared_ptr<Action<In, Mid>> a);
-
-    // ── 완료 트리거 ──
-    // 단일 후속 파이프라인
-    Pipeline& then(std::shared_ptr<IPipelineInput<Out>> next);
-
-    // fan-out: out 아이템을 모든 대상에 복사 전달
-    Pipeline& fan_out(std::vector<std::shared_ptr<IPipelineInput<Out>>> targets);
-
-    // fan-out: 라운드로빈 분배 (동일 아이템을 하나의 타겟에만)
-    Pipeline& fan_out_round_robin(std::vector<std::shared_ptr<IPipelineInput<Out>>> targets);
-
-    // fan-in: 이 파이프라인과 다른 파이프라인의 출력을 merge해서 next에 전달
-    Pipeline& merge_with(std::shared_ptr<Pipeline<In, Out>> other,
-                         std::shared_ptr<IPipelineInput<Out>> next);
-
-    // 조건부 라우팅
-    Pipeline& route_if(std::function<bool(const Out&)> pred,
-                       std::shared_ptr<IPipelineInput<Out>> target);
-
-    // Tee: 메인 체인 외 side-channel에 복사 (모니터링, 로깅)
-    Pipeline& tee(std::shared_ptr<AsyncChannel<Out>> side_channel);
-
-    // ── 라이프사이클 ──
-    void start(Dispatcher& dispatcher);
-
-    // Graceful drain: 입력 닫고 in-flight 완료 후 종료
-    Task<void> drain();
-
-    void stop();  // 즉시 정지 (in-flight 버림)
-
-    // IPipelineInput<In> 구현
-    Task<Result<void>> push(In item) override;  // backpressure 전파
-    bool try_push(In item) override;
-
-    // 메트릭
-    PipelineMetrics metrics() const;
-};
-```
-
-### 9.2 IPipelineInput<T> 인터페이스 (타입 소거)
+### 12.1 공통 인터페이스
 
 ```cpp
 template<typename T>
 struct IPipelineInput {
     virtual ~IPipelineInput() = default;
-    virtual Task<Result<void>> push(T item) = 0;
-    virtual bool try_push(T item) = 0;
+    virtual Task<Result<void>> push(T item) = 0;  // backpressure 전파
+    virtual bool               try_push(T item) = 0;
 };
 ```
 
-`fan_out` 배선에서 `Pipeline<Out, AnyOut>` 의 구체 타입을 모르고도 `Out` 을 전달 가능.
+### 12.2 PipelineBuilder (StaticPipeline 생성기)
+
+```cpp
+template<typename OrigIn, typename CurIn>
+class PipelineBuilder {
+public:
+    // add()가 호출될 때마다 Builder의 CurIn 타입이 바뀜
+    template<typename Out>
+    [[nodiscard]] PipelineBuilder<OrigIn, Out>
+    add(std::shared_ptr<Action<CurIn, Out>> action) &&;
+
+    // 완성: StaticPipeline<OrigIn, CurIn> 반환
+    [[nodiscard]] StaticPipeline<OrigIn, CurIn> build() &&;
+};
+
+// 진입점
+template<typename In>
+using PipelineBuilder = PipelineBuilder<In, In>;
+```
+
+### 12.3 StaticPipeline\<In, Out\>
+
+```cpp
+template<typename In, typename Out>
+class StaticPipeline : public IPipelineInput<In> {
+public:
+    // 완료 트리거 배선
+    StaticPipeline& then(shared_ptr<IPipelineInput<Out>> next);
+    StaticPipeline& fan_out(vector<shared_ptr<IPipelineInput<Out>>> targets);
+    StaticPipeline& fan_out_round_robin(vector<shared_ptr<IPipelineInput<Out>>> targets);
+    StaticPipeline& route_if(function<bool(const Out&)> pred,
+                              shared_ptr<IPipelineInput<Out>> target);
+    StaticPipeline& tee(shared_ptr<AsyncChannel<Out>> side_channel);  // 모니터링 분기
+
+    // 라이프사이클
+    void          start(Dispatcher& d);
+    Task<void>    drain();               // Graceful: input 닫고 in-flight 완료 후 종료
+    void          stop();                // 즉시 정지
+
+    // IPipelineInput<In>
+    Task<Result<void>> push(In item) override;
+    bool               try_push(In item) override;
+
+    PipelineState  state()   const noexcept;
+    PipelineMetrics metrics() const;
+};
+```
+
+### 12.4 DynamicPipeline
+
+```cpp
+class DynamicPipeline {
+public:
+    // stopped 상태 전용 구조 변경
+    Result<void> add_action(string_view name, shared_ptr<IDynamicAction> action);
+    Result<void> insert_before(string_view ref, string_view name, shared_ptr<IDynamicAction>);
+    Result<void> insert_after (string_view ref, string_view name, shared_ptr<IDynamicAction>);
+    Result<void> remove_action(string_view name);
+
+    // running 중 무중단 교체 (§17 참조)
+    Task<Result<void>> hot_swap(string_view name, shared_ptr<IDynamicAction> new_action);
+
+    // 완료 트리거 (타입 소거)
+    void then(shared_ptr<IDynamicPipelineInput> next);
+    void fan_out(vector<shared_ptr<IDynamicPipelineInput>> targets);
+
+    // 라이프사이클
+    Result<void> start(Dispatcher& d);
+    Task<void>   drain();
+    void         stop();
+
+    PipelineState  state()   const noexcept;
+    PipelineMetrics metrics() const;
+};
+```
 
 ---
 
-## 10. Layer 5: PipelineGraph
-
-### 10.1 인터페이스
+## 13. Layer 5: PipelineGraph
 
 ```cpp
 class PipelineGraph {
 public:
-    // 파이프라인 등록
+    // 등록 (타입 소거로 Static/Dynamic 모두 보관)
     template<typename In, typename Out>
-    void add(std::string_view name, std::shared_ptr<Pipeline<In, Out>> pipeline);
+    void add(string_view name, shared_ptr<StaticPipeline<In, Out>> p);
+    void add(string_view name, shared_ptr<DynamicPipeline> p);
 
-    // 파이프라인 조회
-    template<typename In, typename Out>
-    std::shared_ptr<Pipeline<In, Out>> get(std::string_view name) const;
+    // 배선: 이름 기반
+    Result<void> connect   (string_view from, string_view to);
+    Result<void> fan_out   (string_view from, vector<string_view> targets);
+    Result<void> merge_into(vector<string_view> sources, string_view target);
+    Result<void> route_if  (string_view from, function<bool(...)> pred,
+                            string_view true_target, string_view false_target);
 
-    // 배선: A 완료 → B 트리거
-    void connect(std::string_view from, std::string_view to);
+    // start(): DAG 검증(Kahn's algorithm) 후 위상 정렬 순서로 시작
+    Result<void> start(Dispatcher& d);
 
-    // fan-out: A 완료 → {B, C, D} 모두 트리거
-    void fan_out(std::string_view from, std::vector<std::string_view> targets);
-
-    // start() 시 DAG 검증 (사이클 감지) 후 모든 파이프라인 시작
-    Result<void> start(Dispatcher& dispatcher);
-
-    // 모든 파이프라인 drain
     Task<void> drain_all();
+    void       stop_all();
 
-    void stop_all();
+    // A/B 라우팅: from의 x% 트래픽을 target_b로 (나머지는 target_a)
+    void ab_route(string_view from, string_view target_a, string_view target_b,
+                  double b_fraction);  // 0.0 ~ 1.0
 };
 ```
 
-### 10.2 사이클 감지
-
-`start()` 시 Kahn's algorithm (위상 정렬 기반) 으로 DAG 검증.
-사이클 발견 시 `Result::err(errc::invalid_argument)` 반환.
-
 ---
 
-## 11. 메시지 패턴 (gRPC 스타일)
+## 14. 메시지 패턴 (gRPC 스타일)
 
-### 11.1 Unary — Envelope 패턴
-
-```
-단일 요청 → 단일 응답
-```
+### 14.1 Unary — Envelope 패턴
 
 ```cpp
 template<typename Req, typename Res>
 struct RequestEnvelope {
-    Req                                           request;
-    std::shared_ptr<AsyncChannel<Result<Res>>>    reply;  // capacity=1
+    Req                                        request;
+    shared_ptr<AsyncChannel<Result<Res>>>      reply;   // capacity=1
 };
 
-// MessageBus 등록
-bus.create_unary<Req, Res>("svc-name", channel_cap);
+// MessageBus 사용
+bus.create_unary<Req, Res>("service-name", /*cap=*/64);
 
 // 요청 측
-auto reply_ch = std::make_shared<AsyncChannel<Result<Res>>>(1);
-co_await bus.get_unary<Req,Res>("svc-name").send({req, reply_ch});
+auto reply_ch = make_shared<AsyncChannel<Result<Res>>>(1);
+co_await bus.unary<Req,Res>("service-name").send({req, reply_ch});
 auto result = co_await reply_ch->recv();
 
 // 서비스 측
-auto env = co_await bus.get_unary<Req,Res>("svc-name").recv();
-auto res = co_await handle(env.request);
-co_await env.reply->send(res);
+auto env = co_await bus.unary<Req,Res>("service-name").recv();
+co_await env.reply->send(co_await process(env.request));
 ```
 
-### 11.2 Server Streaming
-
-```
-단일 요청 → 스트림 응답
-```
+### 14.2 Server Streaming
 
 ```cpp
-// 요청 측
-auto stream_ch = std::make_shared<AsyncChannel<StreamItem<Res>>>(64);
-co_await bus.get_server_stream<Req,Res>("svc-name").send({req, stream_ch});
-auto stream = Stream<Res>{stream_ch};
-while (auto item = co_await stream.next()) {
-    process(*item);
-}
-
-// 서비스 측
-auto env = co_await bus.get_server_stream<Req,Res>("svc-name").recv();
-auto out = Stream<Res>{env.stream_ch};
-for (auto& r : results) {
-    co_await out.yield(r);
-}
-out.finish();
-```
-
-### 11.3 Client Streaming
-
-```
-스트림 요청 → 단일 응답
-```
-
-```cpp
-// 요청 측
-auto req_stream_ch = std::make_shared<AsyncChannel<StreamItem<Req>>>(64);
-auto reply_ch      = std::make_shared<AsyncChannel<Result<Res>>>(1);
-co_await bus.get_client_stream<Req,Res>("svc-name").send({req_stream_ch, reply_ch});
-auto out = Stream<Req>{req_stream_ch};
-co_await out.yield(r1);
-co_await out.yield(r2);
-out.finish();
-auto result = co_await reply_ch->recv();
-```
-
-### 11.4 Bidirectional Streaming
-
-```
-스트림 요청 ↔ 스트림 응답 (양방향 동시)
-```
-
-```cpp
-struct BidiEnvelope {
-    std::shared_ptr<AsyncChannel<StreamItem<Req>>> req_stream;
-    std::shared_ptr<AsyncChannel<StreamItem<Res>>> res_stream;
+struct ServerStreamEnvelope<Req, Res> {
+    Req                                         request;
+    shared_ptr<AsyncChannel<StreamItem<Res>>>   response_stream;
 };
-
-// 요청/응답 양 방향이 독립적인 코루틴에서 동시 진행
-// co_await send 와 co_await next()를 서로 다른 Task 에서 수행
 ```
 
-### 11.5 MessageBus
+### 14.3 Client Streaming
+
+```cpp
+struct ClientStreamEnvelope<Req, Res> {
+    shared_ptr<AsyncChannel<StreamItem<Req>>>  request_stream;
+    shared_ptr<AsyncChannel<Result<Res>>>      reply;
+};
+```
+
+### 14.4 Bidirectional
+
+```cpp
+struct BidiEnvelope<Req, Res> {
+    shared_ptr<AsyncChannel<StreamItem<Req>>>  req_stream;
+    shared_ptr<AsyncChannel<StreamItem<Res>>>  res_stream;
+};
+// 두 방향이 독립적인 코루틴에서 동시 처리
+```
+
+### 14.5 MessageBus
 
 ```cpp
 class MessageBus {
 public:
-    // Unary 채널 생성/조회
     template<typename Req, typename Res>
-    void   create_unary(std::string_view name, size_t cap = 64);
+    void create_unary      (string_view name, size_t cap = 64);
     template<typename Req, typename Res>
-    AsyncChannel<RequestEnvelope<Req,Res>>& get_unary(std::string_view name);
+    void create_server_stream(string_view name, size_t cap = 64);
+    template<typename Req, typename Res>
+    void create_client_stream(string_view name, size_t cap = 64);
+    template<typename Req, typename Res>
+    void create_bidi       (string_view name, size_t cap = 64);
 
-    // Server/Client/Bidi stream 채널도 동일 패턴
-    // ...
+    // 각 채널 DLQ 접근
+    template<typename T>
+    AsyncChannel<DeadLetter<T>>& get_dlq(string_view name);
 
-    // 전체 채널 목록 (디버그/메트릭)
-    std::vector<std::string> channel_names() const;
+    vector<string> channel_names() const;
 };
 ```
 
 ---
 
-## 12. 복원력 패턴
+## 15. 분산 트레이싱 (OpenTelemetry 호환)
 
-### 12.1 RetryPolicy
+### 15.1 TraceContext — W3C Trace Context 표준
+
+```cpp
+// W3C traceparent: {version}-{trace_id}-{parent_id}-{flags}
+struct TraceContext {
+    uint8_t  trace_id[16];    // 128-bit, globally unique
+    uint8_t  span_id[8];      // 64-bit, per-span unique
+    uint8_t  trace_flags;     // bit 0: sampled
+
+    static TraceContext generate();                          // 새 루트 컨텍스트 생성
+    TraceContext        child_span() const;                  // 자식 span 생성
+    std::string         to_traceparent() const;             // "00-{tid}-{sid}-{flags}"
+    static TraceContext from_traceparent(string_view hdr);  // HTTP 헤더 파싱
+};
+```
+
+### 15.2 아이템에 TraceContext 전파
+
+파이프라인 아이템이 trace context를 운반하는 두 가지 전략:
+
+**전략 A: 래핑 (Traced\<T\>)**
+```cpp
+template<typename T>
+struct Traced {
+    T            payload;
+    TraceContext ctx;
+};
+// Pipeline<Traced<MyType>, Traced<MyResult>>
+// 타입이 바뀌는 단점: 기존 Action 재사용 어려움
+```
+
+**전략 B: 옵셔널 사이드카 (권장)**
+```cpp
+// 파이프라인 내부에서 아이템과 별도로 TraceContext를 thread-local에 전파
+// Action은 필요 시 Reactor::current_trace_context() 로 접근
+// 타입 오염 없음, 트레이싱 비활성화 시 완전 zero-overhead
+thread_local TraceContext current_trace_ctx;
+```
+
+전략 B가 qbuem-stack의 기존 thread-local 패턴 (`Reactor::current()`)과 일관성 있음.
+
+### 15.3 샘플링 전략
+
+```cpp
+class Sampler {
+public:
+    virtual bool should_sample(const TraceContext& parent) const = 0;
+};
+
+class AlwaysSampler  : public Sampler { bool should_sample(...) { return true;  } };
+class NeverSampler   : public Sampler { bool should_sample(...) { return false; } };
+
+class ProbabilitySampler : public Sampler {
+    double rate_;  // 0.0 ~ 1.0
+    bool should_sample(const TraceContext& parent) const override;
+};
+
+class RateLimitingSampler : public Sampler {
+    size_t max_per_second_;
+    // token bucket 내부 구현
+};
+
+class ParentBasedSampler : public Sampler {
+    // 부모가 sampled면 자식도 sampled
+    bool should_sample(const TraceContext& parent) const override {
+        return parent.trace_flags & 0x01;
+    }
+};
+```
+
+### 15.4 Span 수명과 오버헤드
+
+```
+Action 처리 시작: Span 생성 (TraceContext.child_span())
+Action 처리 완료: Span 종료, exporter에 전송
+
+오버헤드 분석:
+- Sampler::should_sample() = 분기 1개 (or 간단한 atomic 카운터)
+- 미샘플링 시: child_span() 미호출, Span 생성 0
+- 샘플링 시: 64B span 스택 할당 + exporter 큐 push
+             → exporter 큐를 buffered async queue로 만들면 hot path 영향 최소화
+```
+
+### 15.5 SpanExporter 인터페이스
+
+```cpp
+class SpanExporter {
+public:
+    struct SpanData {
+        std::string   pipeline_name;
+        std::string   action_name;
+        TraceContext  context;       // span의 trace_id + span_id
+        TraceContext  parent;        // parent span
+        std::chrono::steady_clock::time_point start_time;
+        std::chrono::steady_clock::time_point end_time;
+        std::error_code error;       // 성공이면 기본값(무효)
+        // Baggage / 태그는 추후 확장
+    };
+
+    virtual ~SpanExporter() = default;
+    // 비동기: 내부 버퍼에 쌓고 배치로 전송
+    virtual void export_span(SpanData data) = 0;
+    virtual void flush() = 0;
+};
+
+// 구현체
+class OtlpGrpcExporter  : public SpanExporter { ... };  // OpenTelemetry Collector
+class OtlpHttpExporter  : public SpanExporter { ... };
+class JaegerExporter    : public SpanExporter { ... };
+class ZipkinExporter    : public SpanExporter { ... };
+class LoggingExporter   : public SpanExporter { ... };  // 디버그용
+class NoopExporter      : public SpanExporter {          // 트레이싱 비활성화
+    void export_span(SpanData) override {}
+    void flush()              override {}
+};
+```
+
+### 15.6 PipelineTracer
+
+```cpp
+class PipelineTracer {
+public:
+    PipelineTracer(shared_ptr<Sampler>      sampler,
+                   shared_ptr<SpanExporter> exporter);
+
+    // Action 진입 시 호출: 현재 thread-local ctx의 child span 생성
+    SpanHandle start_span(string_view pipeline, string_view action,
+                          const TraceContext& parent);
+
+    // Action 종료 시 호출
+    void end_span(SpanHandle handle, const std::error_code& ec = {});
+};
+
+// 전역 등록 (Dispatcher당 하나)
+PipelineTracer& global_tracer();
+void set_global_tracer(shared_ptr<PipelineTracer> tracer);
+```
+
+### 15.7 HTTP와의 통합
+
+기존 SSE, HTTP 미들웨어와의 연결:
+```cpp
+// HTTP 핸들러에서 traceparent 헤더 추출 → TraceContext 복원
+// → 파이프라인 push() 시 thread-local에 설정
+// → 파이프라인 완료 후 응답에 traceresponse 헤더 추가
+
+auto ctx = TraceContext::from_traceparent(req.header("traceparent"));
+Reactor::set_current_trace_context(ctx);
+co_await pipeline.push(my_item);
+```
+
+---
+
+## 16. 복원력 패턴
+
+### 16.1 RetryPolicy
 
 ```cpp
 struct RetryPolicy {
-    uint32_t max_attempts = 1;  // 1 = retry 없음
+    uint32_t max_attempts = 1;  // 1 = no retry
 
     enum class BackoffKind { Fixed, Exponential, ExponentialJitter };
-    BackoffKind backoff      = BackoffKind::Exponential;
-    Duration    base_delay   = 100ms;
-    Duration    max_delay    = 30s;
-    Duration    deadline     = Duration::max();  // 절대 시간 제한
+    BackoffKind backoff    = BackoffKind::Exponential;
+    Duration    base_delay = 100ms;
+    Duration    max_delay  = 30s;
+    Duration    deadline   = Duration::max();  // 절대 시간 제한
 
-    // 재시도할 에러 코드 필터 (empty = 모두 재시도)
-    std::vector<std::error_code> retryable_errors;
+    vector<error_code> retryable_errors;  // empty = 모두 재시도
 
-    static RetryPolicy none() { return {.max_attempts = 1}; }
+    static RetryPolicy none()           { return {.max_attempts = 1}; }
     static RetryPolicy exponential(uint32_t n) { return {.max_attempts = n}; }
 };
 ```
 
-### 12.2 CircuitBreaker
+### 16.2 CircuitBreaker
 
 ```cpp
 class CircuitBreaker {
 public:
-    // 상태: Closed(정상) → Open(차단) → HalfOpen(탐색) → Closed
     enum class State { Closed, Open, HalfOpen };
-
     struct Config {
-        uint32_t failure_threshold   = 5;     // 연속 실패 N회 → Open
-        uint32_t success_threshold   = 2;     // HalfOpen에서 연속 성공 N회 → Closed
-        Duration  open_duration      = 30s;   // Open 유지 시간 후 HalfOpen
+        uint32_t failure_threshold = 5;
+        uint32_t success_threshold = 2;
+        Duration open_duration     = 30s;
     };
-
-    // Action 내부에서 사용
-    bool allow_request() const;           // Open이면 false
-    void record_success();
-    void record_failure();
+    bool  allow_request() const;
+    void  record_success();
+    void  record_failure();
     State state() const noexcept;
 };
+// Open 상태에서 들어온 아이템 → 즉시 DLQ (처리 시도 없음)
 ```
 
-Open 상태에서 들어온 아이템은 즉시 DLQ로 전송 (처리 시도 없음).
-
-### 12.3 Dead Letter Queue (DLQ)
+### 16.3 Dead Letter Queue
 
 ```cpp
 template<typename T>
 struct DeadLetter {
     T               item;
-    std::error_code error;
+    error_code      error;
     uint32_t        attempt_count;
-    std::chrono::system_clock::time_point failed_at;
+    system_clock::time_point failed_at;
 };
-
-// MessageBus에서 이름으로 접근
-auto& dlq = bus.get_dlq<MyType>("my-action-dlq");
-
-// 소비자: 실패 아이템 검사, 재처리, 알람 등
-while (auto dead = co_await dlq.recv()) {
-    log_error(dead->error, dead->item);
-    // 선택적: manual replay
-}
+// MessageBus에서 이름으로 접근, DLQ 소비자가 재처리 / 알람 처리
 ```
 
-### 12.4 Bulkhead
+### 16.4 Bulkhead
 
-각 Action의 입력 채널 용량(`channel_cap`)이 자연스러운 Bulkhead.
-채널이 가득 차면 upstream Action의 `send()` 가 co_await 대기 → 자동 back-pressure 전파.
-`try_push()` 를 쓰는 곳에서는 명시적으로 `errc::resource_unavailable_try_again` 반환.
+각 Action의 `channel_cap` 이 자연스러운 Bulkhead.
+채널 포화 → upstream send() 가 co_await 대기 → 자동 backpressure 전파.
 
 ---
 
-## 13. 관찰 가능성 (Observability)
+## 17. Hot-swap Action (무중단 교체)
 
-### 13.1 Action 메트릭
+DynamicPipeline 전용. 절차:
 
-```cpp
-struct ActionMetrics {
-    std::atomic<uint64_t> items_processed{0};
-    std::atomic<uint64_t> items_errored{0};
-    std::atomic<uint64_t> items_retried{0};
-    std::atomic<uint64_t> items_dlq{0};
+```
+1. 해당 Action의 상태를 Sealing으로 전환
+   → upstream의 output channel 잠금 (새 아이템 수신 중단)
+   → 기존 워커들은 현재 큐 소진 후 종료 대기
 
-    // Latency 히스토그램 (버킷: < 1ms, < 10ms, < 100ms, >= 100ms)
-    std::array<std::atomic<uint64_t>, 4> latency_buckets{};
+2. 기존 워커 drain 완료 대기 (co_await)
+   → 타임아웃 설정 가능: hot_swap_timeout (기본 30s)
 
-    std::atomic<uint32_t> current_workers{0};
-    // 채널 깊이는 channel.size()로 직접 조회
-};
+3. 새 Action 설치
+   → 새 워커 코루틴 spawn (Dispatcher::spawn_on 사용)
+
+4. Sealing 해제 → Running으로 전환
+   → upstream output channel 다시 연결
 ```
 
-### 13.2 메트릭 수집 훅
-
 ```cpp
-struct PipelineObserver {
-    // Action 처리 시작/완료 시 호출
-    virtual void on_item_start (std::string_view action_name) = 0;
-    virtual void on_item_done  (std::string_view action_name, Duration elapsed) = 0;
-    virtual void on_item_error (std::string_view action_name, std::error_code) = 0;
-    virtual void on_scale_event(std::string_view action_name, size_t old_n, size_t new_n) = 0;
-};
+// API
+Task<Result<void>> DynamicPipeline::hot_swap(
+    string_view name,
+    shared_ptr<IDynamicAction> new_action,
+    Duration timeout = 30s
+);
 ```
 
-기본 구현: `PrometheusObserver`, `LoggingObserver`.
+**hot_swap 실패 조건**:
+- `timeout` 내에 기존 워커 drain 완료 못함 → `errc::timed_out`
+- 새 Action의 스키마가 인접 Action과 호환 안됨 → `errc::invalid_argument`
+- Pipeline이 `Running` 상태가 아님 → `errc::operation_not_permitted`
 
 ---
 
-## 14. 추가 개념 — 놓쳤던 부분
-
-### 14.1 BatchAction (★ 새로운 개념)
-
-개별 아이템이 아닌 **묶음 단위** 처리. DB bulk insert, HTTP 배치 요청 등에 유용.
-
-```cpp
-template<typename In, typename Out>
-class BatchAction {
-    using BatchFn = std::function<Task<Result<std::vector<Out>>>(std::vector<In>, std::stop_token)>;
-
-    struct BatchConfig {
-        size_t   max_batch_size  = 100;
-        Duration max_wait        = 10ms;  // 배치가 덜 찼어도 이 시간 후 처리
-    };
-
-    // 내부: AsyncChannel<In>에서 max_batch_size 개 또는 max_wait ms 동안 아이템 수집
-    // → BatchFn 호출 → 결과 아이템들을 output channel에 개별 전송
-};
-```
-
-### 14.2 Generator<T> (co_yield 기반 소스)
-
-파이프라인에 데이터를 주입하는 경량 소스. Action이 필요 없는 단순 생산자.
+## 18. 우선순위 채널
 
 ```cpp
 template<typename T>
-struct Generator {
-    struct promise_type {
-        T yielded_value;
-        // co_yield v → yield_value(v) → suspend
-        // 다음 recv() 시 resume
-        ...
-    };
+class PriorityChannel {
+public:
+    enum class Priority : uint8_t { High = 0, Normal = 1, Low = 2 };
 
-    // 소비 측: AsyncIterator처럼 사용
-    Task<std::optional<T>> next();
+    Task<Result<void>> send(T item, Priority p = Priority::Normal);
+    Task<Result<T>>    recv();  // High 소진 → Normal 소진 → Low
+
+    // Aging: Low가 N회 연속 스킵되면 다음 recv에서 강제 처리
+    void set_aging_threshold(size_t n);  // 기본 100
+};
+```
+
+**사용 사례**:
+- High: 긴급 알람, 결제 트랜잭션
+- Normal: 일반 API 요청
+- Low: 배치 처리, 통계 집계
+
+---
+
+## 19. Config-driven Pipeline (설정 주도)
+
+JSON/YAML에서 DynamicPipeline을 생성하는 팩토리.
+
+```json
+{
+  "name": "order-processing",
+  "type": "dynamic",
+  "actions": [
+    { "name": "validate",  "plugin": "libvalidate.so", "workers": 4 },
+    { "name": "enrich",    "plugin": "libenrich.so",   "workers": 8, "auto_scale": true },
+    { "name": "persist",   "plugin": "libpersist.so",  "workers": 2,
+      "retry": { "max_attempts": 3, "backoff": "exponential" } }
+  ],
+  "triggers": [
+    { "on_complete": "notification-pipeline" }
+  ]
+}
+```
+
+```cpp
+class PipelineFactory {
+public:
+    // 플러그인 Action 등록 (.so 로드 없이 코드에서 직접 등록도 가능)
+    void register_plugin(string_view name, function<shared_ptr<IDynamicAction>()> factory);
+
+    Result<shared_ptr<DynamicPipeline>> from_json(string_view json);
+    Result<shared_ptr<DynamicPipeline>> from_yaml(string_view yaml);
+    Result<shared_ptr<PipelineGraph>>   graph_from_json(string_view json);
+};
+```
+
+---
+
+## 20. Pipeline Composition (파이프라인 합성)
+
+StaticPipeline을 하나의 Action처럼 다른 Pipeline에 내장 가능.
+
+```cpp
+// SubpipelineAction: Pipeline<Mid, Out>을 Action<Mid, Out>처럼 래핑
+template<typename In, typename Out>
+class SubpipelineAction : public Action<In, Out> {
+public:
+    explicit SubpipelineAction(StaticPipeline<In, Out> inner);
 };
 
 // 사용 예시
-Generator<int> counter(int n) {
-    for (int i = 0; i < n; ++i)
-        co_yield i;
-}
-pipeline.set_source(counter(1000));
+auto inner = PipelineBuilder<Mid>{}
+    .add(step_a)
+    .add(step_b)
+    .build();
+
+auto outer = PipelineBuilder<In>{}
+    .add(pre_action)
+    .add(SubpipelineAction{std::move(inner)})  // 내부 파이프라인 삽입
+    .add(post_action)
+    .build();
 ```
 
-### 14.3 Dispatcher::spawn() (★ 핵심 추가)
+**용도**: 공통 처리 로직의 재사용, 테스트 용이성 (inner pipeline을 mock으로 교체).
+
+---
+
+## 21. Arena 통합 (제로카피 아이템 할당)
+
+기존 `Arena` / `FixedPoolResource` (arena.hpp)를 파이프라인 아이템 할당에 활용.
 
 ```cpp
-// 파이프라인 워커 코루틴을 dispatcher에 spawn
-// round-robin으로 reactor 선택 후 post()로 kick-off
-dispatcher.spawn(std::move(worker_task));
-dispatcher.spawn_on(reactor_idx, std::move(worker_task));
+// 각 reactor-local arena에서 파이프라인 아이템 래퍼 할당
+// FixedPoolResource<sizeof(PipelineItem<T>)> 를 reactor당 하나 생성
+
+template<typename T>
+struct PipelineItem {
+    T             value;
+    TraceContext  trace_ctx;  // 전략 A 사용 시
+    // 소유: FixedPoolResource 슬롯 (같은 reactor의 arena)
+};
+
+// AsyncChannel<T> 대신 ArenaChannel<T>:
+// 아이템을 heap이 아닌 reactor-local pool에서 할당
+// → malloc/free 없음, 캐시 효율 극대화
 ```
 
-없으면 Action scale-out 시 새 워커를 어디서 어떻게 시작하는지가 불명확해짐.
+**적합한 상황**: 초고성능 경로, 아이템 크기가 고정적인 경우.
+**주의**: Arena는 스레드 비안전 → 동일 reactor 내에서만 사용. Cross-reactor 전달 시 이동(move) 필요.
 
-### 14.4 Worker Affinity Option
+---
+
+## 22. 관찰 가능성 — 메트릭
+
+### 22.1 ActionMetrics
 
 ```cpp
-struct ActionConfig {
-    // ...
-    std::optional<size_t> reactor_affinity;  // 특정 reactor에 고정
-    // nullopt = dispatcher가 적절히 분배
+struct ActionMetrics {
+    atomic<uint64_t> items_processed{0};
+    atomic<uint64_t> items_errored{0};
+    atomic<uint64_t> items_retried{0};
+    atomic<uint64_t> items_dlq{0};
+
+    // 레이턴시 히스토그램 (< 1ms, < 10ms, < 100ms, >= 100ms)
+    array<atomic<uint64_t>, 4> latency_buckets{};
+
+    atomic<uint32_t> current_workers{0};
+    atomic<uint32_t> circuit_breaker_opens{0};
+    // channel depth는 channel.size()로 직접 조회
 };
 ```
 
-CPU 캐시 지역성이 중요한 경우 (파이프라인 전체를 같은 reactor에 핀).
-
-### 14.5 Pipeline Snapshot / Replay
+### 22.2 PipelineObserver 훅
 
 ```cpp
-// DLQ에 쌓인 아이템을 나중에 재처리
-Task<void> replay_dlq(Pipeline<T, ?>& target, size_t max_items = SIZE_MAX);
+struct PipelineObserver {
+    virtual void on_item_start (string_view action) {}
+    virtual void on_item_done  (string_view action, Duration elapsed, bool ok) {}
+    virtual void on_error      (string_view action, error_code ec) {}
+    virtual void on_scale_event(string_view action, size_t old_n, size_t new_n) {}
+    virtual void on_state_change(PipelineState from, PipelineState to) {}
+    virtual void on_dlq_item   (string_view action) {}
+    virtual void on_circuit_open  (string_view action) {}
+    virtual void on_circuit_close (string_view action) {}
+};
+
+// 구현체
+class PrometheusObserver : public PipelineObserver { ... };
+class LoggingObserver    : public PipelineObserver { ... };
 ```
 
 ---
 
-## 15. 파일 구조
+## 23. 파일 구조
 
 ```
-include/qbuem/pipeline/
-├── channel.hpp          AsyncChannel<T>
-├── stream.hpp           Stream<T>, StreamItem<T>
-├── action.hpp           Action<In,Out>, BatchAction<In,Out>
-├── pipeline.hpp         Pipeline<In,Out>, IPipelineInput<T>
-├── pipeline_graph.hpp   PipelineGraph
-├── message_bus.hpp      MessageBus, RequestEnvelope
-├── resilience.hpp       RetryPolicy, CircuitBreaker, DeadLetter
-├── metrics.hpp          ActionMetrics, PipelineMetrics, PipelineObserver
-└── generator.hpp        Generator<T>
+include/qbuem/
+│
+├── core/
+│   ├── reactor.hpp          ← post(fn) 추가
+│   ├── dispatcher.hpp       ← post(), post_to(), spawn(), spawn_on() 추가
+│   ├── epoll_reactor.hpp    ← post() 구현 (eventfd)
+│   ├── io_uring_reactor.hpp ← post() 구현 (MSG_RING / eventfd 폴백)
+│   └── kqueue_reactor.hpp   ← post() 구현 (EVFILT_USER)
+│
+└── pipeline/
+    ├── channel.hpp          AsyncChannel<T>, PriorityChannel<T>
+    ├── stream.hpp           Stream<T>, StreamItem<T>
+    ├── action.hpp           Action<In,Out>, IDynamicAction, BatchAction<In,Out>
+    ├── pipeline.hpp         StaticPipeline<In,Out>, DynamicPipeline, PipelineBuilder
+    ├── pipeline_input.hpp   IPipelineInput<T>
+    ├── pipeline_graph.hpp   PipelineGraph, PipelineFactory
+    ├── message_bus.hpp      MessageBus, RequestEnvelope, xStreamEnvelope
+    ├── tracing.hpp          TraceContext, Sampler, SpanExporter, PipelineTracer
+    ├── resilience.hpp       RetryPolicy, CircuitBreaker, DeadLetter
+    ├── metrics.hpp          ActionMetrics, PipelineMetrics, PipelineObserver
+    ├── hot_swap.hpp         hot_swap 로직 (DynamicPipeline 내부)
+    ├── config.hpp           PipelineFactory (JSON/YAML 파싱)
+    ├── composition.hpp      SubpipelineAction
+    └── generator.hpp        Generator<T>
 
 src/pipeline/
-├── channel.cpp
-├── action.cpp
-├── pipeline.cpp
-├── pipeline_graph.cpp
-└── message_bus.cpp
-
-include/qbuem/core/
-├── reactor.hpp          ← post(fn) 추가
-├── dispatcher.hpp       ← post(), post_to(), spawn(), spawn_on() 추가
-├── epoll_reactor.hpp    ← post() 구현 (eventfd)
-├── io_uring_reactor.hpp ← post() 구현 (MSG_RING 또는 eventfd 폴백)
-└── kqueue_reactor.hpp   ← post() 구현 (EVFILT_USER)
+    ├── channel.cpp
+    ├── action.cpp
+    ├── pipeline.cpp
+    ├── pipeline_graph.cpp
+    ├── message_bus.cpp
+    ├── tracing.cpp
+    └── config.cpp
 ```
 
 ---
 
-## 16. 구현 순서 (의존성 그래프)
+## 24. 구현 순서 (의존성 그래프)
 
 ```
-[0a] Reactor::post() 인터페이스 추가
-[0b] EpollReactor::post() 구현 (eventfd)
-[0c] IOUringReactor::post() 구현
-[0d] KqueueReactor::post() 구현
-[0e] Dispatcher::post() / spawn() 추가
-       ↓
-[1]  AsyncChannel<T>          ← [0e] 완료 후
-       ↓
-[2a] Stream<T>                ← [1] 완료 후
-[2b] RetryPolicy / CircuitBreaker / DeadLetter (헤더 only, 의존성 없음)
-       ↓
-[3]  Action<In,Out>           ← [1][2a][2b] 완료 후
-[3b] BatchAction<In,Out>      ← [3] 완료 후
-       ↓
-[4]  Pipeline<In,Out>         ← [3] 완료 후
-[4b] PipelineObserver / Metrics ← [4]와 병행 가능
-       ↓
-[5a] PipelineGraph            ← [4] 완료 후
-[5b] MessageBus               ← [1] 완료 후 (Pipeline과 독립)
-       ↓
-[6]  통합 테스트 + 예제
+[0a] Reactor::post() 인터페이스
+[0b] EpollReactor::post()       (eventfd)
+[0c] IOUringReactor::post()     (MSG_RING 또는 eventfd)
+[0d] KqueueReactor::post()      (EVFILT_USER)
+[0e] Dispatcher::post() / spawn()
+                │
+                ▼
+[1]  AsyncChannel<T>             ← [0e]
+     PriorityChannel<T>          ← [1]
+                │
+         ┌──────┴──────┐
+         ▼             ▼
+[2a] Stream<T>      [2b] RetryPolicy / CircuitBreaker / DeadLetter (헤더 only)
+         │             │
+         └──────┬──────┘
+                ▼
+[3]  Action<In,Out>  IDynamicAction  BatchAction     ← [1][2a][2b]
+                │
+                ▼
+[4a] StaticPipeline + PipelineBuilder                ← [3]
+[4b] DynamicPipeline + hot_swap                      ← [3]
+[4c] PipelineObserver / Metrics                      ← [4a][4b] 와 병행
+                │
+         ┌──────┴──────┐
+         ▼             ▼
+[5a] PipelineGraph    [5b] MessageBus                ← [4a][4b]
+[5c] PipelineFactory  (Config-driven)                ← [5a][5b]
+                │
+                ▼
+[6]  PipelineTracer + SpanExporter                   ← [4a][4b] 완료 후
+[7]  SubpipelineAction (Composition)                  ← [4a]
+[8]  통합 테스트 + 예제
 ```
 
-**최소 MVP 경로**: `[0a→0b] → [1] → [3] → [4]`
-Linux 단일 플랫폼, 단일 Dispatcher 기준. 나머지는 MVP 이후 추가.
+**최소 MVP 경로**: `[0a→0b] → [1] → [3] → [4a]`
+Linux 단일 플랫폼, StaticPipeline 기준. 나머지는 MVP 이후 단계적 추가.
+
+**2단계 (운영 준비)**: `[4b] + [5a][5b] + [6]` (DynamicPipeline + Graph + Tracing)
+**3단계 (고도화)**: `[5c] + [7] + PriorityChannel + Arena통합`
 
 ---
 
-## 부록: 기술 결정 요약
+## 25. 부록: 기술 결정 요약
 
 | 결정 사항 | 채택 | 이유 |
 |-----------|------|------|
-| 채널 알고리즘 | Dmitry Vyukov MPMC | 검증된 알고리즘, ABA-free, cache-friendly |
-| EOS 표현 | `variant<T, StreamEnd>` | move-only 타입 지원 |
-| scale-in 방식 | atomic target_workers + index 비교 | poison pill보다 예측 가능 |
-| 취소 방식 | `std::stop_token` | C++20 표준, 구조적 취소 |
-| 에러 전파 | `Task<Result<Out>>` | exception 금지 (unhandled_exception=terminate) |
-| request-reply | Envelope + per-request reply channel | 동시 요청 demux, correlation-free |
-| cross-reactor wakeup | eventfd/EVFILT_USER + post() | 플랫폼별 native 메커니즘 활용 |
-| fan-out 타입 소거 | `IPipelineInput<T>` 인터페이스 | heterogeneous pipeline graph 지원 |
+| 채널 알고리즘 | Dmitry Vyukov MPMC | ABA-free, cache-friendly, 검증됨 |
+| EOS 표현 | `variant<T, StreamEnd>` | move-only 타입 완전 지원 |
+| Scale-in 방식 | atomic target_workers + index 비교 | poison pill보다 예측 가능 |
+| 취소 | `std::stop_token` | C++20 표준, 구조적 취소 |
+| 에러 전파 | `Task<Result<Out>>` | unhandled_exception=terminate 대응 |
+| Request-reply | Envelope + per-request reply channel | 동시 요청 demux |
+| Cross-reactor wakeup | eventfd/EVFILT_USER + post() | 플랫폼별 native |
+| Fan-out 타입 소거 | `IPipelineInput<T>` | heterogeneous graph |
+| 정적 파이프라인 | `PipelineBuilder<In>.add<Out>().build()` | 컴파일타임 타입 체인 |
+| 동적 파이프라인 | `IDynamicAction` + `ActionSchema` | 런타임 스키마 호환성 |
+| Hot-swap | Seal → Drain → Swap → Resume | in-flight 유실 없음 |
+| 트레이싱 전파 | thread-local TraceContext (전략 B) | 타입 오염 없음, 기존 패턴 일관 |
+| 트레이싱 샘플링 | Pluggable Sampler 인터페이스 | 환경별 전략 교체 가능 |
+| Arena 통합 | reactor-local FixedPoolResource | 기존 Arena 재사용, zero malloc |
+| 우선순위 채널 | 3레벨 + aging | 스타베이션 방지 |
+| Config 주도 | JSON/YAML → PipelineFactory | 코드 변경 없이 파이프라인 변경 |
+| 파이프라인 합성 | SubpipelineAction 래퍼 | 재사용성, 테스트 용이성 |
