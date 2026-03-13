@@ -165,13 +165,20 @@ static void on_shutdown_signal(int) {
 }
 
 // ─── Per-connection keep-alive state ────────────────────────────────────────
+// ConnCtx is heap-allocated per connection (shared_ptr).
+// Hot fields (timer IDs, handled count, sent_100) are grouped first to fit
+// within the first cache line (64 B).  The strings (buf, client_ip) are cold
+// by comparison and allowed to fall into the second line.
 struct ConnCtx {
+  // ── Hot fields (accessed on every reactor wakeup) ── ~28 B ──────────────
+  int  idle_timer_id  = -1;  // current idle timer (-1 = none)
+  int  read_timer_id  = -1;  // per-request read timeout timer (-1 = none)
+  int  handled        = 0;   // requests handled on this connection
+  bool sent_100       = false; // already sent 100 Continue for current request
+
+  // ── Cold fields (written once on accept, read rarely) ────────────────────
   std::string buf;           // partial-read accumulation buffer
   std::string client_ip;     // remote peer address (dotted-decimal or IPv6)
-  int handled        = 0;   // requests handled on this connection
-  int idle_timer_id  = -1;  // current idle timer (-1 = none)
-  int read_timer_id  = -1;  // per-request read timeout timer (-1 = none)
-  bool sent_100      = false; // already sent 100 Continue for current request
 
   static constexpr int MAX_REQUESTS    = 100;
   static constexpr int IDLE_TIMEOUT_MS = 30'000; // 30 s
