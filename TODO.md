@@ -145,7 +145,7 @@
   - [x] per-connection accumulation buffer (partial read 지원)
 - [x] `[Common]` **Chunked Transfer Encoding** (요청 수신)
   - [x] 청크 파싱 (요청 body) — 청크 확장자 무시, 멀티-청크, 부분 수신 지원
-  - [ ] 청크 직렬화 (응답 body streaming)
+  - [x] 청크 직렬화 (응답 body streaming)
 - [ ] `[Common]` **Pipelining** — 순서 보장 응답 큐 (head-of-line 유지)
 - [x] `[Common]` **Content-Length 자동 계산** — 응답 직렬화 시 자동 삽입
 - [x] `[Common]` **100 Continue** 처리 (`Expect: 100-continue`) — 헤더 완료 후 body 대기 시 자동 응답
@@ -186,7 +186,7 @@
   - [x] 커스텀 콜백 — `App::set_access_logger(fn)` (method, path, status, duration_us)
   - [x] 응답 시간 측정 (µs 단위, `steady_clock`)
   - [ ] JSON structured log 옵션
-  - [ ] **비동기 로그 링 버퍼** — 로그를 ring buffer에 enqueue, 별도 thread가 flush
+  - [x] **비동기 로그 링 버퍼** — 로그를 ring buffer에 enqueue, 별도 thread가 flush
 - [x] `[Common]` **CORS 미들웨어** — `include/draco/middleware/cors.hpp`
   - [x] `Access-Control-Allow-Origin` / `Methods` / `Headers` / `Max-Age` 설정
   - [x] Preflight (`OPTIONS`) 자동 처리 — 204 응답 후 체인 중단
@@ -200,15 +200,15 @@
   - [x] IP 기반 (`X-Forwarded-For` / `X-Real-IP`) / 커스텀 key_fn 제한
   - [x] `X-RateLimit-Limit` / `X-RateLimit-Remaining` / `Retry-After` 헤더
 - [ ] `[Common]` **Compression 미들웨어**
-  - [ ] `Content-Encoding: gzip` (zlib, streaming 압축)
+  - [x] `Content-Encoding: gzip` (zlib, streaming 압축)
   - [ ] `Content-Encoding: br` (brotli, optional)
-  - [ ] `Accept-Encoding` 협상 (q-factor 파싱)
+  - [x] `Accept-Encoding` 협상 (q-factor 파싱)
 - [x] `[Common]` **Cookie 파싱** — `Request::cookie(key)` (no-alloc), `Response::set_cookie()` (Full Attribute 지원)
 - [ ] `[Common]` **Session 미들웨어** — lock-free 세션 맵 (per-reactor 분산)
-- [ ] `[Common]` **JWT 미들웨어**
-  - [ ] HS256 / RS256 검증
-  - [ ] `Authorization: Bearer <token>` 파싱
-  - [ ] **상수 시간 서명 비교** (`CRYPTO_memcmp`) — timing attack 방지
+- [x] `[Common]` **JWT 미들웨어**
+  - [x] HS256 / RS256 검증
+  - [x] `Authorization: Bearer <token>` 파싱
+  - [x] **상수 시간 서명 비교** (`CRYPTO_memcmp`) — timing attack 방지
 - [x] `[Common]` **Static File Serving** — `App::serve_static(url_prefix, root_dir)`, `Router::add_prefix_route()` 와일드카드 확장
   - [x] MIME type 자동 감지 (30+ 확장자, `include/draco/middleware/static_files.hpp`)
   - [x] Weak ETag (`W/"size-mtime"`) + `Last-Modified` 자동 생성 → 304 지원

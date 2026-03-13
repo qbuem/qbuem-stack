@@ -676,6 +676,8 @@ Result<void> App::listen(int port, bool ipv6) {
 #endif
                 std::string hdr = r.serialize_header();
                 size_t bytes = hdr.size();
+                std::string_view body_view =
+                    r.is_chunked() ? r.chunk_buf() : r.get_body();
 #ifdef __linux__
                 if (r.has_sendfile()) {
                   // Zero-copy: write header, then sendfile() body.
@@ -683,17 +685,15 @@ Result<void> App::listen(int port, bool ipv6) {
                   write_all(cfd, hdr);
                   send_file_body(cfd, r.get_sendfile_path(), r.sendfile_size());
                 } else {
-                  std::string_view bv = r.get_body();
-                  bytes += bv.size();
-                  writev_response(cfd, hdr, bv);
+                  bytes += body_view.size();
+                  writev_response(cfd, hdr, body_view);
                 }
                 { int cork = 0; setsockopt(cfd, IPPROTO_TCP, TCP_CORK, &cork, sizeof(cork)); }
                 { int qa = 1; setsockopt(cfd, IPPROTO_TCP, TCP_QUICKACK, &qa, sizeof(qa)); }
 #else
                 {
-                  std::string_view bv = r.get_body();
-                  bytes += bv.size();
-                  writev_response(cfd, hdr, bv);
+                  bytes += body_view.size();
+                  writev_response(cfd, hdr, body_view);
                 }
 #endif
 

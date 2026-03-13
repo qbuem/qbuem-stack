@@ -40,6 +40,26 @@ public:
   Response &body(std::string_view b);
 
   /**
+   * @brief Append a chunk to a chunked-encoding response.
+   *
+   * Call chunk() one or more times instead of body() to stream a response
+   * using HTTP/1.1 Transfer-Encoding: chunked.  The final response is
+   * serialized with chunked framing; no Content-Length is emitted.
+   *
+   * Example:
+   *   res.chunk("Hello, ").chunk("world!").end_chunks();
+   */
+  Response &chunk(std::string_view data);
+
+  /**
+   * @brief Finalize a chunked response (appends the terminal 0-length chunk).
+   *
+   * Must be called after all chunk() calls.  Sets Transfer-Encoding: chunked
+   * and clears Content-Length from the response.
+   */
+  Response &end_chunks();
+
+  /**
    * @brief Append a Set-Cookie response header.
    *
    * Multiple cookies are supported; each call appends one Set-Cookie line.
@@ -122,6 +142,11 @@ public:
   const std::string &get_sendfile_path() const noexcept { return sendfile_path_; }
   size_t sendfile_size() const noexcept { return sendfile_size_; }
 
+  /** @brief True when response uses chunked transfer encoding. */
+  bool is_chunked() const noexcept { return chunked_; }
+  /** @brief Returns the pre-encoded chunked body (framing included). */
+  std::string_view chunk_buf() const noexcept { return chunk_buf_; }
+
 private:
   std::string_view status_to_string(int code) const;
 
@@ -133,6 +158,10 @@ private:
   // Zero-copy sendfile path (empty = not set)
   std::string sendfile_path_;
   size_t      sendfile_size_ = 0;
+
+  // Chunked transfer encoding accumulator
+  bool        chunked_      = false;
+  std::string chunk_buf_;   // encoded chunked body (framing included)
 };
 
 } // namespace draco

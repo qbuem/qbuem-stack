@@ -1,5 +1,5 @@
 #include <draco/http/response.hpp>
-#include <sstream>
+#include <cstdio>
 
 namespace draco {
 
@@ -15,6 +15,25 @@ Response &Response::header(std::string_view key, std::string_view value) {
 
 Response &Response::body(std::string_view b) {
   body_ = std::string(b);
+  return *this;
+}
+
+// ── Chunked transfer encoding ─────────────────────────────────────────────────
+
+Response &Response::chunk(std::string_view data) {
+  if (data.empty()) return *this;
+  // Chunked framing: "<hex-size>\r\n<data>\r\n"
+  char sz[16];
+  int  n = std::snprintf(sz, sizeof(sz), "%zx\r\n", data.size());
+  chunk_buf_.append(sz, static_cast<size_t>(n));
+  chunk_buf_.append(data);
+  chunk_buf_ += "\r\n";
+  return *this;
+}
+
+Response &Response::end_chunks() {
+  chunk_buf_ += "0\r\n\r\n"; // terminal chunk
+  chunked_ = true;
   return *this;
 }
 
@@ -62,9 +81,13 @@ std::string Response::serialize_header() const {
     hdr += c;
     hdr += "\r\n";
   }
-  hdr += "Content-Length: ";
-  hdr += std::to_string(sendfile_path_.empty() ? body_.size() : sendfile_size_);
-  hdr += "\r\n\r\n";
+  if (chunked_) {
+    hdr += "Transfer-Encoding: chunked\r\n\r\n";
+  } else {
+    hdr += "Content-Length: ";
+    hdr += std::to_string(sendfile_path_.empty() ? body_.size() : sendfile_size_);
+    hdr += "\r\n\r\n";
+  }
   return hdr;
 }
 
