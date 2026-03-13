@@ -14,8 +14,14 @@
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <sys/socket.h>
+#include <sys/uio.h>
+#include <sys/un.h>
 #include <unistd.h>
 #include <variant>
+#ifdef __linux__
+#  include <fcntl.h>
+#  include <sys/sendfile.h>
+#endif
 
 namespace draco {
 
@@ -27,8 +33,23 @@ std::atomic<std::time_t> g_date_ts{0};
 char                      g_date_buf[48] = {};
 std::mutex                g_date_mu;
 
+// vDSO fast monotonic second — no syscall overhead on Linux (CLOCK_MONOTONIC_COARSE
+// is served from the vDSO page without entering kernel mode on glibc 2.17+).
+static inline std::time_t fast_now() noexcept {
+#ifdef __linux__
+  struct timespec ts{};
+  clock_gettime(CLOCK_MONOTONIC_COARSE, &ts);
+  // Monotonic time gives elapsed seconds; add wall-clock epoch offset cached once.
+  // For the Date header we need wall-clock seconds, so fall back to CLOCK_REALTIME_COARSE.
+  clock_gettime(CLOCK_REALTIME_COARSE, &ts);
+  return static_cast<std::time_t>(ts.tv_sec);
+#else
+  return std::time(nullptr);
+#endif
+}
+
 std::string_view cached_http_date() noexcept {
-  std::time_t now = std::time(nullptr);
+  std::time_t now = fast_now();
   if (g_date_ts.load(std::memory_order_relaxed) != now) {
     std::lock_guard lk(g_date_mu);
     if (g_date_ts.load(std::memory_order_relaxed) != now) {
@@ -58,6 +79,83 @@ void write_all(int fd, const std::string &data) {
   }
 }
 
+// ─── send_file_body ──────────────────────────────────────────────────────────
+// Zero-copy file-to-socket transfer using platform sendfile().
+#ifdef __linux__
+static void send_file_body(int sock_fd, std::string_view path, size_t size) noexcept {
+  int file_fd = ::open(path.data(), O_RDONLY | O_CLOEXEC);
+  if (file_fd < 0) return;
+  off_t offset = 0;
+  size_t remaining = size;
+  while (remaining > 0) {
+    ssize_t n = ::sendfile(sock_fd, file_fd, &offset,
+                           std::min(remaining, static_cast<size_t>(0x7fff'ffff)));
+    if (n <= 0) {
+      if (errno == EINTR) continue;
+      break;
+    }
+    remaining -= static_cast<size_t>(n);
+  }
+  ::close(file_fd);
+}
+#elif defined(__APPLE__)
+// macOS sendfile(2) — different signature: off_t *len is both input+output.
+static void send_file_body(int sock_fd, std::string_view path, size_t size) noexcept {
+  int file_fd = ::open(path.data(), O_RDONLY | O_CLOEXEC);
+  if (file_fd < 0) return;
+  off_t offset    = 0;
+  off_t remaining = static_cast<off_t>(size);
+  while (remaining > 0) {
+    off_t len = remaining;
+    int r = ::sendfile(file_fd, sock_fd, offset, &len, nullptr, 0);
+    if (len > 0) { offset += len; remaining -= len; }
+    if (r < 0) {
+      if (errno == EINTR || errno == EAGAIN) continue;
+      break;
+    }
+  }
+  ::close(file_fd);
+}
+#endif
+
+// ─── writev_response ─────────────────────────────────────────────────────────
+// Send HTTP header + body in a single writev() syscall — no heap concat.
+// Falls back to write_all for the body if writev() is short.
+void writev_response(int fd, const std::string &hdr, std::string_view body) {
+  struct iovec iov[2];
+  iov[0].iov_base = const_cast<char *>(hdr.data());
+  iov[0].iov_len  = hdr.size();
+  iov[1].iov_base = const_cast<char *>(body.data());
+  iov[1].iov_len  = body.size();
+
+  int iov_cnt = body.empty() ? 1 : 2;
+  ssize_t total = static_cast<ssize_t>(hdr.size() + body.size());
+  ssize_t sent  = 0;
+  int     idx   = 0;
+
+  while (sent < total) {
+    ssize_t n = writev(fd, iov + idx, iov_cnt - idx);
+    if (n <= 0) {
+      if (errno == EINTR) continue;
+      break;
+    }
+    sent += n;
+    // Advance iovec pointers for partial writes
+    ssize_t remaining = n;
+    while (idx < iov_cnt && remaining > 0) {
+      if (static_cast<ssize_t>(iov[idx].iov_len) <= remaining) {
+        remaining -= static_cast<ssize_t>(iov[idx].iov_len);
+        iov[idx].iov_len = 0;
+        ++idx;
+      } else {
+        iov[idx].iov_base = static_cast<char *>(iov[idx].iov_base) + remaining;
+        iov[idx].iov_len -= static_cast<size_t>(remaining);
+        remaining = 0;
+      }
+    }
+  }
+}
+
 // ─── Graceful shutdown ───────────────────────────────────────────────────────
 static App *g_app_instance = nullptr;
 
@@ -67,13 +165,20 @@ static void on_shutdown_signal(int) {
 }
 
 // ─── Per-connection keep-alive state ────────────────────────────────────────
+// ConnCtx is heap-allocated per connection (shared_ptr).
+// Hot fields (timer IDs, handled count, sent_100) are grouped first to fit
+// within the first cache line (64 B).  The strings (buf, client_ip) are cold
+// by comparison and allowed to fall into the second line.
 struct ConnCtx {
+  // ── Hot fields (accessed on every reactor wakeup) ── ~28 B ──────────────
+  int  idle_timer_id  = -1;  // current idle timer (-1 = none)
+  int  read_timer_id  = -1;  // per-request read timeout timer (-1 = none)
+  int  handled        = 0;   // requests handled on this connection
+  bool sent_100       = false; // already sent 100 Continue for current request
+
+  // ── Cold fields (written once on accept, read rarely) ────────────────────
   std::string buf;           // partial-read accumulation buffer
   std::string client_ip;     // remote peer address (dotted-decimal or IPv6)
-  int handled        = 0;   // requests handled on this connection
-  int idle_timer_id  = -1;  // current idle timer (-1 = none)
-  int read_timer_id  = -1;  // per-request read timeout timer (-1 = none)
-  bool sent_100      = false; // already sent 100 Continue for current request
 
   static constexpr int MAX_REQUESTS    = 100;
   static constexpr int IDLE_TIMEOUT_MS = 30'000; // 30 s
@@ -91,6 +196,8 @@ App::App(size_t thread_count) : dispatcher_(thread_count) {
 }
 
 void App::use(Middleware mw) { router_.use(std::move(mw)); }
+
+void App::on_error(ErrorHandler handler) { error_handler_ = std::move(handler); }
 
 void App::get(std::string_view path, HandlerVariant handler) {
   router_.add_route(Method::Get, path, std::move(handler));
@@ -150,6 +257,45 @@ void App::health_check(std::string_view path) {
     }));
 }
 
+void App::health_check_detailed(std::string_view path) {
+  router_.add_route(Method::Get, path,
+    Handler([this](const Request &, Response &res) {
+      auto m = snapshot_metrics();
+      auto uptime = std::chrono::duration_cast<std::chrono::seconds>(
+          std::chrono::steady_clock::now() - start_time_).count();
+      std::string body = "{\"status\":\"ok\","
+          "\"connections\":" + std::to_string(m.active_connections) + ","
+          "\"uptime_s\":"    + std::to_string(uptime) + ","
+          "\"requests_total\":" + std::to_string(m.requests_total) + "}";
+      res.status(200).header("Content-Type", "application/json").body(body);
+    }));
+}
+
+void App::liveness_endpoint(std::string_view path) {
+  router_.add_route(Method::Get, path,
+    Handler([](const Request &, Response &res) {
+      res.status(200)
+         .header("Content-Type", "application/json")
+         .body("{\"alive\":true}");
+    }));
+}
+
+void App::readiness_endpoint(std::string_view path) {
+  router_.add_route(Method::Get, path,
+    Handler([this](const Request &, Response &res) {
+      if (draining_.load(std::memory_order_relaxed)) {
+        res.status(503)
+           .header("Content-Type", "application/json")
+           .header("Retry-After", "5")
+           .body("{\"ready\":false,\"reason\":\"draining\"}");
+      } else {
+        res.status(200)
+           .header("Content-Type", "application/json")
+           .body("{\"ready\":true}");
+      }
+    }));
+}
+
 // ─── Metrics ─────────────────────────────────────────────────────────────────
 
 Metrics App::snapshot_metrics() const {
@@ -201,11 +347,38 @@ void App::enable_access_log() {
   };
 }
 
+void App::enable_json_log() {
+  logger_ = [](std::string_view method, std::string_view path, int status,
+               long duration_us) {
+    std::time_t now = std::time(nullptr);
+    std::tm tm{};
+    gmtime_r(&now, &tm);
+    char ts[32];
+    std::strftime(ts, sizeof(ts), "%Y-%m-%dT%H:%M:%SZ", &tm);
+    std::fprintf(stderr,
+                 "{\"ts\":\"%s\",\"method\":\"%.*s\","
+                 "\"path\":\"%.*s\",\"status\":%d,\"duration_us\":%ld}\n",
+                 ts,
+                 static_cast<int>(method.size()), method.data(),
+                 static_cast<int>(path.size()),   path.data(),
+                 status, duration_us);
+  };
+}
+
+void App::set_max_connections(uint64_t max) {
+  max_connections_.store(max, std::memory_order_relaxed);
+}
+
 // ─── App lifecycle ────────────────────────────────────────────────────────────
 
-void App::stop() { dispatcher_.stop(); }
+void App::stop() {
+  draining_.store(true, std::memory_order_relaxed);
+  dispatcher_.stop();
+}
 
 Result<void> App::listen(int port, bool ipv6) {
+  start_time_ = std::chrono::steady_clock::now();
+  draining_.store(false, std::memory_order_relaxed);
   // ── SIGTERM / SIGINT → graceful shutdown ──────────────────────────────────
   g_app_instance = this;
   std::signal(SIGTERM, on_shutdown_signal);
@@ -215,7 +388,7 @@ Result<void> App::listen(int port, bool ipv6) {
   int af = ipv6 ? AF_INET6 : AF_INET;
   int server_fd = socket(af, SOCK_STREAM, 0);
   if (server_fd == -1)
-    return std::unexpected(
+    return unexpected(
         std::make_error_code(std::errc::resource_unavailable_try_again));
 
   int opt = 1;
@@ -256,7 +429,7 @@ Result<void> App::listen(int port, bool ipv6) {
     if (bind(server_fd, reinterpret_cast<struct sockaddr *>(&addr6),
              sizeof(addr6)) < 0) {
       close(server_fd);
-      return std::unexpected(std::make_error_code(std::errc::address_in_use));
+      return unexpected(std::make_error_code(std::errc::address_in_use));
     }
   } else {
     struct sockaddr_in address{};
@@ -266,13 +439,13 @@ Result<void> App::listen(int port, bool ipv6) {
     if (bind(server_fd, reinterpret_cast<struct sockaddr *>(&address),
              sizeof(address)) < 0) {
       close(server_fd);
-      return std::unexpected(std::make_error_code(std::errc::address_in_use));
+      return unexpected(std::make_error_code(std::errc::address_in_use));
     }
   }
 
   if (::listen(server_fd, 1024) < 0) {
     close(server_fd);
-    return std::unexpected(std::make_error_code(std::errc::address_in_use));
+    return unexpected(std::make_error_code(std::errc::address_in_use));
   }
 
   fcntl(server_fd, F_SETFL, O_NONBLOCK);
@@ -308,6 +481,27 @@ Result<void> App::listen(int port, bool ipv6) {
 
         fcntl(client_fd, F_SETFL, O_NONBLOCK);
 
+        // ── Connection limit guard ────────────────────────────────────────
+        // If max_connections_ is set and active count has reached the limit,
+        // send 503 Service Unavailable and close immediately.
+        {
+          uint64_t mx = max_connections_.load(std::memory_order_relaxed);
+          if (mx > 0 && cnt_active_.load(std::memory_order_relaxed) >= mx) {
+            static constexpr std::string_view kOverload =
+                "HTTP/1.1 503 Service Unavailable\r\n"
+                "Content-Type: application/json\r\n"
+                "Retry-After: 1\r\n"
+                "Content-Length: 37\r\n"
+                "Connection: close\r\n\r\n"
+                "{\"error\":\"too many connections\"}    ";
+            // best-effort send (ignore partial write — connection closing anyway)
+            [[maybe_unused]] auto _ =
+                ::write(client_fd, kOverload.data(), kOverload.size() - 4);
+            ::close(client_fd);
+            return;
+          }
+        }
+
 #ifdef SO_NOSIGPIPE
         // macOS: prevent SIGPIPE on write to closed socket.
         int nosig = 1;
@@ -326,7 +520,24 @@ Result<void> App::listen(int port, bool ipv6) {
         int quickack = 1;
         setsockopt(client_fd, IPPROTO_TCP, TCP_QUICKACK,
                    &quickack, sizeof(quickack));
+
+#  ifdef SO_BUSY_POLL
+        // SO_BUSY_POLL: busy-poll for up to N microseconds before blocking.
+        // Reduces per-packet receive latency at the cost of slightly higher CPU
+        // usage.  50 µs is a good balance for low-latency HTTP services.
+        int busy_poll_us = 50;
+        setsockopt(client_fd, SOL_SOCKET, SO_BUSY_POLL,
+                   &busy_poll_us, sizeof(busy_poll_us));
+#  endif
 #endif
+
+        // SO_SNDTIMEO: kernel-enforced write timeout.
+        // Prevents slow clients from blocking a reactor thread indefinitely
+        // when the send buffer fills up.  5 s is generous for LAN peers.
+        {
+          struct timeval tv{5, 0}; // 5 seconds
+          setsockopt(client_fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+        }
 
         // Per-connection shared state (lives as long as any callback holds it).
         // Custom deleter: decrement active-connection counter when the last
@@ -398,10 +609,14 @@ Result<void> App::listen(int port, bool ipv6) {
                 ctx->idle_timer_id = -1;
               }
 
-              // Read available bytes into accumulation buffer
+              // Read available bytes into accumulation buffer.
+              // Prefetch ctx fields used immediately after read() into L1 cache.
+              __builtin_prefetch(&ctx->buf,        0, 3);
+              __builtin_prefetch(&ctx->handled,    0, 1);
+              __builtin_prefetch(&ctx->idle_timer_id, 0, 1);
               char tmp[8192];
               ssize_t n = read(cfd, tmp, sizeof(tmp));
-              if (n <= 0) {
+              if (n <= 0) [[unlikely]] {
                 cancel_read_timeout();
                 reactor->unregister_event(cfd, EventType::Read);
                 close(cfd);
@@ -409,7 +624,7 @@ Result<void> App::listen(int port, bool ipv6) {
               }
 
               // Start per-request read timeout on first byte of a new request.
-              if (ctx->buf.empty()) arm_read_timeout();
+              if (ctx->buf.empty()) [[likely]] arm_read_timeout();
 
               ctx->buf.append(tmp, static_cast<size_t>(n));
 
@@ -420,7 +635,7 @@ Result<void> App::listen(int port, bool ipv6) {
               auto parsed = parser.parse(ctx->buf, req);
 
               // ── Hard parse error (400 / 413) ──────────────────────────
-              if (!parsed) {
+              if (!parsed) [[unlikely]] {
                 cancel_read_timeout();
                 int status = parser.error_status() ? parser.error_status() : 400;
                 Response err;
@@ -591,13 +806,32 @@ Result<void> App::listen(int port, bool ipv6) {
                                                ctx->handled));
                 }
 #ifdef __linux__
-                // Re-enable TCP_QUICKACK after each response write.
-                int qa = 1;
-                setsockopt(cfd, IPPROTO_TCP, TCP_QUICKACK, &qa, sizeof(qa));
+                // TCP_CORK: delay segment until uncorked, ensuring header+body
+                // go in one TCP segment.  TCP_QUICKACK re-enabled after send.
+                { int cork = 1; setsockopt(cfd, IPPROTO_TCP, TCP_CORK, &cork, sizeof(cork)); }
 #endif
-                std::string serialized = r.serialize();
-                size_t bytes = serialized.size();
-                write_all(cfd, serialized);
+                std::string hdr = r.serialize_header();
+                size_t bytes = hdr.size();
+                std::string_view body_view =
+                    r.is_chunked() ? r.chunk_buf() : r.get_body();
+#ifdef __linux__
+                if (r.has_sendfile()) {
+                  // Zero-copy: write header, then sendfile() body.
+                  bytes += r.sendfile_size();
+                  write_all(cfd, hdr);
+                  send_file_body(cfd, r.get_sendfile_path(), r.sendfile_size());
+                } else {
+                  bytes += body_view.size();
+                  writev_response(cfd, hdr, body_view);
+                }
+                { int cork = 0; setsockopt(cfd, IPPROTO_TCP, TCP_CORK, &cork, sizeof(cork)); }
+                { int qa = 1; setsockopt(cfd, IPPROTO_TCP, TCP_QUICKACK, &qa, sizeof(qa)); }
+#else
+                {
+                  bytes += body_view.size();
+                  writev_response(cfd, hdr, body_view);
+                }
+#endif
 
                 // ── Metrics + access log ────────────────────────────────
                 cnt_bytes_sent_.fetch_add(bytes, std::memory_order_relaxed);
@@ -666,15 +900,20 @@ Result<void> App::listen(int port, bool ipv6) {
                 try {
                   std::get<Handler>(handler)(req, res);
                   if (head_fallback) res.body(""); // HEAD: suppress body
-                } catch (const std::exception &ex) {
-                  std::cerr << "[ERROR] handler exception: " << ex.what()
-                            << std::endl;
-                  res = Response{};
-                  res.status(500).body("Internal Server Error");
                 } catch (...) {
-                  std::cerr << "[ERROR] handler unknown exception" << std::endl;
+                  auto ep = std::current_exception();
                   res = Response{};
-                  res.status(500).body("Internal Server Error");
+                  if (error_handler_) {
+                    try { error_handler_(ep, req, res); } catch (...) {}
+                  } else {
+                    try { std::rethrow_exception(ep); }
+                    catch (const std::exception &ex) {
+                      std::cerr << "[ERROR] handler exception: " << ex.what() << "\n";
+                    } catch (...) {
+                      std::cerr << "[ERROR] handler unknown exception\n";
+                    }
+                    res.status(500).body("Internal Server Error");
+                  }
                 }
                 finalize(res);
                 if (!keep_alive)
@@ -720,10 +959,16 @@ Result<void> App::listen(int port, bool ipv6) {
                                                     c->handled));
                   }
 #ifdef __linux__
-                  int qa = 1;
-                  setsockopt(fd, IPPROTO_TCP, TCP_QUICKACK, &qa, sizeof(qa));
+                  { int cork = 1; setsockopt(fd, IPPROTO_TCP, TCP_CORK, &cork, sizeof(cork)); }
 #endif
-                  write_all(fd, ares.serialize());
+                  {
+                    std::string ahdr = ares.serialize_header();
+                    writev_response(fd, ahdr, ares.get_body());
+                  }
+#ifdef __linux__
+                  { int cork = 0; setsockopt(fd, IPPROTO_TCP, TCP_CORK, &cork, sizeof(cork)); }
+                  { int qa = 1; setsockopt(fd, IPPROTO_TCP, TCP_QUICKACK, &qa, sizeof(qa)); }
+#endif
 
                   if (!ka_flag) {
                     r->unregister_event(fd, EventType::Read);
@@ -742,12 +987,260 @@ Result<void> App::listen(int port, bool ipv6) {
       });
 
   if (!listen_res)
-    return std::unexpected(listen_res.error());
+    return unexpected(listen_res.error());
 
   dispatcher_.run();
 
   close(server_fd);
   return {};
+}
+
+// ─── App::listen_unix ─────────────────────────────────────────────────────────
+
+Result<void> App::listen_unix(std::string_view path) {
+  // ── SIGTERM / SIGINT → graceful shutdown ──────────────────────────────────
+  g_app_instance = this;
+  std::signal(SIGTERM, on_shutdown_signal);
+  std::signal(SIGINT,  on_shutdown_signal);
+
+  // ── Unix domain socket ────────────────────────────────────────────────────
+  int server_fd = ::socket(AF_UNIX, SOCK_STREAM, 0);
+  if (server_fd == -1)
+    return unexpected(
+        std::make_error_code(std::errc::resource_unavailable_try_again));
+
+  // Remove any stale socket file.
+  ::unlink(std::string(path).c_str());
+
+  struct sockaddr_un addr{};
+  addr.sun_family = AF_UNIX;
+  if (path.size() >= sizeof(addr.sun_path) - 1) {
+    close(server_fd);
+    return unexpected(std::make_error_code(std::errc::filename_too_long));
+  }
+  std::memcpy(addr.sun_path, path.data(), path.size());
+  addr.sun_path[path.size()] = '\0';
+
+  if (::bind(server_fd, reinterpret_cast<struct sockaddr *>(&addr),
+             sizeof(addr)) < 0) {
+    close(server_fd);
+    return unexpected(std::make_error_code(std::errc::address_in_use));
+  }
+
+  if (::listen(server_fd, SOMAXCONN) < 0) {
+    close(server_fd);
+    return unexpected(std::make_error_code(std::errc::address_in_use));
+  }
+
+  std::cout << "Draco WAS listening on unix:" << path << "\n";
+
+  std::string sock_path(path);
+
+  // ── Accept loop (same structure as TCP listen, minus TCP socket options) ──
+  auto listen_res = dispatcher_.register_listener(
+      server_fd, [this](int lfd) {
+        Reactor *reactor = Reactor::current();
+
+        // accept() on AF_UNIX — no sockaddr needed for peer address.
+        int client_fd = ::accept(lfd, nullptr, nullptr);
+        if (client_fd == -1) [[unlikely]] {
+          if (errno != EAGAIN && errno != EWOULDBLOCK)
+            std::cerr << "[ERROR] accept(unix): " << strerror(errno) << "\n";
+          return;
+        }
+
+        ::fcntl(client_fd, F_SETFL, O_NONBLOCK);
+#ifdef SO_NOSIGPIPE
+        int nosig = 1;
+        setsockopt(client_fd, SOL_SOCKET, SO_NOSIGPIPE, &nosig, sizeof(nosig));
+#endif
+
+        cnt_active_.fetch_add(1, std::memory_order_relaxed);
+        auto ctx = std::shared_ptr<ConnCtx>(new ConnCtx{},
+            [this](ConnCtx *c) {
+              cnt_active_.fetch_sub(1, std::memory_order_relaxed);
+              delete c;
+            });
+        ctx->client_ip = "unix";
+
+        auto arm_idle = [ctx, reactor, client_fd]() {
+          if (ctx->idle_timer_id != -1) {
+            reactor->unregister_timer(ctx->idle_timer_id);
+            ctx->idle_timer_id = -1;
+          }
+          auto tres = reactor->register_timer(
+              ConnCtx::IDLE_TIMEOUT_MS, [reactor, client_fd, ctx](int) {
+                ctx->idle_timer_id = -1;
+                reactor->unregister_event(client_fd, EventType::Read);
+                close(client_fd);
+              });
+          if (tres) ctx->idle_timer_id = *tres;
+        };
+
+        auto arm_read_timeout = [ctx, reactor, client_fd]() {
+          if (ctx->read_timer_id != -1) return;
+          auto tres = reactor->register_timer(
+              ConnCtx::READ_TIMEOUT_MS, [reactor, client_fd, ctx](int) {
+                ctx->read_timer_id = -1;
+                Response tout;
+                tout.status(408).header("Connection", "close").body("Request Timeout");
+                write_all(client_fd, tout.serialize());
+                reactor->unregister_event(client_fd, EventType::Read);
+                close(client_fd);
+              });
+          if (tres) ctx->read_timer_id = *tres;
+        };
+
+        auto cancel_read_timeout = [ctx, reactor]() {
+          if (ctx->read_timer_id != -1) {
+            reactor->unregister_timer(ctx->read_timer_id);
+            ctx->read_timer_id = -1;
+          }
+        };
+
+        arm_idle();
+
+        reactor->register_event(
+            client_fd, EventType::Read,
+            [this, reactor, ctx, arm_idle, arm_read_timeout,
+             cancel_read_timeout](int cfd) mutable {
+              if (ctx->idle_timer_id != -1) {
+                reactor->unregister_timer(ctx->idle_timer_id);
+                ctx->idle_timer_id = -1;
+              }
+              char tmp[8192];
+              ssize_t n = read(cfd, tmp, sizeof(tmp));
+              if (n <= 0) [[unlikely]] {
+                cancel_read_timeout();
+                reactor->unregister_event(cfd, EventType::Read);
+                close(cfd);
+                return;
+              }
+              if (ctx->buf.empty()) [[likely]] arm_read_timeout();
+              ctx->buf.append(tmp, static_cast<size_t>(n));
+
+              HttpParser parser;
+              Request req;
+              auto parsed = parser.parse(ctx->buf, req);
+              if (!parsed) [[unlikely]] {
+                cancel_read_timeout();
+                Response err;
+                err.status(400).header("Connection","close")
+                   .header("Date", cached_http_date()).body("Bad Request");
+                write_all(cfd, err.serialize());
+                reactor->unregister_event(cfd, EventType::Read);
+                close(cfd);
+                return;
+              }
+              if (!parser.is_complete()) return;
+
+              cancel_read_timeout();
+              ctx->buf.clear();
+              ctx->handled++;
+
+              req.set_remote_addr(ctx->client_ip);
+              cnt_requests_.fetch_add(1, std::memory_order_relaxed);
+
+              bool keep_alive = ctx->handled < ConnCtx::MAX_REQUESTS;
+              Response res;
+              bool cont = true;
+              for (const auto &mw : router_.middlewares()) {
+                if (!mw(req, res)) {
+                  cont = false;
+                  break;
+                }
+              }
+
+              if (!cont) {
+                res.header("Date", cached_http_date())
+                   .header("Connection", "close");
+                std::string hdr = res.serialize_header();
+                writev_response(cfd, hdr, res.get_body());
+                reactor->unregister_event(cfd, EventType::Read);
+                close(cfd);
+                return;
+              }
+
+              std::unordered_map<std::string, std::string> params;
+              auto handler = router_.match(req.method(), req.path(), params);
+              if (std::holds_alternative<std::monostate>(handler)) {
+                int sc = router_.path_exists(req.path()) ? 405 : 404;
+                res.status(sc).body(sc == 405 ? "Method Not Allowed" : "Not Found");
+              } else {
+                for (auto const &[key, val] : params)
+                  req.set_param(key, val);
+                try {
+                  if (std::holds_alternative<Handler>(handler))
+                    std::get<Handler>(handler)(req, res);
+                } catch (...) {
+                  res.status(500).body("Internal Server Error");
+                }
+              }
+
+              res.header("Date", cached_http_date())
+                 .header("Connection", keep_alive ? "keep-alive" : "close");
+              {
+                std::string hdr = res.serialize_header();
+                std::string_view bv = res.is_chunked() ? res.chunk_buf() : res.get_body();
+                writev_response(cfd, hdr, bv);
+              }
+              cnt_bytes_sent_.fetch_add(1, std::memory_order_relaxed);
+              int sc = res.status_code();
+              if (sc >= 400) cnt_errors_.fetch_add(1, std::memory_order_relaxed);
+
+              if (!keep_alive) {
+                reactor->unregister_event(cfd, EventType::Read);
+                close(cfd);
+              } else {
+                arm_idle();
+              }
+            });
+      });
+  if (!listen_res)
+    return unexpected(listen_res.error());
+
+  dispatcher_.run();
+
+  close(server_fd);
+  ::unlink(sock_path.c_str());
+  return {};
+}
+
+// ─── StackController ──────────────────────────────────────────────────────────
+
+void StackController::add(App &app, int port, bool ipv6) {
+  entries_.push_back({&app, port, ipv6});
+}
+
+void StackController::stop() {
+  if (stopping_.exchange(true, std::memory_order_relaxed))
+    return;
+  for (auto &e : entries_)
+    e.app->stop();
+}
+
+void StackController::run() {
+  // Install signal handlers — delegate to stop().
+  static StackController *g_ctrl = nullptr;
+  g_ctrl = this;
+  auto sig_handler = [](int) { if (g_ctrl) g_ctrl->stop(); };
+  std::signal(SIGTERM, sig_handler);
+  std::signal(SIGINT,  sig_handler);
+
+  // Start each app in its own thread.
+  std::vector<std::thread> threads;
+  threads.reserve(entries_.size());
+  for (auto &e : entries_) {
+    threads.emplace_back([&e]() {
+      if (auto r = e.app->listen(e.port, e.ipv6); !r) {
+        std::cerr << "[StackController] listen(" << e.port
+                  << ") failed: " << r.error().message() << "\n";
+      }
+    });
+  }
+
+  for (auto &t : threads)
+    if (t.joinable()) t.join();
 }
 
 } // namespace draco

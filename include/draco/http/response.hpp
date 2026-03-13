@@ -1,5 +1,17 @@
 #pragma once
 
+/**
+ * @file draco/http/response.hpp
+ * @brief HTTP 응답 빌더 — 상태 코드, 헤더, 바디 체인 API
+ * @defgroup qbuem_http_response HTTP Response
+ * @ingroup qbuem_http
+ *
+ * Response는 빌더 패턴. status(), header(), body() 메서드를 체이닝.
+ * chunk()/end_chunks()로 chunked transfer, sendfile_path()로 zero-copy 파일 전송,
+ * set_cookie()로 쿠키 설정.
+ * @{
+ */
+
 #include <draco/common.hpp>
 
 #include <ctime>
@@ -38,6 +50,26 @@ public:
   Response &status(int code);
   Response &header(std::string_view key, std::string_view value);
   Response &body(std::string_view b);
+
+  /**
+   * @brief Append a chunk to a chunked-encoding response.
+   *
+   * Call chunk() one or more times instead of body() to stream a response
+   * using HTTP/1.1 Transfer-Encoding: chunked.  The final response is
+   * serialized with chunked framing; no Content-Length is emitted.
+   *
+   * Example:
+   *   res.chunk("Hello, ").chunk("world!").end_chunks();
+   */
+  Response &chunk(std::string_view data);
+
+  /**
+   * @brief Finalize a chunked response (appends the terminal 0-length chunk).
+   *
+   * Must be called after all chunk() calls.  Sets Transfer-Encoding: chunked
+   * and clears Content-Length from the response.
+   */
+  Response &end_chunks();
 
   /**
    * @brief Append a Set-Cookie response header.
@@ -93,6 +125,40 @@ public:
 
   std::string serialize() const;
 
+  /**
+   * @brief Build only the HTTP response header (status line + headers).
+   *
+   * Used with writev() scatter-gather to send header + body in one syscall
+   * without concatenating them into a single allocation.
+   */
+  std::string serialize_header() const;
+
+  /**
+   * @brief Opt-in zero-copy file serving via sendfile(2) on Linux.
+   *
+   * Instead of reading the file into body(), stores the filesystem path.
+   * The send loop calls sendfile() after sending the HTTP header,
+   * transferring file data directly from page-cache to socket — no user-space
+   * copy and no heap allocation for the file body.
+   *
+   * Content-Length must be set before calling this if the file size is known.
+   * On non-Linux platforms the caller is responsible for setting body() instead.
+   *
+   * @param path   Absolute or relative filesystem path to the file.
+   * @param size   File size in bytes (used for Content-Length).
+   */
+  Response &sendfile_path(std::string_view path, size_t size);
+
+  /** @brief True when send should use sendfile() rather than write(). */
+  bool has_sendfile() const noexcept { return !sendfile_path_.empty(); }
+  const std::string &get_sendfile_path() const noexcept { return sendfile_path_; }
+  size_t sendfile_size() const noexcept { return sendfile_size_; }
+
+  /** @brief True when response uses chunked transfer encoding. */
+  bool is_chunked() const noexcept { return chunked_; }
+  /** @brief Returns the pre-encoded chunked body (framing included). */
+  std::string_view chunk_buf() const noexcept { return chunk_buf_; }
+
 private:
   std::string_view status_to_string(int code) const;
 
@@ -100,6 +166,16 @@ private:
   std::unordered_map<std::string, std::string> headers_;
   std::vector<std::string> cookies_; // raw Set-Cookie values
   std::string body_;
+
+  // Zero-copy sendfile path (empty = not set)
+  std::string sendfile_path_;
+  size_t      sendfile_size_ = 0;
+
+  // Chunked transfer encoding accumulator
+  bool        chunked_      = false;
+  std::string chunk_buf_;   // encoded chunked body (framing included)
 };
 
 } // namespace draco
+
+/** @} */

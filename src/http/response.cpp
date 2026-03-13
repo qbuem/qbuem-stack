@@ -1,5 +1,5 @@
 #include <draco/http/response.hpp>
-#include <sstream>
+#include <cstdio>
 
 namespace draco {
 
@@ -15,6 +15,25 @@ Response &Response::header(std::string_view key, std::string_view value) {
 
 Response &Response::body(std::string_view b) {
   body_ = std::string(b);
+  return *this;
+}
+
+// ── Chunked transfer encoding ─────────────────────────────────────────────────
+
+Response &Response::chunk(std::string_view data) {
+  if (data.empty()) return *this;
+  // Chunked framing: "<hex-size>\r\n<data>\r\n"
+  char sz[16];
+  int  n = std::snprintf(sz, sizeof(sz), "%zx\r\n", data.size());
+  chunk_buf_.append(sz, static_cast<size_t>(n));
+  chunk_buf_.append(data);
+  chunk_buf_ += "\r\n";
+  return *this;
+}
+
+Response &Response::end_chunks() {
+  chunk_buf_ += "0\r\n\r\n"; // terminal chunk
+  chunked_ = true;
   return *this;
 }
 
@@ -39,20 +58,49 @@ Response &Response::set_cookie(std::string_view name, std::string_view value,
   return *this;
 }
 
-std::string Response::serialize() const {
-  std::stringstream ss;
-  ss << "HTTP/1.1 " << status_code_ << " " << status_to_string(status_code_)
-     << "\r\n";
+std::string Response::serialize_header() const {
+  // Pre-size: rough estimate to avoid reallocations in the common case.
+  // Status line (~20B) + ~4 headers * ~40B + Content-Length (~30B) + CRLF (2B)
+  std::string hdr;
+  hdr.reserve(256 + headers_.size() * 48);
+
+  hdr += "HTTP/1.1 ";
+  hdr += std::to_string(status_code_);
+  hdr += ' ';
+  hdr += status_to_string(status_code_);
+  hdr += "\r\n";
+
   for (const auto &[key, value] : headers_) {
-    ss << key << ": " << value << "\r\n";
+    hdr += key;
+    hdr += ": ";
+    hdr += value;
+    hdr += "\r\n";
   }
   for (const auto &c : cookies_) {
-    ss << "Set-Cookie: " << c << "\r\n";
+    hdr += "Set-Cookie: ";
+    hdr += c;
+    hdr += "\r\n";
   }
-  ss << "Content-Length: " << body_.size() << "\r\n";
-  ss << "\r\n";
-  ss << body_;
-  return ss.str();
+  if (chunked_) {
+    hdr += "Transfer-Encoding: chunked\r\n\r\n";
+  } else {
+    hdr += "Content-Length: ";
+    hdr += std::to_string(sendfile_path_.empty() ? body_.size() : sendfile_size_);
+    hdr += "\r\n\r\n";
+  }
+  return hdr;
+}
+
+std::string Response::serialize() const {
+  std::string hdr = serialize_header();
+  hdr += body_;
+  return hdr;
+}
+
+Response &Response::sendfile_path(std::string_view path, size_t size) {
+  sendfile_path_ = std::string(path);
+  sendfile_size_ = size;
+  return *this;
 }
 
 std::string_view Response::status_to_string(int code) const {

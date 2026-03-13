@@ -20,6 +20,23 @@ using HandlerVariant = std::variant<std::monostate, Handler, AsyncHandler>;
 using Middleware = std::function<bool(const Request &, Response &)>;
 
 /**
+ * @brief Error handler called when a route handler throws an exception.
+ *
+ * Parameters: exception_ptr, request, response.
+ * If not set, the default behaviour is 500 Internal Server Error.
+ *
+ * Example:
+ *   app.on_error([](std::exception_ptr ep, const Request& req, Response& res) {
+ *     try { std::rethrow_exception(ep); }
+ *     catch (const std::exception& e) {
+ *       res.status(500).body(e.what());
+ *     }
+ *   });
+ */
+using ErrorHandler =
+    std::function<void(std::exception_ptr, const Request &, Response &)>;
+
+/**
  * @brief Radix Tree for high-performance route matching.
  */
 class RadixTree {

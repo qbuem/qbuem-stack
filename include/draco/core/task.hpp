@@ -1,5 +1,17 @@
 #pragma once
 
+/**
+ * @file draco/core/task.hpp
+ * @brief C++20 코루틴 Task 타입 — 대칭 전송(symmetric transfer) 지원
+ * @defgroup qbuem_task Task Coroutine
+ * @ingroup qbuem_core
+ *
+ * Task<T>는 단일-연속(single-continuation) 코루틴 타입.
+ * co_await로 중단/재개, detach()로 fire-and-forget 지원.
+ * 수명 규칙: Task 소멸자가 프레임 파괴, detach() 후에는 자기 파괴.
+ * @{
+ */
+
 #include <coroutine>
 #include <exception>
 #include <utility>
@@ -185,3 +197,5 @@ template <> struct Task<void> {
 };
 
 } // namespace draco
+
+/** @} */

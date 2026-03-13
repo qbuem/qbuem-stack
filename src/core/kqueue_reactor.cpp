@@ -28,7 +28,7 @@ Result<void> KqueueReactor::register_event(int fd, EventType type,
   EV_SET(&ev, fd, filter, EV_ADD | EV_ENABLE, 0, 0, nullptr);
 
   if (kevent(kq_fd_, &ev, 1, nullptr, 0, nullptr) == -1) {
-    return std::unexpected(std::make_error_code(std::errc::invalid_argument));
+    return unexpected(std::make_error_code(std::errc::invalid_argument));
   }
 
   if (type == EventType::Read) {
@@ -68,7 +68,7 @@ Result<int> KqueueReactor::register_timer(int timeout_ms,
          timeout_ms, nullptr);
 
   if (kevent(kq_fd_, &ev, 1, nullptr, 0, nullptr) == -1) {
-    return std::unexpected(std::make_error_code(std::errc::invalid_argument));
+    return unexpected(std::make_error_code(std::errc::invalid_argument));
   }
 
   callbacks_[timer_id].timer_cb = std::move(callback);
@@ -98,7 +98,7 @@ Result<int> KqueueReactor::poll(int timeout_ms) {
   if (nev == -1) {
     if (errno == EINTR)
       return 0;
-    return std::unexpected(std::make_error_code(std::errc::io_error));
+    return unexpected(std::make_error_code(std::errc::io_error));
   }
 
   for (int i = 0; i < nev; ++i) {

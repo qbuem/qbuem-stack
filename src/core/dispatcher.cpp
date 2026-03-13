@@ -52,7 +52,7 @@ void Dispatcher::stop() {
 Result<void> Dispatcher::register_listener(int fd,
                                            std::function<void(int)> callback) {
   if (reactors_.empty()) {
-    return std::unexpected(std::make_error_code(std::errc::no_such_device));
+    return unexpected(std::make_error_code(std::errc::no_such_device));
   }
   return reactors_[0]->register_event(fd, EventType::Read, std::move(callback));
 }

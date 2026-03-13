@@ -565,9 +565,10 @@ TEST(StaticFilesTest, ServeFileNotFound) {
 TEST(StaticFilesTest, ServeFileExists) {
   // Write a temp file and serve it
   const char *tmp = "/tmp/draco_static_test.html";
+  const std::string expected_content = "<h1>hello</h1>";
   {
     std::ofstream f(tmp);
-    f << "<h1>hello</h1>";
+    f << expected_content;
   }
   Response res;
   draco::middleware::serve_file(tmp, res);
@@ -575,7 +576,14 @@ TEST(StaticFilesTest, ServeFileExists) {
   EXPECT_NE(res.serialize().find("text/html"), std::string::npos);
   EXPECT_NE(res.serialize().find("ETag"), std::string::npos);
   EXPECT_NE(res.serialize().find("Last-Modified"), std::string::npos);
-  EXPECT_EQ(res.get_body(), "<h1>hello</h1>");
+#ifdef __linux__
+  // On Linux, serve_file uses sendfile(2) — body is not loaded into memory.
+  EXPECT_TRUE(res.has_sendfile());
+  EXPECT_EQ(res.get_sendfile_path(), tmp);
+  EXPECT_EQ(res.sendfile_size(), expected_content.size());
+#else
+  EXPECT_EQ(res.get_body(), expected_content);
+#endif
   ::unlink(tmp);
 }
 
