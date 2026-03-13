@@ -3,17 +3,17 @@
 # ============================================================================
 
 # ── Core + HTTP tests (zero external dependency) ─────────────────────────────
-add_executable(draco_tests
+add_executable(qbuem_tests
     reactor_test.cpp
     http_test.cpp
 )
-target_link_libraries(draco_tests
+target_link_libraries(qbuem_tests
     PRIVATE
-    draco::draco
+    qbuem-stack::qbuem
     GTest::gtest_main
 )
 include(GoogleTest)
-gtest_discover_tests(draco_tests)
+gtest_discover_tests(qbuem_tests)
 
 # ── qbuem-json integration tests ─────────────────────────────────────────────
 # Fetches qbuem-json and runs integration tests that verify:
@@ -35,7 +35,7 @@ if(TARGET qbuem_json::qbuem_json)
     )
     target_link_libraries(qbuem_json_tests
         PRIVATE
-        draco::draco
+        qbuem-stack::qbuem
         qbuem_json::qbuem_json
         GTest::gtest_main
     )
@@ -49,7 +49,7 @@ else()
     )
     target_link_libraries(qbuem_json_tests
         PRIVATE
-        draco::draco
+        qbuem-stack::qbuem
         GTest::gtest_main
     )
     gtest_discover_tests(qbuem_json_tests)

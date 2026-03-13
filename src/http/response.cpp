@@ -1,7 +1,7 @@
-#include <draco/http/response.hpp>
+#include <qbuem/http/response.hpp>
 #include <cstdio>
 
-namespace draco {
+namespace qbuem {
 
 Response &Response::status(int code) {
   status_code_ = code;
@@ -126,4 +126,4 @@ std::string_view Response::status_to_string(int code) const {
   }
 }
 
-} // namespace draco
+} // namespace qbuem

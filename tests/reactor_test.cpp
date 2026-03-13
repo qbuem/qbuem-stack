@@ -1,16 +1,16 @@
-#include <draco/common.hpp>
-#include <draco/core/arena.hpp>
-#include <draco/core/task.hpp>
+#include <qbuem/common.hpp>
+#include <qbuem/core/arena.hpp>
+#include <qbuem/core/task.hpp>
 #include <gtest/gtest.h>
 
 TEST(InfraTest, BasicStructure) {
   // Verify common types are accessible
-  draco::Result<int> res = 42;
+  qbuem::Result<int> res = 42;
   EXPECT_TRUE(res.has_value());
   EXPECT_EQ(*res, 42);
 }
 
-draco::Task<void> sample_coro(int &value) {
+qbuem::Task<void> sample_coro(int &value) {
   value = 100;
   co_return;
 }
@@ -26,7 +26,7 @@ TEST(InfraTest, CoroutineTask) {
 }
 
 TEST(InfraTest, ArenaAllocation) {
-  draco::Arena arena(1024);
+  qbuem::Arena arena(1024);
 
   void *p1 = arena.allocate(128);
   void *p2 = arena.allocate(256);

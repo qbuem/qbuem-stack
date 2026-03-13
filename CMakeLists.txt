@@ -27,10 +27,6 @@ option(QBUEM_BUILD_TESTS    "Build unit tests"      ON)
 option(QBUEM_BUILD_EXAMPLES "Build examples"        ON)
 option(QBUEM_INSTALL        "Generate install rules" ON)
 
-# Legacy aliases (backward compat for CI scripts using DRACO_ prefix)
-option(DRACO_BUILD_TESTS    "" ${QBUEM_BUILD_TESTS})
-option(DRACO_BUILD_EXAMPLES "" ${QBUEM_BUILD_EXAMPLES})
-option(DRACO_INSTALL        "" ${QBUEM_INSTALL})
 
 # ============================================================================
 include(FetchContent)
@@ -80,8 +76,6 @@ endif()
 
 add_library(qbuem_core STATIC ${CORE_SOURCES})
 add_library(qbuem-stack::core ALIAS qbuem_core)
-add_library(draco_core ALIAS qbuem_core)
-add_library(draco::core ALIAS qbuem_core)
 
 target_include_directories(qbuem_core
     PUBLIC
@@ -92,7 +86,7 @@ target_compile_features(qbuem_core PUBLIC cxx_std_20)
 qbuem_compile_options(qbuem_core)
 
 if(QBUEM_HAS_IOURING)
-    target_compile_definitions(qbuem_core PUBLIC DRACO_HAS_IOURING)
+    target_compile_definitions(qbuem_core PUBLIC QBUEM_HAS_IOURING)
     target_link_libraries(qbuem_core PUBLIC ${LIBURING_LIB})
 endif()
 
@@ -108,8 +102,6 @@ add_library(qbuem_http STATIC
     src/http/router.cpp
 )
 add_library(qbuem-stack::http ALIAS qbuem_http)
-add_library(draco_http ALIAS qbuem_http)
-add_library(draco::http ALIAS qbuem_http)
 
 target_link_libraries(qbuem_http PUBLIC qbuem_core)
 qbuem_compile_options(qbuem_http)
@@ -119,10 +111,8 @@ qbuem_compile_options(qbuem_http)
 #   All extension points (compression, auth, DB) are abstract interfaces.
 #   Zero external dependency.
 # ============================================================================
-add_library(qbuem STATIC src/draco.cpp)
+add_library(qbuem STATIC src/qbuem.cpp)
 add_library(qbuem-stack::qbuem ALIAS qbuem)
-add_library(draco ALIAS qbuem)
-add_library(draco::draco ALIAS qbuem)
 
 target_link_libraries(qbuem PUBLIC qbuem_core qbuem_http)
 qbuem_compile_options(qbuem)
@@ -137,7 +127,7 @@ if(QBUEM_INSTALL)
         LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
         RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
     )
-    install(DIRECTORY include/draco
+    install(DIRECTORY include/qbuem
         DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
     )
     install(EXPORT qbuemTargets
@@ -146,7 +136,7 @@ if(QBUEM_INSTALL)
         DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/qbuem-stack
     )
     configure_package_config_file(
-        ${CMAKE_CURRENT_SOURCE_DIR}/cmake/draco-config.cmake.in
+        ${CMAKE_CURRENT_SOURCE_DIR}/cmake/qbuem-stack-config.cmake.in
         ${CMAKE_CURRENT_BINARY_DIR}/qbuem-stack-config.cmake
         INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/qbuem-stack
     )
@@ -165,7 +155,7 @@ endif()
 # ============================================================================
 # Tests & Examples
 # ============================================================================
-if(QBUEM_BUILD_TESTS OR DRACO_BUILD_TESTS)
+if(QBUEM_BUILD_TESTS)
     enable_testing()
     FetchContent_Declare(googletest
         GIT_REPOSITORY https://github.com/google/googletest.git
@@ -176,6 +166,6 @@ if(QBUEM_BUILD_TESTS OR DRACO_BUILD_TESTS)
     add_subdirectory(tests)
 endif()
 
-if(QBUEM_BUILD_EXAMPLES OR DRACO_BUILD_EXAMPLES)
+if(QBUEM_BUILD_EXAMPLES)
     add_subdirectory(examples)
 endif()

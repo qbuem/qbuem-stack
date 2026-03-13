@@ -1,14 +1,14 @@
-#include <draco/crypto.hpp>
-#include <draco/draco.hpp>
-#include <draco/http/parser.hpp>
-#include <draco/http/router.hpp>
-#include <draco/middleware/rate_limit.hpp>
-#include <draco/middleware/request_id.hpp>
-#include <draco/middleware/security.hpp>
-#include <draco/middleware/static_files.hpp>
+#include <qbuem/crypto.hpp>
+#include <qbuem/qbuem.hpp>
+#include <qbuem/http/parser.hpp>
+#include <qbuem/http/router.hpp>
+#include <qbuem/middleware/rate_limit.hpp>
+#include <qbuem/middleware/request_id.hpp>
+#include <qbuem/middleware/security.hpp>
+#include <qbuem/middleware/static_files.hpp>
 #include <gtest/gtest.h>
 
-using namespace draco;
+using namespace qbuem;
 
 TEST(HttpParserTest, BasicParse) {
   HttpParser parser;
@@ -281,7 +281,7 @@ TEST(RouterTest, NoMatch) {
 // ─── RequestIdTest ────────────────────────────────────────────────────────────
 
 TEST(RequestIdTest, EchosIncoming) {
-  auto mw = draco::middleware::request_id();
+  auto mw = qbuem::middleware::request_id();
 
   Request req;
   req.add_header("X-Request-ID", "existing-id-abc");
@@ -295,7 +295,7 @@ TEST(RequestIdTest, EchosIncoming) {
 }
 
 TEST(RequestIdTest, GeneratesNew) {
-  auto mw = draco::middleware::request_id();
+  auto mw = qbuem::middleware::request_id();
 
   Request req;  // no X-Request-ID header
   Response res;
@@ -308,7 +308,7 @@ TEST(RequestIdTest, GeneratesNew) {
 }
 
 TEST(RequestIdTest, CustomHeaderName) {
-  auto mw = draco::middleware::request_id("X-Trace-ID");
+  auto mw = qbuem::middleware::request_id("X-Trace-ID");
 
   Request req;
   req.add_header("X-Trace-ID", "trace-xyz");
@@ -322,7 +322,7 @@ TEST(RequestIdTest, CustomHeaderName) {
 
 TEST(RateLimitTest, AllowsNormal) {
   // burst=5: first 5 requests should all pass
-  auto mw = draco::middleware::rate_limit({.rate_per_sec = 10.0, .burst = 5.0});
+  auto mw = qbuem::middleware::rate_limit({.rate_per_sec = 10.0, .burst = 5.0});
 
   for (int i = 0; i < 5; ++i) {
     Request req;
@@ -334,7 +334,7 @@ TEST(RateLimitTest, AllowsNormal) {
 
 TEST(RateLimitTest, BlocksExcess) {
   // burst=2: third request should be blocked
-  auto mw = draco::middleware::rate_limit({.rate_per_sec = 1.0, .burst = 2.0});
+  auto mw = qbuem::middleware::rate_limit({.rate_per_sec = 1.0, .burst = 2.0});
 
   Request req;
   req.add_header("X-Real-IP", "9.9.9.9");
@@ -350,7 +350,7 @@ TEST(RateLimitTest, BlocksExcess) {
 }
 
 TEST(RateLimitTest, SetsRateLimitHeaders) {
-  auto mw = draco::middleware::rate_limit({.rate_per_sec = 10.0, .burst = 10.0});
+  auto mw = qbuem::middleware::rate_limit({.rate_per_sec = 10.0, .burst = 10.0});
 
   Request req;
   Response res;
@@ -364,7 +364,7 @@ TEST(RateLimitTest, SetsRateLimitHeaders) {
 // ─── SecurityHeadersTest ──────────────────────────────────────────────────────
 
 TEST(SecurityHeadersTest, SecureHeadersBundle) {
-  auto mw = draco::middleware::secure_headers();
+  auto mw = qbuem::middleware::secure_headers();
 
   Request req;
   Response res;
@@ -380,7 +380,7 @@ TEST(SecurityHeadersTest, SecureHeadersBundle) {
 }
 
 TEST(SecurityHeadersTest, HstsValues) {
-  auto mw = draco::middleware::hsts(3600, true, true);
+  auto mw = qbuem::middleware::hsts(3600, true, true);
 
   Request req;
   Response res;
@@ -395,37 +395,37 @@ TEST(SecurityHeadersTest, HstsValues) {
 TEST(SecurityHeadersTest, IndividualHelpers) {
   {
     Request req; Response res;
-    draco::middleware::csp("default-src 'none'")(req, res);
+    qbuem::middleware::csp("default-src 'none'")(req, res);
     EXPECT_NE(res.serialize().find("Content-Security-Policy: default-src 'none'"),
               std::string::npos);
   }
   {
     Request req; Response res;
-    draco::middleware::x_frame_options("DENY")(req, res);
+    qbuem::middleware::x_frame_options("DENY")(req, res);
     EXPECT_NE(res.serialize().find("X-Frame-Options: DENY"), std::string::npos);
   }
   {
     Request req; Response res;
-    draco::middleware::x_content_type_options()(req, res);
+    qbuem::middleware::x_content_type_options()(req, res);
     EXPECT_NE(res.serialize().find("X-Content-Type-Options: nosniff"),
               std::string::npos);
   }
   {
     Request req; Response res;
-    draco::middleware::referrer_policy("no-referrer")(req, res);
+    qbuem::middleware::referrer_policy("no-referrer")(req, res);
     EXPECT_NE(res.serialize().find("Referrer-Policy: no-referrer"),
               std::string::npos);
   }
   {
     Request req; Response res;
-    draco::middleware::permissions_policy("camera=()")(req, res);
+    qbuem::middleware::permissions_policy("camera=()")(req, res);
     EXPECT_NE(res.serialize().find("Permissions-Policy: camera=()"),
               std::string::npos);
   }
 }
 
 // ─── RangeRequestTest ─────────────────────────────────────────────────────────
-// Range request logic lives in draco.cpp's finalize() lambda; we test the
+// Range request logic lives in qbuem.cpp's finalize() lambda; we test the
 // Response accessors it depends on (get_body, status_code) here.
 
 TEST(RangeRequestTest, ResponseGetBody) {
@@ -464,32 +464,32 @@ TEST(RangeRequestTest, Status416) {
 // ─── CryptoTest ───────────────────────────────────────────────────────────────
 
 TEST(CryptoTest, ConstantTimeEqualSame) {
-  EXPECT_TRUE(draco::constant_time_equal("hello", "hello"));
-  EXPECT_TRUE(draco::constant_time_equal("", ""));
+  EXPECT_TRUE(qbuem::constant_time_equal("hello", "hello"));
+  EXPECT_TRUE(qbuem::constant_time_equal("", ""));
 }
 
 TEST(CryptoTest, ConstantTimeEqualDifferent) {
-  EXPECT_FALSE(draco::constant_time_equal("hello", "world"));
-  EXPECT_FALSE(draco::constant_time_equal("abc", "ab"));
-  EXPECT_FALSE(draco::constant_time_equal("", "x"));
+  EXPECT_FALSE(qbuem::constant_time_equal("hello", "world"));
+  EXPECT_FALSE(qbuem::constant_time_equal("abc", "ab"));
+  EXPECT_FALSE(qbuem::constant_time_equal("", "x"));
 }
 
 TEST(CryptoTest, RandomBytesLength) {
-  auto r16 = draco::random_bytes(16);
+  auto r16 = qbuem::random_bytes(16);
   EXPECT_EQ(r16.size(), 16u);
-  auto r32 = draco::random_bytes(32);
+  auto r32 = qbuem::random_bytes(32);
   EXPECT_EQ(r32.size(), 32u);
 }
 
 TEST(CryptoTest, RandomBytesUnique) {
   // Two 128-bit samples should not collide (astronomically unlikely)
-  auto a = draco::random_bytes(16);
-  auto b = draco::random_bytes(16);
+  auto a = qbuem::random_bytes(16);
+  auto b = qbuem::random_bytes(16);
   EXPECT_NE(a, b);
 }
 
 TEST(CryptoTest, CsrfTokenFormat) {
-  auto tok = draco::csrf_token();
+  auto tok = qbuem::csrf_token();
   // 128 bits = 16 bytes → ceil(16*4/3) = 22 Base64url chars
   EXPECT_GE(tok.size(), 21u);
   // All characters must be Base64url alphabet (A-Z a-z 0-9 - _)
@@ -537,7 +537,7 @@ TEST(ResponseEtagTest, LastModifiedFormat) {
 // ─── StaticFilesTest ──────────────────────────────────────────────────────────
 
 TEST(StaticFilesTest, MimeTypeDetection) {
-  using draco::middleware::mime_type;
+  using qbuem::middleware::mime_type;
   EXPECT_EQ(mime_type(".html"),  "text/html; charset=utf-8");
   EXPECT_EQ(mime_type(".js"),    "text/javascript; charset=utf-8");
   EXPECT_EQ(mime_type(".css"),   "text/css; charset=utf-8");
@@ -548,7 +548,7 @@ TEST(StaticFilesTest, MimeTypeDetection) {
 }
 
 TEST(StaticFilesTest, FileExtension) {
-  using draco::middleware::file_extension;
+  using qbuem::middleware::file_extension;
   EXPECT_EQ(file_extension("/foo/bar.js"),  ".js");
   EXPECT_EQ(file_extension("style.css"),    ".css");
   EXPECT_EQ(file_extension("/noext"),       "");
@@ -558,20 +558,20 @@ TEST(StaticFilesTest, FileExtension) {
 
 TEST(StaticFilesTest, ServeFileNotFound) {
   Response res;
-  draco::middleware::serve_file("/nonexistent/path/file.txt", res);
+  qbuem::middleware::serve_file("/nonexistent/path/file.txt", res);
   EXPECT_EQ(res.status_code(), 404);
 }
 
 TEST(StaticFilesTest, ServeFileExists) {
   // Write a temp file and serve it
-  const char *tmp = "/tmp/draco_static_test.html";
+  const char *tmp = "/tmp/qbuem_static_test.html";
   const std::string expected_content = "<h1>hello</h1>";
   {
     std::ofstream f(tmp);
     f << expected_content;
   }
   Response res;
-  draco::middleware::serve_file(tmp, res);
+  qbuem::middleware::serve_file(tmp, res);
   EXPECT_EQ(res.status_code(), 200);
   EXPECT_NE(res.serialize().find("text/html"), std::string::npos);
   EXPECT_NE(res.serialize().find("ETag"), std::string::npos);
@@ -668,36 +668,36 @@ TEST(AccessLoggerTest, SetLoggerCalled) {
 
 // ─── UrlTest ──────────────────────────────────────────────────────────────────
 
-#include <draco/url.hpp>
+#include <qbuem/url.hpp>
 
 TEST(UrlTest, DecodePercent) {
-  EXPECT_EQ(draco::url_decode("Hello%20World"), "Hello World");
-  EXPECT_EQ(draco::url_decode("%2F"),           "/");
-  EXPECT_EQ(draco::url_decode("%2f"),           "/");
-  EXPECT_EQ(draco::url_decode("no+encoding"),   "no encoding"); // '+' → space
+  EXPECT_EQ(qbuem::url_decode("Hello%20World"), "Hello World");
+  EXPECT_EQ(qbuem::url_decode("%2F"),           "/");
+  EXPECT_EQ(qbuem::url_decode("%2f"),           "/");
+  EXPECT_EQ(qbuem::url_decode("no+encoding"),   "no encoding"); // '+' → space
 }
 
 TEST(UrlTest, DecodeEmpty) {
-  EXPECT_EQ(draco::url_decode(""), "");
+  EXPECT_EQ(qbuem::url_decode(""), "");
 }
 
 TEST(UrlTest, DecodeUnreserved) {
-  EXPECT_EQ(draco::url_decode("abcABC-_.~"), "abcABC-_.~");
+  EXPECT_EQ(qbuem::url_decode("abcABC-_.~"), "abcABC-_.~");
 }
 
 TEST(UrlTest, EncodeSafeChars) {
-  EXPECT_EQ(draco::url_encode("abcABC-_.~"), "abcABC-_.~");
+  EXPECT_EQ(qbuem::url_encode("abcABC-_.~"), "abcABC-_.~");
 }
 
 TEST(UrlTest, EncodeSpecialChars) {
-  EXPECT_EQ(draco::url_encode(" "),     "%20");
-  EXPECT_EQ(draco::url_encode("/"),     "%2F");
-  EXPECT_EQ(draco::url_encode("a b/c"), "a%20b%2Fc");
+  EXPECT_EQ(qbuem::url_encode(" "),     "%20");
+  EXPECT_EQ(qbuem::url_encode("/"),     "%2F");
+  EXPECT_EQ(qbuem::url_encode("a b/c"), "a%20b%2Fc");
 }
 
 TEST(UrlTest, RoundTrip) {
   std::string original = "hello world / test=1&foo=bar";
-  EXPECT_EQ(draco::url_decode(draco::url_encode(original)), original);
+  EXPECT_EQ(qbuem::url_decode(qbuem::url_encode(original)), original);
 }
 
 // ─── RemoteAddrTest ───────────────────────────────────────────────────────────
