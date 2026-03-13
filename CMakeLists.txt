@@ -4,7 +4,7 @@ cmake_minimum_required(VERSION 3.20)
 # qbuem-stack — Zero Latency · Zero Cost · Zero Dependency WAS Layer
 # ============================================================================
 project(qbuem-stack
-    VERSION 0.3.0
+    VERSION 0.4.0
     LANGUAGES CXX
     DESCRIPTION "qbuem-stack: zero-dependency C++20 WAS layer (HTTP core + async IO)"
 )
@@ -111,7 +111,7 @@ qbuem_compile_options(qbuem_http)
 #   All extension points (compression, auth, DB) are abstract interfaces.
 #   Zero external dependency.
 # ============================================================================
-add_library(qbuem STATIC src/qbuem.cpp)
+add_library(qbuem STATIC src/qbuem_stack.cpp)
 add_library(qbuem-stack::qbuem ALIAS qbuem)
 
 target_link_libraries(qbuem PUBLIC qbuem_core qbuem_http)
