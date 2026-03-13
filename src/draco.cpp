@@ -80,7 +80,7 @@ void write_all(int fd, const std::string &data) {
 }
 
 // ─── send_file_body ──────────────────────────────────────────────────────────
-// Linux sendfile(2): zero-copy transfer from page-cache to socket.
+// Zero-copy file-to-socket transfer using platform sendfile().
 #ifdef __linux__
 static void send_file_body(int sock_fd, std::string_view path, size_t size) noexcept {
   int file_fd = ::open(path.data(), O_RDONLY | O_CLOEXEC);
@@ -89,12 +89,30 @@ static void send_file_body(int sock_fd, std::string_view path, size_t size) noex
   size_t remaining = size;
   while (remaining > 0) {
     ssize_t n = ::sendfile(sock_fd, file_fd, &offset,
-                           std::min(remaining, static_cast<size_t>(2147483647)));
+                           std::min(remaining, static_cast<size_t>(0x7fff'ffff)));
     if (n <= 0) {
       if (errno == EINTR) continue;
       break;
     }
     remaining -= static_cast<size_t>(n);
+  }
+  ::close(file_fd);
+}
+#elif defined(__APPLE__)
+// macOS sendfile(2) — different signature: off_t *len is both input+output.
+static void send_file_body(int sock_fd, std::string_view path, size_t size) noexcept {
+  int file_fd = ::open(path.data(), O_RDONLY | O_CLOEXEC);
+  if (file_fd < 0) return;
+  off_t offset    = 0;
+  off_t remaining = static_cast<off_t>(size);
+  while (remaining > 0) {
+    off_t len = remaining;
+    int r = ::sendfile(file_fd, sock_fd, offset, &len, nullptr, 0);
+    if (len > 0) { offset += len; remaining -= len; }
+    if (r < 0) {
+      if (errno == EINTR || errno == EAGAIN) continue;
+      break;
+    }
   }
   ::close(file_fd);
 }
@@ -406,7 +424,24 @@ Result<void> App::listen(int port, bool ipv6) {
         int quickack = 1;
         setsockopt(client_fd, IPPROTO_TCP, TCP_QUICKACK,
                    &quickack, sizeof(quickack));
+
+#  ifdef SO_BUSY_POLL
+        // SO_BUSY_POLL: busy-poll for up to N microseconds before blocking.
+        // Reduces per-packet receive latency at the cost of slightly higher CPU
+        // usage.  50 µs is a good balance for low-latency HTTP services.
+        int busy_poll_us = 50;
+        setsockopt(client_fd, SOL_SOCKET, SO_BUSY_POLL,
+                   &busy_poll_us, sizeof(busy_poll_us));
+#  endif
 #endif
+
+        // SO_SNDTIMEO: kernel-enforced write timeout.
+        // Prevents slow clients from blocking a reactor thread indefinitely
+        // when the send buffer fills up.  5 s is generous for LAN peers.
+        {
+          struct timeval tv{5, 0}; // 5 seconds
+          setsockopt(client_fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+        }
 
         // Per-connection shared state (lives as long as any callback holds it).
         // Custom deleter: decrement active-connection counter when the last
@@ -478,7 +513,11 @@ Result<void> App::listen(int port, bool ipv6) {
                 ctx->idle_timer_id = -1;
               }
 
-              // Read available bytes into accumulation buffer
+              // Read available bytes into accumulation buffer.
+              // Prefetch ctx fields used immediately after read() into L1 cache.
+              __builtin_prefetch(&ctx->buf,        0, 3);
+              __builtin_prefetch(&ctx->handled,    0, 1);
+              __builtin_prefetch(&ctx->idle_timer_id, 0, 1);
               char tmp[8192];
               ssize_t n = read(cfd, tmp, sizeof(tmp));
               if (n <= 0) [[unlikely]] {
