@@ -29,7 +29,9 @@ qbuem-stack
 ├── Layer 1: IO Core         — IReactor (io_uring / epoll / kqueue), Dispatcher, Task<T>
 ├── Layer 2: HTTP            — SIMD 파서, Radix Tree 라우터, Request/Response
 ├── Layer 3: Middleware      — CORS, RateLimit, Security, RequestID, SSE, Static
-└── Layer 4: App Lifecycle   — App, StackController, 헬스체크, 메트릭
+├── Layer 4: App Lifecycle   — App, StackController, 헬스체크, 메트릭
+└── Layer 5: Pipeline        — AsyncChannel, Action, StaticPipeline / DynamicPipeline,
+                               PipelineGraph, MessageBus, Tracing, Resilience
 ```
 
 **외부 의존성 주입 포인트 (추상 인터페이스):**
@@ -38,6 +40,7 @@ qbuem-stack
 |------|-----------|---------------|
 | 압축 (gzip/br/zstd) | `IBodyEncoder` | zlib, brotli, zstd 등 선택 |
 | 인증 (JWT/API Key) | `ITokenVerifier` | OpenSSL, mbedTLS, 자체 구현 등 |
+| 분산 트레이싱 | `SpanExporter` | OTLP, Jaeger, Zipkin, 자체 구현 |
 | DB 연결 | 서비스 자체 설계 | libpq, mariadb, redis 등 |
 | TLS | 서비스 자체 설계 | OpenSSL, mbedTLS 등 |
 
@@ -228,6 +231,89 @@ ctrl.run();   // SIGTERM/SIGINT 자동 처리
 
 ---
 
+## Pipeline (예정 — Layer 5)
+
+> 설계 문서: **[docs/pipeline-design.md](./docs/pipeline-design.md)**
+
+비동기 처리 파이프라인. 코루틴 기반 워커 풀 + lock-free 채널로 구성.
+Action 단위 독립 scale-in/out, backpressure 자동 전파, fan-out/in 배선.
+
+### 정적 파이프라인 (StaticPipeline) — 컴파일타임 타입 체인
+
+```cpp
+#include <qbuem/pipeline/pipeline.hpp>
+
+// add() 호출마다 반환 타입이 바뀜 — 타입 불일치 시 컴파일 에러
+auto pipeline =
+    qbuem::PipelineBuilder<HttpRequest>{}
+        .add(auth_action)       // Action<HttpRequest, AuthedReq>
+        .add(parse_action)      // Action<AuthedReq, ParsedBody>
+        .add(persist_action)    // Action<ParsedBody, DbResult>
+        .build();               // StaticPipeline<HttpRequest, DbResult>
+
+pipeline.start(dispatcher);
+co_await pipeline.push(request);         // backpressure: 포화 시 co_await 대기
+co_await pipeline.drain();               // graceful shutdown
+```
+
+### 동적 파이프라인 (DynamicPipeline) — 런타임 구성
+
+```cpp
+qbuem::DynamicPipeline dp;
+dp.add_action("parse",   make_dynamic_action(parse_fn));
+dp.add_action("enrich",  make_dynamic_action(enrich_fn));
+dp.add_action("persist", make_dynamic_action(persist_fn));
+dp.start(dispatcher);
+
+// Hot-swap — 재시작 없이 로직 교체 (in-flight 아이템 유실 없음)
+co_await dp.hot_swap("enrich", make_dynamic_action(new_enrich_fn));
+```
+
+### 파이프라인 그래프 (PipelineGraph) — DAG 오케스트레이션
+
+```cpp
+qbuem::PipelineGraph graph;
+graph.add("ingest",  ingestion_pipeline);
+graph.add("process", processing_pipeline);
+graph.add("notify",  notification_pipeline);
+graph.add("audit",   audit_pipeline);
+
+graph.connect("ingest", "process");
+graph.fan_out("process", {"notify", "audit"});  // 완료 후 복수 트리거
+
+graph.start(dispatcher);   // Kahn's algorithm으로 DAG 검증 후 위상 정렬 시작
+```
+
+### 메시지 패턴 (MessageBus) — gRPC 스타일
+
+```cpp
+qbuem::MessageBus bus;
+bus.create_unary<OrderReq, OrderRes>("order-service", /*cap=*/64);
+
+// 요청 측
+auto reply_ch = std::make_shared<qbuem::AsyncChannel<qbuem::Result<OrderRes>>>(1);
+co_await bus.channel<OrderReq, OrderRes>("order-service").send({req, reply_ch});
+auto result = co_await reply_ch->recv();
+
+// 서비스 측 (파이프라인 첫 Action에서)
+auto env = co_await bus.channel<OrderReq, OrderRes>("order-service").recv();
+co_await env.reply->send(co_await process_order(env.request));
+```
+
+### 분산 트레이싱
+
+```cpp
+// W3C Trace Context — HTTP traceparent 헤더와 자동 연결
+auto tracer = std::make_shared<qbuem::PipelineTracer>(
+    std::make_shared<qbuem::ProbabilitySampler>(0.01),   // 1% 샘플링
+    std::make_shared<qbuem::OtlpGrpcExporter>("localhost:4317")
+);
+qbuem::set_global_tracer(tracer);
+// 이후 모든 파이프라인 처리 시 자동으로 span 생성/전파
+```
+
+---
+
 ## JSON 통합 (qbuem-json)
 
 `qbuem-stack` 코어는 JSON에 **의존하지 않습니다**.  
@@ -307,6 +393,21 @@ target_link_libraries(my_service PRIVATE qbuem-stack::qbuem qbuem_json::qbuem_js
 | TLS/SSL | ❌ 예정 | `ITransport` 추상화로 주입 |
 | HTTP/2 | ❌ 예정 | |
 | WebSocket | ❌ 예정 | |
+| **Pipeline** | | |
+| `Reactor::post()` / `Dispatcher::spawn()` | ❌ 예정 | cross-thread 작업 주입 |
+| `AsyncChannel<T>` (MPMC ring) | ❌ 예정 | Dmitry Vyukov 알고리즘 |
+| `PriorityChannel<T>` | ❌ 예정 | 3레벨 + aging |
+| `Stream<T>` | ❌ 예정 | `variant<T, StreamEnd>` EOS |
+| `Action<In,Out>` (정적) | ❌ 예정 | 코루틴 워커 풀, scale-in/out |
+| `IDynamicAction` (동적) | ❌ 예정 | 타입 소거 + ActionSchema |
+| `StaticPipeline<In,Out>` | ❌ 예정 | 컴파일타임 타입 체인 |
+| `DynamicPipeline` | ❌ 예정 | 런타임 구성, hot-swap |
+| `PipelineGraph` | ❌ 예정 | DAG 오케스트레이션 |
+| `MessageBus` | ❌ 예정 | Unary / Stream / Bidi |
+| `RetryPolicy` / `CircuitBreaker` | ❌ 예정 | 복원력 패턴 |
+| `DeadLetterQueue` | ❌ 예정 | 실패 아이템 격리 |
+| `PipelineTracer` (W3C Trace Context) | ❌ 예정 | OpenTelemetry 호환 |
+| `PipelineFactory` (Config-driven) | ❌ 예정 | JSON/YAML → Pipeline |
 
 ---
 
@@ -355,7 +456,16 @@ IDE 자동완성(IntelliSense / clangd)도 지원됩니다.
 
 ## 로드맵
 
-전체 계획은 **[TODO.md](./TODO.md)** 참조.
+| 버전 | 주요 내용 |
+|------|----------|
+| v0.5.0 | `Reactor::post()` + `Dispatcher::spawn()` — 파이프라인 전제조건 |
+| v0.6.0 | Pipeline MVP — `AsyncChannel`, `Action`, `StaticPipeline` |
+| v0.7.0 | `DynamicPipeline` + `PipelineGraph` + `MessageBus` |
+| v0.8.0 | 복원력 (`RetryPolicy`, `CircuitBreaker`, DLQ) + 트레이싱 |
+| v0.9.0 | Hot-swap, Priority Channel, Config-driven, Pipeline 합성 |
+| v1.0.0 | HTTP/2, WebSocket, gRPC |
+
+전체 계획은 **[TODO.md](./TODO.md)**, 파이프라인 상세 설계는 **[docs/pipeline-design.md](./docs/pipeline-design.md)** 참조.
 
 ---
 
