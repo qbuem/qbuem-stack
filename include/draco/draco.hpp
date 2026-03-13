@@ -160,6 +160,19 @@ public:
   Result<void> listen(int port, bool ipv6 = false);
 
   /**
+   * @brief Listen on a Unix Domain Socket path (AF_UNIX SOCK_STREAM).
+   *
+   * Useful for local IPC (reverse proxy, containers) without TCP overhead.
+   * The socket file is removed on graceful shutdown.
+   *
+   * Example:
+   *   app.listen_unix("/tmp/myapp.sock");
+   *
+   * @param path  Filesystem path for the Unix socket (max ~104 chars, OS limit).
+   */
+  Result<void> listen_unix(std::string_view path);
+
+  /**
    * @brief Request graceful shutdown.
    *
    * Safe to call from a signal handler (async-signal-safe: sets an atomic).

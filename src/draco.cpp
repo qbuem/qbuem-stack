@@ -15,6 +15,7 @@
 #include <netinet/tcp.h>
 #include <sys/socket.h>
 #include <sys/uio.h>
+#include <sys/un.h>
 #include <unistd.h>
 #include <variant>
 #ifdef __linux__
@@ -851,6 +852,217 @@ Result<void> App::listen(int port, bool ipv6) {
   dispatcher_.run();
 
   close(server_fd);
+  return {};
+}
+
+// ─── App::listen_unix ─────────────────────────────────────────────────────────
+
+Result<void> App::listen_unix(std::string_view path) {
+  // ── SIGTERM / SIGINT → graceful shutdown ──────────────────────────────────
+  g_app_instance = this;
+  std::signal(SIGTERM, on_shutdown_signal);
+  std::signal(SIGINT,  on_shutdown_signal);
+
+  // ── Unix domain socket ────────────────────────────────────────────────────
+  int server_fd = ::socket(AF_UNIX, SOCK_STREAM, 0);
+  if (server_fd == -1)
+    return unexpected(
+        std::make_error_code(std::errc::resource_unavailable_try_again));
+
+  // Remove any stale socket file.
+  ::unlink(std::string(path).c_str());
+
+  struct sockaddr_un addr{};
+  addr.sun_family = AF_UNIX;
+  if (path.size() >= sizeof(addr.sun_path) - 1) {
+    close(server_fd);
+    return unexpected(std::make_error_code(std::errc::filename_too_long));
+  }
+  std::memcpy(addr.sun_path, path.data(), path.size());
+  addr.sun_path[path.size()] = '\0';
+
+  if (::bind(server_fd, reinterpret_cast<struct sockaddr *>(&addr),
+             sizeof(addr)) < 0) {
+    close(server_fd);
+    return unexpected(std::make_error_code(std::errc::address_in_use));
+  }
+
+  if (::listen(server_fd, SOMAXCONN) < 0) {
+    close(server_fd);
+    return unexpected(std::make_error_code(std::errc::address_in_use));
+  }
+
+  std::cout << "Draco WAS listening on unix:" << path << "\n";
+
+  std::string sock_path(path);
+
+  // ── Accept loop (same structure as TCP listen, minus TCP socket options) ──
+  auto listen_res = dispatcher_.register_listener(
+      server_fd, [this](int lfd) {
+        Reactor *reactor = Reactor::current();
+
+        // accept() on AF_UNIX — no sockaddr needed for peer address.
+        int client_fd = ::accept(lfd, nullptr, nullptr);
+        if (client_fd == -1) [[unlikely]] {
+          if (errno != EAGAIN && errno != EWOULDBLOCK)
+            std::cerr << "[ERROR] accept(unix): " << strerror(errno) << "\n";
+          return;
+        }
+
+        ::fcntl(client_fd, F_SETFL, O_NONBLOCK);
+#ifdef SO_NOSIGPIPE
+        int nosig = 1;
+        setsockopt(client_fd, SOL_SOCKET, SO_NOSIGPIPE, &nosig, sizeof(nosig));
+#endif
+
+        cnt_active_.fetch_add(1, std::memory_order_relaxed);
+        auto ctx = std::shared_ptr<ConnCtx>(new ConnCtx{},
+            [this](ConnCtx *c) {
+              cnt_active_.fetch_sub(1, std::memory_order_relaxed);
+              delete c;
+            });
+        ctx->client_ip = "unix";
+
+        auto arm_idle = [ctx, reactor, client_fd]() {
+          if (ctx->idle_timer_id != -1) {
+            reactor->unregister_timer(ctx->idle_timer_id);
+            ctx->idle_timer_id = -1;
+          }
+          auto tres = reactor->register_timer(
+              ConnCtx::IDLE_TIMEOUT_MS, [reactor, client_fd, ctx](int) {
+                ctx->idle_timer_id = -1;
+                reactor->unregister_event(client_fd, EventType::Read);
+                close(client_fd);
+              });
+          if (tres) ctx->idle_timer_id = *tres;
+        };
+
+        auto arm_read_timeout = [ctx, reactor, client_fd]() {
+          if (ctx->read_timer_id != -1) return;
+          auto tres = reactor->register_timer(
+              ConnCtx::READ_TIMEOUT_MS, [reactor, client_fd, ctx](int) {
+                ctx->read_timer_id = -1;
+                Response tout;
+                tout.status(408).header("Connection", "close").body("Request Timeout");
+                write_all(client_fd, tout.serialize());
+                reactor->unregister_event(client_fd, EventType::Read);
+                close(client_fd);
+              });
+          if (tres) ctx->read_timer_id = *tres;
+        };
+
+        auto cancel_read_timeout = [ctx, reactor]() {
+          if (ctx->read_timer_id != -1) {
+            reactor->unregister_timer(ctx->read_timer_id);
+            ctx->read_timer_id = -1;
+          }
+        };
+
+        arm_idle();
+
+        reactor->register_event(
+            client_fd, EventType::Read,
+            [this, reactor, ctx, arm_idle, arm_read_timeout,
+             cancel_read_timeout](int cfd) mutable {
+              if (ctx->idle_timer_id != -1) {
+                reactor->unregister_timer(ctx->idle_timer_id);
+                ctx->idle_timer_id = -1;
+              }
+              char tmp[8192];
+              ssize_t n = read(cfd, tmp, sizeof(tmp));
+              if (n <= 0) [[unlikely]] {
+                cancel_read_timeout();
+                reactor->unregister_event(cfd, EventType::Read);
+                close(cfd);
+                return;
+              }
+              if (ctx->buf.empty()) [[likely]] arm_read_timeout();
+              ctx->buf.append(tmp, static_cast<size_t>(n));
+
+              HttpParser parser;
+              Request req;
+              auto parsed = parser.parse(ctx->buf, req);
+              if (!parsed) [[unlikely]] {
+                cancel_read_timeout();
+                Response err;
+                err.status(400).header("Connection","close")
+                   .header("Date", cached_http_date()).body("Bad Request");
+                write_all(cfd, err.serialize());
+                reactor->unregister_event(cfd, EventType::Read);
+                close(cfd);
+                return;
+              }
+              if (!parser.is_complete()) return;
+
+              cancel_read_timeout();
+              ctx->buf.clear();
+              ctx->handled++;
+
+              req.set_remote_addr(ctx->client_ip);
+              cnt_requests_.fetch_add(1, std::memory_order_relaxed);
+
+              bool keep_alive = ctx->handled < ConnCtx::MAX_REQUESTS;
+              Response res;
+              bool cont = true;
+              for (const auto &mw : router_.middlewares()) {
+                if (!mw(req, res)) {
+                  cont = false;
+                  break;
+                }
+              }
+
+              if (!cont) {
+                res.header("Date", cached_http_date())
+                   .header("Connection", "close");
+                std::string hdr = res.serialize_header();
+                writev_response(cfd, hdr, res.get_body());
+                reactor->unregister_event(cfd, EventType::Read);
+                close(cfd);
+                return;
+              }
+
+              std::unordered_map<std::string, std::string> params;
+              auto handler = router_.match(req.method(), req.path(), params);
+              if (std::holds_alternative<std::monostate>(handler)) {
+                int sc = router_.path_exists(req.path()) ? 405 : 404;
+                res.status(sc).body(sc == 405 ? "Method Not Allowed" : "Not Found");
+              } else {
+                for (auto const &[key, val] : params)
+                  req.set_param(key, val);
+                try {
+                  if (std::holds_alternative<Handler>(handler))
+                    std::get<Handler>(handler)(req, res);
+                } catch (...) {
+                  res.status(500).body("Internal Server Error");
+                }
+              }
+
+              res.header("Date", cached_http_date())
+                 .header("Connection", keep_alive ? "keep-alive" : "close");
+              {
+                std::string hdr = res.serialize_header();
+                std::string_view bv = res.is_chunked() ? res.chunk_buf() : res.get_body();
+                writev_response(cfd, hdr, bv);
+              }
+              cnt_bytes_sent_.fetch_add(1, std::memory_order_relaxed);
+              int sc = res.status_code();
+              if (sc >= 400) cnt_errors_.fetch_add(1, std::memory_order_relaxed);
+
+              if (!keep_alive) {
+                reactor->unregister_event(cfd, EventType::Read);
+                close(cfd);
+              } else {
+                arm_idle();
+              }
+            });
+      });
+  if (!listen_res)
+    return unexpected(listen_res.error());
+
+  dispatcher_.run();
+
+  close(server_fd);
+  ::unlink(sock_path.c_str());
   return {};
 }
 
