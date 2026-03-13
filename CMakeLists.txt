@@ -33,8 +33,6 @@ include(FetchContent)
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
 
-set(QBUEM_JSON_TAG "main" CACHE STRING "qbuem-json git tag / SHA (tests only)")
-
 # ============================================================================
 # Helper: compile options (PRIVATE — never leak to consumers)
 # ============================================================================
