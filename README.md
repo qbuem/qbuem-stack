@@ -83,12 +83,22 @@ AsyncWrite ──► (Keep-Alive? → Idle) / (Close → Arena free)
 | Conditional Requests | ✅ 완료 | ETag / If-None-Match → 304 Not Modified |
 | Range Requests | ✅ 완료 | 206 Partial Content / 416 Range Not Satisfiable |
 | Slowloris 완화 | ✅ 완료 | Read timeout 10s (per-request) |
+| Write Timeout | ✅ 완료 | `SO_SNDTIMEO` 5s — 느린 클라이언트가 reactor 점유 방지 |
 | IPv6 dual-stack | ✅ 완료 | IPv4/IPv6 Dual-stack listen |
+| Unix Domain Socket | ✅ 완료 | `App::listen_unix()` — AF_UNIX 로컬 IPC |
 | TCP_FASTOPEN | ✅ 완료 | Linux listen socket |
+| SO_BUSY_POLL | ✅ 완료 | Linux 50µs busy-poll — 수신 지연 최소화 |
 | SO_NOSIGPIPE | ✅ 완료 | macOS client socket |
+| sendfile(2) | ✅ 완료 | Linux + macOS 제로카피 정적 파일 전송 |
 | Remote Addr | ✅ 완료 | `req.remote_addr()` 지원 |
 | Crypto Utils | ✅ 완료 | constant-time compare, CSPRNG, CSRF token |
-| Access Log | ✅ 완료 | Combined Log Format 지원 |
+| Access Log | ✅ 완료 | Combined Log Format 지원 (SPSC ring-buffer 비동기) |
+| Async Logger | ✅ 완료 | Lock-free SPSC 큐 기반 비동기 로거 |
+| Chunked Transfer | ✅ 완료 | `Response::chunk()` / `end_chunks()` |
+| Server-Sent Events | ✅ 완료 | `SseStream` — text/event-stream 스트리밍 |
+| gzip 압축 | ✅ 완료 | `compress()` 미들웨어 (zlib) |
+| JWT 인증 | ✅ 완료 | HS256 검증, exp/nbf/iss/aud 클레임, timing-safe |
+| StackController | ✅ 완료 | 다중 App 라이프사이클 통합 관리 |
 | JSON (코어 의존 없음) | ✅ 완료 | 프레임워크 코어에서 완전 제거; 앱이 직접 처리 |
 | TLS/SSL | ❌ 예정 | Phase 8 |
 | HTTP/2 | ❌ 예정 | Phase 9 |
@@ -193,6 +203,93 @@ FetchContent_Declare(qbuem_json
 FetchContent_MakeAvailable(qbuem_json)
 
 target_link_libraries(my_app PRIVATE draco::draco qbuem_json::qbuem_json)
+```
+
+---
+
+### Server-Sent Events (SSE)
+
+```cpp
+#include <draco/middleware/sse.hpp>
+
+app.get("/events", draco::Handler([](const draco::Request&, draco::Response& res) {
+    draco::SseStream sse(res);
+    sse.send("hello",  "message");          // event: message\ndata: hello\n\n
+    sse.send("42",     "counter", "1");     // event + id 필드
+    sse.heartbeat();                        // ": ping\n\n" — 연결 유지
+    sse.close();                            // chunked 종료 마커 전송
+}));
+```
+
+### gzip 압축 미들웨어
+
+```cpp
+#include <draco/middleware/compress.hpp>
+
+// Accept-Encoding: gzip 를 보낸 클라이언트에만 자동 압축
+// min_size 바이트 미만 응답은 압축 건너뜀 (기본값: 256)
+app.use(draco::middleware::compress(512));
+```
+
+### JWT 인증 미들웨어 (HS256)
+
+```cpp
+#include <draco/middleware/jwt.hpp>
+
+draco::middleware::JwtOptions jwt_opts;
+jwt_opts.secret   = "my-secret-key";
+jwt_opts.issuer   = "myapp";              // "iss" 클레임 검증 (선택)
+jwt_opts.audience = "api";               // "aud" 클레임 검증 (선택)
+// jwt_opts.verify_exp = true;           // exp 만료 검증 (기본값: true)
+
+app.use(draco::middleware::jwt_verify(jwt_opts));
+
+// 핸들러에서 검증된 sub 클레임 읽기
+app.get("/profile", draco::Handler([](const draco::Request&, draco::Response& res) {
+    // jwt_verify 미들웨어가 X-JWT-Sub 헤더로 전달
+    res.status(200).body("{\"verified\":true}");
+}));
+```
+
+### Unix Domain Socket
+
+```cpp
+// TCP 오버헤드 없이 로컬 IPC (리버스 프록시, 컨테이너)
+auto result = app.listen_unix("/tmp/myapp.sock");
+```
+
+### StackController — 다중 App 통합 관리
+
+```cpp
+draco::App api_app, admin_app;
+
+api_app.get("/api/v1/hello", draco::Handler([](const auto&, auto& res) {
+    res.status(200).body("API");
+}));
+admin_app.get("/admin/status", draco::Handler([](const auto&, auto& res) {
+    res.status(200).body("OK");
+}));
+
+draco::StackController ctrl;
+ctrl.add(api_app,   8080);          // API 서버
+ctrl.add(admin_app, 9090);          // 관리자 서버
+ctrl.run();  // 블록; SIGTERM/SIGINT 자동 처리 → 양쪽 App 동시 종료
+```
+
+### CSRF 토큰 + constant-time 비교
+
+```cpp
+#include <draco/crypto.hpp>
+
+// 생성 (128비트 엔트로피, URL-safe Base64)
+auto token = draco::csrf_token();          // e.g. "dGhpcyBpcyBhIHRlc3Q"
+res.set_cookie("csrf", token, {.same_site = "Strict", .http_only = false});
+
+// 검증 (timing-attack 저항)
+if (!draco::constant_time_equal(req.cookie("csrf"), expected)) {
+    res.status(403).body("CSRF validation failed");
+    return;
+}
 ```
 
 ---
