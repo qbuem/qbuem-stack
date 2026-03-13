@@ -324,6 +324,27 @@ ctest --test-dir build -V
 
 ---
 
+## 문서
+
+모든 공개 API는 **Doxygen** 주석으로 문서화되어 있습니다.
+
+```bash
+# 의존성 설치 (Ubuntu/Debian)
+sudo apt-get install doxygen graphviz
+
+# HTML 문서 생성
+doxygen Doxyfile
+
+# 브라우저로 열기
+xdg-open docs/api/html/index.html
+```
+
+생성된 문서는 `docs/api/html/` 에 저장됩니다.
+각 헤더 파일의 **Doxygen 블록** (`@file`, `@brief`, `@defgroup`) 을 통해
+IDE 자동완성(IntelliSense / clangd)도 지원됩니다.
+
+---
+
 ## 알려진 제한
 
 - Windows 미지원 (POSIX syscall 전용)

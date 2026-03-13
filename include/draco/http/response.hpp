@@ -1,5 +1,17 @@
 #pragma once
 
+/**
+ * @file draco/http/response.hpp
+ * @brief HTTP 응답 빌더 — 상태 코드, 헤더, 바디 체인 API
+ * @defgroup qbuem_http_response HTTP Response
+ * @ingroup qbuem_http
+ *
+ * Response는 빌더 패턴. status(), header(), body() 메서드를 체이닝.
+ * chunk()/end_chunks()로 chunked transfer, sendfile_path()로 zero-copy 파일 전송,
+ * set_cookie()로 쿠키 설정.
+ * @{
+ */
+
 #include <draco/common.hpp>
 
 #include <ctime>
@@ -165,3 +177,5 @@ private:
 };
 
 } // namespace draco
+
+/** @} */

@@ -1,5 +1,17 @@
 #pragma once
 
+/**
+ * @file draco/core/awaiters.hpp
+ * @brief 비동기 I/O 및 타이머를 위한 C++20 코루틴 Awaiter 집합
+ * @defgroup qbuem_awaiters Coroutine Awaiters
+ * @ingroup qbuem_core
+ *
+ * AsyncRead, AsyncWrite, AsyncSleep, AsyncAccept 구조체를 제공.
+ * 각각 Reactor에 이벤트를 등록하고 코루틴을 중단 후 재개.
+ * 모두 non-blocking이며 Reactor::current()를 통해 현재 스레드의 Reactor에 접근.
+ * @{
+ */
+
 #include <draco/core/reactor.hpp>
 #include <draco/core/task.hpp>
 
@@ -135,3 +147,5 @@ struct AsyncAccept {
 inline AsyncSleep sleep(int ms) { return AsyncSleep{ms}; }
 
 } // namespace draco
+
+/** @} */

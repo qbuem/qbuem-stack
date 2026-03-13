@@ -6,6 +6,18 @@
 
 ## 완료 (v0.3.0)
 
+### 문서화 (Doxygen)
+- [x] `Doxyfile` 생성 — SVG 그래프, 다크 모드, 한국어 출력
+- [x] `version.hpp`, `common.hpp` Doxygen 주석 완료
+- [x] `core/arena.hpp`, `core/reactor.hpp`, `core/task.hpp` 완료
+- [x] `core/dispatcher.hpp`, `core/awaiters.hpp`, `core/connection.hpp` 완료
+- [x] `core/async_logger.hpp` 완료
+- [x] `http/request.hpp`, `http/response.hpp`, `http/parser.hpp`, `http/router.hpp` 완료
+- [x] `middleware/body_encoder.hpp`, `middleware/token_auth.hpp` 완료
+- [x] `middleware/cors.hpp`, `middleware/rate_limit.hpp`, `middleware/security.hpp` 완료
+- [x] `middleware/sse.hpp`, `middleware/static_files.hpp` 완료
+- [x] `draco.hpp`, `crypto.hpp`, `url.hpp` 완료
+
 ### Layer 0: Common
 - [x] `Result<T>` + `unexpected<E>` — C++20 예외 없는 에러 처리
 - [x] `FixedPoolResource<Size>` — O(1) slab allocator (embedded free-list)
