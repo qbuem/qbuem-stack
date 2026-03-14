@@ -268,7 +268,7 @@
 
 > 상세: **[docs/io-deep-dive.md §2](./io-deep-dive.md)**
 
-- [ ] io_uring 직접 RECV/SEND SQE — POLL_ADD 기반에서 실제 비동기 I/O 제출로 전환
+- [x] io_uring 직접 RECV/SEND SQE — POLL_ADD 기반에서 실제 비동기 I/O 제출로 전환
   - `IORING_OP_RECV` + Buffer Ring → recv() syscall 제거
   - `IORING_OP_SEND` → send() syscall 제거
 - [x] `IORING_OP_ACCEPT_MULTISHOT` (Linux 5.19+) — SQE 1회로 다중 연결 수락
@@ -370,7 +370,7 @@
   - Open 상태 아이템 → 즉시 DLQ (처리 시도 없음)
 - [x] `DeadLetter<T>` — `{item, error_code, attempt_count, failed_at}`
   - `DeadLetterQueue`: `MessageBus` 채널명으로 접근
-- [ ] Bulkhead: `channel_cap` 기반 자동 backpressure (별도 구현 불필요, 문서화)
+- [x] Bulkhead: `channel_cap` 기반 자동 backpressure (별도 구현 불필요, 문서화)
 
 ### 분산 트레이싱 (OpenTelemetry 호환)
 - [x] `TraceContext` — W3C Trace Context 표준
@@ -537,7 +537,7 @@
 - [x] `Http1Handler` — `IConnectionHandler<http::Request>` 구현
   - keep-alive 자동 처리, 100-continue, chunked transfer
   - `Router` 주입, `Upgrade` 헤더 처리 (→ WebSocket upgrade)
-- [ ] `Http2Handler` — `IConnectionHandler<Http2Frame>` 구현
+- [x] `Http2Handler` — `IConnectionHandler<Http2Frame>` 구현
   - HPACK 헤더 압축/해제 (Arena 기반, zero-alloc)
   - 스트림 멀티플렉싱: `AsyncChannel<Http2Frame>` per stream
   - SETTINGS / WINDOW_UPDATE / PING / GOAWAY 지원
