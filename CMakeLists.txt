@@ -29,6 +29,33 @@ option(QBUEM_BUILD_TESTS    "Build unit tests"      ON)
 option(QBUEM_BUILD_EXAMPLES "Build examples"        ON)
 option(QBUEM_INSTALL        "Generate install rules" ON)
 
+# ── PGO (Profile-Guided Optimization) ───────────────────────────────────────
+# Usage:
+#   Pass 1 (instrumented):  cmake -DQBUEM_PGO_GENERATE=ON ..  && make && ./bench/wrk ...
+#   Pass 2 (optimized):     cmake -DQBUEM_PGO_USE=ON      ..  && make
+option(QBUEM_PGO_GENERATE "Build instrumented binary for PGO profiling" OFF)
+option(QBUEM_PGO_USE      "Build optimized binary using PGO profile"    OFF)
+
+if(QBUEM_PGO_GENERATE AND QBUEM_PGO_USE)
+  message(FATAL_ERROR "QBUEM_PGO_GENERATE and QBUEM_PGO_USE are mutually exclusive")
+endif()
+
+if(QBUEM_PGO_GENERATE)
+  message(STATUS "[qbuem-stack] PGO: instrumented build (pass 1)")
+  add_compile_options(-fprofile-generate=${CMAKE_BINARY_DIR}/pgo-data)
+  add_link_options(-fprofile-generate=${CMAKE_BINARY_DIR}/pgo-data)
+endif()
+
+if(QBUEM_PGO_USE)
+  if(NOT EXISTS "${CMAKE_BINARY_DIR}/pgo-data")
+    message(WARNING "[qbuem-stack] PGO: pgo-data directory not found — run pass 1 first")
+  else()
+    message(STATUS "[qbuem-stack] PGO: optimized build (pass 2, data=${CMAKE_BINARY_DIR}/pgo-data)")
+    add_compile_options(-fprofile-use=${CMAKE_BINARY_DIR}/pgo-data -fprofile-correction)
+    add_link_options(-fprofile-use=${CMAKE_BINARY_DIR}/pgo-data)
+  endif()
+endif()
+
 
 # ============================================================================
 include(FetchContent)

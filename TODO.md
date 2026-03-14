@@ -384,14 +384,14 @@
   - `ProbabilitySampler(rate)` — 0.0~1.0
   - `RateLimitingSampler(max_per_second)` — token bucket
   - `ParentBasedSampler` — 부모 결정 따름
-- [ ] `SpanExporter` 인터페이스 + `SpanData` (pipeline, action, context, timing, error)
+- [x] `SpanExporter` 인터페이스 + `SpanData` (pipeline, action, context, timing, error)
   - `LoggingExporter` — 디버그 기본 구현
   - `NoopExporter` — 트레이싱 비활성화 시 zero-overhead
   - `OtlpGrpcExporter` / `OtlpHttpExporter` — OpenTelemetry Collector
   - `JaegerExporter` / `ZipkinExporter`
-- [ ] `PipelineTracer` — `start_span()` / `end_span()`, 전역 등록 (`set_global_tracer`)
+- [x] `PipelineTracer` — `start_span()` / `end_span()`, 전역 등록 (`set_global_tracer`)
 - [ ] HTTP 통합: `traceparent` 헤더 자동 파싱 → thread-local 설정 → 응답 `traceresponse`
-- [ ] `IMetricsExporter` — Prometheus push 추상화
+- [x] `IMetricsExporter` — Prometheus push 추상화
 
 ---
 
@@ -506,15 +506,15 @@
 ## v0.9.2 — 인프라 고도화 + NUMA + 성능 측정
 
 ### NUMA-aware 스케줄링
-- [ ] `Dispatcher::pin_reactor_to_cpu(idx, cpu_id)` — pthread_setaffinity_np
-- [ ] `Dispatcher::auto_numa_bind()` — NUMA 노드별 reactor 그룹 자동 배치
+- [x] `Dispatcher::pin_reactor_to_cpu(idx, cpu_id)` — pthread_setaffinity_np
+- [x] `Dispatcher::auto_numa_bind()` — NUMA 노드별 reactor 그룹 자동 배치
 - [ ] reactor-local Arena를 같은 NUMA 노드 메모리에서 할당 (mbind(2) / numa_alloc_local)
 - [ ] `SO_INCOMING_CPU` NUMA 그룹 기반 설정 — 연결→CPU→NUMA 완전 고정
 
 ### 성능 프로파일링 통합
-- [ ] `PerfCounters` — PMU 이벤트 (cycles, instructions, LLC-miss, branch-miss)
+- [x] `PerfCounters` — PMU 이벤트 (cycles, instructions, LLC-miss, branch-miss)
 - [ ] eBPF 트레이싱 가이드 — io_uring tracepoints, tcp_sendmsg kprobe
-- [ ] PGO (Profile-Guided Optimization) 2-pass 빌드 CMake 지원
+- [x] PGO (Profile-Guided Optimization) 2-pass 빌드 CMake 지원
   - `QBUEM_PGO_GENERATE=ON` → instrumented 빌드
   - `QBUEM_PGO_USE=ON` → 프로파일 기반 최적화 빌드
 - [ ] `IORING_OP_FUTEX_WAIT/WAKE` (Linux 6.7+) — eventfd 대체 wakeup
@@ -522,9 +522,9 @@
 ### Pipeline Versioning & Schema Evolution
 - [x] `PipelineVersion { major, minor, patch }` — compatible_with() 검사
 - [x] `PipelineGraph::set_version(name, version)` — 버전 메타데이터 등록
-- [ ] `MigrationFn<OldT, NewT>` — 타입 마이그레이션 함수
-- [ ] `DlqReprocessor::register_migration()` — DLQ 재처리 시 마이그레이션 적용
-- [ ] 점진적 타입 변경 가이드: MigrationAction 삽입 → 병렬 운영 → 제거
+- [x] `MigrationFn<OldT, NewT>` — 타입 마이그레이션 함수
+- [x] `DlqReprocessor::register_migration()` — DLQ 재처리 시 마이그레이션 적용
+- [x] 점진적 타입 변경 가이드: MigrationAction 삽입 → 병렬 운영 → 제거
 
 ---
 
@@ -534,7 +534,7 @@
 
 ### Protocol Handlers
 
-- [ ] `Http1Handler` — `IConnectionHandler<http::Request>` 구현
+- [x] `Http1Handler` — `IConnectionHandler<http::Request>` 구현
   - keep-alive 자동 처리, 100-continue, chunked transfer
   - `Router` 주입, `Upgrade` 헤더 처리 (→ WebSocket upgrade)
 - [ ] `Http2Handler` — `IConnectionHandler<Http2Frame>` 구현
@@ -542,11 +542,11 @@
   - 스트림 멀티플렉싱: `AsyncChannel<Http2Frame>` per stream
   - SETTINGS / WINDOW_UPDATE / PING / GOAWAY 지원
   - ALPN "h2" 협상 후 Http1Codec → Http2Codec 자동 전환
-- [ ] `WebSocketHandler` — RFC 6455 구현
+- [x] `WebSocketHandler` — RFC 6455 구현
   - HTTP/1.1 Upgrade 검증 → 101 Switching Protocols
   - Masking/Unmasking (Arena 기반, zero-alloc)
   - PING/PONG keepalive, CLOSE handshake
-- [ ] `GrpcHandler<Req, Res>` — HTTP/2 위 gRPC 구현
+- [x] `GrpcHandler<Req, Res>` — HTTP/2 위 gRPC 구현
   - protobuf 직접 의존 없음 — 서비스에서 serialize/deserialize 제공
   - Unary / Server Streaming / Client Streaming / Bidi 4가지 패턴
   - `Stream<Res>` / `AsyncChannel<Req>` 직접 연결
