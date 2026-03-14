@@ -2,10 +2,13 @@
 
 #include <cerrno>
 #include <cstdint>
+#include <mutex>
 #include <stdexcept>
 #include <sys/epoll.h>
+#include <sys/eventfd.h>
 #include <sys/timerfd.h>
 #include <unistd.h>
+#include <vector>
 
 namespace qbuem {
 
@@ -14,12 +17,30 @@ EpollReactor::EpollReactor() {
   if (epoll_fd_ == -1) {
     throw std::runtime_error("epoll_create1 failed");
   }
+
+  event_fd_ = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
+  if (event_fd_ == -1) {
+    close(epoll_fd_);
+    throw std::runtime_error("eventfd failed");
+  }
+
+  struct epoll_event ev{};
+  ev.events = EPOLLIN;
+  ev.data.fd = event_fd_;
+  if (epoll_ctl(epoll_fd_, EPOLL_CTL_ADD, event_fd_, &ev) == -1) {
+    close(event_fd_);
+    close(epoll_fd_);
+    throw std::runtime_error("epoll_ctl for eventfd failed");
+  }
 }
 
 EpollReactor::~EpollReactor() {
   // Close all timerfd handles
   for (auto &[id, entry] : timers_by_id_) {
     close(entry.timerfd);
+  }
+  if (event_fd_ != -1) {
+    close(event_fd_);
   }
   if (epoll_fd_ != -1) {
     close(epoll_fd_);
@@ -139,6 +160,21 @@ Result<int> EpollReactor::poll(int timeout_ms) {
     int fd = events[i].data.fd;
     uint32_t ev = events[i].events;
 
+    // Check if this is the internal wake eventfd
+    if (fd == event_fd_) {
+      uint64_t val = 0;
+      ssize_t n = read(event_fd_, &val, sizeof(val)); // drain counter
+      (void)n;
+      std::vector<std::function<void()>> local;
+      {
+        std::lock_guard<std::mutex> lock(work_mutex_);
+        local.swap(work_queue_);
+      }
+      for (auto &fn : local)
+        fn();
+      continue;
+    }
+
     // Check if this is a timerfd
     auto timer_it = timerfd_to_id_.find(fd);
     if (timer_it != timerfd_to_id_.end()) {
@@ -169,6 +205,17 @@ Result<int> EpollReactor::poll(int timeout_ms) {
   }
 
   return nev;
+}
+
+void EpollReactor::post(std::function<void()> fn) {
+  {
+    std::lock_guard<std::mutex> lock(work_mutex_);
+    work_queue_.push_back(std::move(fn));
+  }
+  // Wake up epoll_wait by writing to eventfd.
+  const uint64_t one = 1;
+  ssize_t ret = write(event_fd_, &one, sizeof(one)); // best-effort; EAGAIN means already signalled
+  (void)ret;
 }
 
 void EpollReactor::stop() { running_ = false; }

@@ -165,6 +165,23 @@ public:
   virtual void stop() = 0;
 
   /**
+   * @brief 임의의 콜백을 Reactor 스레드에서 실행하도록 큐에 넣습니다.
+   *
+   * 다른 스레드(또는 같은 스레드)에서 Reactor가 소유한 스레드에서 작업을
+   * 안전하게 실행하고 싶을 때 사용합니다. 코루틴 wakeup 시 `handle.resume()`을
+   * 직접 호출하는 대신 반드시 이 함수를 통해 Reactor 스레드에 위임해야 합니다.
+   *
+   * 구현은 플랫폼별 wakeup 메커니즘을 사용합니다:
+   * - epoll:    eventfd write → epoll_wait 조기 반환
+   * - kqueue:   EVFILT_USER NOTE_TRIGGER
+   * - io_uring: eventfd POLL_ADD (OpKind::Wake)
+   *
+   * @param fn 실행할 콜백. poll() 루프에서 안전하게 호출됩니다.
+   * @note 스레드 안전합니다. 어느 스레드에서도 호출 가능합니다.
+   */
+  virtual void post(std::function<void()> fn) = 0;
+
+  /**
    * @brief 현재 스레드에 연결된 Reactor를 반환합니다.
    *
    * 스레드 로컬 저장소(thread-local storage)를 통해 각 스레드에 고유한

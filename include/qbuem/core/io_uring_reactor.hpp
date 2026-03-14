@@ -50,6 +50,8 @@ public:
   void stop() override;
   bool is_running() const override;
 
+  void post(std::function<void()> fn) override;
+
 private:
   // Pimpl: avoids exposing <liburing.h> in the public header.
   struct Impl;

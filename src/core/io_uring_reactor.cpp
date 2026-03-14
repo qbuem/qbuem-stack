@@ -5,7 +5,10 @@
 
 #include <cerrno>
 #include <cstring>
+#include <mutex>
 #include <stdexcept>
+#include <sys/eventfd.h>
+#include <unistd.h>
 #include <unordered_map>
 #include <vector>
 
@@ -22,7 +25,7 @@ struct IOUringReactor::Impl {
   int next_timer_id = 1;
 
   // Every pending io_uring operation is described by an Op.
-  enum class OpKind { ReadPoll, WritePoll, Timer };
+  enum class OpKind { ReadPoll, WritePoll, Timer, Wake };
   struct Op {
     OpKind kind;
     int fd = -1;        // valid for ReadPoll / WritePoll
@@ -38,6 +41,25 @@ struct IOUringReactor::Impl {
   std::unordered_map<int, uint64_t> read_tokens;  // fd → token
   std::unordered_map<int, uint64_t> write_tokens; // fd → token
   std::unordered_map<int, uint64_t> timer_tokens; // timer_id → token
+
+  // post() wakeup: eventfd + work queue
+  int wake_fd = -1;
+  uint64_t wake_token = 0;
+  std::mutex wake_mutex;
+  std::vector<std::function<void()>> wake_queue;
+
+  // Submit a fresh POLL_ADD for wake_fd and record it.
+  void resubmit_wake(uint64_t token) {
+    struct io_uring_sqe *sqe = io_uring_get_sqe(&ring);
+    if (!sqe) {
+      io_uring_submit(&ring);
+      sqe = io_uring_get_sqe(&ring);
+      if (!sqe)
+        return;
+    }
+    io_uring_prep_poll_add(sqe, wake_fd, POLLIN);
+    io_uring_sqe_set_data64(sqe, token);
+  }
 
   // Submit a POLL_ADD SQE for a pending op that is already in `ops`.
   void submit_poll(uint64_t token, int fd, EventType type) {
@@ -88,9 +110,26 @@ IOUringReactor::IOUringReactor() : impl_(new Impl{}) {
   if (ret < 0)
     throw std::runtime_error(std::string("io_uring_queue_init failed: ") +
                              strerror(-ret));
+
+  // Create eventfd for post() wakeup and register a persistent POLL_ADD.
+  impl_->wake_fd = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
+  if (impl_->wake_fd == -1) {
+    io_uring_queue_exit(&impl_->ring);
+    throw std::runtime_error("eventfd failed");
+  }
+
+  uint64_t token = impl_->next_token++;
+  impl_->wake_token = token;
+  auto &wake_op = impl_->ops[token];
+  wake_op.kind = Impl::OpKind::Wake;
+  wake_op.fd = impl_->wake_fd;
+  impl_->resubmit_wake(token);
+  io_uring_submit(&impl_->ring);
 }
 
 IOUringReactor::~IOUringReactor() {
+  if (impl_->wake_fd != -1)
+    close(impl_->wake_fd);
   io_uring_queue_exit(&impl_->ring);
   delete impl_;
 }
@@ -233,8 +272,29 @@ Result<int> IOUringReactor::poll(int timeout_ms) {
     Impl::Op op = std::move(it->second);
     impl_->ops.erase(it);
 
-    if (op.kind == Impl::OpKind::ReadPoll ||
-        op.kind == Impl::OpKind::WritePoll) {
+    if (op.kind == Impl::OpKind::Wake) {
+      // Drain the eventfd counter.
+      uint64_t val;
+      read(impl_->wake_fd, &val, sizeof(val));
+      // Drain work queue.
+      std::vector<std::function<void()>> local;
+      {
+        std::lock_guard<std::mutex> lock(impl_->wake_mutex);
+        local.swap(impl_->wake_queue);
+      }
+      // Resubmit POLL_ADD for wake_fd before executing callbacks so any
+      // new post() calls queued inside a callback are not lost.
+      uint64_t new_token = impl_->next_token++;
+      impl_->wake_token = new_token;
+      auto &new_op = impl_->ops[new_token];
+      new_op.kind = Impl::OpKind::Wake;
+      new_op.fd = impl_->wake_fd;
+      impl_->resubmit_wake(new_token);
+      for (auto &wfn : local)
+        wfn();
+
+    } else if (op.kind == Impl::OpKind::ReadPoll ||
+               op.kind == Impl::OpKind::WritePoll) {
       EventType etype = (op.kind == Impl::OpKind::ReadPoll) ? EventType::Read
                                                              : EventType::Write;
       auto &tmap = (etype == EventType::Read) ? impl_->read_tokens
@@ -278,6 +338,16 @@ Result<int> IOUringReactor::poll(int timeout_ms) {
   io_uring_submit(&impl_->ring);
 
   return (int)events.size();
+}
+
+void IOUringReactor::post(std::function<void()> fn) {
+  {
+    std::lock_guard<std::mutex> lock(impl_->wake_mutex);
+    impl_->wake_queue.push_back(std::move(fn));
+  }
+  // Wake the ring by writing to the eventfd; the registered POLL_ADD fires.
+  const uint64_t one = 1;
+  write(impl_->wake_fd, &one, sizeof(one)); // best-effort
 }
 
 void IOUringReactor::stop() { impl_->running = false; }

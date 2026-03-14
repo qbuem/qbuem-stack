@@ -1,9 +1,11 @@
 #include <qbuem/core/kqueue_reactor.hpp>
 
 #include <cerrno>
+#include <mutex>
 #include <stdexcept>
 #include <sys/event.h>
 #include <unistd.h>
+#include <vector>
 
 namespace qbuem {
 
@@ -11,6 +13,14 @@ KqueueReactor::KqueueReactor() {
   kq_fd_ = kqueue();
   if (kq_fd_ == -1) {
     throw std::runtime_error("failed to create kqueue");
+  }
+
+  // Register EVFILT_USER with EV_CLEAR (edge-triggered) for post() wakeup.
+  struct kevent ev;
+  EV_SET(&ev, WAKE_IDENT, EVFILT_USER, EV_ADD | EV_CLEAR, 0, 0, nullptr);
+  if (kevent(kq_fd_, &ev, 1, nullptr, 0, nullptr) == -1) {
+    close(kq_fd_);
+    throw std::runtime_error("failed to register EVFILT_USER");
   }
 }
 
@@ -105,6 +115,18 @@ Result<int> KqueueReactor::poll(int timeout_ms) {
     int ident = static_cast<int>(events[i].ident);
     int16_t filter = events[i].filter;
 
+    // Handle post() wakeup — EVFILT_USER is a private channel, not in callbacks_.
+    if (filter == EVFILT_USER) {
+      std::vector<std::function<void()>> local;
+      {
+        std::lock_guard<std::mutex> lock(work_mutex_);
+        local.swap(work_queue_);
+      }
+      for (auto &fn : local)
+        fn();
+      continue;
+    }
+
     auto callback_it = callbacks_.find(ident);
     if (callback_it != callbacks_.end()) {
       // Copy callbacks to avoid UAF if a callback unregisters itself.
@@ -122,6 +144,17 @@ Result<int> KqueueReactor::poll(int timeout_ms) {
   }
 
   return nev;
+}
+
+void KqueueReactor::post(std::function<void()> fn) {
+  {
+    std::lock_guard<std::mutex> lock(work_mutex_);
+    work_queue_.push_back(std::move(fn));
+  }
+  // Trigger the EVFILT_USER event to wake kevent().
+  struct kevent ev;
+  EV_SET(&ev, WAKE_IDENT, EVFILT_USER, EV_ENABLE, NOTE_TRIGGER, 0, nullptr);
+  kevent(kq_fd_, &ev, 1, nullptr, 0, nullptr); // best-effort
 }
 
 void KqueueReactor::stop() { running_ = false; }

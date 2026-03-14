@@ -4,7 +4,9 @@
 #include <qbuem/core/reactor.hpp>
 
 #include <functional>
+#include <mutex>
 #include <unordered_map>
+#include <vector>
 
 namespace qbuem {
 
@@ -32,10 +34,20 @@ public:
 
   bool is_running() const override;
 
+  void post(std::function<void()> fn) override;
+
 private:
+  // Sentinel ident for the EVFILT_USER wake channel used by post().
+  // EVFILT_USER is a separate filter namespace from EVFILT_READ/WRITE/TIMER,
+  // so ident=0 here does not conflict with fd=0 in callbacks_.
+  static constexpr uintptr_t WAKE_IDENT = 0;
+
   int kq_fd_ = -1;
   bool running_ = true;
   int next_timer_id_ = 1;
+
+  std::mutex work_mutex_;
+  std::vector<std::function<void()>> work_queue_;
 
   struct Callbacks {
     std::function<void(int)> read_cb;
