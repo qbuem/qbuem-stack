@@ -130,8 +130,26 @@
 
 ## v0.6.0 — Pipeline MVP (StaticPipeline)
 
-> 최소 완성 경로: `AsyncChannel → Action → StaticPipeline`
+> 최소 완성 경로: `Context → ServiceRegistry → AsyncChannel → Action → StaticPipeline`
 > Linux 단일 플랫폼 기준. v0.5.0의 `Reactor::post` + `Dispatcher::spawn` 필수.
+> 상태 관리 상세 설계: **[docs/pipeline-design.md §26-34](./docs/pipeline-design.md)**
+
+### State Management 기반 (Pipeline보다 먼저 구현)
+- [ ] `Context` — 불변 persistent linked-list 아이템 컨텍스트
+  - `put<T>(value)` → 새 Context 반환 (원본 불변)
+  - `get<T>()` → `std::optional<T>`
+  - `get_ptr<T>()` → `const T*` (복사 없는 참조)
+  - 내장 슬롯: `TraceCtx`, `RequestId`, `AuthSubject`, `AuthRoles`, `Deadline`, `ActiveSpan`
+- [ ] `ServiceRegistry` — 스코프 기반 의존성 주입 컨테이너
+  - `register_singleton<T>(shared_ptr<T>)` / `register_factory<T>(fn)`
+  - 약한 의존성: `get<T>()` → nullptr if missing
+  - 강한 의존성: `require<T>()` → terminate if missing (fail-fast)
+  - 계층: `parent_` 포인터로 GlobalRegistry → PipelineRegistry fallback
+  - `global_registry()` — 프로세스 싱글톤
+- [ ] `ContextualItem<T>` — `{T value; Context ctx}` 채널 전송 단위
+- [ ] `ActionEnv` — `{Context ctx; std::stop_token stop; size_t worker_idx}`
+- [ ] `WorkerLocal<T>` — `alignas(64)` vector + worker_idx 접근, 락 불필요
+- [ ] ⚠️ 코루틴 thread_local 경고 테스트 — co_await 경계에서 Context 전파 검증
 
 ### Layer 5: Pipeline 기반
 - [ ] `AsyncChannel<T>` — Dmitry Vyukov MPMC ring buffer
@@ -147,11 +165,13 @@
 
 ### Action (정적)
 - [ ] `Action<In, Out>` — 코루틴 워커 풀
-  - `Config`: min/max_workers, channel_cap, auto_scale, keyed_ordering
+  - `Config`: min/max_workers, channel_cap, auto_scale, keyed_ordering, registry
   - `scale_to(n)` / `scale_in()` / `scale_out()`
   - scale-in: `atomic<size_t> target_workers` + 워커 인덱스 비교 (poison pill 미사용)
-  - `std::stop_token` 기반 취소
-  - 처리 함수: `Task<Result<Out>>(In, std::stop_token)` — 예외 금지
+  - 처리 함수: **`Task<Result<Out>>(In, ActionEnv)`** — 예외 금지
+  - ActionEnv 구성: `{ctx = upstream_item.ctx, stop, worker_idx}`
+  - ContextualItem 언래핑/래핑: 채널 내부는 `ContextualItem<T>`, Action Fn은 `T`만 봄
+  - Stateless / Immutable / Mutable(WorkerLocal) / External 4가지 패턴 지원
 - [ ] `BatchAction<In, Out>` — 최대 N개 아이템 묶음 처리
 
 ### StaticPipeline
@@ -299,6 +319,10 @@
 
 ```
 [0] Reactor::post() + Dispatcher::spawn()   ← v0.5.0
+         │
+         ▼
+[S] Context + ServiceRegistry + ActionEnv   ← v0.6.0 (Pipeline보다 먼저)
+    WorkerLocal<T> + ContextualItem<T>
          │
          ▼
 [1] AsyncChannel<T>                         ← v0.6.0

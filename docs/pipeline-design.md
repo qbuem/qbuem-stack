@@ -1,8 +1,8 @@
 # qbuem Pipeline System — 기술 설계 문서
 
-> **버전**: 0.2.0-draft
+> **버전**: 0.3.0-draft
 > **대상 브랜치**: `claude/continue-work-p2NeA`
-> **검토 관점**: 분산 시스템 / C++20 코루틴 / Lock-free / 시스템 설계 / Observability / 컴파일러 최적화
+> **검토 관점**: 분산 시스템 / C++20 코루틴 / Lock-free / 시스템 설계 / Observability / 컴파일러 최적화 / 의존성 관리 / 상태 격리
 
 ---
 
@@ -33,6 +33,15 @@
 23. [파일 구조](#23-파일-구조)
 24. [구현 순서 (의존성 그래프)](#24-구현-순서-의존성-그래프)
 25. [부록: 기술 결정 요약](#25-부록-기술-결정-요약)
+26. [State Management 개요 — 5가지 상태 스코프](#26-state-management-개요--5가지-상태-스코프)
+27. [⚠️ 코루틴과 thread_local의 위험성](#27-️-코루틴과-thread_local의-위험성)
+28. [Context 시스템 (아이템 스코프)](#28-context-시스템-아이템-스코프)
+29. [ActionEnv — Action 호출 환경](#29-actionenv--action-호출-환경)
+30. [ServiceRegistry — 스코프 기반 의존성 주입](#30-serviceregistry--스코프-기반-의존성-주입)
+31. [Action 상태 분류 (의존성 강도)](#31-action-상태-분류-의존성-강도)
+32. [Pipeline 간 의존성 강도](#32-pipeline-간-의존성-강도)
+33. [Worker-local 상태 (락 없는 per-worker 패턴)](#33-worker-local-상태-락-없는-per-worker-패턴)
+34. [상태 수명 및 소유권 규칙](#34-상태-수명-및-소유권-규칙)
 
 ---
 
@@ -50,6 +59,9 @@
 | R8 | **분산 트레이싱** | W3C Trace Context, OpenTelemetry 호환 |
 | R9 | **복원력 패턴** | Retry, CircuitBreaker, DLQ, Bulkhead |
 | R10 | **무중단 액션 교체 (Hot-swap)** | 드레인 후 교체 |
+| R11 | **상태 스코프 분리** | Global / Pipeline / Action / Item / Worker 5계층 |
+| R12 | **Context 전파** | 아이템과 함께 이동하는 불변 key-value 컨텍스트 |
+| R13 | **스코프 기반 의존성 주입** | ServiceRegistry 강/약 의존성, 계층적 스코프 |
 
 ---
 
@@ -573,20 +585,29 @@ public:
 ### 11.1 정적 Action\<In, Out\>
 
 ```cpp
+// ActionEnv — Action 호출 환경 (§29 참조)
+struct ActionEnv {
+    Context         ctx;         // 아이템 스코프 불변 컨텍스트 (TraceCtx, RequestId, ...)
+    std::stop_token stop;        // 파이프라인 drain/stop 취소 신호
+    size_t          worker_idx;  // WorkerLocal<T>::get(idx) 접근용
+};
+
 template<typename In, typename Out>
 class Action {
 public:
-    // Task<Result<Out>> 반환 필수 (exception 금지 — unhandled_exception=terminate)
-    using Fn = std::function<Task<Result<Out>>(In, std::stop_token)>;
+    // 처리 함수: Task<Result<Out>> 반환 필수 (exception 금지 — unhandled_exception=terminate)
+    // ActionEnv로 Context + stop_token + worker_idx 수신
+    using Fn = std::function<Task<Result<Out>>(In, ActionEnv)>;
 
     struct Config {
-        size_t        min_workers    = 1;
-        size_t        max_workers    = 16;
-        size_t        channel_cap    = 256;
-        bool          auto_scale     = false;
-        bool          keyed_ordering = false;   // per-key consistent hash 배정
-        RetryPolicy   retry          = RetryPolicy::none();
-        CircuitBreaker circuit_breaker;
+        size_t         min_workers     = 1;
+        size_t         max_workers     = 16;
+        size_t         channel_cap     = 256;
+        bool           auto_scale      = false;
+        bool           keyed_ordering  = false;   // per-key consistent hash 배정
+        RetryPolicy    retry           = RetryPolicy::none();
+        CircuitBreaker circuit_breaker = {};
+        ServiceRegistry* registry      = nullptr; // 파이프라인 스코프 레지스트리
     };
 
     explicit Action(Fn fn, Config cfg = {});
@@ -605,24 +626,32 @@ public:
 **워커 루프 (의사코드)**:
 ```cpp
 Task<void> worker_loop(size_t my_idx, ActionContext& ctx) {
-    while (!ctx.stop.stop_requested()) {
+    while (true) {
         if (my_idx >= ctx.target_workers.load(acquire)) co_return; // scale-in
 
         auto item_r = co_await ctx.in->recv();
-        if (!item_r) co_return;  // channel closed
+        if (!item_r) co_return;  // channel closed (EOS)
 
-        auto span = ctx.tracer.start_span(my_idx);  // 트레이싱
+        // 아이템 컨텍스트 구성: 업스트림 Context + 트레이싱 span 추가
+        ActionEnv env{
+            .ctx        = item_r->ctx,        // upstream Context 전파
+            .stop       = ctx.stop_src.get_token(),
+            .worker_idx = my_idx,
+        };
+        auto span = ctx.tracer.start_span(env.ctx);  // child span
+        env.ctx = env.ctx.put(ActiveSpan{span});      // span을 Context에 추가
 
-        auto out_r = co_await ctx.retry.execute(ctx.fn, *item_r, ctx.stop);
+        auto out_r = co_await ctx.retry.execute(ctx.fn, item_r->value, env);
 
-        ctx.tracer.end_span(span, out_r);
+        ctx.tracer.end_span(span, out_r.has_value() ? std::error_code{} : out_r.error());
 
         if (!out_r) {
-            co_await ctx.dlq->send({*item_r, out_r.error()});
+            co_await ctx.dlq->send(DeadLetter{item_r->value, out_r.error(), env.ctx});
             ctx.metrics.errors.fetch_add(1, relaxed);
             continue;
         }
-        co_await ctx.out->send(std::move(*out_r));
+        // 출력 아이템에 Context 전파 (downstream에서 같은 trace context 사용)
+        co_await ctx.out->send(ContextualItem{std::move(*out_r), env.ctx});
         ctx.metrics.processed.fetch_add(1, relaxed);
     }
 }
@@ -871,28 +900,43 @@ struct TraceContext {
 
 ### 15.2 아이템에 TraceContext 전파
 
-파이프라인 아이템이 trace context를 운반하는 두 가지 전략:
+> **§27 경고 먼저 확인**: 코루틴에서 `thread_local`은 co_await 경계를 넘으면 다른 스레드로
+> 이동할 수 있어 **데이터 레이스**를 유발합니다. 파이프라인 아이템 스코프 상태에
+> `thread_local`을 **사용하면 안 됩니다**.
 
-**전략 A: 래핑 (Traced\<T\>)**
+파이프라인 아이템이 trace context를 운반하는 세 가지 전략:
+
+**전략 A: 아이템 래핑 (Traced\<T\>) — 타입 오염**
 ```cpp
 template<typename T>
-struct Traced {
-    T            payload;
-    TraceContext ctx;
-};
+struct Traced { T payload; TraceContext ctx; };
 // Pipeline<Traced<MyType>, Traced<MyResult>>
-// 타입이 바뀌는 단점: 기존 Action 재사용 어려움
+// 단점: 모든 Action 타입이 바뀜, 기존 Action 재사용 불가
 ```
 
-**전략 B: 옵셔널 사이드카 (권장)**
+**전략 B: thread-local — ❌ 코루틴에서 위험**
 ```cpp
-// 파이프라인 내부에서 아이템과 별도로 TraceContext를 thread-local에 전파
-// Action은 필요 시 Reactor::current_trace_context() 로 접근
-// 타입 오염 없음, 트레이싱 비활성화 시 완전 zero-overhead
 thread_local TraceContext current_trace_ctx;
+// FATAL: co_await 후 다른 reactor 스레드에서 재개되면 wrong context 참조
 ```
 
-전략 B가 qbuem-stack의 기존 thread-local 패턴 (`Reactor::current()`)과 일관성 있음.
+**전략 C: Context 경유 ActionEnv — ✅ 권장**
+```cpp
+// TraceContext를 Context에 내장, ActionEnv.ctx로 전달 (§28, §29 참조)
+struct ActiveSpan { SpanHandle span; };  // Context 슬롯
+
+// Action에서 trace context 접근:
+Task<Result<Out>> my_action(In item, ActionEnv env) {
+    auto span = env.ctx.get<ActiveSpan>();  // 현재 span
+    auto trace = env.ctx.get<TraceCtx>();   // trace_id / span_id
+    // ...
+}
+// 장점: 타입 오염 없음, 코루틴에서 완전 안전, zero-overhead when disabled
+```
+
+**전략 C가 올바른 이유**: Context는 코루틴 프레임(ActionEnv)에 담겨 co_await를 넘어도
+항상 올바른 값을 참조합니다. Reactor::current()처럼 infrastructure thread-local은
+OK이지만, 아이템별로 달라지는 값에는 절대 thread-local을 쓰면 안 됩니다.
 
 ### 15.3 샘플링 전략
 
@@ -1353,9 +1397,762 @@ Linux 단일 플랫폼, StaticPipeline 기준. 나머지는 MVP 이후 단계적
 | 정적 파이프라인 | `PipelineBuilder<In>.add<Out>().build()` | 컴파일타임 타입 체인 |
 | 동적 파이프라인 | `IDynamicAction` + `ActionSchema` | 런타임 스키마 호환성 |
 | Hot-swap | Seal → Drain → Swap → Resume | in-flight 유실 없음 |
-| 트레이싱 전파 | thread-local TraceContext (전략 B) | 타입 오염 없음, 기존 패턴 일관 |
+| 트레이싱 전파 | Context 슬롯 (ActionEnv.ctx) | thread_local은 코루틴에서 데이터 레이스 |
 | 트레이싱 샘플링 | Pluggable Sampler 인터페이스 | 환경별 전략 교체 가능 |
 | Arena 통합 | reactor-local FixedPoolResource | 기존 Arena 재사용, zero malloc |
 | 우선순위 채널 | 3레벨 + aging | 스타베이션 방지 |
 | Config 주도 | JSON/YAML → PipelineFactory | 코드 변경 없이 파이프라인 변경 |
 | 파이프라인 합성 | SubpipelineAction 래퍼 | 재사용성, 테스트 용이성 |
+| 상태 스코프 | 5계층 (Global/Pipeline/Action/Item/Worker) | 격리 + 공유 명확히 분리 |
+| 아이템 컨텍스트 | 불변 persistent linked-list Context | O(1) copy, O(1) with(), 코루틴 안전 |
+| Action 호출 환경 | ActionEnv{ctx, stop, worker_idx} | 모든 per-call 정보 단일 구조체 |
+| 의존성 주입 | ServiceRegistry 계층 (Global → Pipeline) | 강/약 의존성 명시, 테스트 가능 |
+| Worker 로컬 상태 | WorkerLocal<T> (vector<T> + idx) | 락 없는 per-worker 상태 |
+
+---
+
+## 26. State Management 개요 — 5가지 상태 스코프
+
+파이프라인 상태를 **어디에 두느냐**가 성능, 안전성, 테스트 가능성을 결정합니다.
+
+```
+┌────────────────────────────────────────────────────────────────────────┐
+│ Scope 1: Global State                                                  │
+│   수명: 프로세스 전체   공유: 모든 파이프라인 / 모든 Action             │
+│   예: DB 커넥션 풀, 설정(Config), Metrics sink, Logger                 │
+│   접근: GlobalRegistry::get<T>()                                       │
+│                                                                        │
+│  ┌─────────────────────────────────────────────────────────────────┐   │
+│  │ Scope 2: Pipeline State                                         │   │
+│  │   수명: 파이프라인 Running 구간   공유: 같은 파이프라인 내 모든 Action │
+│  │   예: CircuitBreaker 상태, 파이프라인 레벨 Rate Limiter, 파이프라인 캐시│
+│  │   접근: PipelineRegistry::get<T>() (GlobalRegistry 상속)        │   │
+│  │                                                                 │   │
+│  │  ┌──────────────────────────────────────────────────────────┐  │   │
+│  │  │ Scope 3: Action State                                    │  │   │
+│  │  │   수명: Action 객체 수명 (파이프라인 수명 이내)           │  │   │
+│  │  │   공유: 해당 Action의 모든 워커 (스레드 안전 필요)        │  │   │
+│  │  │   예: ML 모델 가중치, 컴파일된 정규식, 연결 풀            │  │   │
+│  │  │   접근: Action 생성자 주입 (ServiceRegistry 경유)         │  │   │
+│  │  │                                                          │  │   │
+│  │  │  ┌───────────────────────────────────────────────────┐  │  │   │
+│  │  │  │ Scope 4: Item State (Context)                     │  │  │   │
+│  │  │  │   수명: 단일 아이템이 파이프라인을 통과하는 동안   │  │  │   │
+│  │  │  │   공유: 없음 (아이템 전용, 불변)                   │  │  │   │
+│  │  │  │   예: TraceContext, RequestId, AuthClaims, Deadline│  │  │   │
+│  │  │  │   접근: ActionEnv.ctx.get<Slot>()                 │  │  │   │
+│  │  │  └───────────────────────────────────────────────────┘  │  │   │
+│  │  │  ┌───────────────────────────────────────────────────┐  │  │   │
+│  │  │  │ Scope 5: Worker State                             │  │  │   │
+│  │  │  │   수명: 워커 코루틴 수명                           │  │  │   │
+│  │  │  │   공유: 없음 (워커 전용, 락 불필요)                │  │  │   │
+│  │  │  │   예: Per-worker RNG, 임시 버퍼, 작은 LRU 캐시    │  │  │   │
+│  │  │  │   접근: WorkerLocal<T>::get(env.worker_idx)       │  │  │   │
+│  │  │  └───────────────────────────────────────────────────┘  │  │   │
+│  │  └──────────────────────────────────────────────────────────┘  │   │
+│  └─────────────────────────────────────────────────────────────────┘   │
+└────────────────────────────────────────────────────────────────────────┘
+```
+
+### 스코프별 정리표
+
+| 스코프 | 수명 | 공유 범위 | 접근 방법 | 스레드 안전 요구 |
+|--------|------|----------|----------|----------------|
+| **Global** | 프로세스 | 모든 곳 | `GlobalRegistry::get<T>()` | 반드시 (읽기는 OK) |
+| **Pipeline** | 파이프라인 | 같은 파이프라인 | `PipelineRegistry::get<T>()` | 반드시 |
+| **Action** | Action 객체 | 같은 Action 워커들 | 생성자 주입 | 반드시 (가변 상태) |
+| **Item** | 아이템 통과 시간 | 없음 (불변) | `ActionEnv.ctx.get<Slot>()` | 불필요 (불변) |
+| **Worker** | 워커 코루틴 | 없음 | `WorkerLocal<T>::get(idx)` | 불필요 (전용) |
+
+---
+
+## 27. ⚠️ 코루틴과 thread_local의 위험성
+
+이것은 qbuem-stack에서 가장 흔한 버그 원인입니다. **반드시 이해해야 합니다.**
+
+### 문제: co_await 경계에서 스레드 교체
+
+```
+스레드 A:  [Action 시작] → thread_local = "user-123" → co_await channel.recv()
+                                                              │
+                                                     [SUSPENDED — 스레드 반납]
+                                                              │
+스레드 B:                              [다른 작업 처리] → [위 코루틴 resume]
+                                                              │
+스레드 B에서 재개됨! thread_local은 여전히 스레드 B의 값을 가리킴 → WRONG!
+```
+
+```cpp
+// ❌ WRONG: thread_local은 코루틴 아이템 상태에 절대 사용 불가
+thread_local std::string current_request_id;
+
+Task<Result<Out>> process(In item, ActionEnv env) {
+    current_request_id = "req-123";      // 스레드 A에 설정
+    auto r = co_await some_async_op();   // ← 여기서 스레드 B로 이동할 수 있음
+    log(current_request_id);             // ← 스레드 B의 thread_local! 다른 값
+    co_return ...;
+}
+
+// ✅ CORRECT: Context는 코루틴 프레임 내에 있어 항상 올바른 값
+Task<Result<Out>> process(In item, ActionEnv env) {
+    auto req_id = env.ctx.get<RequestId>();  // 코루틴 프레임 내부 (안전)
+    auto r = co_await some_async_op();       // 스레드 교체 후에도
+    log(req_id->value);                      // 항상 올바른 값 (코루틴 프레임에 있음)
+    co_return ...;
+}
+```
+
+### thread_local이 OK한 경우 (인프라 전용)
+
+```
+✅ Reactor::current()              — reactor 스레드 시작 시 설정, 변경 없음
+✅ Arena::thread_local_arena()     — reactor 스레드 전용 할당자, 변경 없음
+❌ current_trace_context           — 아이템별로 다름 → Context 슬롯 사용
+❌ current_request_id              — 아이템별로 다름 → Context 슬롯 사용
+❌ current_user                    — 아이템별로 다름 → Context 슬롯 사용
+```
+
+**규칙**: `thread_local`은 reactor 스레드의 수명 동안 값이 고정된 인프라 객체에만 사용.
+아이템별로 다른 값은 반드시 `Context` 슬롯을 사용.
+
+---
+
+## 28. Context 시스템 (아이템 스코프)
+
+### 28.1 설계 요구사항
+
+- **불변성**: `ctx.put(slot, val)` 은 새 Context를 반환, 기존 ctx 미수정
+- **저렴한 복사**: `shared_ptr` 복사 = O(1) (deep copy 없음)
+- **코루틴 안전**: 코루틴 프레임에 담겨 스레드 교체와 무관
+- **타입 안전**: 슬롯 타입 = 저장 타입 (type_index 기반, 캐스트 없음)
+- **Fork 시맨틱**: fan-out 시 자식들이 부모 Context를 독립적으로 확장 가능
+
+### 28.2 구현
+
+```cpp
+// 슬롯 타입 = Context에 저장할 값의 타입 (전체가 key+value)
+// 예: struct RequestId { std::string value; };
+//     ctx.put(RequestId{"req-123"}) / ctx.get<RequestId>()
+
+class Context {
+    // Persistent 단방향 linked list: O(1) prepend, O(1) shared copy
+    // put() = 새 노드를 head에 prepend한 새 Context (원본 불변)
+    struct Node {
+        std::type_index           type_key;
+        std::shared_ptr<void>     value;
+        std::shared_ptr<const Node> next;
+    };
+    std::shared_ptr<const Node> head_;
+
+public:
+    static const Context empty;
+
+    // 슬롯 추가 (기존 타입이 있으면 shadow — 원본은 여전히 접근 가능)
+    template<typename T>
+    [[nodiscard]] Context put(T value) const {
+        auto node = std::make_shared<Node>(Node{
+            .type_key = std::type_index(typeid(T)),
+            .value    = std::make_shared<T>(std::move(value)),
+            .next     = head_,
+        });
+        Context c;
+        c.head_ = std::move(node);
+        return c;
+    }
+
+    // 슬롯 조회 (없으면 nullopt, 존재하면 T의 복사본)
+    template<typename T>
+    [[nodiscard]] std::optional<T> get() const noexcept {
+        auto tid = std::type_index(typeid(T));
+        for (const Node* n = head_.get(); n; n = n->next.get()) {
+            if (n->type_key == tid)
+                return *std::static_pointer_cast<T>(n->value);
+        }
+        return std::nullopt;
+    }
+
+    // 슬롯 포인터 조회 (복사 없이 참조, nullptr = 없음)
+    template<typename T>
+    [[nodiscard]] const T* get_ptr() const noexcept {
+        auto tid = std::type_index(typeid(T));
+        for (const Node* n = head_.get(); n; n = n->next.get()) {
+            if (n->type_key == tid)
+                return std::static_pointer_cast<T>(n->value).get();
+        }
+        return nullptr;
+    }
+
+    bool empty() const noexcept { return !head_; }
+};
+```
+
+### 28.3 내장 Context 슬롯
+
+```cpp
+// 파이프라인 인프라가 자동으로 관리하는 슬롯들
+// Action에서는 읽기만 (put으로 shadow 가능하지만 권장하지 않음)
+
+struct TraceCtx {
+    uint8_t  trace_id[16];  // W3C trace_id (128-bit)
+    uint8_t  span_id[8];    // 현재 span (64-bit)
+    uint8_t  trace_flags;   // sampled bit
+};
+
+struct RequestId    { std::string value; };
+struct AuthSubject  { std::string_view value; };   // 인증된 사용자 식별자
+struct AuthRoles    { std::vector<std::string_view> value; };
+struct Deadline     { std::chrono::steady_clock::time_point value; };
+struct ActiveSpan   { SpanHandle span; };          // 현재 tracing span
+
+// HTTP → Pipeline 진입점에서 자동 설정:
+// Context ctx = Context::empty
+//     .put(TraceCtx::from_traceparent(req.header("traceparent")))
+//     .put(RequestId{req.header("X-Request-Id")})
+//     .put(AuthSubject{res.get_header("X-Auth-Sub")});
+// co_await pipeline.push(ContextualItem{req, ctx});
+```
+
+### 28.4 Fork 시맨틱 (fan-out 시 컨텍스트 분기)
+
+```cpp
+// fan-out: 하나의 Context → 여러 자식 Context (각자 독립 확장)
+auto parent_ctx = env.ctx;
+
+// 각 fan-out 대상이 서로 다른 span을 가지도록
+auto ctx_a = parent_ctx.put(ActiveSpan{tracer.start_span("branch-a", parent_ctx)});
+auto ctx_b = parent_ctx.put(ActiveSpan{tracer.start_span("branch-b", parent_ctx)});
+
+co_await pipeline_a.push(ContextualItem{item, ctx_a});
+co_await pipeline_b.push(ContextualItem{item, ctx_b});
+// parent_ctx는 변경되지 않음 (불변)
+```
+
+### 28.5 ContextualItem — 채널 전송 단위
+
+```cpp
+// AsyncChannel이 실제로 전송하는 타입 (아이템 + 컨텍스트 묶음)
+template<typename T>
+struct ContextualItem {
+    T       value;
+    Context ctx;
+};
+
+// Action의 입출력은 ContextualItem<T> 가 아닌 T 로 보임
+// (파이프라인 인프라가 ContextualItem 래핑/언래핑 처리)
+// → Action Fn의 서명: Task<Result<Out>>(In item, ActionEnv env)
+//   파이프라인이 channel에서 ContextualItem<In>을 꺼내 {.value, ActionEnv{.ctx}} 분리
+```
+
+---
+
+## 29. ActionEnv — Action 호출 환경
+
+Action 처리 함수가 매 호출마다 받는 **per-call 환경 구조체**.
+생성 비용: `shared_ptr` 복사(ctx) + 원시값 2개 = ~16 bytes stack.
+
+```cpp
+struct ActionEnv {
+    Context         ctx;         // 아이템 스코프 불변 컨텍스트
+    std::stop_token stop;        // 파이프라인 drain/stop 취소 신호
+    size_t          worker_idx;  // WorkerLocal<T>::get(idx) 접근용
+};
+
+// Action 처리 함수 서명 (예외 금지 — unhandled_exception=terminate)
+// Task<Result<Out>>(In item, ActionEnv env)
+```
+
+### 29.1 ActionEnv 활용 패턴
+
+```cpp
+// ① Context에서 요청 메타데이터 읽기
+Task<Result<Out>> enrich_action(In item, ActionEnv env) {
+    auto req_id = env.ctx.get<RequestId>();
+    auto subject = env.ctx.get<AuthSubject>();
+
+    if (!subject) co_return std::unexpected(errc::permission_denied);
+
+    // ② stop_token으로 취소 체크 (co_await 전 반드시)
+    if (env.stop.stop_requested())
+        co_return std::unexpected(errc::operation_canceled);
+
+    // ③ WorkerLocal로 락 없는 per-worker 상태 접근
+    auto& rng = rngs_.get(env.worker_idx);
+    auto noise = std::uniform_real_distribution{}(rng);
+
+    // ④ 자식 컨텍스트 생성 (다운스트림에 추가 정보 전달)
+    // 주의: ActionEnv.ctx는 불변 — put()으로 새 ctx 생성
+    // (파이프라인이 자동으로 다음 Action에 전파)
+
+    co_return Out{item, noise};
+}
+```
+
+### 29.2 컨텍스트 확장 — downstream에 새 정보 전달
+
+```cpp
+// Action이 downstream에 새 슬롯을 추가하고 싶을 때:
+// → 처리 결과에 context 수정 의도를 담아 반환하는 방식은 복잡함
+// → 권장: ContextualOut<T>를 Out 타입으로 사용
+
+struct ContextualOut {
+    Out     value;
+    Context ctx_override;  // 비어있으면 upstream ctx 그대로 전파
+};
+
+// 파이프라인이 ContextualOut을 감지하면 ctx_override 사용, 없으면 부모 ctx 전파
+```
+
+---
+
+## 30. ServiceRegistry — 스코프 기반 의존성 주입
+
+### 30.1 설계 원칙
+
+- **Action의 외부 의존성은 생성자에서 주입** (call-time이 아님)
+- **ServiceRegistry는 파이프라인 구성 시 한 번만 읽음** (runtime read-mostly)
+- **계층적 스코프**: PipelineRegistry가 없으면 GlobalRegistry에서 fallback 조회
+- **강한 의존성** (`require<T>`): 없으면 프로세스 시작 불가 → 빠른 실패(fail-fast)
+- **약한 의존성** (`get<T>`): 없으면 `nullptr` → graceful degradation
+
+```cpp
+class ServiceRegistry {
+public:
+    // 싱글톤 등록: 이미 생성된 인스턴스
+    template<typename T>
+    void register_singleton(std::shared_ptr<T> instance) {
+        services_[std::type_index(typeid(T))] = instance;
+    }
+
+    // 팩토리 등록: 첫 조회 시 lazy 생성 (lazy singleton)
+    template<typename T>
+    void register_factory(std::function<std::shared_ptr<T>()> factory) {
+        factories_[std::type_index(typeid(T))] = [factory = std::move(factory)]() {
+            return std::static_pointer_cast<void>(factory());
+        };
+    }
+
+    // 약한 의존성 조회: 없으면 nullptr (graceful degradation)
+    template<typename T>
+    std::shared_ptr<T> get() const {
+        auto key = std::type_index(typeid(T));
+        if (auto it = services_.find(key); it != services_.end())
+            return std::static_pointer_cast<T>(it->second);
+        if (auto it = factories_.find(key); it != factories_.end()) {
+            auto v = it->second();
+            services_[key] = v;  // cache
+            return std::static_pointer_cast<T>(v);
+        }
+        if (parent_) return parent_->get<T>();
+        return nullptr;
+    }
+
+    // 강한 의존성 조회: 없으면 terminate() (fail-fast)
+    template<typename T>
+    std::shared_ptr<T> require() const {
+        auto s = get<T>();
+        if (!s) {
+            // 에러 메시지 출력 후 종료 (디버깅 용이)
+            // "[qbuem] FATAL: required service not registered: T"
+            std::terminate();
+        }
+        return s;
+    }
+
+    ServiceRegistry* parent_ = nullptr;
+
+private:
+    mutable std::unordered_map<std::type_index, std::shared_ptr<void>> services_;
+    mutable std::unordered_map<std::type_index, std::function<std::shared_ptr<void>()>> factories_;
+};
+
+// 전역 레지스트리 (프로세스 싱글톤)
+ServiceRegistry& global_registry();
+
+// 파이프라인 스코프 레지스트리 (전역 상속 + 오버라이드)
+// 생성: PipelineRegistry pr{&global_registry()};
+// 파이프라인별 CB 상태, Rate Limiter 등록
+using PipelineRegistry = ServiceRegistry;  // parent_ 연결로 계층 구성
+```
+
+### 30.2 Action에서의 의존성 주입 패턴
+
+```cpp
+// Action은 생성자에서 ServiceRegistry를 받아 의존성 해결
+// → call-time(ActionEnv)이 아닌 구성 시간에 해결 → 런타임 오버헤드 없음
+
+class EnrichAction {
+    std::shared_ptr<IDatabase>   db_;     // 강한 의존성: 없으면 동작 불가
+    std::shared_ptr<ICache>      cache_;  // 약한 의존성: 없어도 DB로 폴백
+
+public:
+    explicit EnrichAction(ServiceRegistry& registry)
+        : db_   (registry.require<IDatabase>())
+        , cache_(registry.get<ICache>())          // nullptr OK
+    {}
+
+    Task<Result<EnrichedItem>> process(RawItem item, ActionEnv env) {
+        if (env.stop.stop_requested())
+            co_return std::unexpected(errc::operation_canceled);
+
+        // 약한 의존성: cache가 있으면 먼저 시도
+        if (cache_) {
+            if (auto cached = co_await cache_->get(item.id))
+                co_return EnrichedItem{item, *cached};
+        }
+
+        // 강한 의존성: DB 조회 (항상 있음)
+        auto result = co_await db_->query(item.id);
+        if (!result) co_return std::unexpected(result.error());
+
+        if (cache_)
+            co_await cache_->set(item.id, *result);
+
+        co_return EnrichedItem{item, *result};
+    }
+
+private:
+    WorkerLocal<std::mt19937> rngs_;  // worker-local 상태 (§33)
+};
+
+// Action 생성:
+ServiceRegistry pipeline_reg{&global_registry()};
+pipeline_reg.register_singleton<ICache>(make_shared<RedisCache>());
+
+auto action = Action<RawItem, EnrichedItem>{
+    [ea = EnrichAction{pipeline_reg}](RawItem item, ActionEnv env) mutable {
+        return ea.process(std::move(item), env);
+    }
+};
+```
+
+### 30.3 강/약 의존성 결정 기준
+
+| 기준 | 강한 의존성 (`require`) | 약한 의존성 (`get`) |
+|------|------------------------|---------------------|
+| 없으면? | Action이 동작 불가 | graceful degradation 가능 |
+| 예시 | DB 커넥션 풀, Auth 서비스 | Cache, 외부 알림 서비스 |
+| 실패 시 | 빠른 실패 (시작 시 확인) | nullptr 체크 후 폴백 |
+| 테스트 | mock 주입 필수 | mock 선택적 |
+
+---
+
+## 31. Action 상태 분류 (의존성 강도)
+
+### 분류 1: Stateless Action (순수 함수)
+
+```cpp
+// 내부 상태 없음 → 이상적 기본 형태
+// 멱등성, 완전한 테스트 용이성, 병렬화 완전 안전
+auto validate_action = Action<RawItem, ValidatedItem>{
+    [](RawItem item, ActionEnv env) -> Task<Result<ValidatedItem>> {
+        if (item.id.empty())
+            co_return std::unexpected(errc::invalid_argument);
+        co_return ValidatedItem{item};
+    }
+};
+```
+
+### 분류 2: Immutable-Stateful Action (읽기 전용 상태)
+
+```cpp
+// 초기화 후 읽기만 → 공유 가능, 락 불필요
+class PatternAction {
+    std::regex pattern_;  // 컴파일 시 고정, 이후 읽기만
+
+public:
+    explicit PatternAction(std::string_view regex_str)
+        : pattern_(regex_str.data()) {}
+
+    Task<Result<MatchedItem>> process(TextItem item, ActionEnv env) {
+        // pattern_은 읽기 전용 → 스레드 안전
+        if (!std::regex_search(item.text, pattern_))
+            co_return std::unexpected(errc::no_match);
+        co_return MatchedItem{item};
+    }
+};
+```
+
+### 분류 3: Mutable-Stateful Action — 두 가지 선택지
+
+#### 옵션 A: 스레드 안전 (여러 워커가 공유)
+
+```cpp
+class CounterAction {
+    std::atomic<uint64_t> count_{0};  // atomic → 스레드 안전
+
+public:
+    Task<Result<Out>> process(In item, ActionEnv env) {
+        auto n = count_.fetch_add(1, std::memory_order_relaxed);
+        co_return Out{item, n};
+    }
+};
+```
+
+#### 옵션 B: WorkerLocal (§33) — 락 완전 제거
+
+```cpp
+class CachingAction {
+    WorkerLocal<LruCache<Key, Value>> caches_;  // 워커별 독립 캐시
+
+public:
+    explicit CachingAction(size_t worker_count)
+        : caches_(worker_count, [] { return LruCache<Key, Value>{1024}; }) {}
+
+    Task<Result<Out>> process(In item, ActionEnv env) {
+        auto& cache = caches_.get(env.worker_idx);  // 락 없음
+        if (auto hit = cache.get(item.key)) co_return Out{*hit};
+        auto result = co_await fetch(item);
+        cache.set(item.key, *result);
+        co_return Out{*result};
+    }
+};
+```
+
+### 분류 4: External-Stateful Action (외부 시스템)
+
+```cpp
+// DB, Redis, Kafka 등 외부 상태 — ServiceRegistry로 주입
+class PersistAction {
+    std::shared_ptr<IDatabase> db_;  // 생성자 주입 (§30.2)
+
+public:
+    explicit PersistAction(ServiceRegistry& reg)
+        : db_(reg.require<IDatabase>()) {}
+
+    Task<Result<SavedItem>> process(ProcessedItem item, ActionEnv env) {
+        // DB는 자체적으로 스레드 안전 (connection pool 내부 처리)
+        auto result = co_await db_->save(item);
+        if (!result) co_return std::unexpected(result.error());
+        co_return SavedItem{*result};
+    }
+};
+```
+
+### 분류 요약
+
+| 분류 | 공유 가능 | 락 필요 | 선호도 |
+|------|----------|--------|--------|
+| Stateless | ✅ 완전 | 없음 | ⭐⭐⭐ 최우선 |
+| Immutable-Stateful | ✅ 읽기만 | 없음 | ⭐⭐⭐ |
+| Mutable (atomic) | ✅ | atomic | ⭐⭐ |
+| Mutable (WorkerLocal) | ❌ (워커별) | 없음 | ⭐⭐⭐ (성능 중요 시) |
+| External | ✅ (pool) | pool 내부 | ⭐⭐ |
+
+---
+
+## 32. Pipeline 간 의존성 강도
+
+### 강한 의존성 (Strong) — 타입 체인 자체
+
+```
+StaticPipeline에서의 강한 의존성:
+  Action<HttpRequest, AuthedReq>
+         ↓ 출력 타입 = 다음 Action의 입력 타입
+  Action<AuthedReq, ParsedBody>    ← AuthedReq가 없으면 컴파일 에러
+         ↓
+  Action<ParsedBody, SavedItem>    ← ParsedBody가 없으면 컴파일 에러
+
+타입 불일치 = 컴파일 에러 → 런타임 패닉 없음
+```
+
+**특징**:
+- 선행 Action이 실패하면 후속 Action은 실행 안됨 (DLQ로 이동)
+- Action을 제거하거나 타입을 변경하면 전체 파이프라인 재컴파일 필요
+- 의도적 설계: 핵심 처리 경로의 정확성 보장
+
+### 약한 의존성 (Weak) — ServiceRegistry + 옵셔널 접근
+
+```
+여러 파이프라인이 공통 서비스를 공유:
+  Pipeline A ─── GlobalRegistry::get<ICache>() ──→ Redis Cache
+  Pipeline B ─── GlobalRegistry::get<ICache>() ──┘  (같은 캐시 공유)
+
+  Cache가 없어도 → nullptr 체크 후 DB 폴백 (graceful degradation)
+```
+
+**특징**:
+- 서비스 부재 시 degraded mode로 동작 가능
+- 런타임에 서비스 교체/업그레이드 가능 (DynamicPipeline hot-swap과 연계)
+- 파이프라인 간 직접 참조 없음 → 느슨한 결합
+
+### 파이프라인 간 의존성 그래프
+
+```
+PipelineGraph에서 세 가지 의존성 종류:
+
+1. 완료 트리거 (순서 의존):
+   Pipeline A → (완료 후) → Pipeline B
+   A가 끝나야 B 시작, 하지만 타입은 독립적
+
+2. 공유 채널 (데이터 의존):
+   Pipeline A ──→ AsyncChannel<T> ──→ Pipeline B
+   A의 출력이 B의 입력 (MessageBus 패턴)
+
+3. 공유 서비스 (리소스 의존):
+   Pipeline A ──→ GlobalRegistry::get<IDatabase>() ←── Pipeline B
+   같은 DB를 독립적으로 사용 (직접 의존 없음)
+```
+
+### 파이프라인 간 순환 의존성 감지
+
+```cpp
+// PipelineGraph::start() 내부:
+// Kahn's algorithm으로 위상 정렬
+// 사이클 감지 시: Result::err(errc::invalid_argument)
+//   + "cycle detected: A → B → C → A" 에러 메시지
+```
+
+---
+
+## 33. Worker-local 상태 (락 없는 per-worker 패턴)
+
+여러 워커가 동일한 타입의 상태를 독립적으로 소유. 락 완전 제거.
+
+```cpp
+template<typename T>
+class WorkerLocal {
+    // 각 워커가 전용 슬롯 소유 → false sharing 방지를 위해 padding 고려
+    struct alignas(64) Slot { T value; };  // cache-line 정렬
+    std::vector<Slot> slots_;
+
+public:
+    // 워커 수 + 초기값 팩토리로 생성
+    explicit WorkerLocal(size_t worker_count, std::function<T()> factory) {
+        slots_.reserve(worker_count);
+        for (size_t i = 0; i < worker_count; ++i)
+            slots_.emplace_back(Slot{factory()});
+    }
+
+    // O(1) 접근, 락 없음 (워커만 자신의 슬롯 접근)
+    T&       get(size_t worker_idx)       { return slots_[worker_idx].value; }
+    const T& get(size_t worker_idx) const { return slots_[worker_idx].value; }
+};
+```
+
+### 사용 사례
+
+```cpp
+class ImageProcessAction {
+    // 워커별 전용 리소스 — 락 없이 안전하게 사용
+    WorkerLocal<std::mt19937>           rngs_;     // per-worker RNG (시드 다름)
+    WorkerLocal<std::vector<uint8_t>>   buffers_;  // per-worker 재사용 버퍼
+    WorkerLocal<LruCache<Url, Image>>   caches_;   // per-worker 이미지 캐시
+
+public:
+    explicit ImageProcessAction(size_t worker_count)
+        : rngs_   (worker_count, [] { return std::mt19937{std::random_device{}()}; })
+        , buffers_(worker_count, [] { return std::vector<uint8_t>(4096); })
+        , caches_ (worker_count, [] { return LruCache<Url, Image>{256}; })
+    {}
+
+    Task<Result<ProcessedImage>> process(ImageRequest req, ActionEnv env) {
+        auto& rng    = rngs_.get(env.worker_idx);    // 락 없음
+        auto& buffer = buffers_.get(env.worker_idx);  // 락 없음
+        auto& cache  = caches_.get(env.worker_idx);   // 락 없음
+
+        if (auto hit = cache.get(req.url)) co_return ProcessedImage{*hit};
+
+        buffer.resize(req.size);
+        auto noise = std::uniform_real_distribution{0.0, 0.1}(rng);
+        // ... 처리 ...
+        co_return ProcessedImage{/* ... */};
+    }
+};
+```
+
+### WorkerLocal vs thread_local
+
+| | `WorkerLocal<T>` | `thread_local T` |
+|--|-----------------|-----------------|
+| 접근 방법 | `wl.get(env.worker_idx)` | 자동 |
+| 코루틴 안전 | ✅ (idx는 프레임에 있음) | ❌ (co_await 후 다른 스레드) |
+| 공유 제어 | ✅ (명시적 idx) | ❌ (자동, 추적 어려움) |
+| 워커 수 변경 | ✅ (scale_to 연동) | ❌ |
+| 테스트 가능 | ✅ | 어려움 |
+
+---
+
+## 34. 상태 수명 및 소유권 규칙
+
+### 34.1 소유권 계층
+
+```
+전역 상태:
+  GlobalRegistry (프로세스 싱글톤, static lifetime)
+  → std::shared_ptr<T> (소유)
+  → 파이프라인/Action이 shared_ptr 복사 (공동 소유)
+
+파이프라인 상태:
+  PipelineRegistry (파이프라인 lifetime)
+  → CircuitBreaker, RateLimiter (파이프라인이 단독 소유)
+  → GlobalRegistry fallback (공동 소유)
+
+Action 상태:
+  Action 객체 (파이프라인이 소유하는 unique_ptr<Action>)
+  → WorkerLocal<T> (Action이 단독 소유)
+  → ServiceRegistry에서 가져온 shared_ptr (공동 소유)
+
+아이템 상태 (Context):
+  Context (shared_ptr 기반 persistent list)
+  → 채널을 통해 전달 (이동 시 소유권 이전)
+  → fan-out 시 복사 (공동 소유, 불변이라 안전)
+```
+
+### 34.2 수명 규칙 요약
+
+```cpp
+// 1. GlobalRegistry에 등록된 서비스는 모든 파이프라인보다 오래 살아야 함
+//    → main()에서 생성, 모든 파이프라인 stop() 후 소멸
+
+// 2. PipelineRegistry는 해당 파이프라인과 수명 일치
+//    → pipeline.start() 전 구성, pipeline 소멸 시 자동 소멸
+
+// 3. Action이 ServiceRegistry에서 가져온 shared_ptr은 Action 수명 동안 유효
+//    → Action 소멸 → shared_ptr 소멸 → 레퍼런스 카운트 감소
+
+// 4. Context는 아이템 처리 완료 시 자동 해제
+//    → 채널에서 꺼낼 때 move, DLQ로 갈 때도 move
+//    → fan-out: 복사본들이 각자 해제 (shared_ptr 레퍼런스 카운트)
+
+// 5. WorkerLocal<T>는 Action과 수명 일치
+//    → Action 소멸 시 모든 worker 슬롯 자동 소멸
+```
+
+### 34.3 Pipeline 종료 시 순서
+
+```
+1. pipeline.drain()          — 새 아이템 수신 중단, in-flight 완료 대기
+2. Context들 자동 해제       — drain 완료 시 마지막 아이템 Context 소멸
+3. Action 소멸               — WorkerLocal, 주입된 서비스 shared_ptr 해제
+4. PipelineRegistry 소멸     — Pipeline-scoped 서비스 해제
+5. GlobalRegistry 마지막 해제 — 레퍼런스 카운트가 0이 되면 실제 소멸
+```
+
+### 34.4 흔한 수명 버그와 해결책
+
+```cpp
+// ❌ BUG: Action이 글로벌 객체를 raw pointer로 잡음
+//         → 글로벌 먼저 소멸 시 dangling pointer
+class BadAction {
+    IDatabase* db_;  // raw pointer!
+public:
+    BadAction(IDatabase* db) : db_(db) {}
+};
+
+// ✅ FIX: shared_ptr으로 공동 소유
+class GoodAction {
+    std::shared_ptr<IDatabase> db_;  // 공동 소유 → 수명 보장
+public:
+    explicit GoodAction(ServiceRegistry& reg)
+        : db_(reg.require<IDatabase>()) {}
+};
+
+// ❌ BUG: Context에 스택 변수 포인터 저장
+//         → 함수 반환 후 dangling
+Context bad_ctx = ctx.put(AuthSubject{
+    .value = std::string_view{some_local_string}  // 스택 string → dangling!
+});
+
+// ✅ FIX: string을 Context에 복사로 저장, string_view는 Context 내부에만 사용
+Context good_ctx = ctx.put(RequestId{std::string{req.header("X-Request-Id")}});
+```
