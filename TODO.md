@@ -271,15 +271,15 @@
 - [ ] io_uring 직접 RECV/SEND SQE — POLL_ADD 기반에서 실제 비동기 I/O 제출로 전환
   - `IORING_OP_RECV` + Buffer Ring → recv() syscall 제거
   - `IORING_OP_SEND` → send() syscall 제거
-- [ ] `IORING_OP_ACCEPT_MULTISHOT` (Linux 5.19+) — SQE 1회로 다중 연결 수락
+- [x] `IORING_OP_ACCEPT_MULTISHOT` (Linux 5.19+) — SQE 1회로 다중 연결 수락
   - 연결마다 SQE 재제출 없음 → high-concurrency accept 오버헤드 제거
-- [ ] `IORING_OP_RECV_MULTISHOT` (Linux 5.19+) — SQE 1회로 다중 패킷 수신
+- [x] `IORING_OP_RECV_MULTISHOT` (Linux 5.19+) — SQE 1회로 다중 패킷 수신
   - Buffer Ring 자동 선택과 결합 → zero-copy recv 완성
-- [ ] io_uring Fixed Files — `io_uring_register_files()` + `IOSQE_FIXED_FILE`
+- [x] io_uring Fixed Files — `io_uring_register_files()` + `IOSQE_FIXED_FILE`
   - SQE마다 fd 테이블 조회 제거 → 고연결 환경 오버헤드 감소
-- [ ] io_uring Linked SQEs — `IOSQE_IO_LINK` / `IOSQE_IO_HARDLINK`
+- [x] io_uring Linked SQEs — `IOSQE_IO_LINK` / `IOSQE_IO_HARDLINK`
   - 읽기→쓰기 원자적 체인 → 프록시/파이프 전달에 활용
-- [ ] `IORING_OP_SOCKET` + `IORING_OP_CONNECT` — 소켓 생성/연결도 io_uring으로
+- [x] `IORING_OP_SOCKET` + `IORING_OP_CONNECT` — 소켓 생성/연결도 io_uring으로
   - `ConnectionPool::acquire()` 신규 연결 경로에 적용
 
 ### 소켓 고급 옵션 (신규)
@@ -352,7 +352,7 @@
 - [x] kTLS (Kernel TLS) 통합 — `setsockopt(SOL_TLS, TLS_TX/RX)` 지원
   - `kTLSTransport` — ITransport 구현체, TLS 핸드셰이크 후 키 커널 전달
   - kTLS + `sendfile()` 조합 → TLS 연결에서도 정적 파일 zero-copy 가능
-- [ ] `IORING_OP_SENDMSG_ZC` (Linux 6.0+) — io_uring zero-copy send
+- [x] `IORING_OP_SENDMSG_ZC` (Linux 6.0+) — io_uring zero-copy send
   - 두 CQE 패턴(전송 시작 + completion notification) 처리
   - `zero_copy::` 모듈에 io_uring 경로 추가
 - [x] Huge Pages 버퍼 풀 — `mmap(MAP_HUGETLB)` 기반 `HugeBufferPool<N, Count>`
@@ -517,7 +517,7 @@
 - [x] PGO (Profile-Guided Optimization) 2-pass 빌드 CMake 지원
   - `QBUEM_PGO_GENERATE=ON` → instrumented 빌드
   - `QBUEM_PGO_USE=ON` → 프로파일 기반 최적화 빌드
-- [ ] `IORING_OP_FUTEX_WAIT/WAKE` (Linux 6.7+) — eventfd 대체 wakeup
+- [x] `IORING_OP_FUTEX_WAIT/WAKE` (Linux 6.7+) — eventfd 대체 wakeup
 
 ### Pipeline Versioning & Schema Evolution
 - [x] `PipelineVersion { major, minor, patch }` — compatible_with() 검사
