@@ -513,7 +513,7 @@
 
 ### 성능 프로파일링 통합
 - [x] `PerfCounters` — PMU 이벤트 (cycles, instructions, LLC-miss, branch-miss)
-- [ ] eBPF 트레이싱 가이드 — io_uring tracepoints, tcp_sendmsg kprobe
+- [x] eBPF 트레이싱 가이드 — io_uring tracepoints, tcp_sendmsg kprobe
 - [x] PGO (Profile-Guided Optimization) 2-pass 빌드 CMake 지원
   - `QBUEM_PGO_GENERATE=ON` → instrumented 빌드
   - `QBUEM_PGO_USE=ON` → 프로파일 기반 최적화 빌드
