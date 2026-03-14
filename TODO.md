@@ -187,7 +187,7 @@
   - ActionEnv 구성: `{ctx = upstream_item.ctx, stop, worker_idx}`
   - ContextualItem 언래핑/래핑: 채널 내부는 `ContextualItem<T>`, Action Fn은 `T`만 봄
   - Stateless / Immutable / Mutable(WorkerLocal) / External 4가지 패턴 지원
-- [ ] `BatchAction<In, Out>` — 최대 N개 아이템 묶음 처리
+- [x] `BatchAction<In, Out>` — 최대 N개 아이템 묶음 처리
 
 ### StaticPipeline
 - [x] `PipelineBuilder<In>` — `add<Out>(action)` 마다 새 타입 반환 (컴파일타임 체인)
@@ -198,7 +198,7 @@
   - `push(In)` (backpressure) / `try_push(In)` (논블로킹)
   - 파이프라인 상태 머신: Created → Starting → Running → Draining → Stopped
   - `IPipelineInput<T>` — 타입 소거 입력 인터페이스 (fan-out에 활용)
-- [ ] 통합 테스트: StaticPipeline 3단계 체인, scale-out, drain, backpressure
+- [x] 통합 테스트: StaticPipeline 3단계 체인, scale-out, drain, backpressure
 
 ---
 
@@ -224,41 +224,41 @@
 
 ### IO 프리미티브 (Layer 3 — Network Sockets)
 
-- [ ] `SocketAddr` — IPv4/IPv6/Unix 값 타입, zero-alloc, `to_chars()` (할당 없음)
-- [ ] `TcpListener` — `SO_REUSEPORT` bind, `accept()` coroutine
-- [ ] `TcpStream` — `readv()`/`writev()` scatter-gather, `set_nodelay()`/`set_keepalive()`
-- [ ] `UdpSocket` — `sendto()`/`recvfrom()`, `recvmsg_batch()` (io_uring RECVMSG_MULTI)
-- [ ] `UnixSocket` — `AF_UNIX` SOCK_STREAM / SOCK_DGRAM
+- [x] `SocketAddr` — IPv4/IPv6/Unix 값 타입, zero-alloc, `to_chars()` (할당 없음)
+- [x] `TcpListener` — `SO_REUSEPORT` bind, `accept()` coroutine
+- [x] `TcpStream` — `readv()`/`writev()` scatter-gather, `set_nodelay()`/`set_keepalive()`
+- [x] `UdpSocket` — `sendto()`/`recvfrom()`, `recvmsg_batch()` (io_uring RECVMSG_MULTI)
+- [x] `UnixSocket` — `AF_UNIX` SOCK_STREAM / SOCK_DGRAM
 
 ### IO 버퍼 / 슬라이스 (Layer 4 — Zero-copy Buffer)
 
-- [ ] `IOSlice` — `{const byte*, size_t}` fat pointer (zero-alloc)
-- [ ] `IOVec<N>` — 스택 할당 scatter-gather 배열 (wraps `iovec[N]`), `writev()` 직접 전달
-- [ ] `ReadBuf<N>` — 컴파일타임 고정 링버퍼, `write_head()`/`commit()`/`consume()`, zero-alloc
-- [ ] `WriteBuf` — Arena 기반 코르크 버퍼, `as_iovec()` → 단일 `writev()` 시스템콜
-- [ ] `BufferPool<BufSize, Count>` — `FixedPoolResource` 위 io_uring Buffer Ring 연동 래퍼
+- [x] `IOSlice` — `{const byte*, size_t}` fat pointer (zero-alloc)
+- [x] `IOVec<N>` — 스택 할당 scatter-gather 배열 (wraps `iovec[N]`), `writev()` 직접 전달
+- [x] `ReadBuf<N>` — 컴파일타임 고정 링버퍼, `write_head()`/`commit()`/`consume()`, zero-alloc
+- [x] `WriteBuf` — Arena 기반 코르크 버퍼, `as_iovec()` → 단일 `writev()` 시스템콜
+- [x] `BufferPool<BufSize, Count>` — `FixedPoolResource` 위 io_uring Buffer Ring 연동 래퍼
 
 ### Zero-copy IO (Layer 4b)
 
-- [ ] `zero_copy::sendfile()` — `sendfile(2)` 정적 파일 서빙 (kernel space only)
-- [ ] `zero_copy::splice()` — pipe 기반 fd→fd 전송 (generic)
+- [x] `zero_copy::sendfile()` — `sendfile(2)` 정적 파일 서빙 (kernel space only)
+- [x] `zero_copy::splice()` — pipe 기반 fd→fd 전송 (generic)
 - [ ] `zero_copy::send_zerocopy()` — `MSG_ZEROCOPY` 송신 (Linux 4.14+)
 - [ ] `zero_copy::wait_zerocopy()` — errqueue 완료 대기
 
 ### AsyncFile (Layer 4c)
 
-- [ ] `AsyncFile` — 비동기 open/read_at/write_at/close
+- [x] `AsyncFile` — 비동기 open/read_at/write_at/close
   - io_uring `IORING_OP_READ_FIXED` 우선, 없으면 `pread/pwrite` 폴백
   - `O_DIRECT` 지원 (정렬 버퍼 필수)
 
 ### PlainTransport (Layer 5 확장)
 
-- [ ] `PlainTransport` — `ITransport` 구체 TCP 구현체 (TLS 없음)
+- [x] `PlainTransport` — `ITransport` 구체 TCP 구현체 (TLS 없음)
   - 서비스에서 OpenSSL/mbedTLS `ITransport` 구현 주입 패턴 예제 추가
 
 ### TimerWheel (Layer 2 교체)
 
-- [ ] `TimerWheel` — 4레벨 × 256슬롯 계층적 타이밍 휠
+- [x] `TimerWheel` — 4레벨 × 256슬롯 계층적 타이밍 휠
   - `schedule(delay_ms, fn)` O(1) / `cancel(id)` O(1) / `tick(elapsed_ms)` O(만료수)
   - `Entry` 할당: `FixedPoolResource<sizeof(Entry)>` — zero-heap
   - `next_expiry_ms()` — `poll()` timeout 계산에 사용
@@ -291,34 +291,34 @@
 
 ### Codec / Framing (Layer 6)
 
-- [ ] `IFrameCodec<Frame>` — `decode(span<byte>, Frame&)` / `encode(Frame, IOVec<16>&, Arena&)`
-- [ ] `LengthPrefixedCodec<Header>` — N바이트 길이 헤더 프레임
-- [ ] `LineCodec` — `\n` / `\r\n` 구분 (RESP, SMTP 등)
-- [ ] `Http1Codec` — 기존 `http::Parser` 래핑, `IFrameCodec<http::Request>` 구현
+- [x] `IFrameCodec<Frame>` — `decode(span<byte>, Frame&)` / `encode(Frame, IOVec<16>&, Arena&)`
+- [x] `LengthPrefixedCodec<Header>` — N바이트 길이 헤더 프레임
+- [x] `LineCodec` — `\n` / `\r\n` 구분 (RESP, SMTP 등)
+- [x] `Http1Codec` — 기존 `http::Parser` 래핑, `IFrameCodec<http::Request>` 구현
 
 ### Connection Lifecycle (Layer 7)
 
-- [ ] `IConnectionHandler<Frame>` — `on_connect()` / `on_frame()` / `on_disconnect()`
-- [ ] `AcceptLoop<Frame, HandlerFactory>` — SO_REUSEPORT coroutine 루프
+- [x] `IConnectionHandler<Frame>` — `on_connect()` / `on_frame()` / `on_disconnect()`
+- [x] `AcceptLoop<Frame, HandlerFactory>` — SO_REUSEPORT coroutine 루프
   - reactor당 독립 `TcpListener` → accept 경합 없음
   - 각 연결 → `Dispatcher::spawn(handle_connection(...))`
-- [ ] `ConnectionPool<T>` — 아웃바운드 풀 (min_idle, max_size, health_check, idle_timeout)
+- [x] `ConnectionPool<T>` — 아웃바운드 풀 (min_idle, max_size, health_check, idle_timeout)
   - O(1) hot path `acquire()`, RAII `ReturnToPool` deleter
 
 ---
 
 ### DynamicPipeline
-- [ ] `IDynamicAction` — 타입 소거 Action 인터페이스
+- [x] `IDynamicAction` — 타입 소거 Action 인터페이스
   - `ActionSchema { input_type, output_type }` — 런타임 스키마 호환성 체크
   - `process_erased(void*, void*, stop_token)` — 타입 소거 처리
 - [ ] `make_dynamic_action<In,Out>(Action)` — 정적 Action → 동적 어댑터
-- [ ] `DynamicPipeline`
+- [x] `DynamicPipeline`
   - `add_action()` / `insert_before()` / `insert_after()` / `remove_action()` — stopped 상태
   - 상태 머신: Created → Configured → Starting → Running → Reconfiguring → Draining → Stopped
   - `start()` / `drain()` / `stop()`
 
 ### PipelineGraph
-- [ ] `PipelineGraph` — DAG 오케스트레이션
+- [x] `PipelineGraph` — DAG 오케스트레이션
   - `add(name, pipeline)` — Static/Dynamic 모두 지원 (타입 소거)
   - `connect()` / `fan_out()` / `merge_into()` / `route_if()`
   - `start()` — Kahn's algorithm으로 사이클 감지 + 위상 정렬 후 순서대로 시작
@@ -326,7 +326,7 @@
   - A/B 라우팅: `ab_route(from, target_a, target_b, b_fraction)`
 
 ### MessageBus
-- [ ] `MessageBus` — gRPC 스타일 4가지 메시지 패턴
+- [x] `MessageBus` — gRPC 스타일 4가지 메시지 패턴
   - **Unary**: `RequestEnvelope<Req,Res>` = `{request, shared_ptr<AsyncChannel<Result<Res>>>}`
   - **Server Streaming**: `ServerStreamEnvelope<Req,Res>`
   - **Client Streaming**: `ClientStreamEnvelope<Req,Res>`
@@ -334,12 +334,12 @@
   - `create_*()` 등록 / 이름 기반 채널 접근 / DLQ 접근
 
 ### 관찰 가능성 기반
-- [ ] `ActionMetrics` — items_processed, errors, retried, dlq, latency_buckets (4구간)
-- [ ] `PipelineMetrics` — 파이프라인 단위 집계
-- [ ] `PipelineObserver` 훅 인터페이스
+- [x] `ActionMetrics` — items_processed, errors, retried, dlq, latency_buckets (4구간)
+- [x] `PipelineMetrics` — 파이프라인 단위 집계
+- [x] `PipelineObserver` 훅 인터페이스
   - `on_item_start/done`, `on_error`, `on_scale_event`, `on_state_change`
   - `on_dlq_item`, `on_circuit_open/close`
-- [ ] `LoggingObserver` 기본 구현
+- [x] `LoggingObserver` 기본 구현
 
 ---
 
@@ -363,17 +363,17 @@
 - [ ] Prefetch 힌트 — `__builtin_prefetch` 연결 구조체 선제 로드
 
 ### 복원력 패턴
-- [ ] `RetryPolicy` — Fixed / Exponential / ExponentialJitter backoff
+- [x] `RetryPolicy` — Fixed / Exponential / ExponentialJitter backoff
   - `max_attempts`, `base_delay`, `max_delay`, `deadline`, `retryable_errors`
-- [ ] `CircuitBreaker` — Closed / Open / HalfOpen 상태 머신
+- [x] `CircuitBreaker` — Closed / Open / HalfOpen 상태 머신
   - `failure_threshold`, `success_threshold`, `open_duration`
   - Open 상태 아이템 → 즉시 DLQ (처리 시도 없음)
-- [ ] `DeadLetter<T>` — `{item, error_code, attempt_count, failed_at}`
+- [x] `DeadLetter<T>` — `{item, error_code, attempt_count, failed_at}`
   - `DeadLetterQueue`: `MessageBus` 채널명으로 접근
 - [ ] Bulkhead: `channel_cap` 기반 자동 backpressure (별도 구현 불필요, 문서화)
 
 ### 분산 트레이싱 (OpenTelemetry 호환)
-- [ ] `TraceContext` — W3C Trace Context 표준
+- [x] `TraceContext` — W3C Trace Context 표준
   - `trace_id[16]` (128-bit) / `span_id[8]` (64-bit) / `trace_flags`
   - `generate()` / `child_span()` / `to_traceparent()` / `from_traceparent()`
 - [ ] **Context 슬롯 기반 TraceContext 전파** (§27 경고 참조 — thread_local은 코루틴에서 위험)
@@ -398,55 +398,55 @@
 ## v0.9.0 — Pipeline 고도화
 
 ### Hot-swap (무중단 액션 교체)
-- [ ] `DynamicPipeline::hot_swap(name, new_action, timeout)`
+- [x] `DynamicPipeline::hot_swap(name, new_action, timeout)`
   - Seal → Drain → Swap → Resume 절차
   - 타임아웃 초과 시 `errc::timed_out`
   - 스키마 불일치 시 `errc::invalid_argument`
   - Running 상태 아닌 경우 `errc::operation_not_permitted`
 
 ### 우선순위 채널
-- [ ] `PriorityChannel<T>` — High / Normal / Low 3레벨
+- [x] `PriorityChannel<T>` — High / Normal / Low 3레벨
   - recv: High 소진 → Normal 소진 → Low 순서 보장
   - Aging: Low가 N회 연속 skip 시 강제 처리 (스타베이션 방지)
   - `set_aging_threshold(n)` — 기본 100
 
 ### Config-driven Pipeline
-- [ ] `PipelineFactory` — JSON/YAML → `DynamicPipeline` / `PipelineGraph` 생성
+- [x] `PipelineFactory` — JSON/YAML → `DynamicPipeline` / `PipelineGraph` 생성
   - `register_plugin(name, factory)` — 코드 or .so 플러그인 등록
   - `from_json()` / `from_yaml()` / `graph_from_json()`
 
 ### Pipeline 합성
-- [ ] `SubpipelineAction<In,Out>` — `StaticPipeline<In,Out>`을 `Action<In,Out>`처럼 내장
+- [x] `SubpipelineAction<In,Out>` — `StaticPipeline<In,Out>`을 `Action<In,Out>`처럼 내장
   - 재사용성: 공통 처리 로직 캡슐화
   - 테스트 용이성: inner pipeline mock 교체 가능
 
 ### Arena 통합
-- [ ] reactor-local `FixedPoolResource<sizeof(PipelineItem<T>)>` 아이템 할당
+- [x] reactor-local `FixedPoolResource<sizeof(PipelineItem<T>)>` 아이템 할당
   - malloc/free 제거, 캐시 효율 극대화
   - `ArenaChannel<T>` — 동일 reactor 내 zero-copy 전달
 
 ### SPSC Channel (고성능 1:1 경로)
-- [ ] `SpscChannel<T>` — Lamport Queue (head_/tail_ alignas(64) 분리)
+- [x] `SpscChannel<T>` — Lamport Queue (head_/tail_ alignas(64) 분리)
   - `try_push()` / `try_pop()` — wait-free O(1)
   - `send()` / `recv()` — async blocking
   - `Action::Config::min_workers==1 && max_workers==1` → 자동 선택
 
 ### Batch 연산
-- [ ] `AsyncChannel<T>::try_recv_batch(span<T> out, size_t max_n)` — lock-free 배치 dequeue
-- [ ] `AsyncChannel<T>::send_batch(span<T> items)` — 배치 enqueue
-- [ ] `BatchAction<In, Out>` — `span<In>` 단위 처리 (DB bulk insert 등)
+- [x] `AsyncChannel<T>::try_recv_batch(span<T> out, size_t max_n)` — lock-free 배치 dequeue
+- [x] `AsyncChannel<T>::send_batch(span<T> items)` — 배치 enqueue
+- [x] `BatchAction<In, Out>` — `span<In>` 단위 처리 (DB bulk insert 등)
 
 ### 스트림 연산자 (Rx-style)
-- [ ] `stream_map`, `stream_filter`, `stream_flat_map` — 기본 변환
-- [ ] `stream_zip`, `stream_merge` — 멀티 스트림 결합
-- [ ] `stream_chunk(n)` — N개씩 묶어 vector로 (BatchAction 입력용)
-- [ ] `stream_take_while`, `stream_scan` — 상태 유지 변환
-- [ ] `operator|` 파이프 문법 지원
+- [x] `stream_map`, `stream_filter`, `stream_flat_map` — 기본 변환
+- [x] `stream_zip`, `stream_merge` — 멀티 스트림 결합
+- [x] `stream_chunk(n)` — N개씩 묶어 vector로 (BatchAction 입력용)
+- [x] `stream_take_while`, `stream_scan` — 상태 유지 변환
+- [x] `operator|` 파이프 문법 지원
 
 ### 이벤트 처리 고급 패턴
-- [ ] `DebounceAction<T>` — gap_duration 이후 마지막 아이템만 처리
-- [ ] `ThrottleAction<T>` — token bucket 기반 처리 속도 제한
-- [ ] `ScatterGatherAction<In,SubIn,SubOut,Out>` — 병렬 서브작업 후 결과 집계
+- [x] `DebounceAction<T>` — gap_duration 이후 마지막 아이템만 처리
+- [x] `ThrottleAction<T>` — token bucket 기반 처리 속도 제한
+- [x] `ScatterGatherAction<In,SubIn,SubOut,Out>` — 병렬 서브작업 후 결과 집계
   - `ScatterFn`, `ProcessFn`, `GatherFn`, `max_parallelism` 설정
 
 ### 성능 최적화

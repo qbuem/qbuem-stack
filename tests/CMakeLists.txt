@@ -9,6 +9,7 @@ add_executable(qbuem_tests
     dispatcher_post_test.cpp
     pipeline_test.cpp
     pipeline_integration_test.cpp
+    arena_channel_test.cpp
 )
 target_link_libraries(qbuem_tests
     PRIVATE
