@@ -408,6 +408,21 @@ target_link_libraries(my_service PRIVATE qbuem-stack::qbuem qbuem_json::qbuem_js
 | `DeadLetterQueue` | ❌ 예정 | 실패 아이템 격리 |
 | `PipelineTracer` (W3C Trace Context) | ❌ 예정 | OpenTelemetry 호환 |
 | `PipelineFactory` (Config-driven) | ❌ 예정 | JSON/YAML → Pipeline |
+| **Pipeline 고급** | | |
+| `TaskGroup` (구조적 동시성) | ❌ 예정 | 자식 코루틴 수명 관리, cancel-on-error |
+| `SpscChannel<T>` | ❌ 예정 | 1:1 고속 채널 (MPMC 대비 50% atomic 절감) |
+| Batch ops (`send_batch`/`recv_batch`) | ❌ 예정 | DB bulk insert 등 처리량 최적화 |
+| Rx-style 스트림 연산자 | ❌ 예정 | map/filter/flat_map/zip/merge/chunk |
+| `WindowedAction<T>` | ❌ 예정 | Tumbling/Sliding/Session 창 집계 |
+| `ScatterGatherAction` | ❌ 예정 | 병렬 서브작업 후 결과 집계 |
+| `DebounceAction` / `ThrottleAction` | ❌ 예정 | 이벤트 속도 제어 |
+| `SagaOrchestrator` | ❌ 예정 | 실패 시 역순 보상 트랜잭션 |
+| `IdempotencyFilter` | ❌ 예정 | Exactly-once 중복 처리 방지 |
+| `ICheckpointStore` | ❌ 예정 | ETL/배치 크래시 복구 |
+| SLO Tracking + Error Budget | ❌ 예정 | P99 목표 + 자동 circuit break |
+| Pipeline Topology Export | ❌ 예정 | JSON/DOT/Mermaid 위상 시각화 |
+| Canary 자동화 | ❌ 예정 | gradual rollout + 자동 롤백 |
+| Pipeline Versioning | ❌ 예정 | Schema Evolution + MigrationFn |
 
 ---
 
@@ -459,10 +474,12 @@ IDE 자동완성(IntelliSense / clangd)도 지원됩니다.
 | 버전 | 주요 내용 |
 |------|----------|
 | v0.5.0 | `Reactor::post()` + `Dispatcher::spawn()` — 파이프라인 전제조건 |
-| v0.6.0 | Pipeline MVP — `AsyncChannel`, `Action`, `StaticPipeline` |
+| v0.6.0 | Pipeline MVP — `Context`, `ServiceRegistry`, `AsyncChannel`, `Action`, `StaticPipeline` |
 | v0.7.0 | `DynamicPipeline` + `PipelineGraph` + `MessageBus` |
 | v0.8.0 | 복원력 (`RetryPolicy`, `CircuitBreaker`, DLQ) + 트레이싱 |
 | v0.9.0 | Hot-swap, Priority Channel, Config-driven, Pipeline 합성 |
+| v0.9.1 | Windowing, Saga, Exactly-once, Checkpoint, SLO, Topology, Canary |
+| v0.9.2 | NUMA pinning, SPSC, Batch ops, Rx 연산자, Pipeline Versioning |
 | v1.0.0 | HTTP/2, WebSocket, gRPC |
 
 전체 계획은 **[TODO.md](./TODO.md)**, 파이프라인 상세 설계는 **[docs/pipeline-design.md](./docs/pipeline-design.md)** 참조.

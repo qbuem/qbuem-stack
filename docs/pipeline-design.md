@@ -1,6 +1,6 @@
 # qbuem Pipeline System — 기술 설계 문서
 
-> **버전**: 0.3.0-draft
+> **버전**: 0.4.0-draft
 > **대상 브랜치**: `claude/continue-work-p2NeA`
 > **검토 관점**: 분산 시스템 / C++20 코루틴 / Lock-free / 시스템 설계 / Observability / 컴파일러 최적화 / 의존성 관리 / 상태 격리
 
@@ -42,6 +42,22 @@
 32. [Pipeline 간 의존성 강도](#32-pipeline-간-의존성-강도)
 33. [Worker-local 상태 (락 없는 per-worker 패턴)](#33-worker-local-상태-락-없는-per-worker-패턴)
 34. [상태 수명 및 소유권 규칙](#34-상태-수명-및-소유권-규칙)
+35. [C++20 Concepts — Action 타입 정적 검증](#35-c20-concepts--action-타입-정적-검증)
+36. [구조적 동시성 (TaskGroup / Nursery)](#36-구조적-동시성-taskgroup--nursery)
+37. [SPSC Channel & Batch 연산](#37-spsc-channel--batch-연산)
+38. [MPMC Ring Buffer 메모리 오더링 명세](#38-mpmc-ring-buffer-메모리-오더링-명세)
+39. [스트림 연산자 (Rx-style)](#39-스트림-연산자-rx-style)
+40. [Windowing & Event-time Processing](#40-windowing--event-time-processing)
+41. [Scatter-Gather Pattern](#41-scatter-gather-pattern)
+42. [Debounce / Throttle](#42-debounce--throttle)
+43. [Saga Pattern & 보상 트랜잭션](#43-saga-pattern--보상-트랜잭션)
+44. [Exactly-once & Idempotency Key](#44-exactly-once--idempotency-key)
+45. [Checkpoint / Snapshot](#45-checkpoint--snapshot)
+46. [SLO Tracking & Pipeline Health](#46-slo-tracking--pipeline-health)
+47. [Pipeline Topology Export](#47-pipeline-topology-export)
+48. [Canary 자동화 & 자동 롤백](#48-canary-자동화--자동-롤백)
+49. [NUMA-aware 스케줄링 & CPU Pinning](#49-numa-aware-스케줄링--cpu-pinning)
+50. [Pipeline Versioning & Schema Evolution](#50-pipeline-versioning--schema-evolution)
 
 ---
 
@@ -62,6 +78,14 @@
 | R11 | **상태 스코프 분리** | Global / Pipeline / Action / Item / Worker 5계층 |
 | R12 | **Context 전파** | 아이템과 함께 이동하는 불변 key-value 컨텍스트 |
 | R13 | **스코프 기반 의존성 주입** | ServiceRegistry 강/약 의존성, 계층적 스코프 |
+| R14 | **C++20 Concepts** | Action 타입 서명 컴파일타임 검증 |
+| R15 | **구조적 동시성** | TaskGroup으로 자식 코루틴 수명 관리 |
+| R16 | **스트림 연산자** | map/filter/flat_map/zip/merge Rx-style 파이프 |
+| R17 | **Windowing & Event-time** | Tumbling/Sliding/Session 창, Watermark |
+| R18 | **Saga / 보상 트랜잭션** | 부분 실패 시 역순 보상 (rollback) |
+| R19 | **Exactly-once** | 멱등성 키로 중복 처리 방지 |
+| R20 | **SLO 추적** | 액션 단위 P99 레이턴시 목표, 자동 경보 |
+| R21 | **Pipeline Versioning** | 타입 변경 시 버전 관리 + 롤링 업그레이드 |
 
 ---
 
@@ -1408,6 +1432,23 @@ Linux 단일 플랫폼, StaticPipeline 기준. 나머지는 MVP 이후 단계적
 | Action 호출 환경 | ActionEnv{ctx, stop, worker_idx} | 모든 per-call 정보 단일 구조체 |
 | 의존성 주입 | ServiceRegistry 계층 (Global → Pipeline) | 강/약 의존성 명시, 테스트 가능 |
 | Worker 로컬 상태 | WorkerLocal<T> (vector<T> + idx) | 락 없는 per-worker 상태 |
+| Action 타입 검증 | C++20 Concepts (ActionFn) | 명확한 컴파일 에러 |
+| 구조적 동시성 | TaskGroup nursery 패턴 | 자식 코루틴 수명 관리 |
+| SPSC 채널 | Lamport Queue, head/tail alignas(64) | MPMC 대비 50% atomic 절감 |
+| Batch ops | try_recv_batch / send_batch | per-item 오버헤드 감소 |
+| MPMC 메모리 오더 | acquire(seq read) + release(seq write) | happens-before 공식 명세 |
+| Rx 스트림 연산자 | map/filter/flat_map/zip/merge/chunk | 함수형 파이프 스타일 변환 |
+| Windowing | Tumbling/Sliding/Session + Watermark | event-time vs processing-time |
+| Scatter-Gather | ScatterGatherAction (TaskGroup 기반) | 병렬 서브작업 집계 |
+| Debounce/Throttle | gap 타이머 / token bucket | 이벤트 속도 제어 |
+| Saga | SagaOrchestrator 역순 보상 | 분산 트랜잭션 없는 일관성 |
+| Exactly-once | IdempotencyKey + IIdempotencyStore | 중복 처리 방지 |
+| Checkpoint | ICheckpointStore + offset + metadata | ETL/배치 크래시 복구 |
+| SLO + Error Budget | P99/P999 목표 + 자동 Circuit Break | SRE 기반 자동화 |
+| Topology Export | to_json() / to_dot() / to_mermaid() | 대시보드 / 문서 자동화 |
+| Canary 자동화 | gradual rollout + 메트릭 기반 자동 롤백 | 안전 배포 |
+| NUMA pinning | pin_to_cpu() + auto_numa_bind() | cross-NUMA 접근 최소화 |
+| Pipeline Versioning | major.minor.patch + MigrationFn | 무중단 타입 변경 |
 
 ---
 
@@ -2155,4 +2196,866 @@ Context bad_ctx = ctx.put(AuthSubject{
 
 // ✅ FIX: string을 Context에 복사로 저장, string_view는 Context 내부에만 사용
 Context good_ctx = ctx.put(RequestId{std::string{req.header("X-Request-Id")}});
+```
+
+---
+
+## 35. C++20 Concepts — Action 타입 정적 검증
+
+기존에는 Action::Fn 서명이 잘못되면 긴 template error가 나왔다.
+C++20 Concepts를 사용하면 컴파일 에러를 즉각 명확하게 보여준다.
+
+```cpp
+// ─── Concept 정의 ─────────────────────────────────────────────────────────
+
+// 단순 Action (Context 없음 — 레거시 또는 pure stateless)
+template<typename Fn, typename In, typename Out>
+concept SimpleActionFn = requires(Fn fn, In in, std::stop_token st) {
+    { fn(std::move(in), st) } -> std::same_as<Task<Result<Out>>>;
+};
+
+// 풀 Action (ActionEnv 포함 — 권장)
+template<typename Fn, typename In, typename Out>
+concept FullActionFn = requires(Fn fn, In in, ActionEnv env) {
+    { fn(std::move(in), env) } -> std::same_as<Task<Result<Out>>>;
+};
+
+// 둘 중 하나면 OK
+template<typename Fn, typename In, typename Out>
+concept ActionFn = FullActionFn<Fn, In, Out> || SimpleActionFn<Fn, In, Out>;
+
+// ─── Action 생성자에서 사용 ────────────────────────────────────────────────
+template<typename In, typename Out>
+class Action {
+public:
+    // Concept으로 잘못된 Fn 즉시 컴파일 에러
+    template<ActionFn<In, Out> Fn>
+    explicit Action(Fn fn, Config cfg = {});
+};
+
+// ─── PipelineBuilder 타입 체인 Concept ───────────────────────────────────
+template<typename Pipeline, typename In>
+concept PipelineInputFor = requires(Pipeline p, In item) {
+    { p.push(std::move(item)) } -> std::same_as<Task<Result<void>>>;
+};
+
+// ─── 컴파일 에러 예시 ─────────────────────────────────────────────────────
+// wrong return type:
+//   Action<int,float>{[](int, ActionEnv) { return 42; }};
+//   error: constraint not satisfied: FullActionFn<lambda, int, float>
+//           expression '{ fn(in, env) } -> Task<Result<float>>' is false
+```
+
+### 35.1 BatchAction Concept
+
+```cpp
+// 배치 처리 함수: span<In> → vector<Result<Out>>
+template<typename Fn, typename In, typename Out>
+concept BatchActionFn = requires(Fn fn, std::span<In> batch, ActionEnv env) {
+    { fn(batch, env) } -> std::same_as<Task<std::vector<Result<Out>>>>;
+};
+```
+
+---
+
+## 36. 구조적 동시성 (TaskGroup / Nursery)
+
+코루틴 fan-out, scatter 등에서 자식 코루틴들의 수명을 명확히 관리.
+모든 자식이 완료되기 전에 부모가 반환되지 않음을 보장.
+
+```cpp
+// ─── TaskGroup ────────────────────────────────────────────────────────────
+// 자식 Task들을 한 스코프로 묶어 수명 관리
+// → 자식 중 하나라도 에러 → 나머지 취소 후 에러 전파 (structured error)
+// → 모두 성공 → 결과 집합 반환
+
+class TaskGroup {
+public:
+    // 자식 Task 추가 (fire-and-forget 내부, 결과는 join()에서 수집)
+    template<typename T>
+    void spawn(Task<Result<T>> task);
+
+    // 모든 자식 완료 대기. 실패 시 나머지 stop_token 취소 + 첫 에러 반환
+    Task<Result<void>> join();
+
+    // 모든 자식의 결과 수집 (타입이 같을 때)
+    template<typename T>
+    Task<Result<std::vector<T>>> join_all();
+};
+
+// ─── fan-out에서의 사용 ────────────────────────────────────────────────────
+Task<Result<void>> fan_out_action(OrderItem item, ActionEnv env) {
+    TaskGroup group;
+    group.spawn(notify_action.push({item, env.ctx}));
+    group.spawn(audit_action.push({item, env.ctx}));
+    group.spawn(analytics_action.push({item, env.ctx}));
+
+    co_return co_await group.join();
+    // 하나라도 실패 → 나머지 취소 → 에러 반환
+    // 모두 성공 → ok 반환
+}
+
+// ─── scatter에서의 사용 ────────────────────────────────────────────────────
+Task<Result<std::vector<ChunkResult>>> scatter_process(
+    LargeFile file, ActionEnv env
+) {
+    auto chunks = file.split_into_chunks(1024 * 1024);  // 1MB chunks
+    TaskGroup group;
+
+    for (auto& chunk : chunks)
+        group.spawn(process_chunk(chunk, env));
+
+    co_return co_await group.join_all<ChunkResult>();
+}
+```
+
+### 36.1 TaskGroup 내부 구현 스케치
+
+```cpp
+// TaskGroup은 Reactor::post()를 통해 모든 자식을 같은 dispatcher에 spawn
+// cancel: std::stop_source → 자식들에게 std::stop_token 전달
+// join:   atomic counter (N children) → 모두 0이 되면 resume joiner coroutine
+struct TaskGroup::Impl {
+    std::stop_source           cancel_src;
+    std::atomic<size_t>        pending{0};
+    std::vector<std::error_code> errors;
+    std::mutex                 errors_mutex;
+    std::coroutine_handle<>    joiner;   // join()을 co_await한 코루틴
+};
+```
+
+---
+
+## 37. SPSC Channel & Batch 연산
+
+### 37.1 SPSC Channel (Single-Producer Single-Consumer)
+
+MPMC 대비 atomic 연산 50% 감소. 단일 생산자-소비자가 보장되는 경우 사용.
+
+```cpp
+// ─── 사용 케이스 ───────────────────────────────────────────────────────────
+// - Pipeline이 single-worker Action → 다음 single-worker Action
+// - Timer → Alert Action (1:1)
+// - 테스트 픽스처에서 명확한 1:1 파이프
+
+template<typename T>
+class SpscChannel {
+    // Lamport Queue 기반 (Corrigan-Gibbs 정렬)
+    // head_: consumer만 쓰고 producer가 읽음
+    // tail_: producer만 쓰고 consumer가 읽음
+    // ↑ cache-line 분리로 false sharing 제거
+    alignas(64) std::atomic<size_t> head_{0};
+    alignas(64) std::atomic<size_t> tail_{0};
+    std::unique_ptr<T[]>            ring_;
+    size_t                          mask_;
+
+public:
+    explicit SpscChannel(size_t capacity);  // power-of-2
+
+    // lock-free, wait-free O(1)
+    bool     try_push(T item) noexcept;
+    bool     try_pop(T& out)  noexcept;
+
+    // async (blocking on full/empty)
+    Task<Result<void>> send(T item);
+    Task<Result<T>>    recv();
+
+    void close() noexcept;
+    bool is_closed() const noexcept;
+};
+
+// ─── 자동 선택 ─────────────────────────────────────────────────────────────
+// Action::Config::min_workers == 1 && max_workers == 1
+//   → 파이프라인이 자동으로 SpscChannel 사용 (MPMC 대신)
+```
+
+### 37.2 Batch 연산
+
+```cpp
+// AsyncChannel에 배치 API 추가
+template<typename T>
+class AsyncChannel {
+public:
+    // 기존 send/recv는 유지
+
+    // 최대 max_n개 꺼내기 (있는 만큼만, 대기 없음)
+    // 반환: 실제 꺼낸 수
+    size_t try_recv_batch(std::span<T> out, size_t max_n) noexcept;
+
+    // 여러 아이템을 한 번에 넣기 (각각 send를 반복하는 것보다 효율적)
+    // 내부: 연속 슬롯이 있으면 memcpy-level 복사
+    Task<Result<size_t>> send_batch(std::span<T> items);
+
+    // N개 모두 받을 때까지 대기 (또는 EOS)
+    Task<Result<std::vector<T>>> recv_exactly(size_t n);
+};
+
+// ─── BatchAction에서 활용 ─────────────────────────────────────────────────
+// 단일 DB insert × 100 = 100 round-trips
+// vs batch insert: 1 round-trip, 100× 처리량
+Task<Result<void>> batch_persist(std::span<Order> orders, ActionEnv env) {
+    // bulk insert — 1 DB round-trip
+    co_return co_await db_->insert_many(orders);
+}
+```
+
+---
+
+## 38. MPMC Ring Buffer 메모리 오더링 명세
+
+구현 시 정확한 메모리 오더를 명세해야 데이터 레이스 없음을 보장.
+Dmitry Vyukov MPMC queue의 공식 오더링:
+
+```cpp
+// ─── 슬롯 구조 ────────────────────────────────────────────────────────────
+template<typename T>
+struct Slot {
+    alignas(64) std::atomic<size_t> sequence;  // cache-line 전용
+    T data;                                     // 같은 cache-line (슬롯당 하나)
+};
+
+// ─── send() (생산자) ──────────────────────────────────────────────────────
+// 1. tail_.load(relaxed) → 후보 위치
+// 2. slot.sequence.load(acquire) — ★ acquire: 이전 recv가 seq 쓴 것 확인
+// 3. 비교 후 tail_.compare_exchange_weak(relaxed, relaxed)
+//    → 성공: slot.data 쓰기 (비원자 쓰기, 아직 공개 안됨)
+// 4. slot.sequence.store(tail+1, release) — ★ release: data 쓰기가 먼저 끝남 보장
+
+// ─── recv() (소비자) ──────────────────────────────────────────────────────
+// 1. head_.load(relaxed)
+// 2. slot.sequence.load(acquire) — ★ acquire: 생산자의 store(release) 동기화
+// 3. data 읽기
+// 4. slot.sequence.store(head+capacity, release)
+
+// ─── 핵심 불변 조건 ───────────────────────────────────────────────────────
+// sequence[i] == i           → 슬롯 비어있음 (생산자가 쓸 수 있음)
+// sequence[i] == i+1         → 슬롯 가득참 (소비자가 읽을 수 있음)
+// sequence[i] == i+capacity  → 소비자가 읽고 초기화 완료
+//
+// Acquire on read + Release on write → happens-before 보장
+// head_/tail_ 업데이트는 relaxed (sequence atomic이 동기화 담당)
+```
+
+---
+
+## 39. 스트림 연산자 (Rx-style)
+
+`Stream<T>` 위에 함수형 연산자 체인을 제공.
+`operator|` 로 파이프 연결 (range adapter 스타일).
+
+```cpp
+// ─── 연산자 인터페이스 ────────────────────────────────────────────────────
+
+// map: T → U 변환
+template<typename T, typename U>
+Stream<U> stream_map(Stream<T> src, std::function<U(T)> fn);
+
+// filter: 조건 미충족 아이템 제거
+template<typename T>
+Stream<T> stream_filter(Stream<T> src, std::function<bool(const T&)> pred);
+
+// flat_map: T → Stream<U> 평탄화 (M:N 변환)
+template<typename T, typename U>
+Stream<U> stream_flat_map(Stream<T> src, std::function<Stream<U>(T)> fn);
+
+// zip: 두 스트림을 쌍으로 묶음 (짧은 쪽에서 끝남)
+template<typename A, typename B>
+Stream<std::pair<A,B>> stream_zip(Stream<A> a, Stream<B> b);
+
+// merge: 두 스트림을 도착 순서대로 합침 (race)
+template<typename T>
+Stream<T> stream_merge(Stream<T> a, Stream<T> b);
+
+// take_while: 조건이 false가 되면 EOS
+template<typename T>
+Stream<T> stream_take_while(Stream<T> src, std::function<bool(const T&)> pred);
+
+// chunk: N개씩 묶어 vector로 (BatchAction 입력용)
+template<typename T>
+Stream<std::vector<T>> stream_chunk(Stream<T> src, size_t n);
+
+// scan: running accumulator (누적 합 등)
+template<typename T, typename Acc>
+Stream<Acc> stream_scan(Stream<T> src, Acc init, std::function<Acc(Acc, T)> fn);
+
+// ─── pipe operator로 체이닝 ──────────────────────────────────────────────
+using namespace qbuem::stream_ops;  // map, filter, flat_map, ...
+
+auto result = input_stream
+    | filter([](const Event& e) { return e.priority > 3; })
+    | map([](Event e) { return enrich(std::move(e)); })
+    | chunk(100)          // 100개씩 배치
+    | flat_map([&](auto batch) { return db_->bulk_insert(batch); });
+
+// ─── Action 대신 스트림 연산자 사용 ─────────────────────────────────────
+// 가벼운 변환(map/filter)은 Action 없이 Stream 연산자로 처리
+// → 워커 코루틴 생성 오버헤드 없음
+```
+
+---
+
+## 40. Windowing & Event-time Processing
+
+시간 기반 집계. `event_time`(이벤트 발생 시각)과 `processing_time`(처리 시각)을 구분.
+
+### 40.1 Watermark
+
+```cpp
+// Watermark: "이 시점 이전의 모든 이벤트는 이미 수신됐다"는 진행 신호
+// out-of-order 이벤트를 얼마나 기다릴지 결정
+struct Watermark {
+    std::chrono::system_clock::time_point event_time;
+    Duration                               allowed_lateness;  // 이 이후 이벤트는 drop
+};
+
+// Context 슬롯
+struct EventTime { std::chrono::system_clock::time_point value; };
+
+// 파이프라인 진입 시 이벤트 시각 설정
+ctx = ctx.put(EventTime{event.timestamp});
+```
+
+### 40.2 Window Types
+
+```cpp
+// ─── Tumbling Window (겹치지 않는 고정 크기 창) ──────────────────────────
+// [0,10s) → [10s,20s) → [20s,30s) ...
+struct TumblingWindow {
+    Duration size;
+};
+
+// ─── Sliding Window (겹치는 창) ───────────────────────────────────────────
+// size=10s, slide=5s: [0,10s), [5s,15s), [10s,20s) ...
+struct SlidingWindow {
+    Duration size;
+    Duration slide;
+};
+
+// ─── Session Window (활동 기반 창) ────────────────────────────────────────
+// 같은 키에서 gap_duration 동안 이벤트 없으면 창 닫힘
+struct SessionWindow {
+    Duration gap;
+};
+
+// ─── WindowedAction ────────────────────────────────────────────────────────
+template<typename T, typename Acc, typename Out>
+class WindowedAction {
+public:
+    using KeyFn   = std::function<std::string(const T&)>;
+    using AggFn   = std::function<Acc(Acc, T)>;
+    using EmitFn  = std::function<Out(std::string key, Acc, TimeWindow)>;
+
+    // 예: 10초 tumbling window, 사용자별 클릭 수 집계
+    WindowedAction(TumblingWindow{10s},
+                   /*key=*/  [](const Click& c) { return c.user_id; },
+                   /*agg=*/  [](int cnt, const Click&) { return cnt + 1; },
+                   /*emit=*/ [](auto key, int cnt, auto window) {
+                       return ClickCount{key, cnt, window.start, window.end};
+                   });
+};
+```
+
+---
+
+## 41. Scatter-Gather Pattern
+
+하나의 아이템을 여러 서브작업으로 나누고(scatter) 결과를 합침(gather).
+MapReduce, 병렬 DB 조회, 청크 업로드에 활용.
+
+```cpp
+// ─── ScatterAction ────────────────────────────────────────────────────────
+// In → vector<SubIn>으로 분해, 각 SubIn을 병렬 처리
+template<typename In, typename SubIn, typename SubOut, typename Out>
+class ScatterGatherAction {
+    using ScatterFn = std::function<std::vector<SubIn>(In)>;
+    using ProcessFn = std::function<Task<Result<SubOut>>(SubIn, ActionEnv)>;
+    using GatherFn  = std::function<Result<Out>(In, std::vector<SubOut>)>;
+
+public:
+    ScatterGatherAction(ScatterFn scatter, ProcessFn process, GatherFn gather,
+                        size_t max_parallelism = std::thread::hardware_concurrency());
+
+    // 내부:
+    // 1. scatter(item) → sub_items
+    // 2. TaskGroup으로 sub_items 병렬 처리 (max_parallelism 제한)
+    // 3. gather(item, results) → final output
+};
+
+// ─── 사용 예시: 이미지 멀티파트 업로드 ────────────────────────────────────
+auto upload_action = ScatterGatherAction<LargeFile, Chunk, UploadedPart, UploadResult>{
+    /*scatter*/ [](const LargeFile& f) { return f.split(5 * 1024 * 1024); },  // 5MB chunks
+    /*process*/ [&s3](Chunk c, ActionEnv env) -> Task<Result<UploadedPart>> {
+        co_return co_await s3.upload_part(c, env.stop);
+    },
+    /*gather*/  [](const LargeFile& f, std::vector<UploadedPart> parts) {
+        return s3.complete_multipart(f.upload_id, parts);
+    },
+    /*max_parallelism=*/ 8
+};
+```
+
+---
+
+## 42. Debounce / Throttle
+
+### 42.1 Debounce — 마지막 이벤트 후 N ms 대기
+
+```cpp
+// 연속 이벤트를 하나로 합침 (검색 자동완성, UI 이벤트)
+// 마지막 이벤트 후 gap_ms 동안 새 이벤트 없으면 처리
+
+template<typename T>
+class DebounceAction {
+    Duration gap_;
+    // 내부: 타이머 재시작 방식
+    //   새 아이템 도착 → 기존 타이머 취소 → 새 타이머 시작
+    //   타이머 만료 → 마지막 아이템 다운스트림 전달
+public:
+    explicit DebounceAction(Duration gap) : gap_(gap) {}
+};
+
+// ─── 사용 예시: 설정 변경 debounce ────────────────────────────────────────
+// 1초 안에 여러 설정 변경이 들어와도 마지막 것 하나만 처리
+auto debounced_config = DebounceAction<ConfigChange>{1s};
+```
+
+### 42.2 Throttle — 초당 N개 제한
+
+```cpp
+// 처리 속도 제한 (외부 API 호출 rate limit 준수)
+// token bucket 기반
+
+template<typename T>
+class ThrottleAction {
+    size_t   max_per_second_;
+    Duration burst_window_;
+    // 내부: TokenBucket
+public:
+    ThrottleAction(size_t max_per_second, Duration burst_window = 100ms);
+    // 초과 시: 아이템 대기 큐에 쌓임 (drop 아님)
+    // 대기 큐 포화 시 → upstream backpressure
+};
+
+// ─── 사용 예시: 외부 SMS API 100/초 제한 ─────────────────────────────────
+auto throttled_sms = ThrottleAction<SmsRequest>{100, 1s};
+```
+
+---
+
+## 43. Saga Pattern & 보상 트랜잭션
+
+멀티 스텝 파이프라인에서 중간 단계 실패 시 이미 완료된 단계를 역순으로 되돌림.
+분산 트랜잭션(2PC) 대신 보상(compensation)으로 최종 일관성 달성.
+
+```cpp
+// ─── SagaStep ─────────────────────────────────────────────────────────────
+template<typename In, typename Out>
+struct SagaStep {
+    std::string                                     name;
+    std::function<Task<Result<Out>>(In, ActionEnv)> execute;
+    std::function<Task<Result<void>>(Out, ActionEnv)> compensate; // rollback
+};
+
+// ─── SagaOrchestrator ─────────────────────────────────────────────────────
+template<typename T>
+class SagaOrchestrator {
+    std::vector<SagaStep<...>> steps_;  // 타입 소거로 체인
+
+public:
+    Task<Result<void>> execute(T initial, ActionEnv env);
+    // 내부:
+    // 1. steps[0].execute → 성공: 결과 저장, 다음 단계
+    //    실패: 보상 없음 (첫 단계), 에러 반환
+    // 2. steps[1].execute → 성공: 다음 단계
+    //    실패: steps[0].compensate 호출 → 에러 반환
+    // N. steps[N].execute → 실패:
+    //    steps[N-1].compensate, steps[N-2].compensate, ... steps[0].compensate
+    //    → 역순 보상 완료 후 에러 반환
+};
+
+// ─── 사용 예시: 주문 처리 Saga ────────────────────────────────────────────
+auto order_saga = SagaOrchestrator<Order>{}
+    .step(SagaStep{
+        .name       = "reserve-inventory",
+        .execute    = [](Order o, ActionEnv e) { co_return co_await inventory.reserve(o); },
+        .compensate = [](ReservedItem r, ActionEnv e) { co_return co_await inventory.release(r); }
+    })
+    .step(SagaStep{
+        .name       = "charge-payment",
+        .execute    = [](ReservedItem r, ActionEnv e) { co_return co_await payment.charge(r); },
+        .compensate = [](ChargeResult c, ActionEnv e) { co_return co_await payment.refund(c); }
+    })
+    .step(SagaStep{
+        .name       = "send-confirmation",
+        .execute    = [](ChargeResult c, ActionEnv e) { co_return co_await notify.send(c); },
+        .compensate = [](auto, ActionEnv) -> Task<Result<void>> { co_return {}; }  // 알림은 보상 불필요
+    });
+```
+
+### 43.1 보상 실패 처리
+
+```cpp
+// 보상 자체가 실패하면 → DLQ(saga_compensation_failures)에 기록
+// 사람이 수동 처리하거나 별도 보상 워커가 재시도
+struct SagaCompensationFailure {
+    std::string    saga_name;
+    std::string    failed_step;
+    std::string    failed_at_step;  // 원래 실패한 단계
+    std::error_code error;
+    Context        ctx;             // TraceCtx, RequestId 포함
+};
+```
+
+---
+
+## 44. Exactly-once & Idempotency Key
+
+파이프라인이 재시작되거나 DLQ에서 재처리될 때 동일 아이템이 두 번 처리되는 것을 방지.
+
+```cpp
+// ─── IdempotencyKey — Context 슬롯 ───────────────────────────────────────
+struct IdempotencyKey { std::string value; };
+
+// HTTP 요청: X-Idempotency-Key 헤더에서 추출
+// 이벤트: 이벤트 ID를 키로 사용
+ctx = ctx.put(IdempotencyKey{req.header("X-Idempotency-Key")});
+
+// ─── IdempotencyFilter — 중복 방지 Action ────────────────────────────────
+template<typename T>
+class IdempotencyFilter {
+    std::shared_ptr<IIdempotencyStore> store_;  // Redis, DB 등
+
+public:
+    explicit IdempotencyFilter(ServiceRegistry& reg)
+        : store_(reg.require<IIdempotencyStore>()) {}
+
+    Task<Result<T>> process(T item, ActionEnv env) {
+        auto key = env.ctx.get<IdempotencyKey>();
+        if (!key) co_return item;  // 키 없으면 통과
+
+        // 처리 기록 확인
+        if (auto cached = co_await store_->get(key->value))
+            co_return std::unexpected(errc::already_exists);  // 중복 → DLQ 아닌 skip
+
+        // 처리 전 키 등록 (atomic: check-and-set)
+        auto reserved = co_await store_->set_if_absent(key->value, 24h);
+        if (!reserved) co_return std::unexpected(errc::already_exists);  // 레이스 패배
+
+        co_return item;  // 정상 통과
+    }
+};
+
+// ─── IIdempotencyStore ───────────────────────────────────────────────────
+class IIdempotencyStore {
+public:
+    virtual Task<std::optional<std::string>> get(std::string_view key) = 0;
+    virtual Task<bool> set_if_absent(std::string_view key, Duration ttl) = 0;
+};
+```
+
+---
+
+## 45. Checkpoint / Snapshot
+
+장시간 실행 파이프라인(ETL, 배치)의 상태를 주기적으로 저장.
+크래시 후 마지막 체크포인트에서 재개.
+
+```cpp
+// ─── CheckpointStore ─────────────────────────────────────────────────────
+class ICheckpointStore {
+public:
+    // 체크포인트 저장: 파이프라인 이름 + 오프셋(처리 완료 위치) + 메타데이터
+    virtual Task<Result<void>> save(std::string_view pipeline,
+                                    uint64_t         offset,
+                                    std::string_view metadata_json) = 0;
+
+    // 마지막 체크포인트 로드
+    virtual Task<Result<std::optional<CheckpointData>>> load(
+        std::string_view pipeline) = 0;
+};
+
+struct CheckpointData {
+    uint64_t    offset;           // 마지막으로 성공 처리한 아이템 오프셋
+    std::string metadata_json;    // 추가 상태 (cursor 위치, 파티션 오프셋 등)
+    std::chrono::system_clock::time_point saved_at;
+};
+
+// ─── DynamicPipeline에 체크포인트 연동 ────────────────────────────────────
+class DynamicPipeline {
+public:
+    // 체크포인트 설정: N개 처리마다 또는 T초마다 저장
+    void enable_checkpoint(std::shared_ptr<ICheckpointStore> store,
+                           size_t   every_n_items = 1000,
+                           Duration every_t       = 30s);
+
+    // 마지막 체크포인트에서 재개 (start() 대신)
+    Task<Result<void>> resume_from_checkpoint();
+};
+```
+
+---
+
+## 46. SLO Tracking & Pipeline Health
+
+### 46.1 SLO (Service Level Objective)
+
+```cpp
+// ─── Action SLO 설정 ──────────────────────────────────────────────────────
+struct SloConfig {
+    Duration p99_target  = 100ms;  // 99%의 아이템이 이 시간 내 처리
+    Duration p999_target = 500ms;  // 99.9% 목표
+    double   error_budget = 0.001; // 허용 에러율 (0.1%)
+
+    // SLO 위반 시 콜백
+    std::function<void(SloViolation)> on_violation;
+};
+
+struct SloViolation {
+    std::string     pipeline_name;
+    std::string     action_name;
+    Duration        actual_p99;
+    Duration        target_p99;
+    double          actual_error_rate;
+    double          budget_remaining;  // 음수 = budget 소진
+    system_clock::time_point detected_at;
+};
+
+// ─── SLO는 ActionConfig에 추가 ────────────────────────────────────────────
+struct Action::Config {
+    // ... 기존 필드 ...
+    SloConfig slo = {};
+};
+```
+
+### 46.2 Error Budget Tracking
+
+```cpp
+// 에러 버짓 소진 → 자동 Circuit Break
+// budget_remaining < 0 → CircuitBreaker 강제 Open
+
+class ErrorBudgetTracker {
+    double  initial_budget_;       // = 1.0 - target_availability
+    std::atomic<double> remaining_budget_;
+    Duration            window_;   // 버짓 집계 윈도우 (예: 30일)
+
+public:
+    void record_success();
+    void record_failure();
+    double remaining() const;
+    bool   exhausted() const { return remaining() <= 0.0; }
+};
+```
+
+### 46.3 Pipeline Health Check
+
+```cpp
+enum class HealthStatus { Healthy, Degraded, Unhealthy };
+
+struct PipelineHealth {
+    HealthStatus            status;
+    std::string             pipeline_name;
+    std::vector<ActionHealth> actions;
+    system_clock::time_point checked_at;
+};
+
+struct ActionHealth {
+    std::string      name;
+    HealthStatus     status;
+    CircuitBreaker::State circuit_state;
+    double           error_rate_1m;   // 최근 1분 에러율
+    Duration         p99_latency_1m;  // 최근 1분 P99
+    size_t           queue_depth;     // 현재 큐 깊이
+    double           budget_remaining;
+};
+
+// ─── App과 통합 ────────────────────────────────────────────────────────────
+// app.health_check_detailed("/health/detail") 에 파이프라인 상태 포함
+// {
+//   "pipelines": [
+//     { "name": "order-processing", "status": "degraded",
+//       "actions": [{"name": "enrich", "circuit": "half_open", ...}] }
+//   ]
+// }
+```
+
+---
+
+## 47. Pipeline Topology Export
+
+```cpp
+// ─── JSON Export ─────────────────────────────────────────────────────────
+// 파이프라인 그래프를 JSON으로 직렬화 (대시보드, 문서화 자동화)
+
+class PipelineGraph {
+public:
+    // { "nodes": [...], "edges": [...], "metadata": {...} }
+    std::string to_json() const;
+
+    // GraphViz DOT 포맷 — 시각화 도구 (dot, mermaid 등)
+    // digraph G { "ingest" -> "process" -> "notify"; ... }
+    std::string to_dot() const;
+
+    // Mermaid 다이어그램
+    // graph TD; ingest --> process; process --> notify; ...
+    std::string to_mermaid() const;
+};
+
+// ─── 노드 메타데이터 포함 ────────────────────────────────────────────────
+// {
+//   "name": "enrich",
+//   "type": "Action",
+//   "workers": { "current": 4, "min": 1, "max": 16 },
+//   "queue_depth": 12,
+//   "circuit_breaker": "closed",
+//   "slo": { "p99_target_ms": 100, "p99_actual_ms": 45 },
+//   "error_rate_1m": 0.001
+// }
+
+// ─── App 엔드포인트 ───────────────────────────────────────────────────────
+// app.get("/pipeline/topology",  graph.topology_handler());
+// app.get("/pipeline/metrics",   graph.metrics_handler());   // Prometheus
+// app.get("/pipeline/topology.dot", graph.dot_handler());    // GraphViz
+```
+
+---
+
+## 48. Canary 자동화 & 자동 롤백
+
+단순 A/B 라우팅을 넘어 **자동 롤백**을 포함하는 Canary 배포.
+
+```cpp
+// ─── CanaryRouter ─────────────────────────────────────────────────────────
+class CanaryRouter {
+public:
+    struct Config {
+        std::string   pipeline_stable;   // 현재 프로덕션 파이프라인
+        std::string   pipeline_canary;   // 새 버전 파이프라인
+        double        canary_fraction;   // 0.01 = 1%
+        Duration      evaluation_window; // 평가 기간 (예: 10분)
+        double        max_error_delta;   // canary 에러율이 stable보다 이만큼 높으면 롤백
+        Duration      p99_latency_max;   // canary P99가 이보다 높으면 롤백
+    };
+
+    // 자동 gradual rollout: 1% → 5% → 25% → 100%
+    // 각 단계마다 evaluation_window 동안 메트릭 수집 후 판단
+    Task<Result<void>> start_gradual_rollout(Config cfg);
+
+    // 수동 롤백
+    void rollback_to_stable();
+};
+
+// ─── 자동 롤백 조건 ────────────────────────────────────────────────────────
+// canary.error_rate > stable.error_rate + max_error_delta → 즉시 롤백
+// canary.p99 > p99_latency_max → 즉시 롤백
+// canary.budget_remaining < 0  → 즉시 롤백
+// 모두 통과 → 다음 단계로 fraction 증가
+```
+
+---
+
+## 49. NUMA-aware 스케줄링 & CPU Pinning
+
+다중 소켓 서버에서 NUMA 경계를 넘는 메모리 접근은 2-3× 느림.
+
+```cpp
+// ─── Dispatcher NUMA 설정 ─────────────────────────────────────────────────
+class Dispatcher {
+public:
+    // CPU 코어에 reactor 스레드를 고정
+    void pin_reactor_to_cpu(size_t reactor_idx, size_t cpu_id);
+
+    // NUMA 노드에 reactor 그룹 자동 배치
+    // NUMA 노드 0의 코어들 → reactors[0..n/2]
+    // NUMA 노드 1의 코어들 → reactors[n/2..n]
+    void auto_numa_bind();
+
+    // NUMA 노드 ID 조회
+    int get_numa_node(size_t reactor_idx) const;
+};
+
+// ─── NUMA-local Arena 할당 ────────────────────────────────────────────────
+// reactor 스레드가 사용하는 Arena를 같은 NUMA 노드 메모리에서 할당
+// → 메모리 접근 지연 최소화
+// 구현: mbind(2) 또는 numa_alloc_local() 사용
+
+// ─── NUMA-aware 파이프라인 배치 ──────────────────────────────────────────
+// 같은 NUMA 노드의 reactor들에 파이프라인 워커를 집중 배치
+// cross-NUMA 채널 접근 최소화
+// pipeline.config.preferred_numa_node = 0;
+```
+
+---
+
+## 50. Pipeline Versioning & Schema Evolution
+
+### 50.1 Pipeline 버전
+
+```cpp
+// ─── PipelineVersion ─────────────────────────────────────────────────────
+struct PipelineVersion {
+    uint32_t major;  // 호환성 파괴 변경 (타입 변경)
+    uint32_t minor;  // 하위 호환 추가 (새 필드)
+    uint32_t patch;  // 버그 수정
+
+    bool compatible_with(PipelineVersion other) const {
+        return major == other.major;  // 같은 major만 호환
+    }
+};
+
+// PipelineGraph에 버전 정보 추가
+graph.set_version("order-processing", PipelineVersion{1, 2, 0});
+
+// ─── 롤링 업그레이드 ──────────────────────────────────────────────────────
+// v1과 v2 파이프라인 동시 운영 → v1 drain → v2로 전환
+// PipelineGraph::ab_route 활용:
+//   처음: v1=100%, v2=0%
+//   서서히: v1=50%, v2=50%
+//   완료: v1=0%, v2=100% → v1 drain() → 종료
+```
+
+### 50.2 Schema Evolution (타입 변경 시 마이그레이션)
+
+```cpp
+// ─── Migration Function ───────────────────────────────────────────────────
+// 파이프라인 재시작 시 in-flight 아이템 또는 DLQ의 이전 버전 아이템을 변환
+
+template<typename OldT, typename NewT>
+using MigrationFn = std::function<Result<NewT>(OldT)>;
+
+// ─── DLQ 재처리 시 마이그레이션 ──────────────────────────────────────────
+// DLQ에 저장된 v1 OrderItem을 v2 OrderItemV2로 변환 후 재처리
+class DlqReprocessor {
+public:
+    template<typename OldT, typename NewT>
+    void register_migration(std::string_view pipeline,
+                            uint32_t from_major,
+                            MigrationFn<OldT, NewT> migration);
+
+    Task<Result<size_t>> reprocess_with_migration(std::string_view pipeline);
+};
+
+// ─── 버전 메타데이터를 Context에 추가 ────────────────────────────────────
+struct ItemVersion { uint32_t pipeline_major; };
+// 아이템 생성 시: ctx = ctx.put(ItemVersion{1});
+// DLQ 재처리 시: 버전 확인 후 migration 적용
+```
+
+### 50.3 Forward/Backward Compatibility 가이드라인
+
+```
+✅ 하위 호환 (minor bump):
+   - 필드 추가 (Context 슬롯 추가, 기존 없으면 nullopt)
+   - Action 교체 (같은 In/Out 타입)
+   - WorkerLocal 상태 초기화 변경
+
+❌ 호환성 파괴 (major bump, 마이그레이션 필요):
+   - In 또는 Out 타입 변경
+   - Context 필수 슬롯 제거
+   - ServiceRegistry 강한 의존성 타입 변경
+
+💡 권장 패턴 — 점진적 타입 변경:
+   1. v1: Action<OrderV1, ResultV1>
+   2. v2: Action<OrderV2, ResultV2> (병렬 운영)
+      + MigrationAction<OrderV1, OrderV2> 앞에 삽입
+   3. v1 완전 제거 후 MigrationAction 제거
 ```

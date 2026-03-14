@@ -151,6 +151,18 @@
 - [ ] `WorkerLocal<T>` — `alignas(64)` vector + worker_idx 접근, 락 불필요
 - [ ] ⚠️ 코루틴 thread_local 경고 테스트 — co_await 경계에서 Context 전파 검증
 
+### C++20 Concepts (타입 안전)
+- [ ] `ActionFn<Fn, In, Out>` concept — `FullActionFn` (ActionEnv 포함) + `SimpleActionFn` (stop_token만)
+- [ ] `BatchActionFn<Fn, In, Out>` concept — `span<In>` + `ActionEnv` 서명 검증
+- [ ] `PipelineInputFor<Pipeline, In>` concept — push(In) 서명 검증
+- [ ] `Action<In,Out>` 생성자에 concept 적용 → 명확한 컴파일 에러
+
+### TaskGroup (구조적 동시성)
+- [ ] `TaskGroup::spawn(Task<Result<T>>)` — 자식 등록
+- [ ] `TaskGroup::join()` — 모두 완료 대기 (실패 시 나머지 cancel + 에러 전파)
+- [ ] `TaskGroup::join_all<T>()` — 결과 벡터 수집
+- [ ] 내부: `std::atomic<size_t> pending`, `std::stop_source`, cancel-on-first-error 옵션
+
 ### Layer 5: Pipeline 기반
 - [ ] `AsyncChannel<T>` — Dmitry Vyukov MPMC ring buffer
   - head_/tail_ cache-line 분리 (`alignas(64)`)
@@ -242,8 +254,9 @@
 - [ ] `TraceContext` — W3C Trace Context 표준
   - `trace_id[16]` (128-bit) / `span_id[8]` (64-bit) / `trace_flags`
   - `generate()` / `child_span()` / `to_traceparent()` / `from_traceparent()`
-- [ ] thread-local TraceContext 전파 (전략 B — 타입 오염 없음)
-  - `Reactor::set_current_trace_context()` / `get_current_trace_context()`
+- [ ] **Context 슬롯 기반 TraceContext 전파** (§27 경고 참조 — thread_local은 코루틴에서 위험)
+  - `TraceCtx` Context 슬롯 → `ActionEnv.ctx.get<TraceCtx>()`로 접근
+  - `ActiveSpan` Context 슬롯 → Action이 child span 생성 후 ctx에 추가
 - [ ] Pluggable `Sampler` 인터페이스
   - `AlwaysSampler` / `NeverSampler`
   - `ProbabilitySampler(rate)` — 0.0~1.0
@@ -290,12 +303,97 @@
   - malloc/free 제거, 캐시 효율 극대화
   - `ArenaChannel<T>` — 동일 reactor 내 zero-copy 전달
 
+### SPSC Channel (고성능 1:1 경로)
+- [ ] `SpscChannel<T>` — Lamport Queue (head_/tail_ alignas(64) 분리)
+  - `try_push()` / `try_pop()` — wait-free O(1)
+  - `send()` / `recv()` — async blocking
+  - `Action::Config::min_workers==1 && max_workers==1` → 자동 선택
+
+### Batch 연산
+- [ ] `AsyncChannel<T>::try_recv_batch(span<T> out, size_t max_n)` — lock-free 배치 dequeue
+- [ ] `AsyncChannel<T>::send_batch(span<T> items)` — 배치 enqueue
+- [ ] `BatchAction<In, Out>` — `span<In>` 단위 처리 (DB bulk insert 등)
+
+### 스트림 연산자 (Rx-style)
+- [ ] `stream_map`, `stream_filter`, `stream_flat_map` — 기본 변환
+- [ ] `stream_zip`, `stream_merge` — 멀티 스트림 결합
+- [ ] `stream_chunk(n)` — N개씩 묶어 vector로 (BatchAction 입력용)
+- [ ] `stream_take_while`, `stream_scan` — 상태 유지 변환
+- [ ] `operator|` 파이프 문법 지원
+
+### 이벤트 처리 고급 패턴
+- [ ] `DebounceAction<T>` — gap_duration 이후 마지막 아이템만 처리
+- [ ] `ThrottleAction<T>` — token bucket 기반 처리 속도 제한
+- [ ] `ScatterGatherAction<In,SubIn,SubOut,Out>` — 병렬 서브작업 후 결과 집계
+  - `ScatterFn`, `ProcessFn`, `GatherFn`, `max_parallelism` 설정
+
 ### 성능 최적화
 - [ ] Reactor / Connection 구조체 cache-line 패킹 측정 및 최적화
 - [ ] `__builtin_prefetch` — 다음 Connection 구조체 미리 로드
 - [ ] 2KB 이하 요청 헤더 스택 할당 (힙 회피)
 - [ ] `MSG_ZEROCOPY` (`SO_ZEROCOPY`) — 송신 kernel→user 복사 제거
 - [ ] PGO 2-pass 빌드 가이드 (Instrumented → wrk → Optimized)
+
+---
+
+## v0.9.1 — 신뢰성 & 고급 처리 패턴
+
+### Windowing & Event-time Processing
+- [ ] `EventTime { system_clock::time_point }` Context 슬롯
+- [ ] `Watermark` — out-of-order 이벤트 처리 진행 신호
+- [ ] `TumblingWindow` / `SlidingWindow` / `SessionWindow` 구조체
+- [ ] `WindowedAction<T,Acc,Out>` — key 기반 시간 창 집계
+  - per-key state map (WorkerLocal 기반), watermark 도달 시 emit
+
+### Saga & 보상 트랜잭션
+- [ ] `SagaStep<In,Out>` — execute + compensate 쌍
+- [ ] `SagaOrchestrator<T>` — 순차 실행, 실패 시 역순 compensate
+  - 보상 실패 → `saga_compensation_failures` DLQ 기록
+- [ ] Context에 `SagaId` 슬롯 추가 (분산 추적 연동)
+
+### Exactly-once
+- [ ] `IdempotencyKey { std::string }` Context 슬롯
+- [ ] `IIdempotencyStore` — `get()` / `set_if_absent(key, ttl)` 인터페이스
+- [ ] `IdempotencyFilter<T>` — 중복 아이템 skip Action
+
+### Checkpoint / Snapshot
+- [ ] `ICheckpointStore` — `save(pipeline, offset, metadata_json)` / `load(pipeline)`
+- [ ] `DynamicPipeline::enable_checkpoint(store, every_n, every_t)`
+- [ ] `DynamicPipeline::resume_from_checkpoint()`
+
+### SLO Tracking & Error Budget
+- [ ] `SloConfig` — `p99_target`, `p999_target`, `error_budget`, `on_violation`
+- [ ] `ErrorBudgetTracker` — rolling window 에러율 + budget 소진 시 CB 강제 Open
+- [ ] `Action::Config::slo` 필드 추가
+- [ ] 위반 시 `PipelineObserver::on_slo_violation()` 콜백
+
+### Pipeline Health & Topology
+- [ ] `PipelineHealth` — HEALTHY/DEGRADED/UNHEALTHY per pipeline
+- [ ] `ActionHealth` — circuit_state, error_rate_1m, p99_1m, queue_depth
+- [ ] `App::health_check_detailed()` 응답에 pipeline 상태 포함
+- [ ] `PipelineGraph::to_json()` / `to_dot()` / `to_mermaid()` — 위상 Export
+- [ ] `/pipeline/topology` 엔드포인트 (App 통합)
+
+### Canary 자동화
+- [ ] `CanaryRouter::start_gradual_rollout(Config)` — 1%→5%→25%→100% 단계별
+- [ ] 자동 롤백 조건: error_delta 초과 / P99 초과 / budget 소진
+- [ ] `rollback_to_stable()` 수동 롤백
+
+---
+
+## v0.9.2 — 인프라 고도화
+
+### NUMA-aware 스케줄링
+- [ ] `Dispatcher::pin_reactor_to_cpu(idx, cpu_id)` — pthread_setaffinity_np
+- [ ] `Dispatcher::auto_numa_bind()` — NUMA 노드별 reactor 그룹 자동 배치
+- [ ] reactor-local Arena를 같은 NUMA 노드 메모리에서 할당 (mbind(2) / numa_alloc_local)
+
+### Pipeline Versioning & Schema Evolution
+- [ ] `PipelineVersion { major, minor, patch }` — compatible_with() 검사
+- [ ] `PipelineGraph::set_version(name, version)` — 버전 메타데이터 등록
+- [ ] `MigrationFn<OldT, NewT>` — 타입 마이그레이션 함수
+- [ ] `DlqReprocessor::register_migration()` — DLQ 재처리 시 마이그레이션 적용
+- [ ] 점진적 타입 변경 가이드: MigrationAction 삽입 → 병렬 운영 → 제거
 
 ---
 
