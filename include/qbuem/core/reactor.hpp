@@ -182,6 +182,29 @@ public:
   virtual void post(std::function<void()> fn) = 0;
 
   /**
+   * @brief fd에 대한 쓰기 제한 시간(write deadline)을 설정합니다.
+   *
+   * `timeout_ms` 내에 fd의 쓰기 이벤트가 발생하지 않으면 `timeout_cb(fd)`를
+   * 호출합니다. 쓰기가 완료되면 반드시 `unregister_timer(timer_id)`로 취소하세요.
+   *
+   * 기본 구현은 `register_timer()` + 콜백 내 `unregister_event(fd, Write)`를
+   * 조합하여 동작합니다.
+   *
+   * @param fd          감시할 파일 디스크립터.
+   * @param timeout_ms  제한 시간 (밀리초).
+   * @param timeout_cb  타임아웃 발생 시 호출될 콜백. 인자는 fd.
+   * @returns 성공 시 타이머 ID (취소에 사용). 실패 시 에러 코드.
+   */
+  Result<int> register_write_timeout(int fd, int timeout_ms,
+                                     std::function<void(int)> timeout_cb) {
+    return register_timer(timeout_ms, [this, fd,
+                                       cb = std::move(timeout_cb)](int) {
+      unregister_event(fd, EventType::Write);
+      cb(fd);
+    });
+  }
+
+  /**
    * @brief 현재 스레드에 연결된 Reactor를 반환합니다.
    *
    * 스레드 로컬 저장소(thread-local storage)를 통해 각 스레드에 고유한

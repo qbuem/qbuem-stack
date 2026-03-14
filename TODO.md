@@ -106,25 +106,25 @@
 > 이 버전에서 해당 인프라를 완성한다.
 
 ### Reactor cross-thread wakeup
-- [ ] `Reactor::post(fn)` 인터페이스 추가 — 어느 스레드에서나 안전하게 호출 가능
-- [ ] `EpollReactor::post()` — `eventfd(EFD_NONBLOCK|EFD_CLOEXEC)` 기반
-- [ ] `IOUringReactor::post()` — Linux 6.0+: `IORING_OP_MSG_RING`, 폴백: eventfd
-- [ ] `KqueueReactor::post()` — `EVFILT_USER` + `NOTE_TRIGGER` 기반
+- [x] `Reactor::post(fn)` 인터페이스 추가 — 어느 스레드에서나 안전하게 호출 가능
+- [x] `EpollReactor::post()` — `eventfd(EFD_NONBLOCK|EFD_CLOEXEC)` 기반
+- [x] `IOUringReactor::post()` — eventfd + OpKind::Wake POLL_ADD
+- [x] `KqueueReactor::post()` — `EVFILT_USER` + `NOTE_TRIGGER` 기반
 
 ### Dispatcher 확장
-- [ ] `Dispatcher::post(fn)` — round-robin으로 워커 reactor에 주입
-- [ ] `Dispatcher::post_to(idx, fn)` — 특정 reactor 인덱스에 주입
-- [ ] `Dispatcher::spawn(Task<void>&&)` — suspended Task를 reactor에서 kick-off
-- [ ] `Dispatcher::spawn_on(idx, Task<void>&&)` — 특정 reactor에서 시작
+- [x] `Dispatcher::post(fn)` — round-robin으로 워커 reactor에 주입
+- [x] `Dispatcher::post_to(idx, fn)` — 특정 reactor 인덱스에 주입
+- [x] `Dispatcher::spawn(Task<void>&&)` — suspended Task를 reactor에서 kick-off
+- [x] `Dispatcher::spawn_on(idx, Task<void>&&)` — 특정 reactor에서 시작
 
 ### IO Core 고도화
-- [ ] io_uring Fixed Buffers (`io_uring_register_buffers`) — DMA 직접 쓰기
-- [ ] io_uring Buffer Ring (`IORING_OP_PROVIDE_BUFFERS`) — 커널 버퍼 선택
-- [ ] Write timeout 타이머 (응답 전송 최대 시간)
+- [x] io_uring Fixed Buffers (`io_uring_register_buffers`) — DMA 직접 쓰기
+- [x] io_uring Buffer Ring (`IORING_OP_PROVIDE_BUFFERS`) — 커널 버퍼 선택
+- [x] Write timeout 타이머 (`Reactor::register_write_timeout` 헬퍼 — register_timer 기반)
 
 ### 추상 인터페이스 확장
-- [ ] `ITransport` — TLS 계층 주입점 (OpenSSL, mbedTLS, BoringSSL)
-- [ ] `ISessionStore` — 세션 저장소 추상화 (Redis, in-memory)
+- [x] `ITransport` — TLS 계층 주입점 (OpenSSL, mbedTLS, BoringSSL)
+- [x] `ISessionStore` — 세션 저장소 추상화 (Redis, in-memory)
 
 ---
 
@@ -135,48 +135,48 @@
 > 상태 관리 상세 설계: **[docs/pipeline-design.md §26-34](./docs/pipeline-design.md)**
 
 ### State Management 기반 (Pipeline보다 먼저 구현)
-- [ ] `Context` — 불변 persistent linked-list 아이템 컨텍스트
+- [x] `Context` — 불변 persistent linked-list 아이템 컨텍스트
   - `put<T>(value)` → 새 Context 반환 (원본 불변)
   - `get<T>()` → `std::optional<T>`
   - `get_ptr<T>()` → `const T*` (복사 없는 참조)
   - 내장 슬롯: `TraceCtx`, `RequestId`, `AuthSubject`, `AuthRoles`, `Deadline`, `ActiveSpan`
-- [ ] `ServiceRegistry` — 스코프 기반 의존성 주입 컨테이너
+- [x] `ServiceRegistry` — 스코프 기반 의존성 주입 컨테이너
   - `register_singleton<T>(shared_ptr<T>)` / `register_factory<T>(fn)`
   - 약한 의존성: `get<T>()` → nullptr if missing
   - 강한 의존성: `require<T>()` → terminate if missing (fail-fast)
   - 계층: `parent_` 포인터로 GlobalRegistry → PipelineRegistry fallback
   - `global_registry()` — 프로세스 싱글톤
-- [ ] `ContextualItem<T>` — `{T value; Context ctx}` 채널 전송 단위
-- [ ] `ActionEnv` — `{Context ctx; std::stop_token stop; size_t worker_idx}`
-- [ ] `WorkerLocal<T>` — `alignas(64)` vector + worker_idx 접근, 락 불필요
+- [x] `ContextualItem<T>` — `{T value; Context ctx}` 채널 전송 단위
+- [x] `ActionEnv` — `{Context ctx; std::stop_token stop; size_t worker_idx}`
+- [x] `WorkerLocal<T>` — `alignas(64)` vector + worker_idx 접근, 락 불필요
 - [ ] ⚠️ 코루틴 thread_local 경고 테스트 — co_await 경계에서 Context 전파 검증
 
 ### C++20 Concepts (타입 안전)
-- [ ] `ActionFn<Fn, In, Out>` concept — `FullActionFn` (ActionEnv 포함) + `SimpleActionFn` (stop_token만)
-- [ ] `BatchActionFn<Fn, In, Out>` concept — `span<In>` + `ActionEnv` 서명 검증
-- [ ] `PipelineInputFor<Pipeline, In>` concept — push(In) 서명 검증
-- [ ] `Action<In,Out>` 생성자에 concept 적용 → 명확한 컴파일 에러
+- [x] `ActionFn<Fn, In, Out>` concept — `FullActionFn` (ActionEnv 포함) + `SimpleActionFn` (stop_token만)
+- [x] `BatchActionFn<Fn, In, Out>` concept — `span<In>` + `ActionEnv` 서명 검증
+- [x] `PipelineInputFor<Pipeline, In>` concept — push(In) 서명 검증
+- [x] `Action<In,Out>` 생성자에 concept 적용 → 명확한 컴파일 에러
 
 ### TaskGroup (구조적 동시성)
-- [ ] `TaskGroup::spawn(Task<Result<T>>)` — 자식 등록
-- [ ] `TaskGroup::join()` — 모두 완료 대기 (실패 시 나머지 cancel + 에러 전파)
-- [ ] `TaskGroup::join_all<T>()` — 결과 벡터 수집
-- [ ] 내부: `std::atomic<size_t> pending`, `std::stop_source`, cancel-on-first-error 옵션
+- [x] `TaskGroup::spawn(Task<Result<T>>)` — 자식 등록
+- [x] `TaskGroup::join()` — 모두 완료 대기 (실패 시 나머지 cancel + 에러 전파)
+- [x] `TaskGroup::join_all<T>()` — 결과 벡터 수집
+- [x] 내부: `std::atomic<size_t> pending`, `std::stop_source`, cancel-on-first-error 옵션
 
 ### Layer 5: Pipeline 기반
-- [ ] `AsyncChannel<T>` — Dmitry Vyukov MPMC ring buffer
+- [x] `AsyncChannel<T>` — Dmitry Vyukov MPMC ring buffer
   - head_/tail_ cache-line 분리 (`alignas(64)`)
   - `send()` / `recv()` — backpressure: 포화/비면 co_await 대기
   - `try_send()` / `try_recv()` — lock-free, 논블로킹
   - `close()` + EOS 전파
   - waiter → `{Reactor*, coroutine_handle<>}` intrusive list
   - cross-reactor wakeup: `waiter.reactor->post([h]{h.resume();})`
-- [ ] `Stream<T>` — `StreamItem<T> = variant<T, StreamEnd>` (move-only 완전 지원)
-  - `yield()`, `finish()`, `next()`, async range-for
-  - `tee()` — 동일 스트림 두 소비자 분기
+- [x] `Stream<T>` — async pull 인터페이스 (next(), tee(), make_stream())
+  - stream_map, stream_filter, stream_chunk, stream_take_while, stream_scan 연산자
+  - `operator|` 파이프 문법 지원
 
 ### Action (정적)
-- [ ] `Action<In, Out>` — 코루틴 워커 풀
+- [x] `Action<In, Out>` — 코루틴 워커 풀
   - `Config`: min/max_workers, channel_cap, auto_scale, keyed_ordering, registry
   - `scale_to(n)` / `scale_in()` / `scale_out()`
   - scale-in: `atomic<size_t> target_workers` + 워커 인덱스 비교 (poison pill 미사용)
@@ -187,14 +187,13 @@
 - [ ] `BatchAction<In, Out>` — 최대 N개 아이템 묶음 처리
 
 ### StaticPipeline
-- [ ] `PipelineBuilder<In>` — `add<Out>(action)` 마다 새 타입 반환 (컴파일타임 체인)
+- [x] `PipelineBuilder<In>` — `add<Out>(action)` 마다 새 타입 반환 (컴파일타임 체인)
   - `[[nodiscard]] build()` — `StaticPipeline<OrigIn, CurIn>` 반환
   - 타입 불일치 시 컴파일 에러
-- [ ] `StaticPipeline<In, Out>`
+- [x] `StaticPipeline<In, Out>`
   - `start(Dispatcher&)` / `drain()` / `stop()`
   - `push(In)` (backpressure) / `try_push(In)` (논블로킹)
-  - `then()` / `fan_out()` / `fan_out_round_robin()` / `route_if()` / `tee()`
-  - 파이프라인 상태 머신: Created → Built → Starting → Running → Draining → Stopped
+  - 파이프라인 상태 머신: Created → Starting → Running → Draining → Stopped
   - `IPipelineInput<T>` — 타입 소거 입력 인터페이스 (fan-out에 활용)
 - [ ] 통합 테스트: StaticPipeline 3단계 체인, scale-out, drain, backpressure
 

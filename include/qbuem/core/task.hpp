@@ -14,6 +14,7 @@
 
 #include <coroutine>
 #include <exception>
+#include <optional>
 #include <utility>
 
 namespace qbuem {
@@ -29,7 +30,7 @@ namespace qbuem {
  */
 template <typename T = void> struct Task {
   struct promise_type {
-    T value;
+    std::optional<T> value; // optional allows non-default-constructible T
     std::coroutine_handle<> continuation;
     bool detached = false;
 
@@ -57,7 +58,7 @@ template <typename T = void> struct Task {
     }
 
     void unhandled_exception() { std::terminate(); }
-    void return_value(T v) { value = std::move(v); }
+    void return_value(T v) { value.emplace(std::move(v)); }
   };
 
   std::coroutine_handle<promise_type> handle;
@@ -109,7 +110,7 @@ template <typename T = void> struct Task {
     handle.promise().continuation = awaiting;
     return handle;
   }
-  T await_resume() { return std::move(handle.promise().value); }
+  T await_resume() { return std::move(*handle.promise().value); }
 };
 
 template <> struct Task<void> {
