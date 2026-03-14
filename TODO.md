@@ -284,9 +284,9 @@
 
 ### 소켓 고급 옵션 (신규)
 
-- [ ] `SO_INCOMING_CPU` (Linux 3.19+) — 연결을 특정 CPU reactor에 고정
+- [x] `SO_INCOMING_CPU` (Linux 3.19+) — 연결을 특정 CPU reactor에 고정
   - SO_REUSEPORT와 조합 → L1/L2 캐시 적중률 극대화
-- [ ] `TCP_MIGRATE_REQ` (Linux 5.14+) — SO_REUSEPORT 그룹 내 연결 마이그레이션
+- [x] `TCP_MIGRATE_REQ` (Linux 5.14+) — SO_REUSEPORT 그룹 내 연결 마이그레이션
   - 무중단 worker 재시작에 활용
 
 ### Codec / Framing (Layer 6)
@@ -509,7 +509,7 @@
 - [x] `Dispatcher::pin_reactor_to_cpu(idx, cpu_id)` — pthread_setaffinity_np
 - [x] `Dispatcher::auto_numa_bind()` — NUMA 노드별 reactor 그룹 자동 배치
 - [ ] reactor-local Arena를 같은 NUMA 노드 메모리에서 할당 (mbind(2) / numa_alloc_local)
-- [ ] `SO_INCOMING_CPU` NUMA 그룹 기반 설정 — 연결→CPU→NUMA 완전 고정
+- [x] `SO_INCOMING_CPU` NUMA 그룹 기반 설정 — 연결→CPU→NUMA 완전 고정
 
 ### 성능 프로파일링 통합
 - [x] `PerfCounters` — PMU 이벤트 (cycles, instructions, LLC-miss, branch-miss)
@@ -555,9 +555,9 @@
 
 ### gRPC ↔ Pipeline 통합
 
-- [ ] gRPC 서버 스트리밍 → `Stream<T>` 직접 연결
-- [ ] gRPC 클라이언트 스트리밍 → `AsyncChannel<T>` 직접 연결
-- [ ] `BidiEnvelope<Req,Res>` → gRPC bidi 핸들러 어댑터
+- [x] gRPC 서버 스트리밍 → `Stream<T>` 직접 연결
+- [x] gRPC 클라이언트 스트리밍 → `AsyncChannel<T>` 직접 연결
+- [x] `BidiEnvelope<Req,Res>` → gRPC bidi 핸들러 어댑터
 
 ### 극한 성능 (선택적)
 
