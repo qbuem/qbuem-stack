@@ -349,7 +349,7 @@
 
 > 상세: **[docs/io-deep-dive.md §5-6](./io-deep-dive.md)**
 
-- [ ] kTLS (Kernel TLS) 통합 — `setsockopt(SOL_TLS, TLS_TX/RX)` 지원
+- [x] kTLS (Kernel TLS) 통합 — `setsockopt(SOL_TLS, TLS_TX/RX)` 지원
   - `kTLSTransport` — ITransport 구현체, TLS 핸드셰이크 후 키 커널 전달
   - kTLS + `sendfile()` 조합 → TLS 연결에서도 정적 파일 zero-copy 가능
 - [ ] `IORING_OP_SENDMSG_ZC` (Linux 6.0+) — io_uring zero-copy send
