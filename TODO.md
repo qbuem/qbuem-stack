@@ -355,11 +355,11 @@
 - [ ] `IORING_OP_SENDMSG_ZC` (Linux 6.0+) — io_uring zero-copy send
   - 두 CQE 패턴(전송 시작 + completion notification) 처리
   - `zero_copy::` 모듈에 io_uring 경로 추가
-- [ ] Huge Pages 버퍼 풀 — `mmap(MAP_HUGETLB)` 기반 `HugeBufferPool<N, Count>`
+- [x] Huge Pages 버퍼 풀 — `mmap(MAP_HUGETLB)` 기반 `HugeBufferPool<N, Count>`
   - TLB miss 감소 → 고스루풋 IO에서 5-15% 성능 향상
   - `/proc/sys/vm/nr_hugepages` 확인, 폴백 처리
-- [ ] `mmap` 기반 Arena — `madvise(MADV_DONTNEED)` reset (OS 반환 없음)
-- [ ] `madvise(MADV_FREE)` — 연결 종료 시 버퍼 lazy 반환
+- [x] `mmap` 기반 Arena — `madvise(MADV_DONTNEED)` reset (OS 반환 없음)
+- [x] `madvise(MADV_FREE)` — 연결 종료 시 버퍼 lazy 반환
 - [ ] Prefetch 힌트 — `__builtin_prefetch` 연결 구조체 선제 로드
 
 ### 복원력 패턴
