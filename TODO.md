@@ -2,8 +2,10 @@
 
 **Zero Latency · Zero Allocation · Zero Dependency**
 
-> 파이프라인 상세 설계: **[docs/pipeline-design.md](./docs/pipeline-design.md)**
+> 파이프라인 설계: **[docs/pipeline-design.md](./docs/pipeline-design.md)**
 > IO 레이어 아키텍처: **[docs/io-architecture.md](./docs/io-architecture.md)**
+> IO 기술 심층 분석: **[docs/io-deep-dive.md](./docs/io-deep-dive.md)**
+> 라이브러리 분리 전략: **[docs/library-strategy.md](./docs/library-strategy.md)**
 
 ---
 
@@ -200,10 +202,25 @@
 
 ---
 
-## v0.7.0 — IO 프리미티브 + DynamicPipeline + PipelineGraph + MessageBus
+## v0.7.0 — 라이브러리 분리 + IO 프리미티브 + DynamicPipeline
 
 > IO 레이어와 Pipeline 레이어는 병렬 작업 스트림.
-> 상세 IO 설계: **[docs/io-architecture.md](./docs/io-architecture.md)**
+> 라이브러리 분리 전략: **[docs/library-strategy.md](./docs/library-strategy.md)**
+> IO 기술 심층: **[docs/io-deep-dive.md](./docs/io-deep-dive.md)**
+
+### 라이브러리 분리 (CMake 타겟 재구조화)
+
+- [ ] CMakeLists.txt 재구조화 — 9레벨 타겟 분리
+  - `qbuem::result` (header-only) — `Result<T>`, `errc` 독립 분리
+  - `qbuem::arena` (header-only) — `Arena`, `FixedPoolResource`, `BufferPool<N>` 독립
+  - `qbuem::task` (header-only) — `Task<T>`, `awaiters` 독립
+  - `qbuem::reactor` (static) — Reactor 인터페이스 + `TimerWheel` (구현 없음)
+  - `qbuem::epoll` / `qbuem::kqueue` / `qbuem::iouring` — 플랫폼별 분리
+  - `qbuem::dispatcher` (static) — Dispatcher 독립
+- [ ] 헤더 이동: `include/qbuem/core/*` → `include/qbuem/reactor/*`
+- [ ] `include/qbuem/net/`, `buf/`, `io/`, `transport/`, `codec/`, `server/` 신설
+- [ ] `find_package(qbuem-stack COMPONENTS net buf pipeline ...)` COMPONENTS 지원
+- [ ] 하위 호환 alias 유지: `qbuem-stack::core` → `qbuem::reactor` 등
 
 ### IO 프리미티브 (Layer 3 — Network Sockets)
 
@@ -246,6 +263,31 @@
   - `Entry` 할당: `FixedPoolResource<sizeof(Entry)>` — zero-heap
   - `next_expiry_ms()` — `poll()` timeout 계산에 사용
   - `Reactor::register_timer()` 내부 구현을 TimerWheel로 교체
+
+### io_uring 고급 기능 (Linux 5.1+)
+
+> 상세: **[docs/io-deep-dive.md §2](./io-deep-dive.md)**
+
+- [ ] io_uring 직접 RECV/SEND SQE — POLL_ADD 기반에서 실제 비동기 I/O 제출로 전환
+  - `IORING_OP_RECV` + Buffer Ring → recv() syscall 제거
+  - `IORING_OP_SEND` → send() syscall 제거
+- [ ] `IORING_OP_ACCEPT_MULTISHOT` (Linux 5.19+) — SQE 1회로 다중 연결 수락
+  - 연결마다 SQE 재제출 없음 → high-concurrency accept 오버헤드 제거
+- [ ] `IORING_OP_RECV_MULTISHOT` (Linux 5.19+) — SQE 1회로 다중 패킷 수신
+  - Buffer Ring 자동 선택과 결합 → zero-copy recv 완성
+- [ ] io_uring Fixed Files — `io_uring_register_files()` + `IOSQE_FIXED_FILE`
+  - SQE마다 fd 테이블 조회 제거 → 고연결 환경 오버헤드 감소
+- [ ] io_uring Linked SQEs — `IOSQE_IO_LINK` / `IOSQE_IO_HARDLINK`
+  - 읽기→쓰기 원자적 체인 → 프록시/파이프 전달에 활용
+- [ ] `IORING_OP_SOCKET` + `IORING_OP_CONNECT` — 소켓 생성/연결도 io_uring으로
+  - `ConnectionPool::acquire()` 신규 연결 경로에 적용
+
+### 소켓 고급 옵션 (신규)
+
+- [ ] `SO_INCOMING_CPU` (Linux 3.19+) — 연결을 특정 CPU reactor에 고정
+  - SO_REUSEPORT와 조합 → L1/L2 캐시 적중률 극대화
+- [ ] `TCP_MIGRATE_REQ` (Linux 5.14+) — SO_REUSEPORT 그룹 내 연결 마이그레이션
+  - 무중단 worker 재시작에 활용
 
 ### Codec / Framing (Layer 6)
 
@@ -301,7 +343,24 @@
 
 ---
 
-## v0.8.0 — 복원력 + 분산 트레이싱
+## v0.8.0 — 복원력 + 분산 트레이싱 + Zero-copy 고도화
+
+### Zero-copy 고도화 및 메모리 최적화
+
+> 상세: **[docs/io-deep-dive.md §5-6](./io-deep-dive.md)**
+
+- [ ] kTLS (Kernel TLS) 통합 — `setsockopt(SOL_TLS, TLS_TX/RX)` 지원
+  - `kTLSTransport` — ITransport 구현체, TLS 핸드셰이크 후 키 커널 전달
+  - kTLS + `sendfile()` 조합 → TLS 연결에서도 정적 파일 zero-copy 가능
+- [ ] `IORING_OP_SENDMSG_ZC` (Linux 6.0+) — io_uring zero-copy send
+  - 두 CQE 패턴(전송 시작 + completion notification) 처리
+  - `zero_copy::` 모듈에 io_uring 경로 추가
+- [ ] Huge Pages 버퍼 풀 — `mmap(MAP_HUGETLB)` 기반 `HugeBufferPool<N, Count>`
+  - TLB miss 감소 → 고스루풋 IO에서 5-15% 성능 향상
+  - `/proc/sys/vm/nr_hugepages` 확인, 폴백 처리
+- [ ] `mmap` 기반 Arena — `madvise(MADV_DONTNEED)` reset (OS 반환 없음)
+- [ ] `madvise(MADV_FREE)` — 연결 종료 시 버퍼 lazy 반환
+- [ ] Prefetch 힌트 — `__builtin_prefetch` 연결 구조체 선제 로드
 
 ### 복원력 패턴
 - [ ] `RetryPolicy` — Fixed / Exponential / ExponentialJitter backoff
@@ -444,12 +503,21 @@
 
 ---
 
-## v0.9.2 — 인프라 고도화
+## v0.9.2 — 인프라 고도화 + NUMA + 성능 측정
 
 ### NUMA-aware 스케줄링
 - [ ] `Dispatcher::pin_reactor_to_cpu(idx, cpu_id)` — pthread_setaffinity_np
 - [ ] `Dispatcher::auto_numa_bind()` — NUMA 노드별 reactor 그룹 자동 배치
 - [ ] reactor-local Arena를 같은 NUMA 노드 메모리에서 할당 (mbind(2) / numa_alloc_local)
+- [ ] `SO_INCOMING_CPU` NUMA 그룹 기반 설정 — 연결→CPU→NUMA 완전 고정
+
+### 성능 프로파일링 통합
+- [ ] `PerfCounters` — PMU 이벤트 (cycles, instructions, LLC-miss, branch-miss)
+- [ ] eBPF 트레이싱 가이드 — io_uring tracepoints, tcp_sendmsg kprobe
+- [ ] PGO (Profile-Guided Optimization) 2-pass 빌드 CMake 지원
+  - `QBUEM_PGO_GENERATE=ON` → instrumented 빌드
+  - `QBUEM_PGO_USE=ON` → 프로파일 기반 최적화 빌드
+- [ ] `IORING_OP_FUTEX_WAIT/WAKE` (Linux 6.7+) — eventfd 대체 wakeup
 
 ### Pipeline Versioning & Schema Evolution
 - [ ] `PipelineVersion { major, minor, patch }` — compatible_with() 검사
@@ -490,6 +558,17 @@
 - [ ] gRPC 서버 스트리밍 → `Stream<T>` 직접 연결
 - [ ] gRPC 클라이언트 스트리밍 → `AsyncChannel<T>` 직접 연결
 - [ ] `BidiEnvelope<Req,Res>` → gRPC bidi 핸들러 어댑터
+
+### 극한 성능 (선택적)
+
+- [ ] AF_XDP + UMEM — 커널 네트워크 스택 우회, 10-100M PPS 목표
+  - `qbuem::xdp` 별도 라이브러리 (libbpf 의존, 선택적)
+  - UMEM: `BufferPool` 기반 관리, Huge Pages 사용
+  - XDP 프로그램 로드: `load_xdp_prog()` BPF bytecode
+  - 적용처: 게임 서버 UDP, 고속 QUIC, 패킷 캡처
+- [ ] QUIC/HTTP3 — quiche FFI `ITransport` 구현체 레퍼런스 예제
+  - 0-RTT, HOL blocking 없음, 연결 마이그레이션
+  - `QuicheTransport` 구현 가이드 (서비스에서 구현)
 
 ---
 
@@ -537,39 +616,82 @@
 - `[IO-0]→[IO-1]→[IO-2]→[IO-3]→[IO-4]→[IO-5]`: IO 레이어 (신규)
 - 두 스트림은 v1.0.0에서 `AcceptLoop + Http1Handler + Pipeline` 결합으로 합류
 
+**라이브러리 분리 (9레벨):**
+```
+Level 0: result · arena · crypto                    (header-only)
+Level 1: task · reactor · dispatcher                (header-mostly)
+Level 2: epoll · kqueue · iouring                   (platform, static)
+Level 3: net · buf · file · zerocopy               (IO, static)
+Level 4: transport · codec · server                 (static)
+Level 5: http · http-server                         (static)
+Level 6: context · channel · pipeline               (header-only)
+Level 7: pipeline-graph · resilience · tracing · metrics (header-only)
+Level 8: ws · http2 · grpc                          (static)
+Level 9: qbuem (umbrella)
+```
+
 ---
 
 ## 배포 전략
 
-```
-qbuem-stack (이 레포)
-├── qbuem-stack::core      — Reactor + Arena + Task + TimerWheel (임베디드, 게임 서버)
-├── qbuem-stack::net       — SocketAddr + TcpListener/Stream + UdpSocket + BufferPool
-├── qbuem-stack::codec     — IFrameCodec + Http1Codec + LineCodec (core+net 의존)
-├── qbuem-stack::http      — HTTP 파서 + 라우터만 (codec 의존)
-├── qbuem-stack::pipeline  — Pipeline 레이어 (core 의존)
-└── qbuem-stack::qbuem     — 전체 (대부분의 서비스)
+> 상세: **[docs/library-strategy.md](./docs/library-strategy.md)**
 
-외부 통합 (서비스에서 직접 구현):
-├── qbuem-json             — JSON (권장)
-├── [서비스]-tls-transport — ITransport 구현체 (OpenSSL/mbedTLS/BoringSSL)
-├── [서비스]-gzip-encoder  — IBodyEncoder 구현체 (zlib/brotli/zstd)
-├── [서비스]-jwt-verifier  — ITokenVerifier 구현체 (OpenSSL/mbedTLS)
-└── [서비스]-otlp-exporter — SpanExporter 구현체 (OpenTelemetry Collector)
+```
+# 라이브러리 단위 소비 (CMake COMPONENTS)
+find_package(qbuem-stack REQUIRED COMPONENTS net buf pipeline)
+
+qbuem-stack (이 레포, 단일 모노레포)
+├── qbuem::result          — Result<T>, errc (header-only, zero-dep)
+├── qbuem::arena           — Arena, FixedPoolResource (header-only)
+├── qbuem::task            — Task<T>, awaiters (header-only)
+├── qbuem::reactor         — Reactor 인터페이스 + TimerWheel
+├── qbuem::epoll/kqueue/iouring — 플랫폼별 구현
+├── qbuem::dispatcher      — 다중 Reactor 관리
+├── qbuem::net             — SocketAddr, TcpListener, TcpStream, UdpSocket
+├── qbuem::buf             — IOSlice, IOVec<N>, ReadBuf<N>, WriteBuf (header-only)
+├── qbuem::file            — AsyncFile (io_uring/pread 폴백)
+├── qbuem::zerocopy        — sendfile, splice, MSG_ZEROCOPY, kTLS 연동
+├── qbuem::transport       — ITransport, PlainTransport
+├── qbuem::codec           — IFrameCodec, LengthPrefixed, LineCodec (header-only)
+├── qbuem::server          — AcceptLoop, IConnectionHandler, ConnectionPool
+├── qbuem::http            — HTTP/1.1 파서 + 라우터
+├── qbuem::http-server     — Http1Handler, App, Middleware 체인
+├── qbuem::context         — Context, ServiceRegistry, ActionEnv (header-only)
+├── qbuem::channel         — AsyncChannel<T>, Stream<T>, TaskGroup (header-only)
+├── qbuem::pipeline        — Action, StaticPipeline, PipelineBuilder (header-only)
+├── qbuem::pipeline-graph  — DynamicPipeline, PipelineGraph, MessageBus
+├── qbuem::resilience      — RetryPolicy, CircuitBreaker, DLQ (header-only)
+├── qbuem::tracing         — TraceContext, SpanExporter (header-only)
+├── qbuem::metrics         — ActionMetrics, PipelineObserver (header-only)
+├── qbuem::ws              — WebSocketHandler
+├── qbuem::http2           — Http2Handler, HPACK zero-alloc
+├── qbuem::grpc            — GrpcHandler<Req,Res>
+├── qbuem::xdp             — AF_XDP (선택적, libbpf 의존)
+└── qbuem                  — 전체 umbrella
+
+외부 통합 (서비스에서 ITransport/IBodyEncoder 등 구현 주입):
+├── [서비스]-tls-transport — OpenSSL/mbedTLS/BoringSSL/kTLS ITransport 구현
+├── [서비스]-quic-transport — quiche FFI ITransport 구현 (QUIC/HTTP3)
+├── [서비스]-gzip-encoder  — IBodyEncoder (zlib/brotli/zstd)
+├── [서비스]-jwt-verifier  — ITokenVerifier
+├── [서비스]-otlp-exporter — SpanExporter (OpenTelemetry)
+└── qbuem-json             — JSON 파싱 (별도 레포)
 ```
 
 **Zero-dependency 원칙:**
 ```
-의존성        헤더 노출  구현 노출  비고
-──────────────────────────────────────────────────────
-POSIX sockets  YES        YES        항상 사용 가능
-Linux io_uring NO(pimpl)  YES(.cpp)  선택적, epoll 폴백
-liburing       NO(pimpl)  YES(.cpp)  CMake 옵션
-OpenSSL/TLS    NO         NO         서비스 ITransport 구현
-nghttp2        NO         NO         서비스 ICodec 구현
-protobuf       NO         NO         서비스 직렬화 구현
-JSON           NO         NO         qbuem-json 별도 레포
-zlib/brotli    NO         NO         서비스 IBodyEncoder 구현
+의존성         헤더 노출  구현 노출  비고
+─────────────────────────────────────────────────────────
+POSIX sockets   YES        YES        항상 사용 가능
+Linux io_uring  NO(pimpl)  YES(.cpp)  선택적, epoll 폴백
+liburing        NO(pimpl)  YES(.cpp)  CMake QBUEM_IOURING=ON
+libbpf/AF_XDP   NO         YES(.cpp)  qbuem::xdp 별도, 선택적
+OpenSSL/TLS     NO         NO         서비스 ITransport 주입
+nghttp2         NO         NO         미사용 (자체 HPACK 구현)
+protobuf        NO         NO         서비스 직렬화 주입
+quiche/ngtcp2   NO         NO         서비스 QuicTransport 주입
+JSON            NO         NO         qbuem-json 별도 레포
+zlib/brotli     NO         NO         서비스 IBodyEncoder 주입
 ```
 
 ---
