@@ -152,7 +152,7 @@
 - [x] `ContextualItem<T>` — `{T value; Context ctx}` 채널 전송 단위
 - [x] `ActionEnv` — `{Context ctx; std::stop_token stop; size_t worker_idx}`
 - [x] `WorkerLocal<T>` — `alignas(64)` vector + worker_idx 접근, 락 불필요
-- [ ] ⚠️ 코루틴 thread_local 경고 테스트 — co_await 경계에서 Context 전파 검증
+- [x] ⚠️ 코루틴 thread_local 경고 테스트 — co_await 경계에서 Context 전파 검증
 
 ### C++20 Concepts (타입 안전)
 - [x] `ActionFn<Fn, In, Out>` concept — `FullActionFn` (ActionEnv 포함) + `SimpleActionFn` (stop_token만)

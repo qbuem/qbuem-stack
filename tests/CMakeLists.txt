@@ -10,6 +10,7 @@ add_executable(qbuem_tests
     pipeline_test.cpp
     pipeline_integration_test.cpp
     arena_channel_test.cpp
+    coroutine_context_test.cpp
 )
 target_link_libraries(qbuem_tests
     PRIVATE
