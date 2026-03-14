@@ -220,7 +220,7 @@
 - [ ] 헤더 이동: `include/qbuem/core/*` → `include/qbuem/reactor/*`
 - [ ] `include/qbuem/net/`, `buf/`, `io/`, `transport/`, `codec/`, `server/` 신설
 - [x] `find_package(qbuem-stack COMPONENTS net buf pipeline ...)` COMPONENTS 지원
-- [ ] 하위 호환 alias 유지: `qbuem-stack::core` → `qbuem::reactor` 등
+- [x] 하위 호환 alias 유지: `qbuem-stack::core` → `qbuem::reactor` 등
 
 ### IO 프리미티브 (Layer 3 — Network Sockets)
 
@@ -450,7 +450,7 @@
   - `ScatterFn`, `ProcessFn`, `GatherFn`, `max_parallelism` 설정
 
 ### 성능 최적화
-- [ ] Reactor / Connection 구조체 cache-line 패킹 측정 및 최적화
+- [x] Reactor / Connection 구조체 cache-line 패킹 측정 및 최적화
 - [x] `__builtin_prefetch` — 다음 Connection 구조체 미리 로드
 - [x] 2KB 이하 요청 헤더 스택 할당 (힙 회피)
 - [x] `MSG_ZEROCOPY` (`SO_ZEROCOPY`) — 송신 kernel→user 복사 제거

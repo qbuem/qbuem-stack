@@ -145,6 +145,20 @@ target_link_libraries(qbuem PUBLIC qbuem_core qbuem_http)
 qbuem_compile_options(qbuem)
 
 # ============================================================================
+# Backward-compatible alias targets
+# ---------------------------------------------------------------------------
+# 미래 리팩토링을 위해 새 이름을 미리 alias로 제공합니다.
+# 헤더 이동 없이 안전하게 신규 타겟 이름을 사용할 수 있습니다.
+#
+#   qbuem-stack::reactor  →  qbuem-stack::core
+#   qbuem-stack::net      →  qbuem-stack::http   (프로토콜 레이어)
+#   qbuem-stack::stack    →  qbuem-stack::qbuem  (전체 스택)
+# ============================================================================
+add_library(qbuem-stack::reactor ALIAS qbuem_core)
+add_library(qbuem-stack::net     ALIAS qbuem_http)
+add_library(qbuem-stack::stack   ALIAS qbuem)
+
+# ============================================================================
 # Install & CMake Package Export
 # ============================================================================
 if(QBUEM_INSTALL)
