@@ -49,7 +49,8 @@
 
 #include <qbuem/common.hpp>
 #include <qbuem/core/task.hpp>
-#include <qbuem/pipeline/channel.hpp>
+// <qbuem/pipeline/channel.hpp> — 프로젝트 내 실제 파일명은 async_channel.hpp
+#include <qbuem/pipeline/async_channel.hpp>
 
 #include <functional>
 #include <memory>
