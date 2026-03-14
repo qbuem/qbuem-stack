@@ -1,8 +1,9 @@
 # qbuem-stack Roadmap
 
-**Zero Latency · Zero Cost · Zero Dependency**
+**Zero Latency · Zero Allocation · Zero Dependency**
 
 > 파이프라인 상세 설계: **[docs/pipeline-design.md](./docs/pipeline-design.md)**
+> IO 레이어 아키텍처: **[docs/io-architecture.md](./docs/io-architecture.md)**
 
 ---
 
@@ -199,7 +200,70 @@
 
 ---
 
-## v0.7.0 — DynamicPipeline + PipelineGraph + MessageBus
+## v0.7.0 — IO 프리미티브 + DynamicPipeline + PipelineGraph + MessageBus
+
+> IO 레이어와 Pipeline 레이어는 병렬 작업 스트림.
+> 상세 IO 설계: **[docs/io-architecture.md](./docs/io-architecture.md)**
+
+### IO 프리미티브 (Layer 3 — Network Sockets)
+
+- [ ] `SocketAddr` — IPv4/IPv6/Unix 값 타입, zero-alloc, `to_chars()` (할당 없음)
+- [ ] `TcpListener` — `SO_REUSEPORT` bind, `accept()` coroutine
+- [ ] `TcpStream` — `readv()`/`writev()` scatter-gather, `set_nodelay()`/`set_keepalive()`
+- [ ] `UdpSocket` — `sendto()`/`recvfrom()`, `recvmsg_batch()` (io_uring RECVMSG_MULTI)
+- [ ] `UnixSocket` — `AF_UNIX` SOCK_STREAM / SOCK_DGRAM
+
+### IO 버퍼 / 슬라이스 (Layer 4 — Zero-copy Buffer)
+
+- [ ] `IOSlice` — `{const byte*, size_t}` fat pointer (zero-alloc)
+- [ ] `IOVec<N>` — 스택 할당 scatter-gather 배열 (wraps `iovec[N]`), `writev()` 직접 전달
+- [ ] `ReadBuf<N>` — 컴파일타임 고정 링버퍼, `write_head()`/`commit()`/`consume()`, zero-alloc
+- [ ] `WriteBuf` — Arena 기반 코르크 버퍼, `as_iovec()` → 단일 `writev()` 시스템콜
+- [ ] `BufferPool<BufSize, Count>` — `FixedPoolResource` 위 io_uring Buffer Ring 연동 래퍼
+
+### Zero-copy IO (Layer 4b)
+
+- [ ] `zero_copy::sendfile()` — `sendfile(2)` 정적 파일 서빙 (kernel space only)
+- [ ] `zero_copy::splice()` — pipe 기반 fd→fd 전송 (generic)
+- [ ] `zero_copy::send_zerocopy()` — `MSG_ZEROCOPY` 송신 (Linux 4.14+)
+- [ ] `zero_copy::wait_zerocopy()` — errqueue 완료 대기
+
+### AsyncFile (Layer 4c)
+
+- [ ] `AsyncFile` — 비동기 open/read_at/write_at/close
+  - io_uring `IORING_OP_READ_FIXED` 우선, 없으면 `pread/pwrite` 폴백
+  - `O_DIRECT` 지원 (정렬 버퍼 필수)
+
+### PlainTransport (Layer 5 확장)
+
+- [ ] `PlainTransport` — `ITransport` 구체 TCP 구현체 (TLS 없음)
+  - 서비스에서 OpenSSL/mbedTLS `ITransport` 구현 주입 패턴 예제 추가
+
+### TimerWheel (Layer 2 교체)
+
+- [ ] `TimerWheel` — 4레벨 × 256슬롯 계층적 타이밍 휠
+  - `schedule(delay_ms, fn)` O(1) / `cancel(id)` O(1) / `tick(elapsed_ms)` O(만료수)
+  - `Entry` 할당: `FixedPoolResource<sizeof(Entry)>` — zero-heap
+  - `next_expiry_ms()` — `poll()` timeout 계산에 사용
+  - `Reactor::register_timer()` 내부 구현을 TimerWheel로 교체
+
+### Codec / Framing (Layer 6)
+
+- [ ] `IFrameCodec<Frame>` — `decode(span<byte>, Frame&)` / `encode(Frame, IOVec<16>&, Arena&)`
+- [ ] `LengthPrefixedCodec<Header>` — N바이트 길이 헤더 프레임
+- [ ] `LineCodec` — `\n` / `\r\n` 구분 (RESP, SMTP 등)
+- [ ] `Http1Codec` — 기존 `http::Parser` 래핑, `IFrameCodec<http::Request>` 구현
+
+### Connection Lifecycle (Layer 7)
+
+- [ ] `IConnectionHandler<Frame>` — `on_connect()` / `on_frame()` / `on_disconnect()`
+- [ ] `AcceptLoop<Frame, HandlerFactory>` — SO_REUSEPORT coroutine 루프
+  - reactor당 독립 `TcpListener` → accept 경합 없음
+  - 각 연결 → `Dispatcher::spawn(handle_connection(...))`
+- [ ] `ConnectionPool<T>` — 아웃바운드 풀 (min_idle, max_size, health_check, idle_timeout)
+  - O(1) hot path `acquire()`, RAII `ReturnToPool` deleter
+
+---
 
 ### DynamicPipeline
 - [ ] `IDynamicAction` — 타입 소거 Action 인터페이스
@@ -396,16 +460,33 @@
 
 ---
 
-## v1.0.0 — 프로토콜 확장
+## v1.0.0 — 프로토콜 핸들러
 
-### 프로토콜
-- [ ] HTTP/2 (nghttp2 추상화, `IHttp2Handler`)
-- [ ] WebSocket (RFC 6455, `IWebSocketHandler`)
-- [ ] HTTP/3 / QUIC (quiche FFI 추상화)
-- [ ] gRPC — `MessageBus` Bidi 채널 → gRPC 백엔드 연결 (protobuf 추상화)
-- [ ] `AF_XDP` eXpress Data Path (극한 성능, 별도 레이어)
+> 전제: v0.7.0 IO 프리미티브 (SocketAddr, TcpListener, TcpStream, IFrameCodec, AcceptLoop) 완료
+
+### Protocol Handlers
+
+- [ ] `Http1Handler` — `IConnectionHandler<http::Request>` 구현
+  - keep-alive 자동 처리, 100-continue, chunked transfer
+  - `Router` 주입, `Upgrade` 헤더 처리 (→ WebSocket upgrade)
+- [ ] `Http2Handler` — `IConnectionHandler<Http2Frame>` 구현
+  - HPACK 헤더 압축/해제 (Arena 기반, zero-alloc)
+  - 스트림 멀티플렉싱: `AsyncChannel<Http2Frame>` per stream
+  - SETTINGS / WINDOW_UPDATE / PING / GOAWAY 지원
+  - ALPN "h2" 협상 후 Http1Codec → Http2Codec 자동 전환
+- [ ] `WebSocketHandler` — RFC 6455 구현
+  - HTTP/1.1 Upgrade 검증 → 101 Switching Protocols
+  - Masking/Unmasking (Arena 기반, zero-alloc)
+  - PING/PONG keepalive, CLOSE handshake
+- [ ] `GrpcHandler<Req, Res>` — HTTP/2 위 gRPC 구현
+  - protobuf 직접 의존 없음 — 서비스에서 serialize/deserialize 제공
+  - Unary / Server Streaming / Client Streaming / Bidi 4가지 패턴
+  - `Stream<Res>` / `AsyncChannel<Req>` 직접 연결
+- [ ] HTTP/3 / QUIC — quiche FFI 추상화 (별도 `ITransport` 구현체)
+- [ ] `AF_XDP` eXpress Data Path — 극한 성능, 별도 레이어 (선택적)
 
 ### gRPC ↔ Pipeline 통합
+
 - [ ] gRPC 서버 스트리밍 → `Stream<T>` 직접 연결
 - [ ] gRPC 클라이언트 스트리밍 → `AsyncChannel<T>` 직접 연결
 - [ ] `BidiEnvelope<Req,Res>` → gRPC bidi 핸들러 어댑터
@@ -415,38 +496,46 @@
 ## 구현 의존성 그래프
 
 ```
-[0] Reactor::post() + Dispatcher::spawn()   ← v0.5.0
+[0] Reactor::post() + Dispatcher::spawn()           ← v0.5.0 ✓
          │
-         ▼
-[S] Context + ServiceRegistry + ActionEnv   ← v0.6.0 (Pipeline보다 먼저)
-    WorkerLocal<T> + ContextualItem<T>
-         │
-         ▼
-[1] AsyncChannel<T>                         ← v0.6.0
-         │
-    ┌────┴────┐
-    ▼         ▼
-[2a] Stream<T>  [2b] RetryPolicy/CB/DLQ (헤더 only)
-    │         │
-    └────┬────┘
-         ▼
-[3] Action<In,Out>  IDynamicAction           ← v0.6.0 / v0.7.0
-         │
-    ┌────┴────┐
-    ▼         ▼
-[4a] StaticPipeline    [4b] DynamicPipeline  ← v0.6.0 / v0.7.0
-[4c] PipelineObserver/Metrics (병행)
-         │
-    ┌────┴────┐
-    ▼         ▼
-[5a] PipelineGraph  [5b] MessageBus          ← v0.7.0
-[5c] PipelineFactory                         ← v0.9.0
-         │
-         ▼
-[6] PipelineTracer + SpanExporter            ← v0.8.0
-[7] hot_swap + PriorityChannel + Arena       ← v0.9.0
-[8] HTTP/2 / WebSocket / gRPC               ← v1.0.0
+         ├──────────────────────────────────────────┐
+         │                                          │
+         ▼                                          ▼
+[S] Context + ServiceRegistry + ActionEnv       [IO-0] TimerWheel O(1)        ← v0.7.0
+    WorkerLocal<T> + ContextualItem<T>  ← v0.6.0✓  │
+         │                                          │
+         ▼                                      [IO-1] SocketAddr + TcpListener
+[1] AsyncChannel<T>                  ← v0.6.0✓     TcpStream + UdpSocket      ← v0.7.0
+         │                                          │
+    ┌────┴────┐                               [IO-2] IOSlice + IOVec<N>
+    ▼         ▼                                    ReadBuf<N> + WriteBuf       ← v0.7.0
+[2a] Stream<T>  [2b] RetryPolicy/CB/DLQ            BufferPool<N>
+    │         │                                     zero_copy::sendfile/splice ← v0.7.0
+    └────┬────┘                                     AsyncFile                  ← v0.7.0
+         ▼                                          │
+[3] Action<In,Out>  IDynamicAction   ← v0.6.0/v0.7.0
+         │                                      [IO-3] IFrameCodec<F>
+    ┌────┴────┐                                     LengthPrefixedCodec        ← v0.7.0
+    ▼         ▼                                     LineCodec + Http1Codec     ← v0.7.0
+[4a] StaticPipeline  [4b] DynamicPipeline ← v0.6.0/v0.7.0
+[4c] PipelineObserver/Metrics (병행)               │
+         │                                      [IO-4] AcceptLoop (SO_REUSEPORT)
+    ┌────┴────┐                                     IConnectionHandler<Frame>  ← v0.7.0
+    ▼         ▼                                     ConnectionPool<T>          ← v0.7.0
+[5a] PipelineGraph  [5b] MessageBus  ← v0.7.0      │
+[5c] PipelineFactory                 ← v0.9.0       │
+         │                                          │
+         ▼                                          ▼
+[6] PipelineTracer + SpanExporter    ← v0.8.0  [IO-5] Http1Handler            ← v1.0.0
+[7] hot_swap + PriorityChannel + Arena ← v0.9.0     Http2Handler (HPACK)
+[8] IO-5: Protocol Handlers          ← v1.0.0       WebSocketHandler
+                                                     GrpcHandler<Req,Res>
 ```
+
+**병렬 작업 스트림:**
+- `[S]→[1]→[2]→[3]→[4]→[5]`: Pipeline 레이어 (기존 경로)
+- `[IO-0]→[IO-1]→[IO-2]→[IO-3]→[IO-4]→[IO-5]`: IO 레이어 (신규)
+- 두 스트림은 v1.0.0에서 `AcceptLoop + Http1Handler + Pipeline` 결합으로 합류
 
 ---
 
@@ -454,17 +543,33 @@
 
 ```
 qbuem-stack (이 레포)
-├── qbuem-stack::core      — IO 레이어만 (임베디드, 게임 서버 등)
-├── qbuem-stack::http      — HTTP 파서 + 라우터만
+├── qbuem-stack::core      — Reactor + Arena + Task + TimerWheel (임베디드, 게임 서버)
+├── qbuem-stack::net       — SocketAddr + TcpListener/Stream + UdpSocket + BufferPool
+├── qbuem-stack::codec     — IFrameCodec + Http1Codec + LineCodec (core+net 의존)
+├── qbuem-stack::http      — HTTP 파서 + 라우터만 (codec 의존)
 ├── qbuem-stack::pipeline  — Pipeline 레이어 (core 의존)
 └── qbuem-stack::qbuem     — 전체 (대부분의 서비스)
 
 외부 통합 (서비스에서 직접 구현):
 ├── qbuem-json             — JSON (권장)
+├── [서비스]-tls-transport — ITransport 구현체 (OpenSSL/mbedTLS/BoringSSL)
 ├── [서비스]-gzip-encoder  — IBodyEncoder 구현체 (zlib/brotli/zstd)
 ├── [서비스]-jwt-verifier  — ITokenVerifier 구현체 (OpenSSL/mbedTLS)
-├── [서비스]-otlp-exporter — SpanExporter 구현체 (OpenTelemetry Collector)
-└── [서비스]-tls-transport — ITransport 구현체 (예정)
+└── [서비스]-otlp-exporter — SpanExporter 구현체 (OpenTelemetry Collector)
+```
+
+**Zero-dependency 원칙:**
+```
+의존성        헤더 노출  구현 노출  비고
+──────────────────────────────────────────────────────
+POSIX sockets  YES        YES        항상 사용 가능
+Linux io_uring NO(pimpl)  YES(.cpp)  선택적, epoll 폴백
+liburing       NO(pimpl)  YES(.cpp)  CMake 옵션
+OpenSSL/TLS    NO         NO         서비스 ITransport 구현
+nghttp2        NO         NO         서비스 ICodec 구현
+protobuf       NO         NO         서비스 직렬화 구현
+JSON           NO         NO         qbuem-json 별도 레포
+zlib/brotli    NO         NO         서비스 IBodyEncoder 구현
 ```
 
 ---
