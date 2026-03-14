@@ -52,6 +52,13 @@
 
 #if defined(__linux__)
 #  include <sys/mman.h>
+#  include <numaif.h>
+#  if !defined(MPOL_BIND)
+// numaif.h가 없는 경우 직접 정의 (graceful fallback)
+#    define MPOL_BIND 2
+extern "C" long mbind(void*, unsigned long, int, const unsigned long*,
+                      unsigned long, unsigned int);
+#  endif
 #endif
 
 namespace qbuem {
@@ -250,6 +257,39 @@ public:
    */
   [[nodiscard]] std::size_t capacity() const noexcept {
     return capacity_;
+  }
+
+  /**
+   * @brief mmap 영역을 특정 NUMA 노드의 메모리에 바인딩합니다.
+   *
+   * `mbind(2)` (Linux)를 사용하여 이 Arena의 물리 페이지를 지정한 NUMA 노드에서
+   * 할당하도록 정책을 설정합니다 (MPOL_BIND).
+   *
+   * reactor-local Arena를 같은 NUMA 노드 메모리에서 할당하면 크로스-NUMA
+   * 메모리 접근을 방지하고 레이턴시를 줄입니다.
+   *
+   * @param numa_node  바인딩할 NUMA 노드 번호 (0-based).
+   * @returns 성공 시 true. 비Linux 또는 libnuma 미설치 환경에서는 false.
+   */
+  bool bind_to_numa_node(int numa_node) noexcept {
+#if defined(__linux__)
+    if (base_ == nullptr || numa_node < 0) return false;
+
+    // nodemask: 64비트 배열, 노드 번호에 해당하는 비트 설정
+    unsigned long nodemask = 1UL << static_cast<unsigned>(numa_node);
+    unsigned long maxnode  = static_cast<unsigned>(numa_node) + 1;
+
+    int ret = static_cast<int>(::mbind(
+        base_, capacity_,
+        MPOL_BIND,
+        &nodemask, maxnode + 1,
+        0  // flags: 0 = 이후 할당에만 적용
+    ));
+    return (ret == 0);
+#else
+    (void)numa_node;
+    return false;
+#endif
   }
 
 private:

@@ -360,7 +360,7 @@
   - `/proc/sys/vm/nr_hugepages` 확인, 폴백 처리
 - [x] `mmap` 기반 Arena — `madvise(MADV_DONTNEED)` reset (OS 반환 없음)
 - [x] `madvise(MADV_FREE)` — 연결 종료 시 버퍼 lazy 반환
-- [ ] Prefetch 힌트 — `__builtin_prefetch` 연결 구조체 선제 로드
+- [x] Prefetch 힌트 — `__builtin_prefetch` 연결 구조체 선제 로드
 
 ### 복원력 패턴
 - [x] `RetryPolicy` — Fixed / Exponential / ExponentialJitter backoff
@@ -451,7 +451,7 @@
 
 ### 성능 최적화
 - [ ] Reactor / Connection 구조체 cache-line 패킹 측정 및 최적화
-- [ ] `__builtin_prefetch` — 다음 Connection 구조체 미리 로드
+- [x] `__builtin_prefetch` — 다음 Connection 구조체 미리 로드
 - [ ] 2KB 이하 요청 헤더 스택 할당 (힙 회피)
 - [x] `MSG_ZEROCOPY` (`SO_ZEROCOPY`) — 송신 kernel→user 복사 제거
 - [x] PGO 2-pass 빌드 가이드 (Instrumented → wrk → Optimized)
@@ -508,7 +508,7 @@
 ### NUMA-aware 스케줄링
 - [x] `Dispatcher::pin_reactor_to_cpu(idx, cpu_id)` — pthread_setaffinity_np
 - [x] `Dispatcher::auto_numa_bind()` — NUMA 노드별 reactor 그룹 자동 배치
-- [ ] reactor-local Arena를 같은 NUMA 노드 메모리에서 할당 (mbind(2) / numa_alloc_local)
+- [x] reactor-local Arena를 같은 NUMA 노드 메모리에서 할당 (mbind(2) / numa_alloc_local)
 - [x] `SO_INCOMING_CPU` NUMA 그룹 기반 설정 — 연결→CPU→NUMA 완전 고정
 
 ### 성능 프로파일링 통합
