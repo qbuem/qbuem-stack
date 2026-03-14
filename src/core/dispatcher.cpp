@@ -70,4 +70,35 @@ Reactor *Dispatcher::get_worker_reactor(int fd) {
   return reactors_[fd % reactors_.size()].get();
 }
 
+void Dispatcher::post(std::function<void()> fn) {
+  if (reactors_.empty())
+    return;
+  size_t idx = next_post_idx_.fetch_add(1, std::memory_order_relaxed) %
+               reactors_.size();
+  reactors_[idx]->post(std::move(fn));
+}
+
+void Dispatcher::post_to(size_t reactor_idx, std::function<void()> fn) {
+  if (reactor_idx < reactors_.size())
+    reactors_[reactor_idx]->post(std::move(fn));
+}
+
+void Dispatcher::spawn(Task<void> task) {
+  if (reactors_.empty())
+    return;
+  auto h = task.handle;
+  task.detach();
+  size_t idx = next_post_idx_.fetch_add(1, std::memory_order_relaxed) %
+               reactors_.size();
+  reactors_[idx]->post([h]() mutable { h.resume(); });
+}
+
+void Dispatcher::spawn_on(size_t reactor_idx, Task<void> task) {
+  if (reactor_idx >= reactors_.size())
+    return;
+  auto h = task.handle;
+  task.detach();
+  reactors_[reactor_idx]->post([h]() mutable { h.resume(); });
+}
+
 } // namespace qbuem

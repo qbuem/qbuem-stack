@@ -6,6 +6,8 @@
 add_executable(qbuem_tests
     reactor_test.cpp
     http_test.cpp
+    dispatcher_post_test.cpp
+    pipeline_test.cpp
 )
 target_link_libraries(qbuem_tests
     PRIVATE

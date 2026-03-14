@@ -14,8 +14,10 @@
 
 #include <qbuem/common.hpp>
 #include <qbuem/core/reactor.hpp>
+#include <qbuem/core/task.hpp>
 
 #include <atomic>
+#include <coroutine>
 #include <functional>
 #include <memory>
 #include <thread>
@@ -136,9 +138,51 @@ public:
   Result<void> register_listener_at(int fd, size_t reactor_idx,
                                     std::function<void(int)> callback);
 
+  /**
+   * @brief 라운드-로빈으로 워커 Reactor를 선택해 콜백을 큐에 넣습니다.
+   *
+   * 여러 스레드에서 안전하게 호출할 수 있습니다. 선택된 Reactor의
+   * `post()` 구현이 해당 워커 스레드를 깨우고 콜백을 실행합니다.
+   *
+   * @param fn 워커 스레드에서 실행할 콜백.
+   */
+  void post(std::function<void()> fn);
+
+  /**
+   * @brief 특정 인덱스의 워커 Reactor에 콜백을 큐에 넣습니다.
+   *
+   * @param reactor_idx 0 ~ thread_count()-1 범위의 워커 인덱스.
+   * @param fn          워커 스레드에서 실행할 콜백.
+   */
+  void post_to(size_t reactor_idx, std::function<void()> fn);
+
+  /**
+   * @brief 코루틴 Task를 라운드-로빈 워커에서 fire-and-forget으로 실행합니다.
+   *
+   * `task.detach()`를 호출한 뒤 코루틴 핸들을 `post()`를 통해 워커 스레드에
+   * 넘깁니다. 코루틴이 완료되면 프레임이 자기 파괴됩니다.
+   *
+   * @warning 코루틴 내에서 다른 Reactor 스레드를 깨우려면 직접 `handle.resume()`
+   *          을 호출하지 말고, 반드시 대상 Reactor의 `post()`를 사용해야 합니다.
+   *
+   * @param task fire-and-forget으로 실행할 Task<void>. 소유권이 이전됩니다.
+   */
+  void spawn(Task<void> task);
+
+  /**
+   * @brief 코루틴 Task를 특정 워커에서 fire-and-forget으로 실행합니다.
+   *
+   * @param reactor_idx 0 ~ thread_count()-1 범위의 워커 인덱스.
+   * @param task        fire-and-forget으로 실행할 Task<void>.
+   */
+  void spawn_on(size_t reactor_idx, Task<void> task);
+
 private:
   /** @brief 실행 상태 플래그. `run()`과 `stop()` 사이의 동기화에 사용됩니다. */
   std::atomic<bool> running_{false};
+
+  /** @brief `post()` 라운드-로빈 카운터. */
+  std::atomic<size_t> next_post_idx_{0};
 
   /**
    * @brief 워커 Reactor 인스턴스들의 목록.

@@ -3,7 +3,9 @@
 #include <qbuem/core/reactor.hpp>
 
 #include <functional>
+#include <mutex>
 #include <unordered_map>
+#include <vector>
 
 namespace qbuem {
 
@@ -34,10 +36,16 @@ public:
 
   bool is_running() const override;
 
+  void post(std::function<void()> fn) override;
+
 private:
   int epoll_fd_ = -1;
+  int event_fd_ = -1;   // eventfd used to wake epoll_wait from post()
   bool running_ = true;
   int next_timer_id_ = 1;
+
+  std::mutex work_mutex_;
+  std::vector<std::function<void()>> work_queue_;
 
   // Per-fd callbacks for regular I/O events
   struct FdCallbacks {
