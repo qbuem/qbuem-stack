@@ -452,6 +452,46 @@ private:
     bool                                     started_ = false;
 };
 
+/**
+ * @brief Adapts a static Action<In, Out> into a DynamicPipeline stage function.
+ *
+ * Because DynamicPipeline<T> requires homogeneous T→T stages, this function
+ * is constrained to the case where In == Out (same_as).
+ *
+ * The returned function implements the passthrough pattern:
+ *  1. Pushes the incoming value into the action's input channel (with
+ *     backpressure via Action::push).
+ *  2. co_returns the value unchanged so the DynamicPipeline worker can
+ *     forward it to the next stage.
+ *
+ * The Action's own worker pool processes items asynchronously; the pipeline
+ * stage merely fans items in and passes them through.
+ *
+ * @tparam In  Input type (must equal Out).
+ * @tparam Out Output type (must equal In).
+ * @param action A shared_ptr to the Action<In, Out> to wrap.
+ * @returns A std::function<Task<Result<In>>(In, ActionEnv)> usable with
+ *          DynamicPipeline<In>::add_stage / hot_swap.
+ */
+template <typename In, typename Out>
+  requires std::same_as<In, Out>
+auto make_dynamic_action(std::shared_ptr<Action<In, Out>> action)
+    -> std::function<Task<Result<In>>(In, ActionEnv)>
+{
+    return [action = std::move(action)](In value, ActionEnv env)
+        -> Task<Result<In>>
+    {
+        // Forward the item into the action's input channel (with backpressure).
+        auto push_result = co_await action->push(value, env.ctx);
+        if (!push_result.has_value())
+            co_return unexpected(push_result.error());
+
+        // Passthrough: return the original value so the DynamicPipeline
+        // worker can send it to the next stage.
+        co_return value;
+    };
+}
+
 } // namespace qbuem
 
 /** @} */

@@ -242,8 +242,8 @@
 
 - [x] `zero_copy::sendfile()` — `sendfile(2)` 정적 파일 서빙 (kernel space only)
 - [x] `zero_copy::splice()` — pipe 기반 fd→fd 전송 (generic)
-- [ ] `zero_copy::send_zerocopy()` — `MSG_ZEROCOPY` 송신 (Linux 4.14+)
-- [ ] `zero_copy::wait_zerocopy()` — errqueue 완료 대기
+- [x] `zero_copy::send_zerocopy()` — `MSG_ZEROCOPY` 송신 (Linux 4.14+)
+- [x] `zero_copy::wait_zerocopy()` — errqueue 완료 대기
 
 ### AsyncFile (Layer 4c)
 
@@ -311,7 +311,7 @@
 - [x] `IDynamicAction` — 타입 소거 Action 인터페이스
   - `ActionSchema { input_type, output_type }` — 런타임 스키마 호환성 체크
   - `process_erased(void*, void*, stop_token)` — 타입 소거 처리
-- [ ] `make_dynamic_action<In,Out>(Action)` — 정적 Action → 동적 어댑터
+- [x] `make_dynamic_action<In,Out>(Action)` — 정적 Action → 동적 어댑터
 - [x] `DynamicPipeline`
   - `add_action()` / `insert_before()` / `insert_after()` / `remove_action()` — stopped 상태
   - 상태 머신: Created → Configured → Starting → Running → Reconfiguring → Draining → Stopped
@@ -461,45 +461,45 @@
 ## v0.9.1 — 신뢰성 & 고급 처리 패턴
 
 ### Windowing & Event-time Processing
-- [ ] `EventTime { system_clock::time_point }` Context 슬롯
-- [ ] `Watermark` — out-of-order 이벤트 처리 진행 신호
-- [ ] `TumblingWindow` / `SlidingWindow` / `SessionWindow` 구조체
-- [ ] `WindowedAction<T,Acc,Out>` — key 기반 시간 창 집계
+- [x] `EventTime { system_clock::time_point }` Context 슬롯
+- [x] `Watermark` — out-of-order 이벤트 처리 진행 신호
+- [x] `TumblingWindow` / `SlidingWindow` / `SessionWindow` 구조체
+- [x] `WindowedAction<T,Acc,Out>` — key 기반 시간 창 집계
   - per-key state map (WorkerLocal 기반), watermark 도달 시 emit
 
 ### Saga & 보상 트랜잭션
-- [ ] `SagaStep<In,Out>` — execute + compensate 쌍
-- [ ] `SagaOrchestrator<T>` — 순차 실행, 실패 시 역순 compensate
+- [x] `SagaStep<In,Out>` — execute + compensate 쌍
+- [x] `SagaOrchestrator<T>` — 순차 실행, 실패 시 역순 compensate
   - 보상 실패 → `saga_compensation_failures` DLQ 기록
-- [ ] Context에 `SagaId` 슬롯 추가 (분산 추적 연동)
+- [x] Context에 `SagaId` 슬롯 추가 (분산 추적 연동)
 
 ### Exactly-once
-- [ ] `IdempotencyKey { std::string }` Context 슬롯
-- [ ] `IIdempotencyStore` — `get()` / `set_if_absent(key, ttl)` 인터페이스
-- [ ] `IdempotencyFilter<T>` — 중복 아이템 skip Action
+- [x] `IdempotencyKey { std::string }` Context 슬롯
+- [x] `IIdempotencyStore` — `get()` / `set_if_absent(key, ttl)` 인터페이스
+- [x] `IdempotencyFilter<T>` — 중복 아이템 skip Action
 
 ### Checkpoint / Snapshot
-- [ ] `ICheckpointStore` — `save(pipeline, offset, metadata_json)` / `load(pipeline)`
-- [ ] `DynamicPipeline::enable_checkpoint(store, every_n, every_t)`
-- [ ] `DynamicPipeline::resume_from_checkpoint()`
+- [x] `ICheckpointStore` — `save(pipeline, offset, metadata_json)` / `load(pipeline)`
+- [x] `DynamicPipeline::enable_checkpoint(store, every_n, every_t)`
+- [x] `DynamicPipeline::resume_from_checkpoint()`
 
 ### SLO Tracking & Error Budget
-- [ ] `SloConfig` — `p99_target`, `p999_target`, `error_budget`, `on_violation`
-- [ ] `ErrorBudgetTracker` — rolling window 에러율 + budget 소진 시 CB 강제 Open
-- [ ] `Action::Config::slo` 필드 추가
-- [ ] 위반 시 `PipelineObserver::on_slo_violation()` 콜백
+- [x] `SloConfig` — `p99_target`, `p999_target`, `error_budget`, `on_violation`
+- [x] `ErrorBudgetTracker` — rolling window 에러율 + budget 소진 시 CB 강제 Open
+- [x] `Action::Config::slo` 필드 추가
+- [x] 위반 시 `PipelineObserver::on_slo_violation()` 콜백
 
 ### Pipeline Health & Topology
-- [ ] `PipelineHealth` — HEALTHY/DEGRADED/UNHEALTHY per pipeline
-- [ ] `ActionHealth` — circuit_state, error_rate_1m, p99_1m, queue_depth
-- [ ] `App::health_check_detailed()` 응답에 pipeline 상태 포함
-- [ ] `PipelineGraph::to_json()` / `to_dot()` / `to_mermaid()` — 위상 Export
-- [ ] `/pipeline/topology` 엔드포인트 (App 통합)
+- [x] `PipelineHealth` — HEALTHY/DEGRADED/UNHEALTHY per pipeline
+- [x] `ActionHealth` — circuit_state, error_rate_1m, p99_1m, queue_depth
+- [x] `App::health_check_detailed()` 응답에 pipeline 상태 포함
+- [x] `PipelineGraph::to_json()` / `to_dot()` / `to_mermaid()` — 위상 Export
+- [x] `/pipeline/topology` 엔드포인트 (App 통합)
 
 ### Canary 자동화
-- [ ] `CanaryRouter::start_gradual_rollout(Config)` — 1%→5%→25%→100% 단계별
-- [ ] 자동 롤백 조건: error_delta 초과 / P99 초과 / budget 소진
-- [ ] `rollback_to_stable()` 수동 롤백
+- [x] `CanaryRouter::start_gradual_rollout(Config)` — 1%→5%→25%→100% 단계별
+- [x] 자동 롤백 조건: error_delta 초과 / P99 초과 / budget 소진
+- [x] `rollback_to_stable()` 수동 롤백
 
 ---
 
@@ -520,8 +520,8 @@
 - [ ] `IORING_OP_FUTEX_WAIT/WAKE` (Linux 6.7+) — eventfd 대체 wakeup
 
 ### Pipeline Versioning & Schema Evolution
-- [ ] `PipelineVersion { major, minor, patch }` — compatible_with() 검사
-- [ ] `PipelineGraph::set_version(name, version)` — 버전 메타데이터 등록
+- [x] `PipelineVersion { major, minor, patch }` — compatible_with() 검사
+- [x] `PipelineGraph::set_version(name, version)` — 버전 메타데이터 등록
 - [ ] `MigrationFn<OldT, NewT>` — 타입 마이그레이션 함수
 - [ ] `DlqReprocessor::register_migration()` — DLQ 재처리 시 마이그레이션 적용
 - [ ] 점진적 타입 변경 가이드: MigrationAction 삽입 → 병렬 운영 → 제거
