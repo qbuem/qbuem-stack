@@ -148,6 +148,15 @@ qbuem_compile_options(qbuem)
 # Install & CMake Package Export
 # ============================================================================
 if(QBUEM_INSTALL)
+    # ── Alias targets for find_package(qbuem-stack COMPONENTS ...) ─────────
+    # Component → alias target mapping:
+    #   core      → qbuem-stack::core    (reactor, async IO, arena, task)
+    #   http      → qbuem-stack::http    (parser, router, request/response)
+    #   qbuem     → qbuem-stack::qbuem   (full stack, all components)
+    # Downstream usage:
+    #   find_package(qbuem-stack REQUIRED COMPONENTS core http)
+    #   target_link_libraries(myapp PRIVATE qbuem-stack::core qbuem-stack::http)
+
     install(TARGETS qbuem_core qbuem_http qbuem
         EXPORT  qbuemTargets
         ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}

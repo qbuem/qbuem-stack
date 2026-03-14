@@ -18,4 +18,35 @@ include(CMakeFindDependencyMacro)
 # ── qbuem-stack targets ──────────────────────────────────────────────────────
 include("${CMAKE_CURRENT_LIST_DIR}/qbuem-stack-targets.cmake")
 
+# ── COMPONENTS 처리 ──────────────────────────────────────────────────────────
+# find_package(qbuem-stack COMPONENTS core http) 지원
+# 지원 컴포넌트: core, http, qbuem
+foreach(_comp IN LISTS qbuem-stack_FIND_COMPONENTS)
+    if(_comp STREQUAL "core")
+        set(qbuem-stack_${_comp}_FOUND
+            $<TARGET_EXISTS:qbuem-stack::core>)
+        if(NOT TARGET qbuem-stack::core)
+            set(qbuem-stack_${_comp}_FOUND FALSE)
+        else()
+            set(qbuem-stack_${_comp}_FOUND TRUE)
+        endif()
+    elseif(_comp STREQUAL "http")
+        if(NOT TARGET qbuem-stack::http)
+            set(qbuem-stack_${_comp}_FOUND FALSE)
+        else()
+            set(qbuem-stack_${_comp}_FOUND TRUE)
+        endif()
+    elseif(_comp STREQUAL "qbuem")
+        if(NOT TARGET qbuem-stack::qbuem)
+            set(qbuem-stack_${_comp}_FOUND FALSE)
+        else()
+            set(qbuem-stack_${_comp}_FOUND TRUE)
+        endif()
+    else()
+        set(qbuem-stack_${_comp}_FOUND FALSE)
+        set(qbuem-stack_NOT_FOUND_MESSAGE
+            "qbuem-stack: unknown component '${_comp}'. Valid: core, http, qbuem")
+    endif()
+endforeach()
+
 check_required_components(qbuem-stack)
