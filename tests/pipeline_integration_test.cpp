@@ -43,15 +43,17 @@ TEST(StaticPipelineIntegration, ThreeStageChain) {
       .add<double>(size_to_double)
       .build();
 
+  using Pipeline = StaticPipeline<int, double>;
+
   // Pipeline starts in Created state
-  EXPECT_EQ(pipeline.state(), StaticPipeline<int, double>::State::Created);
+  EXPECT_EQ(pipeline.state(), Pipeline::State::Created);
 
   // Construct a Dispatcher (not run() — we only test construction + push API)
   Dispatcher dispatcher(1);
 
   pipeline.start(dispatcher);
 
-  EXPECT_EQ(pipeline.state(), StaticPipeline<int, double>::State::Running);
+  EXPECT_EQ(pipeline.state(), Pipeline::State::Running);
 
   // Push a handful of items non-blocking; the pipeline channel has default
   // capacity 256 so these should all succeed immediately.
@@ -61,7 +63,7 @@ TEST(StaticPipelineIntegration, ThreeStageChain) {
 
   // Verify stop transitions to Stopped state
   pipeline.stop();
-  EXPECT_EQ(pipeline.state(), StaticPipeline<int, double>::State::Stopped);
+  EXPECT_EQ(pipeline.state(), Pipeline::State::Stopped);
 
   dispatcher.stop();
 }
@@ -134,10 +136,11 @@ TEST(StaticPipelineIntegration, DrainTransitionsState) {
       .add<std::string>(int_to_string)
       .build();
 
+  using Pipeline = StaticPipeline<int, std::string>;
   Dispatcher dispatcher(1);
   pipeline.start(dispatcher);
 
-  EXPECT_EQ(pipeline.state(), StaticPipeline<int, double>::State::Running);
+  EXPECT_EQ(pipeline.state(), Pipeline::State::Running);
 
   // Push a few items before draining
   for (int i = 0; i < 3; ++i) {
@@ -147,7 +150,7 @@ TEST(StaticPipelineIntegration, DrainTransitionsState) {
   // Calling stop() synchronously transitions the pipeline to Stopped without
   // requiring a running Reactor (drain() is a coroutine and requires co_await).
   pipeline.stop();
-  EXPECT_EQ(pipeline.state(), StaticPipeline<int, double>::State::Stopped);
+  EXPECT_EQ(pipeline.state(), Pipeline::State::Stopped);
 
   dispatcher.stop();
 }
@@ -195,13 +198,14 @@ TEST(StaticPipelineIntegration, StopTokenCancellation) {
       .add<std::string>(int_to_string)
       .build();
 
+  using Pipeline = StaticPipeline<int, std::string>;
   Dispatcher dispatcher(1);
   pipeline.start(dispatcher);
-  EXPECT_EQ(pipeline.state(), StaticPipeline<int, std::string>::State::Running);
+  EXPECT_EQ(pipeline.state(), Pipeline::State::Running);
 
   // Immediately stop — cancels in-flight workers
   pipeline.stop();
-  EXPECT_EQ(pipeline.state(), StaticPipeline<int, std::string>::State::Stopped);
+  EXPECT_EQ(pipeline.state(), Pipeline::State::Stopped);
 
   dispatcher.stop();
 }
@@ -217,14 +221,15 @@ TEST(StaticPipelineIntegration, MultipleStartIdempotent) {
       .add<std::string>(int_to_string)
       .build();
 
+  using Pipeline = StaticPipeline<int, std::string>;
   Dispatcher dispatcher(1);
 
   pipeline.start(dispatcher);
-  EXPECT_EQ(pipeline.state(), StaticPipeline<int, std::string>::State::Running);
+  EXPECT_EQ(pipeline.state(), Pipeline::State::Running);
 
   // Second start should be ignored — state must remain Running
   pipeline.start(dispatcher);
-  EXPECT_EQ(pipeline.state(), StaticPipeline<int, std::string>::State::Running);
+  EXPECT_EQ(pipeline.state(), Pipeline::State::Running);
 
   pipeline.stop();
   dispatcher.stop();

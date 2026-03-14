@@ -41,7 +41,7 @@ struct AsyncRead {
     }
 
     reactor->register_event(fd, EventType::Read, [handle, this](int f) {
-      result = read(f, buf, count);
+      result = ::read(f, buf, count);
       Reactor::current()->unregister_event(f, EventType::Read);
       handle.resume();
     });
@@ -69,7 +69,7 @@ struct AsyncWrite {
     }
 
     reactor->register_event(fd, EventType::Write, [handle, this](int f) {
-      result = write(f, buf, count);
+      result = ::write(f, buf, count);
       Reactor::current()->unregister_event(f, EventType::Write);
       handle.resume();
     });
