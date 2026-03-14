@@ -1,0 +1,258 @@
+#pragma once
+
+/**
+ * @file qbuem/tracing/sampler.hpp
+ * @brief Pluggable Sampler 인터페이스 및 기본 구현체
+ * @defgroup qbuem_sampler Sampler
+ * @ingroup qbuem_tracing
+ *
+ * ## 설계
+ * `Sampler` 인터페이스는 각 스팬 시작 시점에 샘플링 결정을 내립니다.
+ *
+ * ## 제공 구현체
+ * - `AlwaysSampler`        — 항상 샘플링 (개발/디버그)
+ * - `NeverSampler`         — 항상 드롭 (zero-overhead 트레이싱 비활성화)
+ * - `ProbabilitySampler`   — 0.0~1.0 확률 기반 샘플링
+ * - `RateLimitingSampler`  — token bucket 기반 초당 최대 샘플 수 제한
+ * - `ParentBasedSampler`   — 부모 스팬의 sampled 플래그 따름
+ *
+ * ## 사용 예시
+ * ```cpp
+ * auto sampler = std::make_shared<qbuem::tracing::ProbabilitySampler>(0.1);
+ * qbuem::tracing::PipelineTracer::global().set_sampler(sampler);
+ * ```
+ * @{
+ */
+
+#include <qbuem/tracing/trace_context.hpp>
+
+#include <atomic>
+#include <chrono>
+#include <memory>
+#include <mutex>
+#include <random>
+#include <string_view>
+
+namespace qbuem::tracing {
+
+// ---------------------------------------------------------------------------
+// SamplingDecision
+// ---------------------------------------------------------------------------
+
+/**
+ * @brief 샘플링 결정 열거형.
+ */
+enum class SamplingDecision {
+  DROP,             ///< 스팬을 샘플링하지 않음
+  RECORD_AND_SAMPLE ///< 스팬을 기록하고 샘플링
+};
+
+// ---------------------------------------------------------------------------
+// SamplingContext — 샘플링 결정에 필요한 정보
+// ---------------------------------------------------------------------------
+
+/**
+ * @brief 샘플링 시점에 Sampler에게 제공되는 컨텍스트.
+ */
+struct SamplingContext {
+  std::string_view pipeline_name;  ///< 파이프라인 이름
+  std::string_view action_name;    ///< 액션 이름
+  std::string_view span_name;      ///< 스팬 이름
+  const TraceContext *parent;      ///< 부모 TraceContext (루트면 nullptr)
+};
+
+// ---------------------------------------------------------------------------
+// Sampler — 순수 가상 인터페이스
+// ---------------------------------------------------------------------------
+
+/**
+ * @brief 스팬 샘플링 결정 인터페이스.
+ */
+class Sampler {
+public:
+  virtual ~Sampler() = default;
+
+  /**
+   * @brief 주어진 컨텍스트에 대해 샘플링 여부를 결정합니다.
+   * @param ctx 샘플링 컨텍스트.
+   * @returns RECORD_AND_SAMPLE 또는 DROP.
+   */
+  [[nodiscard]] virtual SamplingDecision should_sample(
+      const SamplingContext &ctx) noexcept = 0;
+
+  /// @brief 이 Sampler의 설명 문자열.
+  [[nodiscard]] virtual std::string_view description() const noexcept = 0;
+};
+
+// ---------------------------------------------------------------------------
+// AlwaysSampler
+// ---------------------------------------------------------------------------
+
+/**
+ * @brief 항상 샘플링합니다. 개발/디버그 환경에 적합.
+ */
+class AlwaysSampler final : public Sampler {
+public:
+  [[nodiscard]] SamplingDecision should_sample(
+      const SamplingContext &) noexcept override {
+    return SamplingDecision::RECORD_AND_SAMPLE;
+  }
+
+  [[nodiscard]] std::string_view description() const noexcept override {
+    return "AlwaysSampler";
+  }
+};
+
+// ---------------------------------------------------------------------------
+// NeverSampler
+// ---------------------------------------------------------------------------
+
+/**
+ * @brief 절대 샘플링하지 않습니다. 트레이싱 비활성화 시 zero-overhead.
+ */
+class NeverSampler final : public Sampler {
+public:
+  [[nodiscard]] SamplingDecision should_sample(
+      const SamplingContext &) noexcept override {
+    return SamplingDecision::DROP;
+  }
+
+  [[nodiscard]] std::string_view description() const noexcept override {
+    return "NeverSampler";
+  }
+};
+
+// ---------------------------------------------------------------------------
+// ProbabilitySampler
+// ---------------------------------------------------------------------------
+
+/**
+ * @brief 0.0~1.0 확률 기반 샘플러.
+ *
+ * `rate = 0.1` → 10% 샘플링, `rate = 1.0` → 100% 샘플링.
+ * 스레드별 RNG를 사용하여 lock-free 동작.
+ */
+class ProbabilitySampler final : public Sampler {
+public:
+  /**
+   * @param rate 샘플링 확률 [0.0, 1.0]. 범위 초과 시 clamping.
+   */
+  explicit ProbabilitySampler(double rate) noexcept
+      : rate_(std::clamp(rate, 0.0, 1.0)) {}
+
+  [[nodiscard]] SamplingDecision should_sample(
+      const SamplingContext &) noexcept override {
+    if (rate_ <= 0.0) return SamplingDecision::DROP;
+    if (rate_ >= 1.0) return SamplingDecision::RECORD_AND_SAMPLE;
+    thread_local std::mt19937_64 rng{std::random_device{}()};
+    thread_local std::uniform_real_distribution<double> dist{0.0, 1.0};
+    return (dist(rng) < rate_) ? SamplingDecision::RECORD_AND_SAMPLE
+                                : SamplingDecision::DROP;
+  }
+
+  [[nodiscard]] std::string_view description() const noexcept override {
+    return "ProbabilitySampler";
+  }
+
+  [[nodiscard]] double rate() const noexcept { return rate_; }
+
+private:
+  double rate_;
+};
+
+// ---------------------------------------------------------------------------
+// RateLimitingSampler
+// ---------------------------------------------------------------------------
+
+/**
+ * @brief Token bucket 기반 초당 최대 샘플 수 제한 샘플러.
+ *
+ * `max_per_second = 100` → 초당 최대 100개 스팬만 샘플링.
+ * 버스트 허용량은 `max_per_second`와 동일합니다.
+ */
+class RateLimitingSampler final : public Sampler {
+public:
+  /**
+   * @param max_per_second 초당 최대 샘플 수. 0이면 NeverSampler와 동일.
+   */
+  explicit RateLimitingSampler(double max_per_second)
+      : rate_(max_per_second),
+        tokens_(max_per_second),
+        last_refill_(clock::now()) {}
+
+  [[nodiscard]] SamplingDecision should_sample(
+      const SamplingContext &) noexcept override {
+    if (rate_ <= 0.0) return SamplingDecision::DROP;
+
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto now = clock::now();
+    double elapsed = std::chrono::duration<double>(now - last_refill_).count();
+
+    // 토큰 보충
+    tokens_ = std::min(rate_, tokens_ + elapsed * rate_);
+    last_refill_ = now;
+
+    if (tokens_ >= 1.0) {
+      tokens_ -= 1.0;
+      return SamplingDecision::RECORD_AND_SAMPLE;
+    }
+    return SamplingDecision::DROP;
+  }
+
+  [[nodiscard]] std::string_view description() const noexcept override {
+    return "RateLimitingSampler";
+  }
+
+private:
+  using clock = std::chrono::steady_clock;
+
+  double           rate_;
+  double           tokens_;
+  clock::time_point last_refill_;
+  mutable std::mutex mutex_;
+};
+
+// ---------------------------------------------------------------------------
+// ParentBasedSampler
+// ---------------------------------------------------------------------------
+
+/**
+ * @brief 부모 스팬의 sampled 플래그를 따르는 샘플러.
+ *
+ * - 부모가 있고 sampled=1 → RECORD_AND_SAMPLE
+ * - 부모가 있고 sampled=0 → DROP
+ * - 부모 없음 (루트) → `root_sampler`에 위임
+ */
+class ParentBasedSampler final : public Sampler {
+public:
+  /**
+   * @param root_sampler 루트 스팬(부모 없음)에 적용할 샘플러.
+   *                     nullptr이면 AlwaysSampler 사용.
+   */
+  explicit ParentBasedSampler(std::shared_ptr<Sampler> root_sampler = nullptr)
+      : root_(root_sampler
+                  ? std::move(root_sampler)
+                  : std::make_shared<AlwaysSampler>()) {}
+
+  [[nodiscard]] SamplingDecision should_sample(
+      const SamplingContext &ctx) noexcept override {
+    if (ctx.parent == nullptr) {
+      return root_->should_sample(ctx);
+    }
+    // W3C trace-flags: bit 0 = sampled
+    bool parent_sampled = (ctx.parent->flags & 0x01) != 0;
+    return parent_sampled ? SamplingDecision::RECORD_AND_SAMPLE
+                          : SamplingDecision::DROP;
+  }
+
+  [[nodiscard]] std::string_view description() const noexcept override {
+    return "ParentBasedSampler";
+  }
+
+private:
+  std::shared_ptr<Sampler> root_;
+};
+
+} // namespace qbuem::tracing
+
+/** @} */

@@ -376,10 +376,10 @@
 - [x] `TraceContext` — W3C Trace Context 표준
   - `trace_id[16]` (128-bit) / `span_id[8]` (64-bit) / `trace_flags`
   - `generate()` / `child_span()` / `to_traceparent()` / `from_traceparent()`
-- [ ] **Context 슬롯 기반 TraceContext 전파** (§27 경고 참조 — thread_local은 코루틴에서 위험)
+- [x] **Context 슬롯 기반 TraceContext 전파** (§27 경고 참조 — thread_local은 코루틴에서 위험)
   - `TraceCtx` Context 슬롯 → `ActionEnv.ctx.get<TraceCtx>()`로 접근
   - `ActiveSpan` Context 슬롯 → Action이 child span 생성 후 ctx에 추가
-- [ ] Pluggable `Sampler` 인터페이스
+- [x] Pluggable `Sampler` 인터페이스
   - `AlwaysSampler` / `NeverSampler`
   - `ProbabilitySampler(rate)` — 0.0~1.0
   - `RateLimitingSampler(max_per_second)` — token bucket
@@ -390,7 +390,7 @@
   - `OtlpGrpcExporter` / `OtlpHttpExporter` — OpenTelemetry Collector
   - `JaegerExporter` / `ZipkinExporter`
 - [x] `PipelineTracer` — `start_span()` / `end_span()`, 전역 등록 (`set_global_tracer`)
-- [ ] HTTP 통합: `traceparent` 헤더 자동 파싱 → thread-local 설정 → 응답 `traceresponse`
+- [x] HTTP 통합: `traceparent` 헤더 자동 파싱 → thread-local 설정 → 응답 `traceresponse`
 - [x] `IMetricsExporter` — Prometheus push 추상화
 
 ---
@@ -453,8 +453,8 @@
 - [ ] Reactor / Connection 구조체 cache-line 패킹 측정 및 최적화
 - [ ] `__builtin_prefetch` — 다음 Connection 구조체 미리 로드
 - [ ] 2KB 이하 요청 헤더 스택 할당 (힙 회피)
-- [ ] `MSG_ZEROCOPY` (`SO_ZEROCOPY`) — 송신 kernel→user 복사 제거
-- [ ] PGO 2-pass 빌드 가이드 (Instrumented → wrk → Optimized)
+- [x] `MSG_ZEROCOPY` (`SO_ZEROCOPY`) — 송신 kernel→user 복사 제거
+- [x] PGO 2-pass 빌드 가이드 (Instrumented → wrk → Optimized)
 
 ---
 
