@@ -7,6 +7,24 @@ target_link_libraries(async_timer PRIVATE qbuem-stack::qbuem)
 add_executable(kqueue_sophistication kqueue_sophistication.cpp)
 target_link_libraries(kqueue_sophistication PRIVATE qbuem-stack::qbuem)
 
+# ── Pipeline Guide 예제 ───────────────────────────────────────────────────────
+
+# §5-1: Fan-out (Broadcast) / Fan-in (Merge) — PipelineGraph 1→N / N→1
+add_executable(pipeline_fanout pipeline_fanout.cpp)
+target_link_libraries(pipeline_fanout PRIVATE qbuem-stack::qbuem)
+
+# §6A Recipe A: Sensor Fusion — ServiceRegistry N:1 Sync Gather
+add_executable(pipeline_sensor_fusion pipeline_sensor_fusion.cpp)
+target_link_libraries(pipeline_sensor_fusion PRIVATE qbuem-stack::qbuem)
+
+# §6B Recipe B: Hardware Batching (NPU) — BatchAction
+add_executable(pipeline_hardware_batching pipeline_hardware_batching.cpp)
+target_link_libraries(pipeline_hardware_batching PRIVATE qbuem-stack::qbuem)
+
+# §3-2 + §6C: DynamicPipeline Hot-swap + DLQ
+add_executable(pipeline_dynamic_hotswap pipeline_dynamic_hotswap.cpp)
+target_link_libraries(pipeline_dynamic_hotswap PRIVATE qbuem-stack::qbuem)
+
 # ── coro_json: 비동기 코루틴 + qbuem-json 예제 ────────────────────────────────
 # qbuem-json 이 없을 경우 빌드를 건너뜀 (선택적 의존성).
 FetchContent_Declare(qbuem_json

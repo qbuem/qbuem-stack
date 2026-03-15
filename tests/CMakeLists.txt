@@ -84,6 +84,16 @@ target_link_libraries(qbuem_enhancement_tests
     GTest::gtest_main
 )
 
+# ── Pipeline Guide: 패턴 & 레시피 통합 테스트 ────────────────────────────────
+add_executable(qbuem_pipeline_guide_tests
+    pipeline_guide_test.cpp
+)
+target_link_libraries(qbuem_pipeline_guide_tests
+    PRIVATE
+    qbuem-stack::qbuem
+    GTest::gtest_main
+)
+
 include(GoogleTest)
 gtest_discover_tests(qbuem_tests)
 gtest_discover_tests(qbuem_ext_tests)
@@ -92,3 +102,4 @@ gtest_discover_tests(qbuem_v15_tests)
 gtest_discover_tests(qbuem_v16_tests)
 gtest_discover_tests(qbuem_v17_tests)
 gtest_discover_tests(qbuem_enhancement_tests)
+gtest_discover_tests(qbuem_pipeline_guide_tests)
