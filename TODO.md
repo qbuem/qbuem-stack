@@ -14,8 +14,8 @@
 - **Mechanical Sympathy**: NUMA-aware, cache-aligned, and lock-free by default.
 
 **Documentation:**
-- [Pipeline Design](./docs/pipeline-design.md) | [IO Architecture](./docs/io-architecture.md) | [Library Strategy](./docs/library-strategy.md)
-- [SHM Messaging](./docs/shm-messaging.md) | [DB Abstraction](./docs/db-abstraction.md) | [Strategic Vision](./docs/strategic-evaluation.md)
+- [Pipeline Master Guide](./docs/pipeline-master-guide.md) | [IO Architecture](./docs/io-architecture.md) | [Library Strategy](./docs/library-strategy.md)
+- [DB Abstraction](./docs/db-abstraction.md) | [Strategic Vision](./docs/strategic-evaluation.md) | [Windows Support](./docs/windows-support.md) | [Versatility](./docs/versatility-guide.md)
 
 ---
 

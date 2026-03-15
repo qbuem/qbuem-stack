@@ -23,9 +23,10 @@
 
 - **[Roadmap & Progress](./TODO.md)**: Current status and future milestones.
 - **[Strategic Vision](./docs/strategic-evaluation.md)**: Why `qbuem-stack` is a universal platform.
-- **[IO Architecture](./docs/io-architecture.md)**: Zero-copy networking and file I/O deep dive.
-- **[Pipeline Design](./docs/pipeline-design.md)**: High-performance stream processing engine.
+- **[Pipeline Master Guide](./docs/pipeline-master-guide.md)**: The complete reference for design, patterns, and recipes.
 - **[Library Strategy](./docs/library-strategy.md)**: Modular 9-level build system.
+- **[Versatility Guide](./docs/versatility-guide.md)**: Application in Media Streaming, AI/NPU, and Edge.
+- **[Windows Support](./docs/windows-support.md)**: Native IOCP integration and Win32 alignment.
 - **[SHM Messaging](./docs/shm-messaging.md)**: Sub-microsecond cross-process IPC.
 - **[DB Abstraction](./docs/db-abstraction.md)**: Zero-allocation database driver interface.
 
