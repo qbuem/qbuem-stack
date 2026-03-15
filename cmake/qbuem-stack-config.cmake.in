@@ -5,12 +5,41 @@
 #
 # Usage (in a downstream CMakeLists.txt):
 #
-#   find_package(qbuem-stack REQUIRED)          # full App + HTTP + core
-#   find_package(qbuem-stack REQUIRED COMPONENTS core http)   # pick components
+#   find_package(qbuem-stack REQUIRED)
+#   find_package(qbuem-stack REQUIRED COMPONENTS net buf pipeline)
+#   find_package(qbuem-stack REQUIRED COMPONENTS http tracing resilience)
 #
-#   target_link_libraries(myapp PRIVATE qbuem-stack::qbuem)  # everything
-#   target_link_libraries(myapp PRIVATE qbuem-stack::http)   # HTTP only (+ core)
-#   target_link_libraries(myapp PRIVATE qbuem-stack::core)   # reactor only
+# Available components:
+#   result        — Result<T>, errc (header-only, zero-dep)
+#   arena         — Arena, FixedPoolResource, MmapArena, HugePages
+#   crypto        — CSPRNG, constant_time_equal, csrf_token
+#   task          — Task<T>, coroutine primitives (header-only)
+#   reactor       — Reactor interface + TimerWheel + Dispatcher (static)
+#   epoll         — alias for reactor (Linux epoll)
+#   kqueue        — alias for reactor (macOS kqueue)
+#   iouring       — alias for reactor (Linux io_uring)
+#   buf           — IOSlice, IOVec<N>, ReadBuf<N>, WriteBuf (header-only)
+#   net           — SocketAddr, TcpListener, TcpStream, UdpSocket, UnixSocket
+#   io            — AsyncFile, ZeroCopy, SocketOpts, kTLS, io_uring ops
+#   transport     — ITransport (abstract), PlainTransport
+#   codec         — IFrameCodec, LengthPrefixCodec, LineCodec, Http1Codec
+#   server-base   — IConnectionHandler, AcceptLoop, ConnectionPool
+#   http          — HTTP/1.1 parser + radix tree router (static)
+#   http-server   — Http1Handler + App + middleware chain
+#   context       — Context, ServiceRegistry, ActionEnv (header-only)
+#   channel       — AsyncChannel<T>, SpscChannel, PriorityChannel, Stream<T>
+#   pipeline      — Action, StaticPipeline, DynamicPipeline, PipelineBuilder
+#   pipeline-graph — PipelineGraph, MessageBus, HotSwap, ArenaChannel
+#   resilience    — RetryPolicy, CircuitBreaker, DLQ, Saga, SLO, Windowing
+#   tracing       — W3C TraceContext, Span, Sampler, SpanExporter
+#   metrics       — ActionMetrics, PipelineMetrics, PipelineObserver
+#   ws            — WebSocketHandler (RFC 6455)
+#   http2         — Http2Handler (HPACK encoder/decoder, stream multiplexing)
+#   grpc          — GrpcHandler<Req,Res> (Unary/Server/Client/Bidi streaming)
+#   xdp           — AF_XDP + UMEM (optional, requires libbpf)
+#   core          — backward-compat alias for reactor
+#   stack         — backward-compat alias for qbuem (everything)
+#   qbuem         — full umbrella (everything)
 # ============================================================================
 
 include(CMakeFindDependencyMacro)
@@ -18,34 +47,63 @@ include(CMakeFindDependencyMacro)
 # ── qbuem-stack targets ──────────────────────────────────────────────────────
 include("${CMAKE_CURRENT_LIST_DIR}/qbuem-stack-targets.cmake")
 
+# ── Component → target 매핑 ──────────────────────────────────────────────────
+set(_QBUEM_COMP_TARGET_result         qbuem-stack::result)
+set(_QBUEM_COMP_TARGET_arena          qbuem-stack::arena)
+set(_QBUEM_COMP_TARGET_crypto         qbuem-stack::crypto)
+set(_QBUEM_COMP_TARGET_task           qbuem-stack::task)
+set(_QBUEM_COMP_TARGET_reactor        qbuem-stack::reactor)
+set(_QBUEM_COMP_TARGET_epoll          qbuem-stack::epoll)
+set(_QBUEM_COMP_TARGET_kqueue         qbuem-stack::kqueue)
+set(_QBUEM_COMP_TARGET_iouring        qbuem-stack::iouring)
+set(_QBUEM_COMP_TARGET_buf            qbuem-stack::buf)
+set(_QBUEM_COMP_TARGET_net            qbuem-stack::net)
+set(_QBUEM_COMP_TARGET_io             qbuem-stack::io)
+set(_QBUEM_COMP_TARGET_transport      qbuem-stack::transport)
+set(_QBUEM_COMP_TARGET_codec          qbuem-stack::codec)
+set(_QBUEM_COMP_TARGET_server-base    qbuem-stack::server-base)
+set(_QBUEM_COMP_TARGET_http           qbuem-stack::http)
+set(_QBUEM_COMP_TARGET_http-server    qbuem-stack::http-server)
+set(_QBUEM_COMP_TARGET_context        qbuem-stack::context)
+set(_QBUEM_COMP_TARGET_channel        qbuem-stack::channel)
+set(_QBUEM_COMP_TARGET_pipeline       qbuem-stack::pipeline)
+set(_QBUEM_COMP_TARGET_pipeline-graph qbuem-stack::pipeline-graph)
+set(_QBUEM_COMP_TARGET_resilience     qbuem-stack::resilience)
+set(_QBUEM_COMP_TARGET_tracing        qbuem-stack::tracing)
+set(_QBUEM_COMP_TARGET_metrics        qbuem-stack::metrics)
+set(_QBUEM_COMP_TARGET_ws             qbuem-stack::ws)
+set(_QBUEM_COMP_TARGET_http2          qbuem-stack::http2)
+set(_QBUEM_COMP_TARGET_grpc           qbuem-stack::grpc)
+set(_QBUEM_COMP_TARGET_xdp            qbuem-stack::xdp)
+# backward-compat aliases
+set(_QBUEM_COMP_TARGET_core           qbuem-stack::core)
+set(_QBUEM_COMP_TARGET_stack          qbuem-stack::stack)
+set(_QBUEM_COMP_TARGET_qbuem          qbuem-stack::qbuem)
+
 # ── COMPONENTS 처리 ──────────────────────────────────────────────────────────
-# find_package(qbuem-stack COMPONENTS core http) 지원
-# 지원 컴포넌트: core, http, qbuem
+# find_package(qbuem-stack COMPONENTS net buf pipeline ...) 지원
 foreach(_comp IN LISTS qbuem-stack_FIND_COMPONENTS)
-    if(_comp STREQUAL "core")
-        set(qbuem-stack_${_comp}_FOUND
-            $<TARGET_EXISTS:qbuem-stack::core>)
-        if(NOT TARGET qbuem-stack::core)
-            set(qbuem-stack_${_comp}_FOUND FALSE)
+    if(DEFINED "_QBUEM_COMP_TARGET_${_comp}")
+        set(_tgt "${_QBUEM_COMP_TARGET_${_comp}}")
+        if(TARGET "${_tgt}")
+            set("qbuem-stack_${_comp}_FOUND" TRUE)
         else()
-            set(qbuem-stack_${_comp}_FOUND TRUE)
-        endif()
-    elseif(_comp STREQUAL "http")
-        if(NOT TARGET qbuem-stack::http)
-            set(qbuem-stack_${_comp}_FOUND FALSE)
-        else()
-            set(qbuem-stack_${_comp}_FOUND TRUE)
-        endif()
-    elseif(_comp STREQUAL "qbuem")
-        if(NOT TARGET qbuem-stack::qbuem)
-            set(qbuem-stack_${_comp}_FOUND FALSE)
-        else()
-            set(qbuem-stack_${_comp}_FOUND TRUE)
+            set("qbuem-stack_${_comp}_FOUND" FALSE)
+            if(qbuem-stack_FIND_REQUIRED_${_comp})
+                set(qbuem-stack_NOT_FOUND_MESSAGE
+                    "qbuem-stack: required component '${_comp}' target '${_tgt}' not found.")
+            endif()
         endif()
     else()
-        set(qbuem-stack_${_comp}_FOUND FALSE)
-        set(qbuem-stack_NOT_FOUND_MESSAGE
-            "qbuem-stack: unknown component '${_comp}'. Valid: core, http, qbuem")
+        set("qbuem-stack_${_comp}_FOUND" FALSE)
+        if(qbuem-stack_FIND_REQUIRED_${_comp})
+            set(qbuem-stack_NOT_FOUND_MESSAGE
+                "qbuem-stack: unknown component '${_comp}'. "
+                "Valid: result arena crypto task reactor epoll kqueue iouring "
+                "buf net io transport codec server-base http http-server "
+                "context channel pipeline pipeline-graph resilience tracing metrics "
+                "ws http2 grpc xdp core stack qbuem")
+        endif()
     endif()
 endforeach()
 

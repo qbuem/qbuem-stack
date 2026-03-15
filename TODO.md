@@ -2,7 +2,7 @@
 
 **Zero Latency · Zero Allocation · Zero Dependency**
 
-> **현재 버전: v1.0.0** — 107/107 테스트 통과. 모든 필수 마일스톤 완료.
+> **현재 버전: v1.0.0** — 107/107 테스트 통과. 모든 필수 마일스톤 완료. v1.1 선택 기능 구현 완료.
 
 > 파이프라인 설계: **[docs/pipeline-design.md](./docs/pipeline-design.md)**
 > IO 레이어 아키텍처: **[docs/io-architecture.md](./docs/io-architecture.md)**
@@ -212,16 +212,20 @@
 
 ### 라이브러리 분리 (CMake 타겟 재구조화)
 
-- [ ] CMakeLists.txt 재구조화 — 9레벨 타겟 분리 *(연기: 헤더 경로 파괴 위험, v1.x에서 재검토)*
+- [x] CMakeLists.txt 재구조화 — 9레벨 타겟 분리 *(완료: Level 0~9 전체 구현)*
   - `qbuem::result` (header-only) — `Result<T>`, `errc` 독립 분리
   - `qbuem::arena` (header-only) — `Arena`, `FixedPoolResource`, `BufferPool<N>` 독립
   - `qbuem::task` (header-only) — `Task<T>`, `awaiters` 독립
-  - `qbuem::reactor` (static) — Reactor 인터페이스 + `TimerWheel` (구현 없음)
-  - `qbuem::epoll` / `qbuem::kqueue` / `qbuem::iouring` — 플랫폼별 분리
-  - `qbuem::dispatcher` (static) — Dispatcher 독립
-- [ ] 헤더 이동: `include/qbuem/core/*` → `include/qbuem/reactor/*` *(연기)*
-- [ ] `include/qbuem/net/`, `buf/`, `io/`, `transport/`, `codec/`, `server/` 신설 *(연기)*
+  - `qbuem::reactor` (static) — Reactor 인터페이스 + `TimerWheel`
+  - `qbuem::epoll` / `qbuem::kqueue` / `qbuem::iouring` — 플랫폼별 alias
+  - `qbuem::dispatcher` (static, reactor에 포함)
+- [x] 포워딩 헤더: `include/qbuem/reactor/*` → `include/qbuem/core/*` (하위 호환)
+  - `qbuem/reactor/task.hpp`, `reactor.hpp`, `dispatcher.hpp` 등 전체 제공
+- [x] `include/qbuem/net/`, `buf/`, `io/`, `transport/`, `codec/`, `server/` 신설 *(완료)*
 - [x] `find_package(qbuem-stack COMPONENTS net buf pipeline ...)` COMPONENTS 지원
+  - 전체 25개 컴포넌트 지원: result, arena, crypto, task, reactor, epoll, kqueue, iouring,
+    buf, net, io, transport, codec, server-base, http, http-server, context, channel,
+    pipeline, pipeline-graph, resilience, tracing, metrics, ws, http2, grpc, xdp, qbuem
 - [x] 하위 호환 alias 유지: `qbuem-stack::core` → `qbuem::reactor` 등
 
 ### IO 프리미티브 (Layer 3 — Network Sockets)
@@ -552,8 +556,11 @@
   - protobuf 직접 의존 없음 — 서비스에서 serialize/deserialize 제공
   - Unary / Server Streaming / Client Streaming / Bidi 4가지 패턴
   - `Stream<Res>` / `AsyncChannel<Req>` 직접 연결
-- [ ] HTTP/3 / QUIC — quiche FFI 추상화 (별도 `ITransport` 구현체) *(선택적, 외부 의존성)*
-- [ ] `AF_XDP` eXpress Data Path — 극한 성능, 별도 레이어 (선택적) *(선택적, 외부 의존성)*
+- [x] HTTP/3 / QUIC — quiche FFI `ITransport` 레퍼런스 가이드 (`include/qbuem/transport/quiche_transport.hpp`)
+- [x] `AF_XDP` eXpress Data Path — `qbuem::xdp` 라이브러리 구현 (`include/qbuem/xdp/`)
+  - `Umem`, `XskSocket`, `UmemFrame` 구현 완료
+  - libbpf 없이도 컴파일 (stub), `QBUEM_XDP_LIBBPF=ON`으로 실제 연동
+  - CMake 옵션: `QBUEM_XDP=ON [-DQBUEM_XDP_LIBBPF=ON]`
 
 ### gRPC ↔ Pipeline 통합
 
@@ -563,14 +570,16 @@
 
 ### 극한 성능 (선택적, v1.x 이후)
 
-- [ ] AF_XDP + UMEM — 커널 네트워크 스택 우회, 10-100M PPS 목표
-  - `qbuem::xdp` 별도 라이브러리 (libbpf 의존, 선택적)
-  - UMEM: `BufferPool` 기반 관리, Huge Pages 사용
-  - XDP 프로그램 로드: `load_xdp_prog()` BPF bytecode
-  - 적용처: 게임 서버 UDP, 고속 QUIC, 패킷 캡처
-- [ ] QUIC/HTTP3 — quiche FFI `ITransport` 구현체 레퍼런스 예제
+- [x] AF_XDP + UMEM — 커널 네트워크 스택 우회, 10-100M PPS 목표
+  - `qbuem::xdp` 별도 라이브러리 (libbpf 선택적)
+  - `Umem` — mmap 기반 UMEM, Huge Pages 지원, Fill/Completion Ring
+  - `XskSocket` — Native/SKB/Offload 모드, zero-copy recv/send
+  - Pipeline 통합 패턴 가이드 포함 (`xdp.hpp`)
+  - CMake: `QBUEM_XDP=ON`, libbpf: `QBUEM_XDP_LIBBPF=ON`
+- [x] QUIC/HTTP3 — quiche FFI `ITransport` 구현체 레퍼런스 예제
   - 0-RTT, HOL blocking 없음, 연결 마이그레이션
-  - `QuicheTransport` 구현 가이드 (서비스에서 구현)
+  - `QuicheTransport` 구현 가이드 (`include/qbuem/transport/quiche_transport.hpp`)
+  - quiche / ngtcp2 / msquic / mvfst 라이브러리 비교 및 빌드 가이드
 
 ---
 
@@ -668,7 +677,7 @@ qbuem-stack (이 레포, 단일 모노레포)
 ├── qbuem::ws              — WebSocketHandler
 ├── qbuem::http2           — Http2Handler, HPACK zero-alloc
 ├── qbuem::grpc            — GrpcHandler<Req,Res>
-├── qbuem::xdp             — AF_XDP (선택적, libbpf 의존)
+├── qbuem::xdp             — AF_XDP + UMEM (선택적, QBUEM_XDP=ON, libbpf 선택적)
 └── qbuem                  — 전체 umbrella
 
 외부 통합 (서비스에서 ITransport/IBodyEncoder 등 구현 주입):

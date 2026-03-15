@@ -25,13 +25,28 @@ C++20 WAS (Web Application Server) 레이어 라이브러리.
 
 ```
 qbuem-stack
-├── Layer 0: Common          — Result<T>, Status, PMR Arena, 상수
-├── Layer 1: IO Core         — IReactor (io_uring / epoll / kqueue), Dispatcher, Task<T>
-├── Layer 2: HTTP            — SIMD 파서, Radix Tree 라우터, Request/Response
-├── Layer 3: Middleware      — CORS, RateLimit, Security, RequestID, SSE, Static
-├── Layer 4: App Lifecycle   — App, StackController, 헬스체크, 메트릭
-└── Layer 5: Pipeline        — AsyncChannel, Action, StaticPipeline / DynamicPipeline,
-                               PipelineGraph, MessageBus, Tracing, Resilience
+├── Level 0: Foundation      — Result<T>, Arena, FixedPoolResource, Crypto
+├── Level 1: Async Core      — Task<T>, IReactor (io_uring/epoll/kqueue), Dispatcher
+├── Level 2: Platform Impl   — EpollReactor, KqueueReactor, IOUringReactor
+├── Level 3: IO Primitives   — IOSlice, IOVec<N>, ReadBuf<N>, WriteBuf, AsyncFile
+├── Level 4: Transport/Codec — ITransport, PlainTransport, IFrameCodec, Codec 구현체
+├── Level 5: HTTP            — SIMD HTTP/1.1 파서, Radix Tree 라우터, App, Middleware
+├── Level 6: Pipeline Core   — Context, ServiceRegistry, AsyncChannel, Action
+├── Level 7: Pipeline Ext    — DynamicPipeline, PipelineGraph, Resilience, Tracing
+├── Level 8: Protocol        — Http1Handler, Http2Handler (HPACK), WebSocket, gRPC
+└── Level 8b: AF_XDP         — Umem, XskSocket (선택적, QBUEM_XDP=ON)
+```
+
+**CMake 컴포넌트 지원:**
+```cmake
+# 컴포넌트 단위 선택적 링크
+find_package(qbuem-stack REQUIRED COMPONENTS net buf pipeline)
+find_package(qbuem-stack REQUIRED COMPONENTS http tracing resilience grpc)
+find_package(qbuem-stack REQUIRED COMPONENTS xdp)     # AF_XDP (선택적)
+
+# 전체 umbrella
+find_package(qbuem-stack REQUIRED)
+target_link_libraries(myapp PRIVATE qbuem-stack::qbuem)
 ```
 
 **외부 의존성 주입 포인트 (추상 인터페이스):**
@@ -71,11 +86,35 @@ ctest --test-dir build          # 단위 테스트 (qbuem-json 포함)
 find_package(qbuem-stack REQUIRED)
 
 target_link_libraries(my_service
-    qbuem-stack::qbuem   # 전체 (HTTP + IO + Lifecycle)
-    # 또는 선택적으로:
-    # qbuem-stack::core  — IO 레이어만
-    # qbuem-stack::http  — HTTP 파서 + 라우터만
+    qbuem-stack::qbuem       # 전체 (HTTP + IO + Pipeline + Protocol)
+    # 선택적 컴포넌트:
+    # qbuem-stack::reactor    — IO core (epoll/kqueue/io_uring)
+    # qbuem-stack::http       — HTTP/1.1 파서 + 라우터
+    # qbuem-stack::http2      — HTTP/2 (HPACK, 스트림 멀티플렉싱)
+    # qbuem-stack::ws         — WebSocket (RFC 6455)
+    # qbuem-stack::grpc       — gRPC (Unary/Stream/Bidi)
+    # qbuem-stack::pipeline   — Action, StaticPipeline
+    # qbuem-stack::pipeline-graph — PipelineGraph, MessageBus
+    # qbuem-stack::resilience — RetryPolicy, CircuitBreaker, Saga
+    # qbuem-stack::tracing    — W3C TraceContext, SpanExporter
+    # qbuem-stack::metrics    — ActionMetrics, PipelineObserver
+    # qbuem-stack::net        — SocketAddr, TcpListener, TcpStream
+    # qbuem-stack::buf        — IOSlice, IOVec<N>, ReadBuf<N>
+    # qbuem-stack::xdp        — AF_XDP + UMEM (선택적)
+    # qbuem-stack::core       — backward-compat alias for reactor
 )
+```
+
+### 선택적 기능 활성화
+
+```bash
+# AF_XDP (Linux 4.18+, 극한 성능 10-100M PPS)
+cmake -DQBUEM_XDP=ON -DQBUEM_XDP_LIBBPF=ON ..
+
+# PGO (Profile-Guided Optimization) 2-pass 빌드
+cmake -DQBUEM_PGO_GENERATE=ON ..   # pass 1: instrumented
+./build/bench/bench_throughput      # 프로파일 수집
+cmake -DQBUEM_PGO_USE=ON ..        # pass 2: optimized
 ```
 
 ---
@@ -390,36 +429,41 @@ target_link_libraries(my_service PRIVATE qbuem-stack::qbuem qbuem_json::qbuem_js
 | K8s Probe | ✅ | `/live`, `/ready` |
 | 연결 수 제한 | ✅ | 초과 시 503 + Retry-After |
 | 에러 핸들러 | ✅ | `on_error(ErrorHandler)` |
-| TLS/SSL | ❌ 예정 | `ITransport` 추상화로 주입 |
-| HTTP/2 | ❌ 예정 | |
-| WebSocket | ❌ 예정 | |
+| TLS/SSL | ✅ | `ITransport` 추상화 + `kTLSTransport`, `PlainTransport` |
+| HTTP/2 | ✅ | `Http2Handler` (HPACK zero-alloc, 스트림 멀티플렉싱) |
+| WebSocket | ✅ | `WebSocketHandler` (RFC 6455, PING/PONG/CLOSE) |
+| gRPC | ✅ | `GrpcHandler<Req,Res>` (Unary/Server/Client/Bidi) |
+| AF_XDP | ✅ | `qbuem::xdp` (Umem, XskSocket, QBUEM_XDP=ON) |
+| QUIC/HTTP3 가이드 | ✅ | `quiche_transport.hpp` — quiche/ngtcp2 ITransport 주입 가이드 |
 | **Pipeline** | | |
 | `Reactor::post()` / `Dispatcher::spawn()` | ✅ | cross-thread 작업 주입 |
 | `AsyncChannel<T>` (MPMC ring) | ✅ | Dmitry Vyukov, 44M ops/s |
 | `SpscChannel<T>` | ✅ | wait-free SPSC, 111M ops/s |
-| `ArenaChannel<T>` | ✅ | Arena 기반 고속, 110M ops/s |
+| `ArenaChannel<T>` | ✅ | Arena 기반 zero-alloc, 110M ops/s |
+| `PriorityChannel<T>` | ✅ | 3레벨 + aging (스타베이션 방지) |
 | `Action<In,Out>` (정적) | ✅ | 코루틴 워커 풀, scale-in/out |
+| `BatchAction<In,Out>` | ✅ | span<In> 단위 bulk 처리 |
 | `StaticPipeline<In,Out>` | ✅ | 컴파일타임 타입 체인 |
+| `DynamicPipeline` | ✅ | 런타임 구성, hot-swap, Reconfiguring 상태 |
+| `PipelineGraph` | ✅ | DAG 오케스트레이션, Kahn's 위상 정렬 |
+| `MessageBus` | ✅ | Unary / Server / Client / Bidi 스트리밍 |
 | `RetryPolicy` / `CircuitBreaker` | ✅ | 복원력 패턴 |
-| `Context` / `ServiceRegistry` | ✅ | 타입키 K/V, DI |
+| `DeadLetterQueue` | ✅ | 실패 아이템 격리 + 재처리 |
+| `Context` / `ServiceRegistry` | ✅ | 타입키 K/V, DI 컨테이너 |
 | Batch ops (`send_batch`/`recv_batch`) | ✅ | DB bulk insert 등 처리량 최적화 |
-| `PriorityChannel<T>` | ❌ 예정 | 3레벨 + aging |
-| `DynamicPipeline` | ❌ 예정 | 런타임 구성, hot-swap |
-| `PipelineGraph` | ❌ 예정 | DAG 오케스트레이션 |
-| `MessageBus` | ❌ 예정 | Unary / Stream / Bidi |
-| `DeadLetterQueue` | ❌ 예정 | 실패 아이템 격리 |
-| `PipelineTracer` (W3C Trace Context) | ❌ 예정 | OpenTelemetry 호환 |
-| `PipelineFactory` (Config-driven) | ❌ 예정 | JSON/YAML → Pipeline |
+| `PipelineTracer` (W3C Trace Context) | ✅ | OTLP/Jaeger/Zipkin 익스포터 |
+| `PipelineFactory` (Config-driven) | ✅ | JSON/YAML → DynamicPipeline 생성 |
 | **Pipeline 고급** | | |
-| `TaskGroup` (구조적 동시성) | ❌ 예정 | 자식 코루틴 수명 관리, cancel-on-error |
-| Rx-style 스트림 연산자 | ❌ 예정 | map/filter/flat_map/zip/merge/chunk |
-| `WindowedAction<T>` | ❌ 예정 | Tumbling/Sliding/Session 창 집계 |
-| `ScatterGatherAction` | ❌ 예정 | 병렬 서브작업 후 결과 집계 |
-| `SagaOrchestrator` | ❌ 예정 | 실패 시 역순 보상 트랜잭션 |
-| `IdempotencyFilter` | ❌ 예정 | Exactly-once 중복 처리 방지 |
-| `ICheckpointStore` | ❌ 예정 | ETL/배치 크래시 복구 |
-| SLO Tracking + Error Budget | ❌ 예정 | P99 목표 + 자동 circuit break |
-| Pipeline Topology Export | ❌ 예정 | JSON/DOT/Mermaid 위상 시각화 |
+| `TaskGroup` (구조적 동시성) | ✅ | cancel-on-error, join_all<T>() |
+| Rx-style 스트림 연산자 | ✅ | map/filter/flat_map/zip/merge/chunk/scan |
+| `WindowedAction<T>` | ✅ | Tumbling/Sliding/Session 창 집계 |
+| `ScatterGatherAction` | ✅ | 병렬 서브작업 후 결과 집계 |
+| `SagaOrchestrator` | ✅ | 실패 시 역순 보상 트랜잭션 |
+| `IdempotencyFilter` | ✅ | Exactly-once 중복 처리 방지 |
+| `ICheckpointStore` | ✅ | ETL/배치 크래시 복구 |
+| SLO Tracking + Error Budget | ✅ | P99 목표 + 자동 circuit break |
+| Pipeline Topology Export | ✅ | `to_json()` / `to_dot()` / `to_mermaid()` |
+| Canary 자동 롤아웃 | ✅ | 1%→5%→25%→100% 단계, 자동 롤백 |
 
 ---
 
@@ -495,18 +539,18 @@ IDE 자동완성(IntelliSense / clangd)도 지원됩니다.
 
 ## 로드맵
 
-| 버전 | 주요 내용 |
-|------|----------|
-| v0.5.0 | `Reactor::post()` + `Dispatcher::spawn()` — 파이프라인 전제조건 |
-| v0.6.0 | Pipeline MVP — `Context`, `ServiceRegistry`, `AsyncChannel`, `Action`, `StaticPipeline` |
-| v0.7.0 | `DynamicPipeline` + `PipelineGraph` + `MessageBus` |
-| v0.8.0 | 복원력 (`RetryPolicy`, `CircuitBreaker`, DLQ) + 트레이싱 |
-| v0.9.0 | Hot-swap, Priority Channel, Config-driven, Pipeline 합성 |
-| v0.9.1 | Windowing, Saga, Exactly-once, Checkpoint, SLO, Topology, Canary |
-| v0.9.2 | NUMA pinning, SPSC, Batch ops, Rx 연산자, Pipeline Versioning |
-| **v1.0.0** ✅ | **StaticPipeline GA · 651 tests · 전 벤치마크 목표 달성 · HTTP/2 handler 스텁** |
-| v1.1.0 | DynamicPipeline, PipelineGraph, MessageBus |
-| v1.2.0 | HTTP/2 full support, WebSocket, gRPC |
+| 버전 | 주요 내용 | 상태 |
+|------|----------|------|
+| v0.5.0 | `Reactor::post()` + `Dispatcher::spawn()` — 파이프라인 전제조건 | ✅ |
+| v0.6.0 | Pipeline MVP — `Context`, `ServiceRegistry`, `AsyncChannel`, `Action`, `StaticPipeline` | ✅ |
+| v0.7.0 | IO 프리미티브 + `DynamicPipeline` + `PipelineGraph` + `MessageBus` | ✅ |
+| v0.8.0 | 복원력 (`RetryPolicy`, `CircuitBreaker`, DLQ) + 분산 트레이싱 | ✅ |
+| v0.9.0 | Hot-swap, PriorityChannel, Config-driven Pipeline, 합성 | ✅ |
+| v0.9.1 | Windowing, Saga, Exactly-once, Checkpoint, SLO, Topology, Canary | ✅ |
+| v0.9.2 | NUMA pinning, PGO, Pipeline Versioning, SPSC, Batch, Rx 연산자 | ✅ |
+| **v1.0.0** | **Protocol Handlers (HTTP/2, WebSocket, gRPC) · 107 tests · 전 벤치마크 목표 달성** | ✅ |
+| **v1.1** | **AF_XDP + UMEM · cmake COMPONENTS 전체 지원 · reactor/* 포워딩 헤더 · QUIC 가이드** | ✅ |
+| v2.0 | HTTP/3 native (quiche ITransport 구현체 동봉 시) · AF_XDP 프로덕션 예제 | 계획 |
 
 전체 계획은 **[TODO.md](./TODO.md)**, 파이프라인 상세 설계는 **[docs/pipeline-design.md](./docs/pipeline-design.md)** 참조.
 

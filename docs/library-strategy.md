@@ -675,9 +675,13 @@ GrpcHandler<Req,Res>     qbuem::grpc             서비스별 핸들러 구현
 | 5 | Pipeline 헤더 재구성: `context`, `channel`, `pipeline` 분리 | v0.7.0 | ✅ |
 | 6 | `tracing/`, `metrics/` 분리 | v0.8.0 | ✅ |
 | 7 | `protocol/` 추가 (ws, http2, grpc 핸들러 스텁) | v1.0.0 | ✅ |
-| 8 | `find_package(qbuem-stack COMPONENTS ...)` 지원 완성 | v1.0.0 | ✅ |
-| 9 | DynamicPipeline, PipelineGraph, MessageBus 분리 | v1.1.0 | ❌ 예정 |
-| 10 | HTTP/2 full, WebSocket, gRPC 구현 | v1.2.0 | ❌ 예정 |
+| 8 | `find_package(qbuem-stack COMPONENTS ...)` 전체 25개 컴포넌트 지원 | v1.1 | ✅ |
+| 9 | DynamicPipeline, PipelineGraph, MessageBus 구현 | v1.0.0 | ✅ |
+| 10 | HTTP/2 full (HPACK), WebSocket (RFC 6455), gRPC (4패턴) 구현 | v1.0.0 | ✅ |
+| 11 | `reactor/*` 포워딩 헤더 추가 (하위 호환 경로 제공) | v1.1 | ✅ |
+| 12 | `qbuem::xdp` — AF_XDP + UMEM 라이브러리 (선택적, QBUEM_XDP=ON) | v1.1 | ✅ |
+| 13 | QUIC/HTTP3 `ITransport` 레퍼런스 가이드 | v1.1 | ✅ |
+| 14 | HTTP/3 native (quiche 동봉) / AF_XDP 프로덕션 예제 | v2.0 | 계획 |
 
 ### 하위 호환성 유지
 
@@ -687,3 +691,69 @@ add_library(qbuem-stack::core  ALIAS qbuem_reactor)  # 기존 core → reactor
 add_library(qbuem-stack::http  ALIAS qbuem_http)
 add_library(qbuem-stack::qbuem ALIAS qbuem_all)
 ```
+
+헤더 경로도 하위 호환 포워딩 헤더로 유지됩니다:
+
+```cpp
+// 모두 동일하게 동작 — 실제 헤더는 core/ 에 있음
+#include <qbuem/reactor/task.hpp>     // 새 경로 (포워딩)
+#include <qbuem/core/task.hpp>        // 기존 경로 (실제 헤더)
+```
+
+---
+
+## 10. AF_XDP 선택적 라이브러리 (`qbuem::xdp`)
+
+커널 네트워크 스택을 완전히 우회하는 극한 성능 패킷 I/O.
+
+### 빌드
+
+```bash
+# AF_XDP 인터페이스만 (stub — 컴파일은 되나 실제 동작 없음)
+cmake -DQBUEM_XDP=ON ..
+
+# AF_XDP + libbpf 실제 연동 (Linux 4.18+, libbpf-dev 필요)
+cmake -DQBUEM_XDP=ON -DQBUEM_XDP_LIBBPF=ON ..
+```
+
+### 사용
+
+```cmake
+find_package(qbuem-stack REQUIRED COMPONENTS xdp)
+target_link_libraries(myapp PRIVATE qbuem-stack::xdp)
+```
+
+```cpp
+#include <qbuem/xdp/xdp.hpp>
+
+// UMEM 생성 (NIC ↔ 유저스페이스 공유 메모리)
+auto umem = qbuem::xdp::Umem::create({
+    .frame_count   = 4096,
+    .frame_size    = 4096,
+    .use_hugepages = true,
+});
+
+// XSK 소켓 (eth0, 큐 0, native mode)
+auto xsk = qbuem::xdp::XskSocket::create("eth0", 0, *umem, {
+    .mode           = qbuem::xdp::XskConfig::Mode::Native,
+    .force_zerocopy = true,
+});
+
+// 수신 루프
+umem->fill_frames(2048);
+while (true) {
+    qbuem::xdp::UmemFrame frames[64];
+    uint32_t n = xsk->recv(frames, 64);
+    // 처리 ...
+    umem->fill_frames(n);
+}
+```
+
+### 적용 사례
+
+| 사례 | 목표 PPS | 비고 |
+|------|---------|------|
+| 게임 서버 UDP | 10M+ PPS | RTT < 50µs |
+| 고속 QUIC (HTTP/3) | 1M+ conn/s | 연결 마이그레이션 |
+| 패킷 캡처/분석 | 100M+ PPS | tcpdump 대체 |
+| L4 로드밸런서 | 100M+ PPS | XDP redirect |
