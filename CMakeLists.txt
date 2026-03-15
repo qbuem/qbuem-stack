@@ -30,6 +30,15 @@ option(QBUEM_BUILD_EXAMPLES "Build examples"        ON)
 option(QBUEM_BUILD_BENCH    "Build benchmarks"      ON)
 option(QBUEM_INSTALL        "Generate install rules" ON)
 
+# ── AF_XDP (optional, requires Linux 4.18+) ─────────────────────────────────
+# Usage:
+#   cmake -DQBUEM_XDP=ON [-DQBUEM_XDP_LIBBPF=ON] ..
+#
+# QBUEM_XDP=ON        : 헤더/타겟 노출, QBUEM_HAS_XDP 정의
+# QBUEM_XDP_LIBBPF=ON : libbpf 연동 (xsk_umem__create 등 실제 구현 활성화)
+option(QBUEM_XDP        "Enable AF_XDP support (Linux 4.18+)"           OFF)
+option(QBUEM_XDP_LIBBPF "Link libbpf for AF_XDP (requires QBUEM_XDP=ON)" OFF)
+
 # ── PGO (Profile-Guided Optimization) ───────────────────────────────────────
 # Usage:
 #   Pass 1 (instrumented):  cmake -DQBUEM_PGO_GENERATE=ON ..  && make && ./bench/bench_throughput ...
@@ -318,6 +327,51 @@ target_compile_features(qbuem_grpc INTERFACE cxx_std_20)
 target_link_libraries(qbuem_grpc INTERFACE qbuem_http2 qbuem_pipeline qbuem_channel)
 
 # ============================================================================
+# ── Level 8b: AF_XDP (optional, Linux 4.18+) ─────────────────────────────────
+# cmake -DQBUEM_XDP=ON [-DQBUEM_XDP_LIBBPF=ON] ..
+# ============================================================================
+
+add_library(qbuem_xdp INTERFACE)
+add_library(qbuem-stack::xdp ALIAS qbuem_xdp)
+target_include_directories(qbuem_xdp INTERFACE ${QBUEM_INCLUDE_DIR} ${QBUEM_INSTALL_INCLUDE})
+target_compile_features(qbuem_xdp INTERFACE cxx_std_20)
+target_link_libraries(qbuem_xdp INTERFACE qbuem_result qbuem_arena)
+
+if(QBUEM_XDP)
+    if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        message(WARNING "[qbuem-stack] QBUEM_XDP=ON is only supported on Linux. Ignoring.")
+    else()
+        message(STATUS "[qbuem-stack] AF_XDP enabled (QBUEM_HAS_XDP)")
+        target_compile_definitions(qbuem_xdp INTERFACE QBUEM_HAS_XDP)
+
+        if(QBUEM_XDP_LIBBPF)
+            find_path(LIBBPF_INCLUDE_DIR  NAMES xdp/xsk.h bpf/libbpf.h
+                      HINTS /usr/include /usr/local/include)
+            find_library(LIBBPF_LIB NAMES bpf
+                         HINTS /usr/lib /usr/local/lib)
+            find_library(LIBXDP_LIB NAMES xdp
+                         HINTS /usr/lib /usr/local/lib)
+
+            if(LIBBPF_INCLUDE_DIR AND LIBBPF_LIB)
+                message(STATUS "[qbuem-stack] libbpf found → QBUEM_XDP_LIBBPF enabled")
+                target_compile_definitions(qbuem_xdp INTERFACE QBUEM_XDP_LIBBPF)
+                target_include_directories(qbuem_xdp INTERFACE ${LIBBPF_INCLUDE_DIR})
+                target_link_libraries(qbuem_xdp INTERFACE ${LIBBPF_LIB})
+                if(LIBXDP_LIB)
+                    message(STATUS "[qbuem-stack] libxdp found → linking")
+                    target_link_libraries(qbuem_xdp INTERFACE ${LIBXDP_LIB})
+                endif()
+            else()
+                message(WARNING
+                    "[qbuem-stack] QBUEM_XDP_LIBBPF=ON but libbpf not found. "
+                    "Install libbpf-dev (Debian/Ubuntu) or libbpf-devel (Fedora). "
+                    "Falling back to stub (no-op) implementation.")
+            endif()
+        endif()
+    endif()
+endif()
+
+# ============================================================================
 # ── Level 9: Umbrella — qbuem-stack::qbuem (everything) ─────────────────────
 # ============================================================================
 
@@ -336,6 +390,7 @@ target_link_libraries(qbuem PUBLIC
     qbuem_ws
     qbuem_http2
     qbuem_grpc
+    qbuem_xdp
     qbuem_io
     qbuem_net
     qbuem_buf
@@ -392,6 +447,7 @@ if(QBUEM_INSTALL)
         qbuem_ws
         qbuem_http2
         qbuem_grpc
+        qbuem_xdp
         qbuem
         qbuem_core_compat
         qbuem_stack_compat
