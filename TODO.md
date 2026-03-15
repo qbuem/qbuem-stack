@@ -2,7 +2,7 @@
 
 **Zero Latency · Zero Allocation · Zero Dependency**
 
-> **현재 버전: v1.0.0** — 107/107 테스트 통과. 모든 필수 마일스톤 완료. v1.1 선택 기능 구현 완료.
+> **현재 버전: v1.2.0** — 107/107 테스트 통과. 모든 필수 마일스톤 완료. v1.1 선택 기능 + v1.2 성능 고도화 완료.
 
 > 파이프라인 설계: **[docs/pipeline-design.md](./docs/pipeline-design.md)**
 > IO 레이어 아키텍처: **[docs/io-architecture.md](./docs/io-architecture.md)**
@@ -580,6 +580,35 @@
   - 0-RTT, HOL blocking 없음, 연결 마이그레이션
   - `QuicheTransport` 구현 가이드 (`include/qbuem/transport/quiche_transport.hpp`)
   - quiche / ngtcp2 / msquic / mvfst 라이브러리 비교 및 빌드 가이드
+
+---
+
+## v1.2.0 — 성능 고도화 (완료)
+
+### 핵심 성능 최적화
+- [x] `TimerWheel::cancel()` O(n) → O(1): `Entry`에 `(level_, slot_)` 추가 + `unordered_map<TimerId, Entry*> index_`
+  - `next_expiry_ms()`도 index_ 순회로 O(1024 슬롯) → O(n_timers) 개선
+- [x] `BufferPool::available()` O(n) → O(1): `atomic<size_t> free_count_` 카운터 도입
+- [x] `Request::header()/param()`: `StringViewHash/StringViewEqual` 헤테로지니어스 맵으로 `string` 할당 제거
+- [x] `Request::query()`: 첫 호출 시 한 번만 파싱 후 `mutable optional<StringMap>` 캐시, 이후 O(1) 조회
+- [x] `Context::get_ptr<T>()`: 최근 4개 타입 인라인 캐시(`CacheEntry[4]`) 추가, linked-list 스캔 최소화
+- [x] `RadixTree::find_child()`: 정렬 유지 + 분기 수 > 4 시 binary search (`add_child()` 도입)
+
+### 동시성 개선
+- [x] `CircuitBreaker::state_` → `std::atomic<State>`: Closed/HalfOpen fast-path는 lock 없이 처리, Open 시에만 mutex 획득
+- [x] `Task<T>`: `set_unhandled_exception_handler()` 전역 예외 핸들러 API 추가 (`g_unhandled_exception_handler`)
+
+### 기능 추가
+- [x] `Action::Config::slo`: `std::optional<SloConfig>` 필드 추가 (`pipeline/slo.hpp` 연동)
+- [x] `DrainTimeoutPolicy { Dlq, Drop, Resume }` enum + `HotSwapConfig::timeout_policy` 필드
+- [x] `rate_limit`: `RateLimitConfig::max_keys` (기본 10,000) 초과 시 oldest 항목 LRU 퇴출 (unbounded memory 방지)
+- [x] `kTLS::enable_ktls_with_fallback()`: `not_supported` 시 plain-TCP 자동 폴백
+- [x] `XskSocket::is_supported()`: AF_XDP 런타임 감지 정적 메서드
+- [x] `HistogramMetrics`: 사용자 정의 버킷 경계 히스토그램 클래스 추가; `ActionMetrics::histogram` 필드로 선택적 연동
+- [x] `stream_map_filter(map_fn, pred)`: map+filter 퓨즈 연산자, 중간 채널·코루틴 프레임 제거
+
+### 문서
+- [x] `bench/README.md`: 빌드/실행 가이드, p50/p99/p999 해석 방법, 측정 환경 기록 양식
 
 ---
 
