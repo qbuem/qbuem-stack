@@ -2,7 +2,7 @@
 
 **Zero Latency · Zero Allocation · Zero Dependency**
 
-> **Current Version: v1.3.0** — 651/651 Tests Passed. Kqueue reactor sophistication complete.
+> **Current Version: v1.4.0** — Unified DB Abstraction & SHM Messaging complete.
 > 
 > High-performance C++ infrastructure for Web, Messaging, and Data Pipelines.
 
@@ -19,24 +19,24 @@
 
 ---
 
-## 🚀 Current Focus: v1.4.0 — Unified DB & SHM Messaging
+## ✅ Completed: v1.4.0 — Unified DB & SHM Messaging
 > **Goal**: Achieve sub-microsecond IPC and zero-allocation database access.
 
 ### 1. Unified Database Abstraction ([docs/db-abstraction.md](./docs/db-abstraction.md))
-- [ ] **IDBDriver Interface**: O(1) connection handover and stateless protocol parsing.
-- [ ] **ConnectionPool & Statement**: Zero-allocation query preparation and result streaming.
-- [ ] **SIMD Protocol Parser**: AVX-512/NEON accelerated parsing for PostgreSQL/MySQL results.
-- [ ] **db::Value**: Heap-free variant for parameter binding and result extraction.
+- [x] **IDBDriver Interface**: O(1) connection handover and stateless protocol parsing. (`include/qbuem/db/driver.hpp`)
+- [x] **ConnectionPool & Statement**: Zero-allocation query preparation and result streaming. (`include/qbuem/db/driver.hpp`)
+- [x] **SIMD Protocol Parser**: AVX-512/NEON accelerated parsing for PostgreSQL/MySQL results. (`include/qbuem/db/simd_parser.hpp`)
+- [x] **db::Value**: Heap-free variant for parameter binding and result extraction. (`include/qbuem/db/value.hpp`)
 
 ### 2. SHM Messaging Infrastructure ([docs/shm-messaging.md](./docs/shm-messaging.md))
-- [ ] **SHMChannel**: 150ns latency cross-process messaging via `memfd_create`.
-- [ ] **Futex-uring Sync**: `IORING_OP_FUTEX` based wait/wake for lowest possible IPC jitter.
-- [ ] **Zero-copy Data Arena**: Direct memory access to shared segments without copies.
-- [ ] **Unified Message Bus**: Bridging intra-thread `AsyncChannel` and inter-process `SHMChannel`.
+- [x] **SHMChannel**: 150ns latency cross-process messaging via `memfd_create`. (`include/qbuem/shm/shm_channel.hpp`)
+- [x] **Futex-uring Sync**: `IORING_OP_FUTEX` based wait/wake for lowest possible IPC jitter. (`include/qbuem/shm/shm_channel.hpp`)
+- [x] **Zero-copy Data Arena**: Direct memory access to shared segments without copies. (`include/qbuem/shm/shm_channel.hpp`)
+- [x] **Unified Message Bus**: Bridging intra-thread `AsyncChannel` and inter-process `SHMChannel`. (`include/qbuem/shm/shm_bus.hpp`)
 
 ---
 
-## 🔮 Future Horizons
+## 🚀 Current Focus: v1.5.0 — Zero-dep Security & TLS
 
 ### v1.5.0 — Zero-dep Security & TLS ([docs/security-tls.md](./docs/security-tls.md))
 - [ ] **kTLS Optimization**: `sendfile` + kTLS for zero-copy encrypted transmission.
@@ -56,6 +56,19 @@
 ---
 
 ## ✅ Completed Milestones
+
+<details>
+<summary><b>v1.4.0 — Unified DB & SHM Messaging</b></summary>
+
+- [x] **IDBDriver Interface**: O(1) connection handover and stateless protocol parsing.
+- [x] **ConnectionPool & Statement**: Zero-allocation query preparation and result streaming.
+- [x] **SIMD Protocol Parser**: AVX-512/NEON accelerated parsing for PostgreSQL/MySQL results.
+- [x] **db::Value**: Heap-free variant (≤32B) for parameter binding and result extraction.
+- [x] **SHMChannel**: 150ns latency cross-process messaging via `memfd_create` / `shm_open`.
+- [x] **Futex-uring Sync**: `IORING_OP_FUTEX` based wait/wake for lowest possible IPC jitter.
+- [x] **Zero-copy Data Arena**: Direct memory access to shared segments without copies.
+- [x] **Unified SHMBus**: Bridging intra-thread `AsyncChannel` and inter-process `SHMChannel`, with `SHMSource`/`SHMSink` Pipeline integration.
+</details>
 
 <details>
 <summary><b>v1.3.0 — Kqueue Sophistication (macOS)</b></summary>

@@ -5,6 +5,15 @@
 #include <qbuem/http/router.hpp>
 #include <qbuem/version.hpp>
 
+// v1.4.0: Unified DB Abstraction
+#include <qbuem/db/value.hpp>
+#include <qbuem/db/driver.hpp>
+#include <qbuem/db/simd_parser.hpp>
+
+// v1.4.0: SHM Messaging Infrastructure
+#include <qbuem/shm/shm_channel.hpp>
+#include <qbuem/shm/shm_bus.hpp>
+
 #include <atomic>
 #include <chrono>
 #include <cstdint>

@@ -33,6 +33,18 @@ target_link_libraries(qbuem_ext_tests
     GTest::gtest_main
 )
 
+# ── v1.4.0: DB Abstraction + SHM Messaging tests ─────────────────────────────
+add_executable(qbuem_v14_tests
+    db_value_test.cpp
+    shm_layout_test.cpp
+)
+target_link_libraries(qbuem_v14_tests
+    PRIVATE
+    qbuem-stack::qbuem
+    GTest::gtest_main
+)
+
 include(GoogleTest)
 gtest_discover_tests(qbuem_tests)
 gtest_discover_tests(qbuem_ext_tests)
+gtest_discover_tests(qbuem_v14_tests)
