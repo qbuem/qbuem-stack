@@ -15,18 +15,19 @@ void RadixTree::insert(std::string_view path, HandlerVariant handler) {
       while (j < path.length() && path[j] != '/')
         j++;
       std::string param_name(path.substr(i + 1, j - i - 1));
-      if (!curr->children[':']) {
-        curr->children[':'] = std::make_unique<Node>();
-        curr->children[':']->is_param = true;
-        curr->children[':']->param_name = param_name;
+      if (!curr->param_child) {
+        curr->param_child = std::make_unique<Node>();
+        curr->param_name  = std::move(param_name);
       }
-      curr = curr->children[':'].get();
+      curr = curr->param_child.get();
       i = j;
     } else {
-      if (!curr->children[path[i]]) {
-        curr->children[path[i]] = std::make_unique<Node>();
+      Node *child = curr->find_child(path[i]);
+      if (!child) {
+        curr->children.emplace_back(path[i], std::make_unique<Node>());
+        child = curr->children.back().second.get();
       }
-      curr = curr->children[path[i]].get();
+      curr = child;
       i++;
     }
   }
@@ -46,27 +47,29 @@ HandlerVariant RadixTree::search_recursive(
     return node->handler;
   }
 
-  if (node->children.count(path[pos])) {
-    auto res = search_recursive(node->children.at(path[pos]).get(), path,
-                                pos + 1, params);
+  // Try exact character child first
+  const Node *child = node->find_child(path[pos]);
+  if (child) {
+    auto res = search_recursive(child, path, pos + 1, params);
     if (!std::holds_alternative<std::monostate>(res))
       return res;
   }
 
-  if (node->children.count(':')) {
-    const Node *param_node = node->children.at(':').get();
+  // Try param child
+  if (node->param_child) {
+    const Node *param_node = node->param_child.get();
     size_t next_slash = path.find('/', pos);
     if (next_slash == std::string_view::npos)
       next_slash = path.length();
 
     std::string val(path.substr(pos, next_slash - pos));
-    params[param_node->param_name] = val;
+    params[node->param_name] = val;
 
     auto res = search_recursive(param_node, path, next_slash, params);
     if (!std::holds_alternative<std::monostate>(res))
       return res;
 
-    params.erase(param_node->param_name);
+    params.erase(node->param_name);
   }
 
   return std::monostate{};
@@ -75,7 +78,7 @@ HandlerVariant RadixTree::search_recursive(
 // Router Implementation
 void Router::add_route(Method method, std::string_view path,
                        HandlerVariant handler) {
-  routes_[method].insert(path, std::move(handler));
+  routes_[static_cast<size_t>(method)].insert(path, std::move(handler));
 }
 
 void Router::use(Middleware mw) { middlewares_.push_back(std::move(mw)); }
@@ -93,13 +96,10 @@ void Router::add_prefix_route(Method method, std::string_view prefix,
 HandlerVariant
 Router::match(Method method, std::string_view path,
               std::unordered_map<std::string, std::string> &params) const {
-  // 1. Exact / param match via RadixTree
-  auto it = routes_.find(method);
-  if (it != routes_.end()) {
-    auto h = it->second.search(path, params);
-    if (!std::holds_alternative<std::monostate>(h))
-      return h;
-  }
+  // 1. Exact / param match via RadixTree — direct array index, no hash
+  auto h = routes_[static_cast<size_t>(method)].search(path, params);
+  if (!std::holds_alternative<std::monostate>(h))
+    return h;
 
   // 2. Prefix routes (e.g., for static file serving)
   for (const auto &pr : prefix_routes_) {
@@ -114,8 +114,8 @@ Router::match(Method method, std::string_view path,
 
 bool Router::path_exists(std::string_view path) const {
   std::unordered_map<std::string, std::string> dummy;
-  for (const auto &[method, tree] : routes_) {
-    if (!std::holds_alternative<std::monostate>(tree.search(path, dummy)))
+  for (size_t i = 0; i < kMethodCount; ++i) {
+    if (!std::holds_alternative<std::monostate>(routes_[i].search(path, dummy)))
       return true;
     dummy.clear();
   }

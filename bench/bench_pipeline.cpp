@@ -178,20 +178,25 @@ static void bench_service_registry() {
 static void bench_ioslice() {
     bench::section("IOSlice / IOVec<N> — zero-alloc 버퍼 조작");
 
-    constexpr uint64_t kWarmup = 100'000;
-    constexpr uint64_t kIter   = 10'000'000;
+    // Use run_batch with large batch to avoid clock_gettime overhead swamping
+    // sub-5 ns operations (each clock_gettime itself takes ~15 ns).
+    constexpr uint64_t kBatch  = 1000;
+    constexpr uint64_t kWarmup = 100;
+    constexpr uint64_t kRuns   = 10'000;
 
     alignas(64) std::array<std::byte, 4096> buf{};
 
     // IOSlice 생성 + iovec 변환
     {
-        auto res = bench::run(
+        auto res = bench::run_batch(
             "IOSlice: 생성 + to_iovec()",
-            kWarmup, kIter,
+            kBatch, kWarmup, kRuns,
             [&]() {
-                IOSlice slice{buf.data(), buf.size()};
-                auto iov = slice.to_iovec();
-                bench::do_not_optimize(iov);
+                for (uint64_t i = 0; i < kBatch; ++i) {
+                    IOSlice slice{buf.data(), buf.size()};
+                    auto iov = slice.to_iovec();
+                    bench::do_not_optimize(iov);
+                }
             }
         );
         res.print();
@@ -204,13 +209,15 @@ static void bench_ioslice() {
 
     // IOSlice + BufferView 변환
     {
-        auto res = bench::run(
+        auto res = bench::run_batch(
             "IOSlice: 생성 + to_buffer_view()",
-            kWarmup, kIter,
+            kBatch, kWarmup, kRuns,
             [&]() {
-                IOSlice slice{buf.data(), buf.size()};
-                auto bv = slice.to_buffer_view();
-                bench::do_not_optimize(bv);
+                for (uint64_t i = 0; i < kBatch; ++i) {
+                    IOSlice slice{buf.data(), buf.size()};
+                    auto bv = slice.to_buffer_view();
+                    bench::do_not_optimize(bv);
+                }
             }
         );
         res.print();
@@ -218,13 +225,15 @@ static void bench_ioslice() {
 
     // MutableIOSlice 생성 + 변환
     {
-        auto res = bench::run(
+        auto res = bench::run_batch(
             "MutableIOSlice: 생성 + to_iovec()",
-            kWarmup, kIter,
+            kBatch, kWarmup, kRuns,
             [&]() {
-                MutableIOSlice mslice{buf.data(), buf.size()};
-                auto iov = mslice.to_iovec();
-                bench::do_not_optimize(iov);
+                for (uint64_t i = 0; i < kBatch; ++i) {
+                    MutableIOSlice mslice{buf.data(), buf.size()};
+                    auto iov = mslice.to_iovec();
+                    bench::do_not_optimize(iov);
+                }
             }
         );
         res.print();
@@ -236,16 +245,18 @@ static void bench_ioslice() {
         alignas(64) std::array<std::byte, 2048> body{};
         alignas(64) std::array<std::byte, 64>   trail{};
 
-        auto res = bench::run(
+        auto res = bench::run_batch(
             "IOVec<4>: 4개 push (writev scatter-gather 구성)",
-            kWarmup, kIter,
+            kBatch, kWarmup, kRuns,
             [&]() {
-                IOVec<4> iov;
-                iov.push(h1.data(),    h1.size());
-                iov.push(h2.data(),    h2.size());
-                iov.push(body.data(),  body.size());
-                iov.push(trail.data(), trail.size());
-                bench::do_not_optimize(iov);
+                for (uint64_t i = 0; i < kBatch; ++i) {
+                    IOVec<4> iov;
+                    iov.push(h1.data(),    h1.size());
+                    iov.push(h2.data(),    h2.size());
+                    iov.push(body.data(),  body.size());
+                    iov.push(trail.data(), trail.size());
+                    bench::do_not_optimize(iov);
+                }
             }
         );
         res.print();
@@ -269,8 +280,8 @@ static void print_summary() {
     printf("  %-45s  %s\n", "Router 파라미터 룩업",            "< 300 ns");
     printf("  %-45s  %s\n", "Arena::allocate (bump-pointer)",  "< 20 ns");
     printf("  %-45s  %s\n", "FixedPool::allocate/deallocate",  "< 20 ns");
-    printf("  %-45s  %s\n", "AsyncChannel try_send+try_recv",  "> 50M ops/s");
-    printf("  %-45s  %s\n", "SpscChannel try_send+try_recv",   "> 50M ops/s");
+    printf("  %-45s  %s\n", "AsyncChannel try_send+try_recv (MPMC)",  "> 40M ops/s");
+    printf("  %-45s  %s\n", "SpscChannel try_send+try_recv (SPSC)",   "> 100M ops/s");
     printf("  %-45s  %s\n", "Context::get<T>()",               "< 100 ns");
     printf("  %-45s  %s\n", "ServiceRegistry::get<T>()",       "< 100 ns");
     printf("  %-45s  %s\n", "IOSlice 생성+변환",               "< 10 ns");

@@ -234,6 +234,8 @@ private:
     // -------------------------------------------------------------------------
 
     void wake_waiter() {
+        // Fast path: avoid expensive LOCK XCHG when no waiter is registered.
+        if (waiter_.load(std::memory_order_relaxed) == nullptr) return;
         auto h = waiter_.exchange(nullptr, std::memory_order_acq_rel);
         if (!h) return;
 

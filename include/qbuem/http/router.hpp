@@ -5,6 +5,7 @@
 #include <qbuem/http/request.hpp>
 #include <qbuem/http/response.hpp>
 
+#include <algorithm>
 #include <functional>
 #include <memory>
 #include <string>
@@ -75,10 +76,23 @@ public:
 
 private:
   struct Node {
-    std::unordered_map<char, std::unique_ptr<Node>> children;
-    HandlerVariant handler;
-    bool is_param = false;
-    std::string param_name;
+    // Compact sorted children: key=first-char, value=child node.
+    // Linear scan is faster than unordered_map for typical branching factors (1-8).
+    std::vector<std::pair<char, std::unique_ptr<Node>>> children;
+    std::unique_ptr<Node> param_child; // ':' wildcard child
+    std::string           param_name;  // param name if param_child is set
+    HandlerVariant        handler;
+
+    const Node *find_child(char c) const noexcept {
+      for (auto &[k, v] : children)
+        if (k == c) return v.get();
+      return nullptr;
+    }
+    Node *find_child(char c) noexcept {
+      for (auto &[k, v] : children)
+        if (k == c) return v.get();
+      return nullptr;
+    }
   };
 
   HandlerVariant
@@ -135,7 +149,9 @@ private:
     HandlerVariant handler;
   };
 
-  std::unordered_map<Method, RadixTree> routes_;
+  // Direct-indexed array: Method enum values are 0..7 (Get..Unknown).
+  static constexpr size_t kMethodCount = 8;
+  std::array<RadixTree, kMethodCount> routes_;
   std::vector<AnyMiddleware>            middlewares_;
   std::vector<PrefixRoute>             prefix_routes_;
   bool                                  has_async_mw_ = false;

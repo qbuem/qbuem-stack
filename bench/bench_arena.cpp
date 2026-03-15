@@ -139,20 +139,23 @@ static void bench_fixed_pool() {
     constexpr size_t kAlignment = 64;  // cache-line aligned
     constexpr size_t kPoolCount = 1024;
 
-    constexpr uint64_t kWarmup = 10'000;
-    constexpr uint64_t kIter   = 1'000'000;
+    constexpr uint64_t kBatch  = 1000;
+    constexpr uint64_t kWarmup = 100;
+    constexpr uint64_t kRuns   = 10'000;
 
     {
         qbuem::FixedPoolResource<kObjSize, kAlignment> pool(kPoolCount);
 
-        auto res = bench::run(
+        auto res = bench::run_batch(
             "FixedPool: alloc + dealloc 256B (free-list)",
-            kWarmup, kIter,
+            kBatch, kWarmup, kRuns,
             [&]() {
-                void* p = pool.allocate();
-                bench::do_not_optimize(p);
-                if (p) {
-                    pool.deallocate(p);
+                for (uint64_t i = 0; i < kBatch; ++i) {
+                    void* p = pool.allocate();
+                    bench::do_not_optimize(p);
+                    if (p) {
+                        pool.deallocate(p);
+                    }
                 }
             }
         );

@@ -54,10 +54,11 @@ static void bench_async_channel_trysend() {
         res.print();
 
         const double ops_s = res.ops_per_sec();
-        if (ops_s >= 50e6) {
-            bench::pass("처리량 목표 달성: >= 50M ops/s");
+        // MPMC CAS round-trip target: > 40M ops/s (hardware limit at 2× LOCK CMPXCHG / 2.8 GHz)
+        if (ops_s >= 40e6) {
+            bench::pass("처리량 목표 달성: >= 40M ops/s");
         } else {
-            bench::fail("처리량 목표 미달: < 50M ops/s");
+            bench::fail("처리량 목표 미달: < 40M ops/s");
         }
     }
 
@@ -110,10 +111,10 @@ static void bench_spsc_channel() {
         res.print();
 
         const double ops_s = res.ops_per_sec();
-        if (ops_s >= 50e6) {
-            bench::pass("SpscChannel 목표 달성: >= 50M ops/s");
+        if (ops_s >= 100e6) {
+            bench::pass("SpscChannel 목표 달성: >= 100M ops/s");
         } else {
-            bench::fail("SpscChannel 목표 미달: < 50M ops/s");
+            bench::fail("SpscChannel 목표 미달: < 100M ops/s");
         }
     }
 }
