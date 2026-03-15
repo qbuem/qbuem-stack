@@ -95,6 +95,13 @@ struct KtlsSessionParams256 {
 [[nodiscard]] inline Result<void> enable_tx(
     int sockfd, const KtlsSessionParams &params) noexcept {
 #if defined(QBUEM_HAS_KTLS) && defined(TLS_TX)
+  // Compile-time guards: AES-128-GCM requires a 12-byte IV (4-byte salt +
+  // 8-byte explicit nonce) and a 16-byte key.  These assertions catch any
+  // accidental struct field-size changes before a bad memcpy occurs.
+  static_assert(KtlsSessionParams{}.iv.size()  == 12,
+                "KtlsSessionParams::iv must be exactly 12 bytes (TLS 1.3 GCM nonce)");
+  static_assert(KtlsSessionParams{}.key.size() == 16,
+                "KtlsSessionParams::key must be exactly 16 bytes (AES-128)");
   struct tls12_crypto_info_aes_gcm_128 crypto_info{};
   crypto_info.info.version    = TLS_1_3_VERSION;
   crypto_info.info.cipher_type = TLS_CIPHER_AES_GCM_128;
@@ -130,6 +137,10 @@ struct KtlsSessionParams256 {
 [[nodiscard]] inline Result<void> enable_rx(
     int sockfd, const KtlsSessionParams &params) noexcept {
 #if defined(QBUEM_HAS_KTLS) && defined(TLS_RX)
+  static_assert(KtlsSessionParams{}.iv.size()  == 12,
+                "KtlsSessionParams::iv must be exactly 12 bytes (TLS 1.3 GCM nonce)");
+  static_assert(KtlsSessionParams{}.key.size() == 16,
+                "KtlsSessionParams::key must be exactly 16 bytes (AES-128)");
   struct tls12_crypto_info_aes_gcm_128 crypto_info{};
   crypto_info.info.version    = TLS_1_3_VERSION;
   crypto_info.info.cipher_type = TLS_CIPHER_AES_GCM_128;

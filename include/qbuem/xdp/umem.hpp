@@ -34,6 +34,7 @@
 #include <qbuem/common.hpp>
 #include <qbuem/core/arena.hpp>
 
+#include <cerrno>
 #include <cstddef>
 #include <cstdint>
 #include <sys/mman.h>
@@ -156,6 +157,11 @@ public:
         Umem u(cfg);
 
         // 1. mmap으로 정렬된 연속 메모리 할당
+        // Integer overflow guard: frame_count * frame_size must not wrap.
+        if (cfg.frame_count > 0 &&
+            static_cast<size_t>(cfg.frame_size) > SIZE_MAX / static_cast<size_t>(cfg.frame_count)) {
+            return unexpected(std::make_error_code(std::errc::invalid_argument));
+        }
         const size_t total = static_cast<size_t>(cfg.frame_count) * cfg.frame_size;
         int mmap_flags = MAP_PRIVATE | MAP_ANONYMOUS;
         if (cfg.use_hugepages) {

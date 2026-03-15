@@ -88,16 +88,27 @@ struct RateLimitConfig {
 inline Middleware rate_limit(RateLimitConfig cfg = {}) {
   if (!cfg.key_fn) {
     cfg.key_fn = [](const Request &req) -> std::string {
+      // Hard cap on key length: a legitimate IPv4/IPv6 address is at most
+      // 45 characters; 256 bytes stops a DoS via an oversized header that
+      // would cause unbounded memory use in the per-thread bucket map.
+      static constexpr size_t kMaxKeyLen = 256;
+
       // X-Forwarded-For may contain a comma-separated list; take the first IP.
       auto xff = req.header("X-Forwarded-For");
       if (!xff.empty()) {
         size_t comma = xff.find(',');
-        return std::string(comma == std::string_view::npos
-                               ? xff
-                               : xff.substr(0, comma));
+        auto s = std::string(comma == std::string_view::npos
+                                 ? xff
+                                 : xff.substr(0, comma));
+        if (s.size() > kMaxKeyLen) s.resize(kMaxKeyLen);
+        return s;
       }
       auto real_ip = req.header("X-Real-IP");
-      if (!real_ip.empty()) return std::string(real_ip);
+      if (!real_ip.empty()) {
+        auto s = std::string(real_ip);
+        if (s.size() > kMaxKeyLen) s.resize(kMaxKeyLen);
+        return s;
+      }
       return "__global__";
     };
   }

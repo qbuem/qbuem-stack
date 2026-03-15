@@ -38,16 +38,27 @@ namespace qbuem {
  */
 [[nodiscard]] inline bool constant_time_equal(std::string_view a,
                                                std::string_view b) noexcept {
-  if (a.size() != b.size()) {
-    // Perform a dummy comparison to avoid leaking length information via timing.
-    volatile uint8_t sink = 0;
-    for (size_t i = 0; i < a.size(); ++i)
-      sink |= static_cast<uint8_t>(a[i]);
-    (void)sink;
-    return false;
-  }
-  volatile uint8_t diff = 0;
-  for (size_t i = 0; i < a.size(); ++i)
+  // Branchless implementation: no early return on size mismatch.
+  // A size difference is folded into `diff` via XOR reduction, so the
+  // function always touches min(a.size(), b.size()) bytes.  This prevents
+  // content-based timing oracles while remaining branchless on the sizes.
+  //
+  // Note: the *number of loop iterations* still depends on string length.
+  // For truly length-independent timing use fixed-length tokens (e.g. CSRF
+  // tokens, HMAC digests) so both operands always have the same size.
+  const size_t na = a.size();
+  const size_t nb = b.size();
+
+  // Encode size mismatch as a non-zero diff without branching.
+  // Reduce all bits of (na XOR nb) into a single byte.
+  size_t sz_diff = na ^ nb;
+  sz_diff |= sz_diff >> 32;
+  sz_diff |= sz_diff >> 16;
+  sz_diff |= sz_diff >> 8;
+  volatile uint8_t diff = static_cast<uint8_t>(sz_diff & 0xFF);
+
+  const size_t n = na < nb ? na : nb;
+  for (size_t i = 0; i < n; ++i)
     diff |= static_cast<uint8_t>(a[i]) ^ static_cast<uint8_t>(b[i]);
   return diff == 0;
 }

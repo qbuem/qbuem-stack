@@ -43,6 +43,7 @@
 #include <qbuem/http/router.hpp>
 
 #include <functional>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -130,13 +131,64 @@ struct BearerAuthOptions {
 };
 
 /**
- * @brief Returns a Bearer token authentication middleware.
+ * @brief Returns a Bearer token authentication middleware (shared ownership).
  *
- * Extracts the Bearer token from the Authorization header, delegates
- * verification to @p verifier, and on success forwards verified claims as
- * response-side X-Auth-* headers readable by the handler.
+ * Preferred overload: verifier lifetime is managed by shared_ptr, so the
+ * middleware safely co-owns the verifier and there is no risk of a dangling
+ * reference even if the original caller destroys the verifier object.
  *
- * On failure, responds with 401 and halts the middleware chain.
+ * @param verifier  Shared verifier instance.
+ * @param opts      Optional error handler and header prefix.
+ *
+ * Example:
+ *   auto v = std::make_shared<HS256Verifier>("secret");
+ *   app.use(qbuem::middleware::bearer_auth(v));
+ */
+inline Middleware bearer_auth(std::shared_ptr<ITokenVerifier> verifier,
+                               BearerAuthOptions opts = {}) {
+  return [verifier = std::move(verifier), opts = std::move(opts)](
+             const Request &req, Response &res) -> bool {
+    std::string_view auth = req.header("Authorization");
+    static constexpr std::string_view kBearer = "Bearer ";
+    if (auth.size() <= kBearer.size() ||
+        auth.substr(0, kBearer.size()) != kBearer) {
+      if (opts.on_error) {
+        opts.on_error(req, res, "missing Bearer token");
+      } else {
+        res.status(401)
+           .header("WWW-Authenticate", "Bearer realm=\"qbuem-stack\"")
+           .body("Unauthorized");
+      }
+      return false;
+    }
+    std::string_view token = auth.substr(kBearer.size());
+    auto claims = verifier->verify(token);
+    if (!claims) {
+      if (opts.on_error) {
+        opts.on_error(req, res, "token verification failed");
+      } else {
+        res.status(401)
+           .header("WWW-Authenticate", "Bearer realm=\"qbuem-stack\",error=\"invalid_token\"")
+           .body("Unauthorized");
+      }
+      return false;
+    }
+    const std::string &pfx = opts.claims_prefix;
+    if (!claims->subject.empty())  res.header(pfx + "Sub", claims->subject);
+    if (!claims->issuer.empty())   res.header(pfx + "Iss", claims->issuer);
+    if (!claims->audience.empty()) res.header(pfx + "Aud", claims->audience);
+    for (const auto &[k, v] : claims->custom)
+      res.header(pfx + k, v);
+    return true;
+  };
+}
+
+/**
+ * @brief Returns a Bearer token authentication middleware (reference overload).
+ *
+ * @warning The caller MUST guarantee that @p verifier outlives all requests
+ *          handled by this middleware (i.e., outlives the App).  Prefer the
+ *          `shared_ptr` overload above to avoid dangling-reference bugs.
  *
  * @param verifier  Token verifier instance (must outlive the App).
  * @param opts      Optional error handler and header prefix.

@@ -146,9 +146,13 @@ auto operator|(Stream<T> stream, StreamMapOp<Fn> op) {
   };
 
   auto pump = Pump::run(std::move(stream), chan, std::move(op.fn));
+  // Save handle BEFORE detach(): detach() nulls pump.handle.
+  // Without this, the lambda below would capture nullptr and never resume
+  // the coroutine, leaking the frame at initial_suspend().
+  auto h    = pump.handle;
   pump.detach(); // fire-and-forget; Reactor will drive it
   if (auto *r = Reactor::current())
-    r->post([h = pump.handle]() mutable { (void)h; }); // already detached
+    r->post([h]() mutable { h.resume(); });
 
   return out;
 }

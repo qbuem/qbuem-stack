@@ -109,6 +109,18 @@ public:
    *
    * @returns 사용 가능한 버퍼 포인터. 풀이 소진되면 `nullptr`.
    * @note 반환된 버퍼의 `data` 내용은 초기화되지 않습니다.
+   *
+   * @par ABA 문제 (이론적 한계)
+   * 이 구현은 일반적인 lock-free 스택 ABA 문제에 노출되어 있습니다:
+   * 스레드 T1이 `head`를 읽고 일시 정지된 사이, 다른 스레드가 `head`를 빼고
+   * 반납하면 T1의 CAS는 성공하지만 `head->next_`가 유효하지 않을 수 있습니다.
+   *
+   * **실제 위험도**: BufferPool의 버퍼는 풀 소유이며 풀보다 먼저 해제되지 않으므로
+   * 포인터 자체는 항상 유효합니다.  단, 높은 경합 환경에서는 freed 버퍼가 잘못된
+   * `next_` 링크로 재배치될 수 있습니다.
+   *
+   * **완화 방법**: 단일 Reactor 스레드에서만 사용하면 ABA 문제가 발생하지 않습니다.
+   * 다중 스레드 환경에서는 tagged pointer 또는 Hazard Pointer를 사용하세요.
    */
   Buffer *acquire() noexcept {
     Buffer *head = free_list_head_.load(std::memory_order_acquire);
