@@ -167,6 +167,46 @@ struct KtlsSessionParams256 {
 }
 
 // ---------------------------------------------------------------------------
+// kTLS graceful fallback
+// ---------------------------------------------------------------------------
+
+/**
+ * @brief kTLS를 시도하고, 미지원 커널이면 자동으로 plain-TCP로 폴백합니다.
+ *
+ * `enable_ktls()` 실패 시 `errc::not_supported`이면 경고를 무시하고
+ * `Result<void>` 성공을 반환합니다. 이 경우 이후 send()/recv()는
+ * user-space TLS 라이브러리(OpenSSL 등)가 계속 암호화를 담당합니다.
+ *
+ * 다른 오류(권한, 잘못된 파라미터 등)는 그대로 전파됩니다.
+ *
+ * ### 사용 예시
+ * @code
+ * // kTLS가 지원되면 커널 offload, 아니면 user-space TLS 폴백
+ * auto r = qbuem::io::enable_ktls_with_fallback(fd, tx_params, rx_params);
+ * if (!r) {
+ *     // 실제 오류 (not_supported 아님)
+ *     return r;
+ * }
+ * @endcode
+ *
+ * @param sockfd    TLS 핸드셰이크가 완료된 TCP 소켓 fd.
+ * @param tx_params 송신 세션 파라미터.
+ * @param rx_params 수신 세션 파라미터.
+ * @returns 성공 또는 폴백 시 `Result<void>` ok; 치명적 오류 시 에러.
+ */
+[[nodiscard]] inline Result<void> enable_ktls_with_fallback(
+    int sockfd,
+    const KtlsSessionParams &tx_params,
+    const KtlsSessionParams &rx_params) noexcept {
+  auto r = enable_ktls(sockfd, tx_params, rx_params);
+  if (!r && r.error() == errc::not_supported) {
+    // kTLS not available on this kernel — silently fall back to user-space TLS.
+    return {};
+  }
+  return r;
+}
+
+// ---------------------------------------------------------------------------
 // kTLS 상태 확인
 // ---------------------------------------------------------------------------
 

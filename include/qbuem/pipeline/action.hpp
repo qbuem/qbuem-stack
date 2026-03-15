@@ -38,10 +38,12 @@
 #include <qbuem/pipeline/async_channel.hpp>
 #include <qbuem/pipeline/concepts.hpp>
 #include <qbuem/pipeline/context.hpp>
+#include <qbuem/pipeline/slo.hpp>
 
 #include <atomic>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <stop_token>
 #include <vector>
 
@@ -69,6 +71,22 @@ public:
     bool   auto_scale    = true; ///< 부하 기반 자동 스케일링
     bool   keyed_ordering = false; ///< 동일 키 순서 보장 (순서 중요한 경우)
     ServiceRegistry *registry = nullptr; ///< 파이프라인 ServiceRegistry
+    /**
+     * @brief SLO (Service Level Objective) 설정.
+     *
+     * 설정 시 이 액션의 레이턴시 및 에러율 SLO를 추적합니다.
+     * `std::nullopt`이면 SLO 추적 비활성화 (기본값).
+     *
+     * 예시:
+     * @code
+     * Action<int,int> a{fn, {.slo = qbuem::SloConfig{
+     *     .p99_target_us  = 5000,   // 5ms p99
+     *     .p999_target_us = 20000,  // 20ms p999
+     *     .error_budget   = 0.001,  // 0.1% error budget
+     * }}};
+     * @endcode
+     */
+    std::optional<SloConfig> slo; ///< SLO 설정 (없으면 추적 비활성)
   };
 
   /**

@@ -315,6 +315,71 @@ auto operator|(Stream<T> stream, StreamScanOp<State, Fn> op) {
 }
 
 // ---------------------------------------------------------------------------
+// Fused map+filter (operator fusion — eliminates an intermediate channel)
+// ---------------------------------------------------------------------------
+
+/**
+ * @brief 퓨즈된 map+filter 연산자.
+ *
+ * `stream | stream_map(f) | stream_filter(p)` 체인은 두 개의 중간 코루틴 프레임과
+ * 채널을 생성합니다.  `stream_map_filter`는 이를 단일 펌프로 합쳐
+ * 중간 할당을 제거합니다.
+ *
+ * ### 성능 이점
+ * - 중간 `AsyncChannel<U>` 제거 → 채널 송수신 오버헤드 없음
+ * - 코루틴 프레임 1개 절약
+ *
+ * ### 사용 예시
+ * @code
+ * // 이전 (2 중간 채널):
+ * auto s = stream | stream_map(f) | stream_filter(p);
+ *
+ * // 퓨즈 (중간 채널 0):
+ * auto s = stream | stream_map_filter(f, p);
+ * @endcode
+ *
+ * @param map_fn   `(T) -> Task<Result<U>>` 변환 함수.
+ * @param pred     `(const U&) -> bool` 필터 술어.
+ */
+template <typename MapFn, typename FilterFn>
+struct StreamMapFilterOp { MapFn map_fn; FilterFn pred; };
+
+template <typename MapFn, typename FilterFn>
+auto stream_map_filter(MapFn map_fn, FilterFn pred) {
+  return StreamMapFilterOp<MapFn, FilterFn>{std::move(map_fn), std::move(pred)};
+}
+
+template <typename T, typename MapFn, typename FilterFn>
+auto operator|(Stream<T> stream, StreamMapFilterOp<MapFn, FilterFn> op) {
+  using U = typename std::invoke_result_t<MapFn, T>::value_type::value_type;
+  auto [out, chan] = make_stream<U>();
+
+  struct Pump {
+    static Task<void> run(Stream<T> in, std::shared_ptr<AsyncChannel<U>> out,
+                          MapFn map_fn, FilterFn pred) {
+      for (;;) {
+        auto item = co_await in.next();
+        if (!item) { out->close(); co_return; }
+        auto result = co_await map_fn(std::move(*item));
+        if (!result.has_value()) { out->close(); co_return; }
+        // Fused filter: skip channel round-trip for filtered items.
+        if (!pred(*result)) continue;
+        co_await out->send(std::move(*result));
+      }
+    }
+  };
+
+  auto pump = Pump::run(std::move(stream), chan,
+                        std::move(op.map_fn), std::move(op.pred));
+  auto h    = pump.handle;
+  pump.detach();
+  if (auto *r = Reactor::current())
+    r->post([h]() mutable { h.resume(); });
+
+  return out;
+}
+
+// ---------------------------------------------------------------------------
 // flat_map
 // ---------------------------------------------------------------------------
 

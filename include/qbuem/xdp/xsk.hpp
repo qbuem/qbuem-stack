@@ -66,6 +66,11 @@
 #include <cstdint>
 #include <string_view>
 
+#if defined(QBUEM_XDP_LIBBPF) || defined(QBUEM_HAS_XDP)
+#  include <sys/socket.h>
+#  include <unistd.h>
+#endif
+
 #ifdef QBUEM_XDP_LIBBPF
 #  include <xdp/xsk.h>
 #  include <net/if.h>
@@ -269,6 +274,41 @@ public:
 #else
         (void)frames; (void)n;
         return 0;
+#endif
+    }
+
+    // ── 팩토리 (런타임 감지) ──────────────────────────────────────────
+
+    /**
+     * @brief 이 커널/플랫폼에서 AF_XDP가 지원되는지 런타임에 감지합니다.
+     *
+     * `socket(AF_XDP, SOCK_RAW, 0)`을 시험 생성하여 지원 여부를 확인합니다.
+     * 소켓은 즉시 닫힙니다 (부작용 없음).
+     *
+     * ### 반환값
+     * - `true`  : AF_XDP 소켓 생성 가능 (Linux 4.18+, AF_XDP 활성화)
+     * - `false` : 미지원 커널, 빌드 플래그 누락, 또는 권한 부족
+     *
+     * @code
+     * if (!qbuem::xdp::XskSocket::is_supported()) {
+     *     // AF_XDP 미지원 — UdpSocket 폴백 사용
+     * }
+     * @endcode
+     */
+    [[nodiscard]] static bool is_supported() noexcept {
+#ifdef QBUEM_HAS_XDP
+#  ifdef QBUEM_XDP_LIBBPF
+      // libbpf 빌드: AF_XDP 소켓 직접 감지
+      int fd = ::socket(AF_XDP, SOCK_RAW, 0);
+      if (fd < 0) return false;
+      ::close(fd);
+      return true;
+#  else
+      // 스텁 빌드: libbpf 없이 컴파일됐으므로 런타임 지원 불가
+      return false;
+#  endif
+#else
+      return false;
 #endif
     }
 

@@ -77,21 +77,45 @@ public:
 private:
   struct Node {
     // Compact sorted children: key=first-char, value=child node.
-    // Linear scan is faster than unordered_map for typical branching factors (1-8).
+    // Children are kept sorted by key so binary search can be used when
+    // branching factor exceeds kBinarySearchThreshold (default: 4).
     std::vector<std::pair<char, std::unique_ptr<Node>>> children;
     std::unique_ptr<Node> param_child; // ':' wildcard child
     std::string           param_name;  // param name if param_child is set
     HandlerVariant        handler;
 
+    static constexpr size_t kBinarySearchThreshold = 4;
+
     const Node *find_child(char c) const noexcept {
+      if (children.size() > kBinarySearchThreshold) {
+        // Binary search on sorted children.
+        auto it = std::lower_bound(children.begin(), children.end(), c,
+            [](const auto &p, char ch) { return p.first < ch; });
+        if (it != children.end() && it->first == c) return it->second.get();
+        return nullptr;
+      }
       for (auto &[k, v] : children)
         if (k == c) return v.get();
       return nullptr;
     }
     Node *find_child(char c) noexcept {
+      if (children.size() > kBinarySearchThreshold) {
+        auto it = std::lower_bound(children.begin(), children.end(), c,
+            [](const auto &p, char ch) { return p.first < ch; });
+        if (it != children.end() && it->first == c) return it->second.get();
+        return nullptr;
+      }
       for (auto &[k, v] : children)
         if (k == c) return v.get();
       return nullptr;
+    }
+
+    // Insert a child in sorted order (maintains sorted invariant for binary search).
+    Node *add_child(char c) {
+      auto it = std::lower_bound(children.begin(), children.end(), c,
+          [](const auto &p, char ch) { return p.first < ch; });
+      auto ins = children.emplace(it, c, std::make_unique<Node>());
+      return ins->second.get();
     }
   };
 

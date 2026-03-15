@@ -19,9 +19,12 @@
 
 #include <qbuem/common.hpp>
 
+#include <algorithm>
 #include <atomic>
 #include <cstdio>
 #include <cstdint>
+#include <initializer_list>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -29,6 +32,85 @@
 #include <vector>
 
 namespace qbuem {
+
+// ─── HistogramMetrics ─────────────────────────────────────────────────────────
+
+/**
+ * @brief 사용자 정의 버킷 경계를 지원하는 레이턴시 히스토그램.
+ *
+ * `ActionMetrics`의 고정 4-버킷 히스토그램 대신 사용할 수 있으며
+ * Prometheus-style cumulative histogram과 호환되는 구조입니다.
+ *
+ * ### 사용 예시
+ * @code
+ * // p50/p90/p99/p999에 최적화된 5-버킷 히스토그램
+ * HistogramMetrics hist({500, 1000, 5000, 10000, 50000}); // µs 단위
+ * hist.observe(latency_us);
+ * auto counts = hist.bucket_counts(); // 각 버킷의 누적 카운트
+ * @endcode
+ *
+ * @note 스레드 안전: `observe()`는 `std::atomic` relaxed 연산으로 구현됩니다.
+ */
+class HistogramMetrics {
+public:
+  /**
+   * @brief 사용자 정의 상한 경계(µs)로 히스토그램을 생성합니다.
+   *
+   * @param upper_bounds µs 단위 버킷 상한값 목록 (오름차순 정렬).
+   *                     마지막 버킷은 최대값 이상의 모든 관측값을 포함합니다.
+   *
+   * 예) `{1000, 10000, 100000}` → 버킷: [0,1ms), [1ms,10ms), [10ms,100ms), [100ms,∞)
+   */
+  explicit HistogramMetrics(std::initializer_list<uint64_t> upper_bounds)
+      : bounds_(upper_bounds) {
+    buckets_.resize(bounds_.size() + 1); // +1 for overflow bucket
+    for (auto &b : buckets_) b.store(0, std::memory_order_relaxed);
+  }
+
+  explicit HistogramMetrics(std::vector<uint64_t> upper_bounds)
+      : bounds_(std::move(upper_bounds)) {
+    buckets_.resize(bounds_.size() + 1);
+    for (auto &b : buckets_) b.store(0, std::memory_order_relaxed);
+  }
+
+  /**
+   * @brief 관측값을 히스토그램에 기록합니다.
+   *
+   * @param us 레이턴시 (마이크로초).
+   */
+  void observe(uint64_t us) noexcept {
+    // Binary search for the first bucket whose upper bound >= us.
+    auto it = std::lower_bound(bounds_.begin(), bounds_.end(), us);
+    size_t idx = static_cast<size_t>(it - bounds_.begin());
+    buckets_[idx].fetch_add(1, std::memory_order_relaxed);
+  }
+
+  /**
+   * @brief 각 버킷의 카운트를 스냅샷으로 반환합니다.
+   *
+   * @returns 버킷 카운트 벡터. 크기 = `upper_bounds.size() + 1`.
+   */
+  [[nodiscard]] std::vector<uint64_t> bucket_counts() const noexcept {
+    std::vector<uint64_t> counts(buckets_.size());
+    for (size_t i = 0; i < buckets_.size(); ++i)
+      counts[i] = buckets_[i].load(std::memory_order_relaxed);
+    return counts;
+  }
+
+  /** @brief 버킷 상한 경계 목록을 반환합니다. */
+  [[nodiscard]] const std::vector<uint64_t> &upper_bounds() const noexcept {
+    return bounds_;
+  }
+
+  /** @brief 모든 카운터를 0으로 초기화합니다. */
+  void reset() noexcept {
+    for (auto &b : buckets_) b.store(0, std::memory_order_relaxed);
+  }
+
+private:
+  std::vector<uint64_t>            bounds_;   ///< 버킷 상한 경계 (µs)
+  std::vector<std::atomic<uint64_t>> buckets_; ///< 버킷별 카운터
+};
 
 // ─── ActionMetrics ────────────────────────────────────────────────────────────
 
@@ -64,11 +146,20 @@ struct alignas(64) ActionMetrics {
   std::atomic<uint64_t> lat_buckets[4] = {};
 
   /**
-   * @brief 레이턴시(µs)를 히스토그램에 기록합니다.
+   * @brief 사용자 정의 버킷 히스토그램 (선택 사항).
+   *
+   * 기본 4-버킷 히스토그램 대신 또는 함께 사용할 수 있습니다.
+   * `nullptr`이면 사용 안 함.
+   */
+  std::shared_ptr<HistogramMetrics> histogram;
+
+  /**
+   * @brief 레이턴시를 고정 버킷과 사용자 정의 히스토그램 모두에 기록합니다.
    *
    * @param us 측정된 레이턴시 (마이크로초).
    */
   void record_latency_us(uint64_t us) noexcept {
+    // Fixed 4-bucket histogram (backward compatible).
     if (us < 1000u)
       lat_buckets[0].fetch_add(1, std::memory_order_relaxed);
     else if (us < 10000u)
@@ -77,6 +168,8 @@ struct alignas(64) ActionMetrics {
       lat_buckets[2].fetch_add(1, std::memory_order_relaxed);
     else
       lat_buckets[3].fetch_add(1, std::memory_order_relaxed);
+    // User-configurable histogram (if attached).
+    if (histogram) histogram->observe(us);
   }
 
   /**
@@ -89,6 +182,7 @@ struct alignas(64) ActionMetrics {
     dlq_count.store(0, std::memory_order_relaxed);
     for (auto &b : lat_buckets)
       b.store(0, std::memory_order_relaxed);
+    if (histogram) histogram->reset();
   }
 };
 

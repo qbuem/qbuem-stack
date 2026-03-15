@@ -14,10 +14,42 @@
 
 #include <coroutine>
 #include <exception>
+#include <functional>
 #include <optional>
 #include <utility>
 
 namespace qbuem {
+
+/**
+ * @brief 코루틴 미처리 예외 전역 핸들러.
+ *
+ * 기본값: nullptr (std::terminate() 호출).
+ * `set_unhandled_exception_handler()`로 변경하면 terminate 대신 핸들러를 호출합니다.
+ *
+ * ### 스레드 안전성
+ * 애플리케이션 시작 시 한 번만 설정하세요. 핸들러 교체는 스레드 안전하지 않습니다.
+ */
+inline std::function<void(std::exception_ptr)> g_unhandled_exception_handler;
+
+/**
+ * @brief 코루틴 미처리 예외 핸들러를 설정합니다.
+ *
+ * @param handler 예외를 받을 함수. nullptr이면 std::terminate()로 복귀.
+ *
+ * 예시:
+ * @code
+ * qbuem::set_unhandled_exception_handler([](std::exception_ptr ep) {
+ *   try { std::rethrow_exception(ep); }
+ *   catch (const std::exception& e) {
+ *     log_error("Unhandled coroutine exception: {}", e.what());
+ *   }
+ * });
+ * @endcode
+ */
+inline void set_unhandled_exception_handler(
+    std::function<void(std::exception_ptr)> handler) {
+  g_unhandled_exception_handler = std::move(handler);
+}
 
 /**
  * @brief A Coroutine Task type with symmetric transfer support.
@@ -57,7 +89,12 @@ template <typename T = void> struct Task {
       return final_awaiter{};
     }
 
-    void unhandled_exception() { std::terminate(); }
+    void unhandled_exception() {
+      if (g_unhandled_exception_handler)
+        g_unhandled_exception_handler(std::current_exception());
+      else
+        std::terminate();
+    }
     void return_value(T v) { value.emplace(std::move(v)); }
   };
 
@@ -141,7 +178,12 @@ template <> struct Task<void> {
       return final_awaiter{};
     }
 
-    void unhandled_exception() { std::terminate(); }
+    void unhandled_exception() {
+      if (g_unhandled_exception_handler)
+        g_unhandled_exception_handler(std::current_exception());
+      else
+        std::terminate();
+    }
     void return_void() {}
   };
 
