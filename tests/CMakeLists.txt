@@ -44,7 +44,18 @@ target_link_libraries(qbuem_v14_tests
     GTest::gtest_main
 )
 
+# ── v1.5.0: Security & TLS tests ─────────────────────────────────────────────
+add_executable(qbuem_v15_tests
+    security_v15_test.cpp
+)
+target_link_libraries(qbuem_v15_tests
+    PRIVATE
+    qbuem-stack::qbuem
+    GTest::gtest_main
+)
+
 include(GoogleTest)
 gtest_discover_tests(qbuem_tests)
 gtest_discover_tests(qbuem_ext_tests)
 gtest_discover_tests(qbuem_v14_tests)
+gtest_discover_tests(qbuem_v15_tests)

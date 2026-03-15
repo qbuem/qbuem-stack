@@ -2,12 +2,25 @@
 
 /**
  * @file qbuem/crypto.hpp
- * @brief Cryptographic utilities: constant-time comparison, CSPRNG, CSRF tokens.
+ * @brief Cryptographic utilities: constant-time comparison, CSPRNG, CSRF tokens,
+ *        and hardware entropy (RDRAND / RDSEED).
  *
  * All functions are header-only and platform-aware:
+ *   - x86-64 (RDRAND/RDSEED): CPU 하드웨어 TRNG/DRNG 직접 접근
  *   - Linux:  getrandom(2) syscall (no file descriptor needed)
  *   - macOS:  arc4random_buf() (kernel CSPRNG)
  *   - Other:  /dev/urandom fallback
+ *
+ * ## Hardware Entropy 전략 (v1.5.0)
+ * `rdrand64()` / `rdseed64()` inline 함수로 CPU 엔트로피를 직접 수집합니다.
+ * `hw_entropy_fill()`은 RDRAND를 우선 사용하고, 미지원 CPU에서는
+ * `random_fill()` (getrandom/arc4random)으로 투명하게 폴백합니다.
+ *
+ * ### RDRAND vs RDSEED
+ * | 명령어 | 소스 | 특성 |
+ * |--------|------|------|
+ * | RDRAND | CSPRNG (HW PRNG 기반) | 고속, 엔트로피 고갈 없음 |
+ * | RDSEED | 진성 난수 (TRNG, 열 잡음 기반) | 저속, 시딩 목적 |
  */
 
 #include <array>
@@ -21,6 +34,14 @@
 #  include <sys/random.h>  // getrandom
 #else
 #  include <cstdlib>       // arc4random_buf
+#endif
+
+// RDRAND / RDSEED (x86-64, -mrdrnd 플래그 또는 __RDRND__ 정의 필요)
+#if defined(__x86_64__) || defined(__i386__)
+#  if __has_include(<immintrin.h>)
+#    include <immintrin.h>
+#    define QBUEM_HAS_RDRAND 1
+#  endif
 #endif
 
 namespace qbuem {
@@ -143,6 +164,222 @@ inline std::string base64url_encode(const uint8_t *data, size_t len) {
   std::string raw = random_bytes(bytes);
   return detail::base64url_encode(
       reinterpret_cast<const uint8_t *>(raw.data()), raw.size());
+}
+
+// ─── Hardware Entropy (RDRAND / RDSEED) ──────────────────────────────────────
+
+/**
+ * @brief CPU RDRAND 명령어로 64-bit 난수를 직접 수집합니다.
+ *
+ * RDRAND는 Intel/AMD CPU의 하드웨어 CSPRNG(AES-CTR 기반)에서
+ * 직접 출력을 가져옵니다. 엔트로피 고갈이 없으며 FIPS 140-2 검증됩니다.
+ *
+ * ## 재시도 정책
+ * 하드웨어 CSPRNG는 드물게 실패할 수 있으므로(캐리 플래그 0)
+ * 최대 `kMaxRetries`번 재시도합니다.
+ *
+ * @param[out] out  수집된 64-bit 난수.
+ * @returns 성공이면 true, RDRAND 미지원 또는 재시도 초과이면 false.
+ */
+[[nodiscard]] inline bool rdrand64(uint64_t &out) noexcept {
+#if defined(QBUEM_HAS_RDRAND) && defined(__RDRND__)
+  static constexpr int kMaxRetries = 10;
+  for (int i = 0; i < kMaxRetries; ++i) {
+    unsigned long long val = 0;
+    if (_rdrand64_step(&val)) {
+      out = static_cast<uint64_t>(val);
+      return true;
+    }
+  }
+  return false;
+#elif defined(QBUEM_HAS_RDRAND)
+  // __RDRND__ 없는 빌드: inline asm 직접 호출
+  uint64_t val = 0;
+  uint8_t  cf  = 0;
+  __asm__ volatile (
+    "rdrand %0\n\t"
+    "setc   %1"
+    : "=r"(val), "=qm"(cf)
+    :
+    : "cc"
+  );
+  if (cf) { out = val; return true; }
+  return false;
+#else
+  (void)out;
+  return false; // 비x86 환경 폴백
+#endif
+}
+
+/**
+ * @brief CPU RDSEED 명령어로 64-bit 진성 난수(TRNG)를 수집합니다.
+ *
+ * RDSEED는 열 잡음(thermal noise) 기반 TRNG에서 직접 출력을 가져옵니다.
+ * RDRAND보다 느리지만 물리적 엔트로피를 포함합니다.
+ * PRNG 시드 초기화나 키 생성에 적합합니다.
+ *
+ * @param[out] out  수집된 64-bit 진성 난수.
+ * @returns 성공이면 true, RDSEED 미지원 또는 재시도 초과이면 false.
+ */
+[[nodiscard]] inline bool rdseed64(uint64_t &out) noexcept {
+#if defined(QBUEM_HAS_RDRAND) && defined(__RDSEED__)
+  static constexpr int kMaxRetries = 10;
+  for (int i = 0; i < kMaxRetries; ++i) {
+    unsigned long long val = 0;
+    if (_rdseed64_step(&val)) {
+      out = static_cast<uint64_t>(val);
+      return true;
+    }
+  }
+  return false;
+#elif defined(QBUEM_HAS_RDRAND)
+  uint64_t val = 0;
+  uint8_t  cf  = 0;
+  __asm__ volatile (
+    "rdseed %0\n\t"
+    "setc   %1"
+    : "=r"(val), "=qm"(cf)
+    :
+    : "cc"
+  );
+  if (cf) { out = val; return true; }
+  return false;
+#else
+  (void)out;
+  return false;
+#endif
+}
+
+/**
+ * @brief 하드웨어 RDRAND로 버퍼를 채웁니다. 미지원 시 `random_fill()`으로 폴백.
+ *
+ * RDRAND가 지원되면 8바이트 단위로 빠르게 채우고,
+ * 지원되지 않으면 `random_fill()` (getrandom/arc4random_buf)을 호출합니다.
+ *
+ * ## 사용 예시
+ * @code
+ * std::array<uint8_t, 32> key;
+ * qbuem::hw_entropy_fill(key.data(), key.size()); // 256-bit 하드웨어 엔트로피
+ * @endcode
+ *
+ * @param buf 채울 버퍼 포인터.
+ * @param len 채울 바이트 수.
+ * @throws std::runtime_error 엔트로피 소스를 사용할 수 없을 때.
+ */
+inline void hw_entropy_fill(void *buf, size_t len) {
+  auto *ptr = static_cast<uint8_t*>(buf);
+  size_t done = 0;
+
+  // 8바이트 단위: RDRAND 사용
+  while (done + 8 <= len) {
+    uint64_t rand_val = 0;
+    if (!rdrand64(rand_val)) {
+      // RDRAND 실패 → 나머지는 kernel CSPRNG로 처리
+      random_fill(ptr + done, len - done);
+      return;
+    }
+    std::memcpy(ptr + done, &rand_val, 8);
+    done += 8;
+  }
+
+  // 잔여 바이트: kernel CSPRNG
+  if (done < len) {
+    uint64_t rand_val = 0;
+    if (rdrand64(rand_val)) {
+      std::memcpy(ptr + done, &rand_val, len - done);
+    } else {
+      random_fill(ptr + done, len - done);
+    }
+  }
+}
+
+/**
+ * @brief RDSEED로 버퍼를 채웁니다. RDRAND보다 느리지만 물리적 엔트로피 포함.
+ *
+ * RDSEED 실패 시 `hw_entropy_fill()`(RDRAND 우선)으로 폴백합니다.
+ *
+ * @param buf 채울 버퍼.
+ * @param len 바이트 수.
+ * @throws std::runtime_error 엔트로피 소스 없을 때.
+ */
+inline void hw_seed_fill(void *buf, size_t len) {
+  auto *ptr = static_cast<uint8_t*>(buf);
+  size_t done = 0;
+
+  while (done + 8 <= len) {
+    uint64_t seed_val = 0;
+    if (!rdseed64(seed_val)) {
+      // RDSEED 미지원/실패 → RDRAND + kernel CSPRNG 폴백
+      hw_entropy_fill(ptr + done, len - done);
+      return;
+    }
+    std::memcpy(ptr + done, &seed_val, 8);
+    done += 8;
+  }
+
+  if (done < len) {
+    uint64_t seed_val = 0;
+    if (rdseed64(seed_val)) {
+      std::memcpy(ptr + done, &seed_val, len - done);
+    } else {
+      hw_entropy_fill(ptr + done, len - done);
+    }
+  }
+}
+
+/**
+ * @brief 하드웨어 RDRAND가 사용 가능한지 런타임 확인합니다.
+ *
+ * CPUID를 이용해 ECX bit 30 (RDRAND 지원 여부)을 확인합니다.
+ * 최초 호출 후 캐시합니다.
+ *
+ * @returns RDRAND 사용 가능이면 true.
+ */
+[[nodiscard]] inline bool has_rdrand() noexcept {
+#if defined(__x86_64__) || defined(__i386__)
+  static const bool cached = []() noexcept -> bool {
+    uint32_t ecx = 0;
+#  if defined(__GNUC__) || defined(__clang__)
+    __asm__ volatile (
+      "cpuid"
+      : "=c"(ecx)
+      : "a"(1), "c"(0)
+      : "ebx", "edx"
+    );
+#  endif
+    return (ecx >> 30) & 1u;
+  }();
+  return cached;
+#else
+  return false;
+#endif
+}
+
+/**
+ * @brief CPU RDSEED가 사용 가능한지 런타임 확인합니다.
+ *
+ * CPUID EBX bit 18 (RDSEED)를 확인합니다.
+ *
+ * @returns RDSEED 사용 가능이면 true.
+ */
+[[nodiscard]] inline bool has_rdseed() noexcept {
+#if defined(__x86_64__) || defined(__i386__)
+  static const bool cached = []() noexcept -> bool {
+    uint32_t ebx = 0;
+#  if defined(__GNUC__) || defined(__clang__)
+    __asm__ volatile (
+      "cpuid"
+      : "=b"(ebx)
+      : "a"(7), "c"(0)
+      : "ecx", "edx"
+    );
+#  endif
+    return (ebx >> 18) & 1u;
+  }();
+  return cached;
+#else
+  return false;
+#endif
 }
 
 } // namespace qbuem

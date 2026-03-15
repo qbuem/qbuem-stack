@@ -2,7 +2,7 @@
 
 **Zero Latency · Zero Allocation · Zero Dependency**
 
-> **Current Version: v1.4.0** — Unified DB Abstraction & SHM Messaging complete.
+> **Current Version: v1.5.0** — Zero-dep Security & TLS complete.
 > 
 > High-performance C++ infrastructure for Web, Messaging, and Data Pipelines.
 
@@ -36,12 +36,14 @@
 
 ---
 
-## 🚀 Current Focus: v1.5.0 — Zero-dep Security & TLS
+## ✅ Completed: v1.5.0 — Zero-dep Security & TLS
 
 ### v1.5.0 — Zero-dep Security & TLS ([docs/security-tls.md](./docs/security-tls.md))
-- [ ] **kTLS Optimization**: `sendfile` + kTLS for zero-copy encrypted transmission.
-- [ ] **SIMD Auth Parser**: High-speed JWT and token parsing using SIMD predicates.
-- [ ] **Hardware Entropy**: Direct integration with CPU `RDRAND` and kernel `getrandom`.
+- [x] **kTLS Optimization**: `sendfile` + kTLS for zero-copy encrypted transmission. (`include/qbuem/io/ktls.hpp`)
+- [x] **SIMD Auth Parser**: High-speed JWT and token parsing using SIMD predicates. (`include/qbuem/security/simd_jwt.hpp`)
+- [x] **Hardware Entropy**: Direct integration with CPU `RDRAND`/`RDSEED` and kernel `getrandom`. (`include/qbuem/crypto.hpp`)
+
+## 🚀 Current Focus: v1.6.0 — Embedded & PCIe Integration
 
 ### v1.6.0 — Embedded & PCIe Integration ([docs/embedded-pcie.md](./docs/embedded-pcie.md))
 - [ ] **qbuem::PCIeDevice**: Linux VFIO-based userspace PCIe control.
@@ -56,6 +58,14 @@
 ---
 
 ## ✅ Completed Milestones
+
+<details>
+<summary><b>v1.5.0 — Zero-dep Security & TLS</b></summary>
+
+- [x] **kTLS Optimization**: `ktls_sendfile()` / `ktls_sendfile_all()` — sendfile + kTLS zero-copy 암호화 전송. Linux 폴백 EAGAIN 처리 포함.
+- [x] **SIMD Auth Parser**: `SIMDJwtParser` — AVX2/SSE4.2/NEON/Scalar `.` 탐색, Base64url 검증, 클레임 추출 (zero-allocation). JwtView 클레임 API (`claim()`, `claim_int()`, `is_expired()`).
+- [x] **Hardware Entropy**: `rdrand64()`, `rdseed64()` CPUID 기반 inline asm, `hw_entropy_fill()`, `hw_seed_fill()`, `has_rdrand()`, `has_rdseed()`. getrandom/arc4random 투명 폴백.
+</details>
 
 <details>
 <summary><b>v1.4.0 — Unified DB & SHM Messaging</b></summary>

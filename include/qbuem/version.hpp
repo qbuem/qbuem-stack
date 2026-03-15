@@ -46,6 +46,11 @@
  *           db::Value, SIMD Protocol Parser),
  *           SHM Messaging (SHMChannel, Futex-uring Sync, Zero-copy DataArena,
  *           Unified SHMBus with SHMSource/SHMSink Pipeline integration)
+ * - 1.5.0: Zero-dep Security & TLS
+ *           (kTLS sendfile zero-copy encrypted transmission,
+ *            SIMDJwtParser AVX2/SSE4.2/NEON/Scalar dot-scan + Base64url validation,
+ *            Hardware Entropy: RDRAND/RDSEED inline asm with getrandom fallback,
+ *            CPUID runtime detection for has_rdrand()/has_rdseed())
  */
 
 /**
@@ -83,13 +88,13 @@ struct Version {
   static constexpr int major = 1;
 
   /** @brief Minor 버전 번호. 하위 호환을 유지하며 새 기능이 추가될 때 증가합니다. */
-  static constexpr int minor = 4;
+  static constexpr int minor = 5;
 
   /** @brief Patch 버전 번호. 버그 수정만 이루어질 때 증가합니다. */
   static constexpr int patch = 0;
 
   /** @brief "major.minor.patch" 형식의 버전 문자열 (null-terminated 보장). */
-  static constexpr std::string_view string = "1.4.0";
+  static constexpr std::string_view string = "1.5.0";
 };
 
 } // namespace qbuem
@@ -98,12 +103,12 @@ struct Version {
 #define QBUEM_VERSION_MAJOR 1
 
 /** @brief Minor 버전 번호 (전처리기 조건 분기용). */
-#define QBUEM_VERSION_MINOR 4
+#define QBUEM_VERSION_MINOR 5
 
 /** @brief Patch 버전 번호 (전처리기 조건 분기용). */
 #define QBUEM_VERSION_PATCH 0
 
 /** @brief "major.minor.patch" 형식의 버전 문자열 리터럴 (전처리기 조건 분기용). */
-#define QBUEM_VERSION_STRING "1.4.0"
+#define QBUEM_VERSION_STRING "1.5.0"
 
 /** @} */ // end of qbuem_version

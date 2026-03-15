@@ -14,6 +14,10 @@
 #include <qbuem/shm/shm_channel.hpp>
 #include <qbuem/shm/shm_bus.hpp>
 
+// v1.5.0: Zero-dep Security & TLS
+#include <qbuem/security/simd_jwt.hpp>
+#include <qbuem/io/ktls.hpp>
+
 #include <atomic>
 #include <chrono>
 #include <cstdint>
