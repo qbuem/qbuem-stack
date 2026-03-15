@@ -4,9 +4,9 @@ cmake_minimum_required(VERSION 3.20)
 # qbuem-stack — Zero Latency · Zero Cost · Zero Dependency WAS Layer
 # ============================================================================
 project(qbuem-stack
-    VERSION 0.4.0
+    VERSION 1.0.0
     LANGUAGES CXX
-    DESCRIPTION "qbuem-stack: zero-dependency C++20 WAS layer (HTTP core + async IO)"
+    DESCRIPTION "qbuem-stack: zero-dependency C++20 async server framework (HTTP/1.1, HTTP/2, WebSocket, gRPC, Pipeline)"
 )
 
 set(CMAKE_CXX_STANDARD 20)

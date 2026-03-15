@@ -2,6 +2,8 @@
 
 **Zero Latency · Zero Allocation · Zero Dependency**
 
+> **현재 버전: v1.0.0** — 107/107 테스트 통과. 모든 필수 마일스톤 완료.
+
 > 파이프라인 설계: **[docs/pipeline-design.md](./docs/pipeline-design.md)**
 > IO 레이어 아키텍처: **[docs/io-architecture.md](./docs/io-architecture.md)**
 > IO 기술 심층 분석: **[docs/io-deep-dive.md](./docs/io-deep-dive.md)**
@@ -210,15 +212,15 @@
 
 ### 라이브러리 분리 (CMake 타겟 재구조화)
 
-- [ ] CMakeLists.txt 재구조화 — 9레벨 타겟 분리
+- [ ] CMakeLists.txt 재구조화 — 9레벨 타겟 분리 *(연기: 헤더 경로 파괴 위험, v1.x에서 재검토)*
   - `qbuem::result` (header-only) — `Result<T>`, `errc` 독립 분리
   - `qbuem::arena` (header-only) — `Arena`, `FixedPoolResource`, `BufferPool<N>` 독립
   - `qbuem::task` (header-only) — `Task<T>`, `awaiters` 독립
   - `qbuem::reactor` (static) — Reactor 인터페이스 + `TimerWheel` (구현 없음)
   - `qbuem::epoll` / `qbuem::kqueue` / `qbuem::iouring` — 플랫폼별 분리
   - `qbuem::dispatcher` (static) — Dispatcher 독립
-- [ ] 헤더 이동: `include/qbuem/core/*` → `include/qbuem/reactor/*`
-- [ ] `include/qbuem/net/`, `buf/`, `io/`, `transport/`, `codec/`, `server/` 신설
+- [ ] 헤더 이동: `include/qbuem/core/*` → `include/qbuem/reactor/*` *(연기)*
+- [ ] `include/qbuem/net/`, `buf/`, `io/`, `transport/`, `codec/`, `server/` 신설 *(연기)*
 - [x] `find_package(qbuem-stack COMPONENTS net buf pipeline ...)` COMPONENTS 지원
 - [x] 하위 호환 alias 유지: `qbuem-stack::core` → `qbuem::reactor` 등
 
@@ -550,8 +552,8 @@
   - protobuf 직접 의존 없음 — 서비스에서 serialize/deserialize 제공
   - Unary / Server Streaming / Client Streaming / Bidi 4가지 패턴
   - `Stream<Res>` / `AsyncChannel<Req>` 직접 연결
-- [ ] HTTP/3 / QUIC — quiche FFI 추상화 (별도 `ITransport` 구현체)
-- [ ] `AF_XDP` eXpress Data Path — 극한 성능, 별도 레이어 (선택적)
+- [ ] HTTP/3 / QUIC — quiche FFI 추상화 (별도 `ITransport` 구현체) *(선택적, 외부 의존성)*
+- [ ] `AF_XDP` eXpress Data Path — 극한 성능, 별도 레이어 (선택적) *(선택적, 외부 의존성)*
 
 ### gRPC ↔ Pipeline 통합
 
@@ -559,7 +561,7 @@
 - [x] gRPC 클라이언트 스트리밍 → `AsyncChannel<T>` 직접 연결
 - [x] `BidiEnvelope<Req,Res>` → gRPC bidi 핸들러 어댑터
 
-### 극한 성능 (선택적)
+### 극한 성능 (선택적, v1.x 이후)
 
 - [ ] AF_XDP + UMEM — 커널 네트워크 스택 우회, 10-100M PPS 목표
   - `qbuem::xdp` 별도 라이브러리 (libbpf 의존, 선택적)
