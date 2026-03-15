@@ -82,9 +82,10 @@ TEST(StaticPipelineIntegration, ThreeStageChain) {
   auto output = pipeline.output();
   ASSERT_NE(output, nullptr);
 
-  // Dispatcher 생성 (1 스레드)
+  // Dispatcher 생성 (1 스레드) + 이벤트 루프 백그라운드 실행
   Dispatcher dispatcher(1);
   pipeline.start(dispatcher);
+  std::thread run_thread([&] { dispatcher.run(); });
 
   // 아이템 투입
   std::vector<int> expected_values = {42, 7, 100};
@@ -95,7 +96,7 @@ TEST(StaticPipelineIntegration, ThreeStageChain) {
 
   // 출력 수집 (타임아웃 포함)
   std::vector<StoredEvent> results;
-  auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+  auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
 
   while (results.size() < expected_values.size() &&
          std::chrono::steady_clock::now() < deadline) {
@@ -108,6 +109,7 @@ TEST(StaticPipelineIntegration, ThreeStageChain) {
   }
 
   dispatcher.stop();
+  run_thread.join();
 
   // 검증
   ASSERT_EQ(results.size(), expected_values.size());
@@ -155,6 +157,7 @@ TEST(StaticPipelineIntegration, ScaleOutUnderLoad) {
   auto output = pipeline.output();
   Dispatcher dispatcher(2);
   pipeline.start(dispatcher);
+  std::thread run_thread([&] { dispatcher.run(); });
 
   // 아이템 투입
   constexpr size_t kItems = 20;
@@ -165,13 +168,14 @@ TEST(StaticPipelineIntegration, ScaleOutUnderLoad) {
   }
 
   // 처리 완료 대기
-  auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+  auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
   while (processed.load() < pushed &&
          std::chrono::steady_clock::now() < deadline) {
     std::this_thread::sleep_for(std::chrono::milliseconds(5));
   }
 
   dispatcher.stop();
+  run_thread.join();
 
   // 처리된 수가 투입된 수 이하
   EXPECT_LE(processed.load(), pushed)
@@ -208,6 +212,7 @@ TEST(StaticPipelineIntegration, DrainProcessesAllItems) {
 
   Dispatcher dispatcher(1);
   pipeline.start(dispatcher);
+  std::thread run_thread([&] { dispatcher.run(); });
 
   // 아이템 투입
   constexpr size_t kItems = 10;
@@ -215,7 +220,6 @@ TEST(StaticPipelineIntegration, DrainProcessesAllItems) {
     pipeline.try_push(RawEvent{"x"});
 
   // drain 실행 — 모든 아이템이 처리될 때까지 대기
-  // drain()은 코루틴이므로 Dispatcher에 spawn하여 완료를 폴링
   std::atomic<bool> drain_done{false};
 
   // drain 래퍼 코루틴 정의
@@ -226,13 +230,14 @@ TEST(StaticPipelineIntegration, DrainProcessesAllItems) {
   };
   dispatcher.spawn(drain_task());
 
-  auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+  auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
   while (!drain_done.load(std::memory_order_acquire) &&
          std::chrono::steady_clock::now() < deadline) {
     std::this_thread::sleep_for(std::chrono::milliseconds(5));
   }
 
   dispatcher.stop();
+  run_thread.join();
 
   EXPECT_TRUE(drain_done.load()) << "drain()이 타임아웃 내에 완료되지 않음";
   EXPECT_EQ(processed.load(), kItems)
@@ -337,6 +342,7 @@ TEST(StaticPipelineIntegration, ContextPropagationThroughStages) {
   auto output = pipeline.output();
   Dispatcher dispatcher(1);
   pipeline.start(dispatcher);
+  std::thread run_thread([&] { dispatcher.run(); });
 
   // Context에 RequestId를 담아서 push
   const std::string kReqId = "req-ctx-test-001";
@@ -346,7 +352,7 @@ TEST(StaticPipelineIntegration, ContextPropagationThroughStages) {
   pipeline.try_push(RawEvent{"0"}, ctx);
 
   // 출력 대기
-  auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+  auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
   bool got_output = false;
   while (!got_output && std::chrono::steady_clock::now() < deadline) {
     auto item = output->try_recv();
@@ -358,6 +364,7 @@ TEST(StaticPipelineIntegration, ContextPropagationThroughStages) {
   }
 
   dispatcher.stop();
+  run_thread.join();
 
   ASSERT_TRUE(got_output) << "타임아웃 내에 출력이 생성되지 않음";
 

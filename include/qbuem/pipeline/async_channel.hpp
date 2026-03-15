@@ -159,7 +159,8 @@ public:
       if (closed_.load(std::memory_order_relaxed))
         co_return unexpected(std::make_error_code(std::errc::broken_pipe));
 
-      if (try_send_inner(std::move(value))) {
+      if (try_send_inner(value)) {
+        wake_one_receiver();
         co_return Result<void>{};
       }
 
@@ -303,8 +304,10 @@ private:
       chan->add_send_waiter(&waiter);
       // Re-check: space may have appeared after adding waiter
       if (!chan->is_full() || chan->is_closed()) {
-        chan->remove_send_waiter(&waiter);
-        return false;
+        // If remove returns false, someone already removed us and will resume us
+        if (chan->remove_send_waiter(&waiter))
+          return false; // we removed ourselves — continue inline
+        // else: already removed by wake_one_sender — stay suspended, it will resume us
       }
       return true;
     }
@@ -328,8 +331,10 @@ private:
       waiter.reactor = Reactor::current();
       chan->add_recv_waiter(&waiter);
       if (!chan->is_empty() || chan->is_closed()) {
-        chan->remove_recv_waiter(&waiter);
-        return false;
+        // If remove returns false, someone already removed us and will resume us
+        if (chan->remove_recv_waiter(&waiter))
+          return false; // we removed ourselves — continue inline
+        // else: already removed by wake_one_receiver — stay suspended, it will resume us
       }
       return true;
     }
@@ -341,7 +346,7 @@ private:
   // Internal helpers
   // -------------------------------------------------------------------------
 
-  bool try_send_inner(T value) {
+  bool try_send_inner(T &value) {
     size_t pos = tail_.load(std::memory_order_relaxed);
     for (;;) {
       Slot &slot = slots_[pos & (capacity_ - 1)];
@@ -381,13 +386,14 @@ private:
     send_waiters_   = w;
   }
 
-  void remove_send_waiter(Waiter *w) {
+  bool remove_send_waiter(Waiter *w) {
     std::lock_guard lock(send_waiters_mutex_);
     Waiter **p = &send_waiters_;
     while (*p) {
-      if (*p == w) { *p = w->next; return; }
+      if (*p == w) { *p = w->next; return true; }
       p = &(*p)->next;
     }
+    return false;
   }
 
   void add_recv_waiter(Waiter *w) {
@@ -396,13 +402,14 @@ private:
     recv_waiters_   = w;
   }
 
-  void remove_recv_waiter(Waiter *w) {
+  bool remove_recv_waiter(Waiter *w) {
     std::lock_guard lock(recv_waiters_mutex_);
     Waiter **p = &recv_waiters_;
     while (*p) {
-      if (*p == w) { *p = w->next; return; }
+      if (*p == w) { *p = w->next; return true; }
       p = &(*p)->next;
     }
+    return false;
   }
 
   void wake_one_receiver() {

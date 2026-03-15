@@ -221,19 +221,13 @@ public:
 
     // Wire: current tail channel → action's input channel
     if (tail_) {
-      // Replace action's default input channel with the current tail
-      // This is done by passing the tail channel as the action's in_channel
-      // We share the channel reference.
-      // NOTE: For simplicity, Action uses its own input channel.
       // Connect: pump from tail_ into action's in_channel
-      // This pump runs as a background coroutine (fire-and-forget)
+      // The pump coroutine is created lazily at start() time to avoid
+      // storing a raw coroutine handle across the builder lifetime.
       auto src = tail_;
       auto dst = action_ptr->input();
-      auto pump_task = pump_channels<CurOut>(src, dst);
-      auto h = pump_task.handle;
-      pump_task.detach();
-      starters_.push_back([h](Dispatcher &d) mutable {
-        d.spawn_on(0, make_resume_task(h));
+      starters_.push_back([src, dst](Dispatcher &d) mutable {
+        d.spawn(pump_channels<CurOut>(src, dst));
       });
     } else {
       // First action: head_ = action's in_channel.
@@ -307,10 +301,6 @@ private:
     }
   }
 
-  static Task<void> make_resume_task(std::coroutine_handle<> h) {
-    h.resume();
-    co_return;
-  }
 };
 
 // ---------------------------------------------------------------------------
