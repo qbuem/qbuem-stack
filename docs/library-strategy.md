@@ -666,16 +666,18 @@ GrpcHandler<Req,Res>     qbuem::grpc             서비스별 핸들러 구현
 
 ## 9. 마이그레이션 계획 (현재 → 목표 구조)
 
-| 단계 | 내용 | 버전 |
-|------|------|------|
-| 1 | 헤더 이동: `core/arena.hpp` → `arena.hpp`, `core/reactor.hpp` → `reactor/reactor.hpp` | v0.7.0 |
-| 2 | CMake 타겟 분리: `qbuem_core` → `qbuem_result` + `qbuem_arena` + `qbuem_task` + `qbuem_reactor` | v0.7.0 |
-| 3 | `net/` 디렉토리 신설, IO 프리미티브 추가 | v0.7.0 |
-| 4 | `buf/`, `io/`, `transport/`, `codec/`, `server/` 추가 | v0.7.0 |
-| 5 | Pipeline 헤더 재구성: `context`, `channel`, `pipeline`, `pipeline-graph` 분리 | v0.7.0 |
-| 6 | `tracing/`, `metrics/` 분리 | v0.8.0 |
-| 7 | `protocol/` 추가 (ws, http2, grpc) | v1.0.0 |
-| 8 | `find_package(qbuem-stack COMPONENTS ...)` 지원 완성 | v1.0.0 |
+| 단계 | 내용 | 버전 | 상태 |
+|------|------|------|------|
+| 1 | 헤더 이동: `core/arena.hpp` → `arena.hpp`, `core/reactor.hpp` → `reactor/reactor.hpp` | v0.7.0 | ✅ |
+| 2 | CMake 타겟 분리: `qbuem_core` → `qbuem_result` + `qbuem_arena` + `qbuem_task` + `qbuem_reactor` | v0.7.0 | ✅ |
+| 3 | `net/` 디렉토리 신설, IO 프리미티브 추가 | v0.7.0 | ✅ |
+| 4 | `buf/`, `io/`, `transport/`, `codec/`, `server/` 추가 | v0.7.0 | ✅ |
+| 5 | Pipeline 헤더 재구성: `context`, `channel`, `pipeline` 분리 | v0.7.0 | ✅ |
+| 6 | `tracing/`, `metrics/` 분리 | v0.8.0 | ✅ |
+| 7 | `protocol/` 추가 (ws, http2, grpc 핸들러 스텁) | v1.0.0 | ✅ |
+| 8 | `find_package(qbuem-stack COMPONENTS ...)` 지원 완성 | v1.0.0 | ✅ |
+| 9 | DynamicPipeline, PipelineGraph, MessageBus 분리 | v1.1.0 | ❌ 예정 |
+| 10 | HTTP/2 full, WebSocket, gRPC 구현 | v1.2.0 | ❌ 예정 |
 
 ### 하위 호환성 유지
 

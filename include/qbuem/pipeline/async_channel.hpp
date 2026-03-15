@@ -159,7 +159,8 @@ public:
       if (closed_.load(std::memory_order_relaxed))
         co_return unexpected(std::make_error_code(std::errc::broken_pipe));
 
-      if (try_send_inner(std::move(value))) {
+      if (try_send_inner(value)) {
+        wake_one_receiver();
         co_return Result<void>{};
       }
 
@@ -303,8 +304,10 @@ private:
       chan->add_send_waiter(&waiter);
       // Re-check: space may have appeared after adding waiter
       if (!chan->is_full() || chan->is_closed()) {
-        chan->remove_send_waiter(&waiter);
-        return false;
+        // If remove returns false, someone already removed us and will resume us
+        if (chan->remove_send_waiter(&waiter))
+          return false; // we removed ourselves — continue inline
+        // else: already removed by wake_one_sender — stay suspended, it will resume us
       }
       return true;
     }
@@ -328,8 +331,10 @@ private:
       waiter.reactor = Reactor::current();
       chan->add_recv_waiter(&waiter);
       if (!chan->is_empty() || chan->is_closed()) {
-        chan->remove_recv_waiter(&waiter);
-        return false;
+        // If remove returns false, someone already removed us and will resume us
+        if (chan->remove_recv_waiter(&waiter))
+          return false; // we removed ourselves — continue inline
+        // else: already removed by wake_one_receiver — stay suspended, it will resume us
       }
       return true;
     }
@@ -341,7 +346,7 @@ private:
   // Internal helpers
   // -------------------------------------------------------------------------
 
-  bool try_send_inner(T value) {
+  bool try_send_inner(T &value) {
     size_t pos = tail_.load(std::memory_order_relaxed);
     for (;;) {
       Slot &slot = slots_[pos & (capacity_ - 1)];
@@ -379,39 +384,54 @@ private:
     std::lock_guard lock(send_waiters_mutex_);
     w->next         = send_waiters_;
     send_waiters_   = w;
+    send_waiter_count_.fetch_add(1, std::memory_order_relaxed);
   }
 
-  void remove_send_waiter(Waiter *w) {
+  bool remove_send_waiter(Waiter *w) {
     std::lock_guard lock(send_waiters_mutex_);
     Waiter **p = &send_waiters_;
     while (*p) {
-      if (*p == w) { *p = w->next; return; }
+      if (*p == w) {
+        *p = w->next;
+        send_waiter_count_.fetch_sub(1, std::memory_order_relaxed);
+        return true;
+      }
       p = &(*p)->next;
     }
+    return false;
   }
 
   void add_recv_waiter(Waiter *w) {
     std::lock_guard lock(recv_waiters_mutex_);
     w->next         = recv_waiters_;
     recv_waiters_   = w;
+    recv_waiter_count_.fetch_add(1, std::memory_order_relaxed);
   }
 
-  void remove_recv_waiter(Waiter *w) {
+  bool remove_recv_waiter(Waiter *w) {
     std::lock_guard lock(recv_waiters_mutex_);
     Waiter **p = &recv_waiters_;
     while (*p) {
-      if (*p == w) { *p = w->next; return; }
+      if (*p == w) {
+        *p = w->next;
+        recv_waiter_count_.fetch_sub(1, std::memory_order_relaxed);
+        return true;
+      }
       p = &(*p)->next;
     }
+    return false;
   }
 
   void wake_one_receiver() {
+    // Fast path: skip mutex if no waiters (common case in fully-async usage)
+    if (recv_waiter_count_.load(std::memory_order_relaxed) == 0) return;
     Waiter *w = nullptr;
     {
       std::lock_guard lock(recv_waiters_mutex_);
       if (recv_waiters_) {
         w              = recv_waiters_;
         recv_waiters_  = w->next;
+        recv_waiter_count_.fetch_sub(1, std::memory_order_relaxed);
       }
     }
     if (!w) return;
@@ -419,12 +439,14 @@ private:
   }
 
   void wake_one_sender() {
+    if (send_waiter_count_.load(std::memory_order_relaxed) == 0) return;
     Waiter *w = nullptr;
     {
       std::lock_guard lock(send_waiters_mutex_);
       if (send_waiters_) {
         w             = send_waiters_;
         send_waiters_ = w->next;
+        send_waiter_count_.fetch_sub(1, std::memory_order_relaxed);
       }
     }
     if (!w) return;
@@ -432,11 +454,13 @@ private:
   }
 
   void wake_all_receivers() {
+    if (recv_waiter_count_.load(std::memory_order_relaxed) == 0) return;
     Waiter *list = nullptr;
     {
       std::lock_guard lock(recv_waiters_mutex_);
       list           = recv_waiters_;
       recv_waiters_  = nullptr;
+      recv_waiter_count_.store(0, std::memory_order_relaxed);
     }
     while (list) {
       Waiter *next = list->next;
@@ -446,11 +470,13 @@ private:
   }
 
   void wake_all_senders() {
+    if (send_waiter_count_.load(std::memory_order_relaxed) == 0) return;
     Waiter *list = nullptr;
     {
       std::lock_guard lock(send_waiters_mutex_);
       list          = send_waiters_;
       send_waiters_ = nullptr;
+      send_waiter_count_.store(0, std::memory_order_relaxed);
     }
     while (list) {
       Waiter *next = list->next;
@@ -485,11 +511,13 @@ private:
   alignas(64) std::atomic<bool>   closed_{false};
 
   // Waiter lists (protected by their respective mutexes)
-  std::mutex send_waiters_mutex_;
-  Waiter    *send_waiters_ = nullptr;
+  std::mutex              send_waiters_mutex_;
+  Waiter                 *send_waiters_ = nullptr;
+  std::atomic<uint32_t>   send_waiter_count_{0}; // fast-path: skip lock when 0
 
-  std::mutex recv_waiters_mutex_;
-  Waiter    *recv_waiters_ = nullptr;
+  std::mutex              recv_waiters_mutex_;
+  Waiter                 *recv_waiters_ = nullptr;
+  std::atomic<uint32_t>   recv_waiter_count_{0}; // fast-path: skip lock when 0
 };
 
 } // namespace qbuem

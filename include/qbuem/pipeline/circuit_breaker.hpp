@@ -29,6 +29,22 @@
 
 namespace qbuem {
 
+/** @brief 서킷 브레이커 상태 (네임스페이스 레벨 — designated initializer 호환). */
+enum class CircuitBreakerState { Closed, Open, HalfOpen };
+
+/**
+ * @brief 서킷 브레이커 설정 (네임스페이스 레벨 aggregate — designated initializer 지원).
+ *
+ * CircuitBreaker 외부에 정의되어 GCC C++20 aggregate 제약을 우회합니다.
+ * `CircuitBreaker::Config` alias로도 접근 가능합니다.
+ */
+struct CircuitBreakerConfig {
+    size_t failure_threshold                                         = 5;       ///< Open 전환까지 허용 실패 수
+    size_t success_threshold                                         = 2;       ///< HalfOpen→Closed 전환 성공 수
+    std::chrono::milliseconds timeout{30000};                                  ///< Open→HalfOpen 대기 시간
+    std::function<void(CircuitBreakerState, CircuitBreakerState)> on_state_change = nullptr; ///< 상태 전환 콜백
+};
+
 /**
  * @brief 3상태 서킷 브레이커.
  *
@@ -37,19 +53,11 @@ namespace qbuem {
  */
 class CircuitBreaker {
 public:
-    /** @brief 서킷 브레이커 상태. */
-    enum class State { Closed, Open, HalfOpen };
+    /** @brief 서킷 브레이커 상태 (하위 호환 alias). */
+    using State = CircuitBreakerState;
 
-    /**
-     * @brief 서킷 브레이커 설정.
-     */
-    struct Config {
-        size_t failure_threshold                                     = 5;       ///< Open 전환까지 허용 실패 수
-        size_t success_threshold                                     = 2;       ///< HalfOpen→Closed 전환 성공 수
-        std::chrono::milliseconds timeout{30000};                              ///< Open→HalfOpen 대기 시간
-        /// 상태 전환 콜백 (선택적)
-        std::function<void(State from, State to)> on_state_change   = nullptr;
-    };
+    /** @brief 서킷 브레이커 설정 (하위 호환 alias). */
+    using Config = CircuitBreakerConfig;
 
     /**
      * @brief 서킷 브레이커를 생성합니다.

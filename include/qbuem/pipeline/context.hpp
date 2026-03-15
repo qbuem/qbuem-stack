@@ -28,9 +28,12 @@
  * @{
  */
 
+#include <chrono>
 #include <memory>
 #include <optional>
+#include <string>
 #include <typeindex>
+#include <vector>
 
 namespace qbuem {
 

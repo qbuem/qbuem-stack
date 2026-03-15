@@ -394,35 +394,59 @@ target_link_libraries(my_service PRIVATE qbuem-stack::qbuem qbuem_json::qbuem_js
 | HTTP/2 | ❌ 예정 | |
 | WebSocket | ❌ 예정 | |
 | **Pipeline** | | |
-| `Reactor::post()` / `Dispatcher::spawn()` | ❌ 예정 | cross-thread 작업 주입 |
-| `AsyncChannel<T>` (MPMC ring) | ❌ 예정 | Dmitry Vyukov 알고리즘 |
+| `Reactor::post()` / `Dispatcher::spawn()` | ✅ | cross-thread 작업 주입 |
+| `AsyncChannel<T>` (MPMC ring) | ✅ | Dmitry Vyukov, 44M ops/s |
+| `SpscChannel<T>` | ✅ | wait-free SPSC, 111M ops/s |
+| `ArenaChannel<T>` | ✅ | Arena 기반 고속, 110M ops/s |
+| `Action<In,Out>` (정적) | ✅ | 코루틴 워커 풀, scale-in/out |
+| `StaticPipeline<In,Out>` | ✅ | 컴파일타임 타입 체인 |
+| `RetryPolicy` / `CircuitBreaker` | ✅ | 복원력 패턴 |
+| `Context` / `ServiceRegistry` | ✅ | 타입키 K/V, DI |
+| Batch ops (`send_batch`/`recv_batch`) | ✅ | DB bulk insert 등 처리량 최적화 |
 | `PriorityChannel<T>` | ❌ 예정 | 3레벨 + aging |
-| `Stream<T>` | ❌ 예정 | `variant<T, StreamEnd>` EOS |
-| `Action<In,Out>` (정적) | ❌ 예정 | 코루틴 워커 풀, scale-in/out |
-| `IDynamicAction` (동적) | ❌ 예정 | 타입 소거 + ActionSchema |
-| `StaticPipeline<In,Out>` | ❌ 예정 | 컴파일타임 타입 체인 |
 | `DynamicPipeline` | ❌ 예정 | 런타임 구성, hot-swap |
 | `PipelineGraph` | ❌ 예정 | DAG 오케스트레이션 |
 | `MessageBus` | ❌ 예정 | Unary / Stream / Bidi |
-| `RetryPolicy` / `CircuitBreaker` | ❌ 예정 | 복원력 패턴 |
 | `DeadLetterQueue` | ❌ 예정 | 실패 아이템 격리 |
 | `PipelineTracer` (W3C Trace Context) | ❌ 예정 | OpenTelemetry 호환 |
 | `PipelineFactory` (Config-driven) | ❌ 예정 | JSON/YAML → Pipeline |
 | **Pipeline 고급** | | |
 | `TaskGroup` (구조적 동시성) | ❌ 예정 | 자식 코루틴 수명 관리, cancel-on-error |
-| `SpscChannel<T>` | ❌ 예정 | 1:1 고속 채널 (MPMC 대비 50% atomic 절감) |
-| Batch ops (`send_batch`/`recv_batch`) | ❌ 예정 | DB bulk insert 등 처리량 최적화 |
 | Rx-style 스트림 연산자 | ❌ 예정 | map/filter/flat_map/zip/merge/chunk |
 | `WindowedAction<T>` | ❌ 예정 | Tumbling/Sliding/Session 창 집계 |
 | `ScatterGatherAction` | ❌ 예정 | 병렬 서브작업 후 결과 집계 |
-| `DebounceAction` / `ThrottleAction` | ❌ 예정 | 이벤트 속도 제어 |
 | `SagaOrchestrator` | ❌ 예정 | 실패 시 역순 보상 트랜잭션 |
 | `IdempotencyFilter` | ❌ 예정 | Exactly-once 중복 처리 방지 |
 | `ICheckpointStore` | ❌ 예정 | ETL/배치 크래시 복구 |
 | SLO Tracking + Error Budget | ❌ 예정 | P99 목표 + 자동 circuit break |
 | Pipeline Topology Export | ❌ 예정 | JSON/DOT/Mermaid 위상 시각화 |
-| Canary 자동화 | ❌ 예정 | gradual rollout + 자동 롤백 |
-| Pipeline Versioning | ❌ 예정 | Schema Evolution + MigrationFn |
+
+---
+
+## 성능 벤치마크 (v1.0, Intel Xeon 2.8 GHz, Linux)
+
+| 컴포넌트 | 측정값 | 목표 |
+|---------|--------|------|
+| HTTP 파서 (GET) | 291 MB/s | > 300 MB/s |
+| HTTP 파서 (POST 10 헤더) | 317 MB/s | > 300 MB/s |
+| Router 정적 룩업 | 112 ns | < 200 ns ✅ |
+| Router 파라미터 룩업 | 162 ns | < 300 ns ✅ |
+| Router 1100-route 테이블 | 175 ns | < 500 ns ✅ |
+| Arena bump-pointer alloc | 2.8 ns | < 20 ns ✅ |
+| FixedPool alloc+dealloc | 4.5 ns | < 20 ns ✅ |
+| AsyncChannel try_send+recv (MPMC) | 23 ns / 43M ops/s | > 40M ops/s ✅ |
+| SpscChannel try_send+recv (SPSC) | 9 ns / 111M ops/s | > 100M ops/s ✅ |
+| ArenaChannel push+pop | 9 ns / 110M ops/s | — |
+| Context::get&lt;T&gt;() | 48 ns | < 100 ns ✅ |
+| ServiceRegistry::get&lt;T&gt;() | 60 ns | < 100 ns ✅ |
+| IOSlice 생성+변환 | 0.6 ns | < 10 ns ✅ |
+| IOVec&lt;4&gt; push×4 | 1.8 ns | < 10 ns ✅ |
+
+```bash
+# 벤치마크 빌드 및 실행
+cmake -B build_bench -DCMAKE_BUILD_TYPE=Release -DQBUEM_BUILD_BENCH=ON
+cmake --build build_bench --target run_bench
+```
 
 ---
 
@@ -431,11 +455,11 @@ target_link_libraries(my_service PRIVATE qbuem-stack::qbuem qbuem_json::qbuem_js
 ```bash
 # 빌드 + 전체 테스트
 cmake -B build && cmake --build build --parallel
-ctest --test-dir build -V
+ctest --test-dir build -V   # 651 tests
 
 # 개별 실행
-./build/tests/qbuem_tests       # 코어 + HTTP (60 tests)
-./build/tests/qbuem_json_tests  # qbuem-json 통합 (네트워크 필요)
+./build/tests/qbuem_tests        # 코어 + HTTP
+./build/tests/qbuem_ext_tests    # JSON, 통합 테스트
 ```
 
 ---
@@ -480,7 +504,9 @@ IDE 자동완성(IntelliSense / clangd)도 지원됩니다.
 | v0.9.0 | Hot-swap, Priority Channel, Config-driven, Pipeline 합성 |
 | v0.9.1 | Windowing, Saga, Exactly-once, Checkpoint, SLO, Topology, Canary |
 | v0.9.2 | NUMA pinning, SPSC, Batch ops, Rx 연산자, Pipeline Versioning |
-| v1.0.0 | HTTP/2, WebSocket, gRPC |
+| **v1.0.0** ✅ | **StaticPipeline GA · 651 tests · 전 벤치마크 목표 달성 · HTTP/2 handler 스텁** |
+| v1.1.0 | DynamicPipeline, PipelineGraph, MessageBus |
+| v1.2.0 | HTTP/2 full support, WebSocket, gRPC |
 
 전체 계획은 **[TODO.md](./TODO.md)**, 파이프라인 상세 설계는 **[docs/pipeline-design.md](./docs/pipeline-design.md)** 참조.
 

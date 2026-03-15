@@ -161,7 +161,7 @@ private:
         };
 
         int ms = static_cast<int>(std::min(
-            delay.count(),
+            static_cast<long long>(delay.count()),
             static_cast<long long>(std::numeric_limits<int>::max())
         ));
         co_await TimerAwaiter{reactor, ms};
