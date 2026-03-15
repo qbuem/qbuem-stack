@@ -25,6 +25,44 @@ target_link_libraries(pipeline_hardware_batching PRIVATE qbuem-stack::qbuem)
 add_executable(pipeline_dynamic_hotswap pipeline_dynamic_hotswap.cpp)
 target_link_libraries(pipeline_dynamic_hotswap PRIVATE qbuem-stack::qbuem)
 
+# ── Feature examples ─────────────────────────────────────────────────────────
+
+# Middleware: CORS, RateLimit, RequestID, HSTS, BearerAuth, SSE
+add_executable(middleware_example middleware_example.cpp)
+target_link_libraries(middleware_example PRIVATE qbuem-stack::qbuem)
+
+# WebSocket: RFC 6455 frame encode/decode, compute_accept_key
+add_executable(websocket_example websocket_example.cpp)
+target_link_libraries(websocket_example PRIVATE qbuem-stack::qbuem)
+
+# Codec: LengthPrefixedCodec, LineCodec
+add_executable(codec_example codec_example.cpp)
+target_link_libraries(codec_example PRIVATE qbuem-stack::qbuem)
+
+# Tracing: W3C TraceContext, PipelineTracer, Samplers, SpanExporter
+add_executable(tracing_example tracing_example.cpp)
+target_link_libraries(tracing_example PRIVATE qbuem-stack::qbuem)
+
+# TimerWheel: schedule, cancel, tick, next_expiry_ms
+add_executable(timer_wheel_example timer_wheel_example.cpp)
+target_link_libraries(timer_wheel_example PRIVATE qbuem-stack::qbuem)
+
+# Arena + FixedPoolResource + AsyncLogger
+add_executable(arena_example arena_example.cpp)
+target_link_libraries(arena_example PRIVATE qbuem-stack::qbuem)
+
+# MessageBus: Pub/Sub subscribe, publish, try_publish
+add_executable(message_bus_example message_bus_example.cpp)
+target_link_libraries(message_bus_example PRIVATE qbuem-stack::qbuem)
+
+# Stream operators: map, filter, throttle, debounce, tumbling_window
+add_executable(stream_ops_example stream_ops_example.cpp)
+target_link_libraries(stream_ops_example PRIVATE qbuem-stack::qbuem)
+
+# TCP Echo Server: TcpListener, TcpStream, accept loop
+add_executable(tcp_echo_server tcp_echo_server.cpp)
+target_link_libraries(tcp_echo_server PRIVATE qbuem-stack::qbuem)
+
 # ── coro_json: 비동기 코루틴 + qbuem-json 예제 ────────────────────────────────
 # qbuem-json 이 없을 경우 빌드를 건너뜀 (선택적 의존성).
 FetchContent_Declare(qbuem_json

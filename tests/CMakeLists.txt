@@ -94,6 +94,52 @@ target_link_libraries(qbuem_pipeline_guide_tests
     GTest::gtest_main
 )
 
+# ── URL / Codec / IO Buffer tests ─────────────────────────────────────────────
+add_executable(qbuem_util_tests
+    url_test.cpp
+    codec_test.cpp
+    io_buf_test.cpp
+)
+target_link_libraries(qbuem_util_tests
+    PRIVATE
+    qbuem-stack::qbuem
+    GTest::gtest_main
+)
+
+# ── Tracing / Timer / Arena / AsyncLogger / SocketAddr tests ──────────────────
+add_executable(qbuem_infra_tests
+    tracing_test.cpp
+    timer_wheel_test.cpp
+    arena_test.cpp
+    async_logger_test.cpp
+    socket_addr_test.cpp
+)
+target_link_libraries(qbuem_infra_tests
+    PRIVATE
+    qbuem-stack::qbuem
+    GTest::gtest_main
+)
+
+# ── HTTP Middleware tests ──────────────────────────────────────────────────────
+add_executable(qbuem_middleware_tests
+    http_middleware_test.cpp
+)
+target_link_libraries(qbuem_middleware_tests
+    PRIVATE
+    qbuem-stack::qbuem
+    GTest::gtest_main
+)
+
+# ── Advanced Pipeline: Observability / Health / Saga / Checkpoint / Idempotency
+add_executable(qbuem_pipeline_advanced_tests
+    pipeline_advanced_test.cpp
+)
+target_link_libraries(qbuem_pipeline_advanced_tests
+    PRIVATE
+    qbuem-stack::qbuem
+    GTest::gtest_main
+)
+
 include(GoogleTest)
 gtest_discover_tests(qbuem_tests)
 gtest_discover_tests(qbuem_ext_tests)
@@ -103,3 +149,7 @@ gtest_discover_tests(qbuem_v16_tests)
 gtest_discover_tests(qbuem_v17_tests)
 gtest_discover_tests(qbuem_enhancement_tests)
 gtest_discover_tests(qbuem_pipeline_guide_tests)
+gtest_discover_tests(qbuem_util_tests)
+gtest_discover_tests(qbuem_infra_tests)
+gtest_discover_tests(qbuem_middleware_tests)
+gtest_discover_tests(qbuem_pipeline_advanced_tests)
