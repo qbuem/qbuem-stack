@@ -54,8 +54,41 @@ target_link_libraries(qbuem_v15_tests
     GTest::gtest_main
 )
 
+# ── v1.6.0: PCIe/VFIO + MSI-X + UDS Advanced tests ──────────────────────────
+add_executable(qbuem_v16_tests
+    pcie_layout_test.cpp
+)
+target_link_libraries(qbuem_v16_tests
+    PRIVATE
+    qbuem-stack::qbuem
+    GTest::gtest_main
+)
+
+# ── v1.7.0: RDMA + eBPF + NVMe IO tests ──────────────────────────────────────
+add_executable(qbuem_v17_tests
+    spdk_layout_test.cpp
+)
+target_link_libraries(qbuem_v17_tests
+    PRIVATE
+    qbuem-stack::qbuem
+    GTest::gtest_main
+)
+
+# ── 고도화: LockFreeConnectionPool + FutexSync + JwtAuthAction tests ──────────
+add_executable(qbuem_enhancement_tests
+    enhancement_test.cpp
+)
+target_link_libraries(qbuem_enhancement_tests
+    PRIVATE
+    qbuem-stack::qbuem
+    GTest::gtest_main
+)
+
 include(GoogleTest)
 gtest_discover_tests(qbuem_tests)
 gtest_discover_tests(qbuem_ext_tests)
 gtest_discover_tests(qbuem_v14_tests)
 gtest_discover_tests(qbuem_v15_tests)
+gtest_discover_tests(qbuem_v16_tests)
+gtest_discover_tests(qbuem_v17_tests)
+gtest_discover_tests(qbuem_enhancement_tests)

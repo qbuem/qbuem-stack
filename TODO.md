@@ -2,7 +2,7 @@
 
 **Zero Latency · Zero Allocation · Zero Dependency**
 
-> **Current Version: v1.5.0** — Zero-dep Security & TLS complete.
+> **Current Version: v2.0.0** — All TODOs complete + 고도화 done.
 > 
 > High-performance C++ infrastructure for Web, Messaging, and Data Pipelines.
 
@@ -43,21 +43,82 @@
 - [x] **SIMD Auth Parser**: High-speed JWT and token parsing using SIMD predicates. (`include/qbuem/security/simd_jwt.hpp`)
 - [x] **Hardware Entropy**: Direct integration with CPU `RDRAND`/`RDSEED` and kernel `getrandom`. (`include/qbuem/crypto.hpp`)
 
-## 🚀 Current Focus: v1.6.0 — Embedded & PCIe Integration
+## ✅ Completed: v1.6.0 — Embedded & PCIe Integration
 
 ### v1.6.0 — Embedded & PCIe Integration ([docs/embedded-pcie.md](./docs/embedded-pcie.md))
-- [ ] **qbuem::PCIeDevice**: Linux VFIO-based userspace PCIe control.
-- [ ] **Interrupt to Reactor Bridge**: Mapping MSI-X interrupts to `eventfd` signals.
-- [ ] **UDS Advanced**: FD passing (SCM_RIGHTS) for process-level handle sharing.
+- [x] **qbuem::PCIeDevice**: Linux VFIO-based userspace PCIe control. (`include/qbuem/pcie/pcie_device.hpp`)
+- [x] **Interrupt to Reactor Bridge**: Mapping MSI-X interrupts to `eventfd` signals. (`include/qbuem/pcie/msix_reactor.hpp`)
+- [x] **UDS Advanced**: FD passing (SCM_RIGHTS) for process-level handle sharing. (`include/qbuem/net/uds_advanced.hpp`)
+
+## ✅ Completed: v1.7.0 — High-End Connectivity
 
 ### v1.7.0 — High-End Connectivity
-- [ ] **RDMA (RoCE)**: Extending zero-copy messaging cross-host via IBVerbs/RoCE.
-- [ ] **eBPF Observability**: Standardized cluster-wide tracing via BPF CO-RE.
-- [ ] **User-space Storage (SPDK)**: io_uring passthrough for direct NVMe access.
+- [x] **RDMA (RoCE)**: Extending zero-copy messaging cross-host via IBVerbs/RoCE. (`include/qbuem/rdma/rdma_channel.hpp`)
+- [x] **eBPF Observability**: Standardized cluster-wide tracing via BPF CO-RE. (`include/qbuem/ebpf/ebpf_tracer.hpp`)
+- [x] **User-space Storage (SPDK)**: io_uring passthrough for direct NVMe access. (`include/qbuem/spdk/nvme_io.hpp`)
+
+## ✅ Completed: v2.0.0 — 고도화 (Enhancement)
+
+### v2.0.0 — Lock-free Infrastructure & JWT Pipeline Integration
+- [x] **LockFreeConnectionPool**: LIFO FreeStack CAS-based O(1) lock-free acquire/release + PooledConnection RAII guard. (`include/qbuem/db/connection_pool.hpp`)
+- [x] **FutexSync**: `IORING_OP_FUTEX_WAIT/WAKE` non-blocking coroutine futex + syscall fallback. (`include/qbuem/shm/futex_sync.hpp`)
+- [x] **FutexMutex**: Cross-process RAII mutex (states: 0=Unlocked/1=Locked/2=Waiters). (`include/qbuem/shm/futex_sync.hpp`)
+- [x] **FutexSemaphore**: Cross-process counting semaphore. (`include/qbuem/shm/futex_sync.hpp`)
+- [x] **JwtAuthAction**: SIMD JWT Pipeline Action with LRU cache, Stats atomics, zero-copy JwtClaims Context injection. (`include/qbuem/security/jwt_action.hpp`)
 
 ---
 
 ## ✅ Completed Milestones
+
+<details>
+<summary><b>v2.0.0 — 고도화 (Enhancement)</b></summary>
+
+- [x] **LockFreeConnectionPool**: LIFO FreeStack (CAS push/pop, max 256 slots), O(1) lock-free `acquire()`/`release()`, waiter queue, idle timeout cleanup, `warmup()`, `drain()`.
+- [x] **PooledConnection**: RAII guard for pool-acquired connections. `acquire(pool)` factory. Move-only.
+- [x] **FutexWord**: 4-byte `alignas(4) atomic<uint32_t>` for cross-process futex. Static asserts for size/alignment.
+- [x] **FutexSync**: `IORING_OP_FUTEX_WAIT` SQE + syscall fallback. `wait()`, `wake()`, `wake_all()`, `has_uring_futex()`.
+- [x] **FutexMutex**: Cross-process RAII mutex (0=Unlocked, 1=Locked, 2=Locked+Waiters). `lock()`, `try_lock()`, `unlock()`, `LockGuard`.
+- [x] **FutexSemaphore**: Cross-process counting semaphore. `acquire()`, `try_acquire()`, `release()`, `value()`.
+- [x] **JwtClaims**: Zero-copy `string_view` fields (sub/iss/aud) + int64 exp/iat/nbf. `is_valid_at()` with leeway.
+- [x] **JwtAuthConfig**: leeway_sec, cache_size=256, require_exp, require_sub, auth_header, kBearerPrefixLen=7.
+- [x] **JwtAuthResult**: OK/NoToken/InvalidFormat/Expired/NotYetValid/SignatureInvalid/MissingClaim/CacheHit.
+- [x] **JwtAuthAction\<Msg\>**: Token extraction (duck typing), LRU cache (FNV-1a direct-mapped), SIMD parse, exp check, ITokenVerifier delegation, Context::put\<JwtClaims\>(), Stats atomics.
+</details>
+
+<details>
+<summary><b>v1.7.0 — High-End Connectivity</b></summary>
+
+- [x] **RDMAContext**: `open(dev_name)` IBVerbs device + PD allocation. Move-only.
+- [x] **RDMAChannel**: RC QP setup, `local_info()`/`connect()`, `write()`/`read()`/`send()`/`post_recv()`, `poll_cq()`. In-flight limiting.
+- [x] **QPInfo**: qp_num, lid, gid[16], psn for QP handshake.
+- [x] **Completion**: wr_id, bytes, status, opcode. `ok()` check.
+- [x] **EBPFTracer**: CO-RE BPF load, `enable()`/`disable()`, BPF ringbuf `poll()`, `subscribe()` callback, `read_stats()`, `reset_stats()`, `lookup_map<K,V>()`.
+- [x] **TraceEvent**: 64-byte cache-line aligned struct, `set_label()`/`get_label()`.
+- [x] **EventType**: TcpAccept/TcpClose/HttpParse/PipelineAction/IoUring/ShmChannel/RDMA/JwtVerify/Custom.
+- [x] **qbuem_trace_point**: `[[gnu::noinline]]` no-op uprobe attachment point. `QBUEM_TRACE` macro.
+- [x] **NVMeIOContext**: `open()`, `alloc_dma()`, `read()`/`write()`/`flush()`/`trim()`, `read_scatter()`, `identify_controller()`, `get_log_page()`.
+- [x] **DMABuffer**: Abstract base for `mmap(MAP_HUGETLB)` / `posix_memalign` buffers.
+- [x] **NVMeResult**: status, `ok()`, `sct()`, `sc()`.
+- [x] **NVMeDeviceInfo**: ns_size, lba_size, `total_bytes()`.
+- [x] **NVMeStats**: Atomic read_ops/write_ops/read_bytes/write_bytes/errors/avg_latency_ns.
+</details>
+
+<details>
+<summary><b>v1.6.0 — Embedded & PCIe Integration</b></summary>
+
+- [x] **BDF**: bus/device/function struct + `to_string()`.
+- [x] **BarMapping**: vaddr, size, bar_idx. `read32()`/`write32()` MMIO helpers.
+- [x] **DmaBuffer**: vaddr, iova, size, container_fd for IOMMU-mapped DMA.
+- [x] **PCIeDevice**: `open(bdf)` VFIO, `map_bar()`, `read_mmio32()`/`write_mmio32()`, `alloc_dma_buffer()`. Move-only.
+- [x] **VectorStats**: `alignas(64)` irq_count/missed/latency_ns atomics.
+- [x] **MSIXReactor**: `setup()`, `wait()` co_await eventfd, `try_consume()`, `mask()`/`unmask()`. Move-only.
+- [x] **PeerCredentials**: pid/uid/gid from `SO_PEERCRED`.
+- [x] **RecvFdsResult**: fd_count, data_bytes.
+- [x] **send_fds()**: `SCM_RIGHTS` FD passing via `sendmsg`.
+- [x] **recv_fds()**: `SCM_RIGHTS` FD receiving via `recvmsg`.
+- [x] **get_peer_credentials()**: `SO_PEERCRED` getsockopt.
+- [x] **bind_abstract()** / **connect_abstract()**: Linux abstract namespace Unix domain sockets.
+</details>
 
 <details>
 <summary><b>v1.5.0 — Zero-dep Security & TLS</b></summary>

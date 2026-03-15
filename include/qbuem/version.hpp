@@ -51,6 +51,19 @@
  *            SIMDJwtParser AVX2/SSE4.2/NEON/Scalar dot-scan + Base64url validation,
  *            Hardware Entropy: RDRAND/RDSEED inline asm with getrandom fallback,
  *            CPUID runtime detection for has_rdrand()/has_rdseed())
+ * - 1.6.0: Embedded & PCIe Integration
+ *           (PCIeDevice VFIO userspace PCIe control, BarMapping, DmaBuffer,
+ *            MSIXReactor: MSI-X → eventfd → IReactor bridge, VectorStats,
+ *            UDS Advanced: SCM_RIGHTS FD passing, PeerCredentials, abstract sockets)
+ * - 1.7.0: High-End Connectivity
+ *           (RDMAContext/RDMAChannel IBVerbs RC QP RDMA Write/Read/Send/Recv,
+ *            EBPFTracer CO-RE BPF ringbuf/uprobe/kprobe observability,
+ *            NVMeIOContext io_uring IORING_OP_URING_CMD passthrough, DMABuffer)
+ * - 2.0.0: Enhancement (고도화)
+ *           (LockFreeConnectionPool LIFO FreeStack O(1) lock-free acquire/release,
+ *            FutexSync IORING_OP_FUTEX_WAIT/WAKE + syscall fallback,
+ *            FutexMutex cross-process RAII mutex, FutexSemaphore counting semaphore,
+ *            JwtAuthAction<Msg> SIMD JWT Pipeline Action with LRU cache + Stats)
  */
 
 /**
@@ -85,30 +98,30 @@ namespace qbuem {
  */
 struct Version {
   /** @brief Major 버전 번호. API 하위 호환이 깨질 때 증가합니다. */
-  static constexpr int major = 1;
+  static constexpr int major = 2;
 
   /** @brief Minor 버전 번호. 하위 호환을 유지하며 새 기능이 추가될 때 증가합니다. */
-  static constexpr int minor = 5;
+  static constexpr int minor = 0;
 
   /** @brief Patch 버전 번호. 버그 수정만 이루어질 때 증가합니다. */
   static constexpr int patch = 0;
 
   /** @brief "major.minor.patch" 형식의 버전 문자열 (null-terminated 보장). */
-  static constexpr std::string_view string = "1.5.0";
+  static constexpr std::string_view string = "2.0.0";
 };
 
 } // namespace qbuem
 
 /** @brief Major 버전 번호 (전처리기 조건 분기용). */
-#define QBUEM_VERSION_MAJOR 1
+#define QBUEM_VERSION_MAJOR 2
 
 /** @brief Minor 버전 번호 (전처리기 조건 분기용). */
-#define QBUEM_VERSION_MINOR 5
+#define QBUEM_VERSION_MINOR 0
 
 /** @brief Patch 버전 번호 (전처리기 조건 분기용). */
 #define QBUEM_VERSION_PATCH 0
 
 /** @brief "major.minor.patch" 형식의 버전 문자열 리터럴 (전처리기 조건 분기용). */
-#define QBUEM_VERSION_STRING "1.5.0"
+#define QBUEM_VERSION_STRING "2.0.0"
 
 /** @} */ // end of qbuem_version
