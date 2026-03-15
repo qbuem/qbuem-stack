@@ -4,6 +4,9 @@ target_link_libraries(hello_world PRIVATE qbuem-stack::qbuem)
 add_executable(async_timer async_timer.cpp)
 target_link_libraries(async_timer PRIVATE qbuem-stack::qbuem)
 
+add_executable(kqueue_sophistication kqueue_sophistication.cpp)
+target_link_libraries(kqueue_sophistication PRIVATE qbuem-stack::qbuem)
+
 # ── coro_json: 비동기 코루틴 + qbuem-json 예제 ────────────────────────────────
 # qbuem-json 이 없을 경우 빌드를 건너뜀 (선택적 의존성).
 FetchContent_Declare(qbuem_json

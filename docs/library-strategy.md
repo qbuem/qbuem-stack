@@ -28,12 +28,12 @@
 Level 0  ─ Foundation   : result · arena · crypto
 Level 1  ─ Async Core   : task · reactor · dispatcher
 Level 2  ─ Reactor Impl : epoll · kqueue · iouring
-Level 3  ─ IO           : net · buf · file · zerocopy
+Level 3  ─ IO           : net · buf · file · zerocopy · **shm** (IPC Messaging)
 Level 4  ─ Transport    : transport · codec · server
 Level 5  ─ HTTP         : http · http-server
 Level 6  ─ Pipeline     : context · channel · pipeline
-Level 7  ─ Extensions   : pipeline-graph · resilience · tracing · metrics
-Level 8  ─ Protocol     : ws · http2 · grpc
+Level 7  ─ Extensions   : dynamic-pipeline · resilience · tracing · metrics · **db-abstraction** · **security-core**
+Level 8  ─ Protocol     : ws · http2 · grpc · **db-postgres** · **db-redis** · **security-ktls**
 Level 9  ─ Umbrella     : qbuem (all)
 ```
 

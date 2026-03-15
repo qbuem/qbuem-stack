@@ -2,11 +2,13 @@
 #define QBUEM_CORE_KQUEUE_REACTOR_HPP
 
 #include <qbuem/core/reactor.hpp>
+#include <qbuem/core/arena.hpp>
+#include <qbuem/core/timer_wheel.hpp>
 
 #include <functional>
 #include <mutex>
-#include <unordered_map>
 #include <vector>
+#include <sys/event.h>
 
 namespace qbuem {
 
@@ -37,24 +39,35 @@ public:
   void post(std::function<void()> fn) override;
 
 private:
-  // Sentinel ident for the EVFILT_USER wake channel used by post().
-  // EVFILT_USER is a separate filter namespace from EVFILT_READ/WRITE/TIMER,
-  // so ident=0 here does not conflict with fd=0 in callbacks_.
+  struct KqueueEntry {
+    int ident;
+    std::function<void(int)> read_cb;
+    std::function<void(int)> write_cb;
+    bool active = false;
+  };
+
+  void flush_changes();
+  KqueueEntry* get_or_create_entry(int fd);
+
   static constexpr uintptr_t WAKE_IDENT = 0;
 
   int kq_fd_ = -1;
   bool running_ = true;
-  int next_timer_id_ = 1;
 
   std::mutex work_mutex_;
   std::vector<std::function<void()>> work_queue_;
 
-  struct Callbacks {
-    std::function<void(int)> read_cb;
-    std::function<void(int)> write_cb;
-    std::function<void(int)> timer_cb;
-  };
-  std::unordered_map<int, Callbacks> callbacks_;
+  // Batching & Direct Dispatch
+  std::vector<struct kevent> changelist_;
+  std::vector<struct kevent> events_;
+
+  // Zero-allocation pool and fast lookup
+  FixedPoolResource<sizeof(KqueueEntry), alignof(KqueueEntry)> entry_pool_;
+  std::vector<KqueueEntry*> entry_map_;
+
+  // High-performance timer management
+  TimerWheel timer_wheel_;
+  uint64_t last_tick_ms_ = 0;
 };
 
 } // namespace qbuem

@@ -1,4 +1,4 @@
-#include <qbuem/qbuem-stack.hpp>
+#include <qbuem/qbuem_stack.hpp>
 #include <qbuem/http/parser.hpp>
 #include <qbuem/middleware/static_files.hpp>
 
@@ -895,7 +895,6 @@ Result<void> App::listen(int port, bool ipv6) {
                 std::string hdr = r.serialize_header();
                 size_t bytes    = hdr.size();
                 std::string_view body_view = r.is_chunked() ? r.chunk_buf() : r.get_body();
-#ifdef __linux__
                 if (r.has_sendfile()) {
                   bytes += r.sendfile_size();
                   write_all(cfd, hdr);
@@ -910,18 +909,9 @@ Result<void> App::listen(int port, bool ipv6) {
                   bytes += tr.size();
                   write_all(cfd, tr);
                 }
+#ifdef __linux__
                 { int cork = 0; setsockopt(cfd, IPPROTO_TCP, TCP_CORK, &cork, sizeof(cork)); }
                 { int qa   = 1; setsockopt(cfd, IPPROTO_TCP, TCP_QUICKACK, &qa, sizeof(qa)); }
-#else
-                {
-                  bytes += body_view.size();
-                  writev_response(cfd, hdr, body_view);
-                  if (r.is_chunked() && r.has_trailers()) {
-                    std::string tr = r.encode_trailers();
-                    bytes += tr.size();
-                    write_all(cfd, tr);
-                  }
-                }
 #endif
                 cnt_bytes_sent_.fetch_add(bytes, std::memory_order_relaxed);
                 int sc = r.status_code();

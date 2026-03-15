@@ -18,6 +18,7 @@
  */
 
 #include <qbuem/common.hpp>
+#include <cinttypes>
 
 #include <algorithm>
 #include <atomic>
@@ -62,14 +63,12 @@ public:
    * 예) `{1000, 10000, 100000}` → 버킷: [0,1ms), [1ms,10ms), [10ms,100ms), [100ms,∞)
    */
   explicit HistogramMetrics(std::initializer_list<uint64_t> upper_bounds)
-      : bounds_(upper_bounds) {
-    buckets_.resize(bounds_.size() + 1); // +1 for overflow bucket
+      : bounds_(upper_bounds), buckets_(upper_bounds.size() + 1) {
     for (auto &b : buckets_) b.store(0, std::memory_order_relaxed);
   }
 
   explicit HistogramMetrics(std::vector<uint64_t> upper_bounds)
-      : bounds_(std::move(upper_bounds)) {
-    buckets_.resize(bounds_.size() + 1);
+      : bounds_(std::move(upper_bounds)), buckets_(bounds_.size() + 1) {
     for (auto &b : buckets_) b.store(0, std::memory_order_relaxed);
   }
 

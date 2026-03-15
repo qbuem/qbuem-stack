@@ -1,164 +1,210 @@
 #include <qbuem/core/kqueue_reactor.hpp>
-
-#include <cerrno>
-#include <mutex>
-#include <stdexcept>
-#include <sys/event.h>
 #include <unistd.h>
-#include <vector>
+#include <chrono>
 
 namespace qbuem {
 
-KqueueReactor::KqueueReactor() {
-  kq_fd_ = kqueue();
-  if (kq_fd_ == -1) {
-    throw std::runtime_error("failed to create kqueue");
-  }
+KqueueReactor::KqueueReactor() 
+    : entry_pool_(4096),
+      timer_wheel_(4096) {
+    kq_fd_ = kqueue();
+    if (kq_fd_ == -1) {
+        throw std::runtime_error("Failed to create kqueue");
+    }
 
-  // Register EVFILT_USER with EV_CLEAR (edge-triggered) for post() wakeup.
-  struct kevent ev;
-  EV_SET(&ev, WAKE_IDENT, EVFILT_USER, EV_ADD | EV_CLEAR, 0, 0, nullptr);
-  if (kevent(kq_fd_, &ev, 1, nullptr, 0, nullptr) == -1) {
-    close(kq_fd_);
-    throw std::runtime_error("failed to register EVFILT_USER");
-  }
+    // Pre-allocate for common use cases
+    changelist_.reserve(128);
+    events_.resize(128);
+    entry_map_.resize(256, nullptr);
+
+    // Register WAKE_IDENT for post()
+    struct kevent ev;
+    EV_SET(&ev, WAKE_IDENT, EVFILT_USER, EV_ADD | EV_CLEAR, 0, 0, nullptr);
+    kevent(kq_fd_, &ev, 1, nullptr, 0, nullptr);
+
+    auto now = std::chrono::steady_clock::now();
+    last_tick_ms_ = std::chrono::duration_cast<std::chrono::milliseconds>(
+                        now.time_since_epoch()).count();
 }
 
 KqueueReactor::~KqueueReactor() {
-  stop();
-  if (kq_fd_ != -1) {
-    close(kq_fd_);
-  }
+    if (kq_fd_ != -1) {
+        close(kq_fd_);
+    }
+    // FixedPoolResource handles memory allocation, but we must call destructors
+    // because KqueueEntry contains std::function (non-trivial).
+    for (auto* entry : entry_map_) {
+        if (entry) {
+            entry->~KqueueEntry();
+        }
+    }
 }
 
 Result<void> KqueueReactor::register_event(int fd, EventType type,
-                                           std::function<void(int)> callback) {
-  struct kevent ev;
-  int16_t filter = (type == EventType::Read) ? EVFILT_READ : EVFILT_WRITE;
-  EV_SET(&ev, fd, filter, EV_ADD | EV_ENABLE, 0, 0, nullptr);
+                                         std::function<void(int)> callback) {
+    auto* entry = get_or_create_entry(fd);
+    if (!entry) return unexpected(std::make_error_code(std::errc::not_enough_memory));
 
-  if (kevent(kq_fd_, &ev, 1, nullptr, 0, nullptr) == -1) {
-    return unexpected(std::make_error_code(std::errc::invalid_argument));
-  }
+    short filter = (type == EventType::Read) ? EVFILT_READ : EVFILT_WRITE;
+    if (type == EventType::Read) entry->read_cb = std::move(callback);
+    else entry->write_cb = std::move(callback);
 
-  if (type == EventType::Read) {
-    callbacks_[fd].read_cb = std::move(callback);
-  } else {
-    callbacks_[fd].write_cb = std::move(callback);
-  }
-  return {};
+    struct kevent ev;
+    EV_SET(&ev, fd, filter, EV_ADD | EV_ENABLE, 0, 0, entry);
+    changelist_.push_back(ev);
+    entry->active = true;
+
+    return Result<void>::ok();
 }
 
 Result<void> KqueueReactor::unregister_event(int fd, EventType type) {
-  struct kevent ev;
-  int16_t filter = (type == EventType::Read) ? EVFILT_READ : EVFILT_WRITE;
-  EV_SET(&ev, fd, filter, EV_DELETE, 0, 0, nullptr);
-  kevent(kq_fd_, &ev, 1, nullptr, 0, nullptr);
-
-  auto it = callbacks_.find(fd);
-  if (it != callbacks_.end()) {
-    if (type == EventType::Read) {
-      it->second.read_cb = nullptr;
-    } else {
-      it->second.write_cb = nullptr;
+    if (static_cast<size_t>(fd) >= entry_map_.size() || !entry_map_[fd]) {
+        return Result<void>::ok();
     }
 
-    if (!it->second.read_cb && !it->second.write_cb) {
-      callbacks_.erase(it);
+    auto* entry = entry_map_[fd];
+    short filter = (type == EventType::Read) ? EVFILT_READ : EVFILT_WRITE;
+
+    struct kevent ev;
+    EV_SET(&ev, fd, filter, EV_DELETE, 0, 0, nullptr);
+    changelist_.push_back(ev);
+
+    if (type == EventType::Read) entry->read_cb = nullptr;
+    else entry->write_cb = nullptr;
+
+    if (!entry->read_cb && !entry->write_cb) {
+        entry->active = false;
     }
-  }
-  return {};
+
+    return Result<void>::ok();
 }
 
 Result<int> KqueueReactor::register_timer(int timeout_ms,
-                                          std::function<void(int)> callback) {
-  int timer_id = next_timer_id_++;
-  struct kevent ev;
-  EV_SET(&ev, timer_id, EVFILT_TIMER, EV_ADD | EV_ENABLE | EV_ONESHOT, 0,
-         timeout_ms, nullptr);
+                                        std::function<void(int)> callback) {
+    // We need to pass the ID back to the callback, but the ID isn't known 
+    // until schedule() returns. We use a shared pointer to bridge this.
+    struct TimerCtx {
+        std::function<void(int)> cb;
+        TimerWheel::TimerId id;
+    };
+    auto ctx = std::make_shared<TimerCtx>();
+    ctx->cb = std::move(callback);
+    
+    ctx->id = timer_wheel_.schedule(timeout_ms, [ctx]() {
+        if (ctx->cb) ctx->cb(static_cast<int>(ctx->id));
+    });
 
-  if (kevent(kq_fd_, &ev, 1, nullptr, 0, nullptr) == -1) {
-    return unexpected(std::make_error_code(std::errc::invalid_argument));
-  }
-
-  callbacks_[timer_id].timer_cb = std::move(callback);
-  return timer_id;
+    if (ctx->id == TimerWheel::kInvalid) {
+        return unexpected(std::make_error_code(std::errc::not_enough_memory));
+    }
+    
+    return static_cast<int>(ctx->id);
 }
 
 Result<void> KqueueReactor::unregister_timer(int timer_id) {
-  struct kevent ev;
-  EV_SET(&ev, timer_id, EVFILT_TIMER, EV_DELETE, 0, 0, nullptr);
-  kevent(kq_fd_, &ev, 1, nullptr, 0, nullptr);
-  callbacks_.erase(timer_id);
-  return {};
+    timer_wheel_.cancel(static_cast<TimerWheel::TimerId>(timer_id));
+    return Result<void>::ok();
 }
 
 Result<int> KqueueReactor::poll(int timeout_ms) {
-  struct kevent events[64];
-  struct timespec ts{};
-  struct timespec *timeout_ptr = nullptr;
+    flush_changes();
 
-  if (timeout_ms >= 0) {
-    ts.tv_sec = timeout_ms / 1000;
-    ts.tv_nsec = (timeout_ms % 1000) * 1000000;
-    timeout_ptr = &ts;
-  }
-
-  int nev = kevent(kq_fd_, nullptr, 0, events, 64, timeout_ptr);
-  if (nev == -1) {
-    if (errno == EINTR)
-      return 0;
-    return unexpected(std::make_error_code(std::errc::io_error));
-  }
-
-  for (int i = 0; i < nev; ++i) {
-    int ident = static_cast<int>(events[i].ident);
-    int16_t filter = events[i].filter;
-
-    // Handle post() wakeup — EVFILT_USER is a private channel, not in callbacks_.
-    if (filter == EVFILT_USER) {
-      std::vector<std::function<void()>> local;
-      {
-        std::lock_guard<std::mutex> lock(work_mutex_);
-        local.swap(work_queue_);
-      }
-      for (auto &fn : local)
-        fn();
-      continue;
+    // 1. Calculate timeout considering TimerWheel
+    uint64_t wheel_timeout = timer_wheel_.next_expiry_ms();
+    int final_timeout_ms = timeout_ms;
+    if (wheel_timeout != std::numeric_limits<uint64_t>::max()) {
+        final_timeout_ms = std::min(static_cast<int>(wheel_timeout), timeout_ms);
     }
 
-    auto callback_it = callbacks_.find(ident);
-    if (callback_it != callbacks_.end()) {
-      // Copy callbacks to avoid UAF if a callback unregisters itself.
-      auto cbs = callback_it->second;
-      if (filter == EVFILT_READ && cbs.read_cb) {
-        cbs.read_cb(ident);
-      } else if (filter == EVFILT_WRITE && cbs.write_cb) {
-        cbs.write_cb(ident);
-      } else if (filter == EVFILT_TIMER && cbs.timer_cb) {
-        // EV_ONESHOT: the timer fires once and is already removed from kqueue.
-        callbacks_.erase(ident);
-        cbs.timer_cb(ident);
-      }
+    struct timespec ts;
+    struct timespec* ts_ptr = nullptr;
+    if (final_timeout_ms >= 0) {
+        ts.tv_sec = final_timeout_ms / 1000;
+        ts.tv_nsec = (final_timeout_ms % 1000) * 1000000;
+        ts_ptr = &ts;
     }
-  }
 
-  return nev;
+    int n = kevent(kq_fd_, nullptr, 0, events_.data(), events_.size(), ts_ptr);
+    if (n < 0) {
+        if (errno == EINTR) return Result<int>::ok(0);
+        return unexpected(std::error_code(errno, std::system_category()));
+    }
+
+    // 2. Dispatch events
+    for (int i = 0; i < n; ++i) {
+        auto& ev = events_[i];
+        if (ev.filter == EVFILT_USER) {
+            std::vector<std::function<void()>> local_queue;
+            {
+                std::lock_guard<std::mutex> lock(work_mutex_);
+                local_queue.swap(work_queue_);
+            }
+            for (auto& fn : local_queue) fn();
+            continue;
+        }
+
+        auto* entry = static_cast<KqueueEntry*>(ev.udata);
+        if (!entry || !entry->active) continue;
+
+        if (ev.filter == EVFILT_READ && entry->read_cb) {
+            entry->read_cb(entry->ident);
+        } else if (ev.filter == EVFILT_WRITE && entry->write_cb) {
+            entry->write_cb(entry->ident);
+        }
+    }
+
+    // 3. Update TimerWheel
+    auto now = std::chrono::steady_clock::now();
+    uint64_t now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                        now.time_since_epoch()).count();
+    uint64_t elapsed = (now_ms > last_tick_ms_) ? (now_ms - last_tick_ms_) : 0;
+    
+    if (elapsed > 0) {
+        timer_wheel_.tick(elapsed);
+        last_tick_ms_ = now_ms;
+    }
+
+    return Result<int>::ok(n);
+}
+
+void KqueueReactor::stop() {
+    running_ = false;
+    post([]() {}); // Wake up
+}
+
+bool KqueueReactor::is_running() const {
+    return running_;
 }
 
 void KqueueReactor::post(std::function<void()> fn) {
-  {
-    std::lock_guard<std::mutex> lock(work_mutex_);
-    work_queue_.push_back(std::move(fn));
-  }
-  // Trigger the EVFILT_USER event to wake kevent().
-  struct kevent ev;
-  EV_SET(&ev, WAKE_IDENT, EVFILT_USER, EV_ENABLE, NOTE_TRIGGER, 0, nullptr);
-  kevent(kq_fd_, &ev, 1, nullptr, 0, nullptr); // best-effort
+    {
+        std::lock_guard<std::mutex> lock(work_mutex_);
+        work_queue_.push_back(std::move(fn));
+    }
+    struct kevent ev;
+    EV_SET(&ev, WAKE_IDENT, EVFILT_USER, 0, NOTE_TRIGGER, 0, nullptr);
+    kevent(kq_fd_, &ev, 1, nullptr, 0, nullptr);
 }
 
-void KqueueReactor::stop() { running_ = false; }
+void KqueueReactor::flush_changes() {
+    if (changelist_.empty()) return;
+    kevent(kq_fd_, changelist_.data(), changelist_.size(), nullptr, 0, nullptr);
+    changelist_.clear();
+}
 
-bool KqueueReactor::is_running() const { return running_; }
+KqueueReactor::KqueueEntry* KqueueReactor::get_or_create_entry(int fd) {
+    if (fd < 0) return nullptr;
+    if (static_cast<size_t>(fd) >= entry_map_.size()) {
+        entry_map_.resize(fd + 1, nullptr);
+    }
+    if (entry_map_[fd]) return entry_map_[fd];
+
+    void* raw = entry_pool_.allocate();
+    if (!raw) return nullptr;
+    auto* entry = new (raw) KqueueEntry();
+    entry->ident = fd;
+    entry_map_[fd] = entry;
+    return entry;
+}
 
 } // namespace qbuem

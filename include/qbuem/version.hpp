@@ -36,6 +36,12 @@
  * - 1.0.0: Http1Handler, Http2Handler (HPACK), WebSocketHandler,
  *           GrpcHandler<Req,Res>, gRPC↔Pipeline integration,
  *           TraceMiddleware, InlineRequestBuffer, COMPONENTS support
+ * - 1.1.0: AF_XDP + UMEM, cmake COMPONENTS full support,
+ *           reactor/* forwarding headers, QUIC guide
+ * - 1.2.0: TimerWheel::cancel() O(1), Heterogeneous map lookup,
+ *           Context::get<T>() inline cache, RadixTree binary search
+ * - 1.3.0: Kqueue reactor sophistication (User-space Buffer Ring,
+ *           Multi-event Batching, Pointer-direct Dispatch)
  */
 
 /**
@@ -65,7 +71,7 @@ namespace qbuem {
  *
  * @code
  * static_assert(qbuem::Version::major >= 0, "버전 확인");
- * std::cout << qbuem::Version::string << '\n'; // "0.4.0"
+ * std::cout << qbuem::Version::string << '\n'; // "1.3.0"
  * @endcode
  */
 struct Version {
@@ -73,13 +79,13 @@ struct Version {
   static constexpr int major = 1;
 
   /** @brief Minor 버전 번호. 하위 호환을 유지하며 새 기능이 추가될 때 증가합니다. */
-  static constexpr int minor = 0;
+  static constexpr int minor = 3;
 
   /** @brief Patch 버전 번호. 버그 수정만 이루어질 때 증가합니다. */
   static constexpr int patch = 0;
 
   /** @brief "major.minor.patch" 형식의 버전 문자열 (null-terminated 보장). */
-  static constexpr std::string_view string = "1.0.0";
+  static constexpr std::string_view string = "1.3.0";
 };
 
 } // namespace qbuem
@@ -88,12 +94,12 @@ struct Version {
 #define QBUEM_VERSION_MAJOR 1
 
 /** @brief Minor 버전 번호 (전처리기 조건 분기용). */
-#define QBUEM_VERSION_MINOR 0
+#define QBUEM_VERSION_MINOR 3
 
 /** @brief Patch 버전 번호 (전처리기 조건 분기용). */
 #define QBUEM_VERSION_PATCH 0
 
 /** @brief "major.minor.patch" 형식의 버전 문자열 리터럴 (전처리기 조건 분기용). */
-#define QBUEM_VERSION_STRING "1.0.0"
+#define QBUEM_VERSION_STRING "1.3.0"
 
 /** @} */ // end of qbuem_version
