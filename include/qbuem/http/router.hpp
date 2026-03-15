@@ -111,6 +111,10 @@ private:
     }
 
     // Insert a child in sorted order (maintains sorted invariant for binary search).
+    // Safety: std::vector::emplace() returns a valid iterator to the inserted
+    // element even when the vector reallocates.  ins->second.get() is a pointer
+    // into the unique_ptr-owned Node (heap-allocated), NOT into the vector
+    // storage, so it remains valid regardless of subsequent vector reallocations.
     Node *add_child(char c) {
       auto it = std::lower_bound(children.begin(), children.end(), c,
           [](const auto &p, char ch) { return p.first < ch; });

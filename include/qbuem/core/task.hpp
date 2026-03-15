@@ -59,6 +59,18 @@ inline void set_unhandled_exception_handler(
  *  - When detach() is called the Task releases ownership. The coroutine frame
  *    is then responsible for destroying itself when it completes (no
  *    continuation). This avoids leaking fire-and-forget coroutines.
+ *
+ * @warning **Thread safety**: Task is NOT thread-safe.
+ *  - `detach()` writes `promise.detached` from the owning thread.
+ *  - `final_suspend()` reads `promise.detached` / `promise.continuation` from
+ *    the coroutine frame's execution context.
+ *  - `await_suspend()` writes `promise.continuation` from the awaiting
+ *    coroutine's thread.
+ *
+ *  All of the above MUST happen on the same thread (the Reactor event loop).
+ *  If coroutines are dispatched across multiple threads, callers are
+ *  responsible for external synchronization.  A TSan data race will be
+ *  reported if `detach()` races with `final_suspend()` on different threads.
  */
 template <typename T = void> struct Task {
   struct promise_type {

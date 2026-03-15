@@ -196,8 +196,19 @@ private:
   void ensure_query_cache() const {
     if (query_cache_) return;
     query_cache_.emplace();
+
+    // DoS guard: ignore query strings that are unreasonably large.
+    // Legitimate query strings are rarely > 8 KiB; a 64 KiB limit stops
+    // a single request from triggering a multi-megabyte parse.
+    static constexpr size_t kMaxQueryStringBytes = 65536;
+    if (query_string_.size() > kMaxQueryStringBytes) return;
+
+    // DoS guard: limit the number of key-value pairs we will parse.
+    static constexpr size_t kMaxQueryParams = 128;
+
     std::string_view src = query_string_;
     while (!src.empty()) {
+      if (query_cache_->size() >= kMaxQueryParams) break;
       size_t delim = src.find('&');
       std::string_view pair = (delim == std::string_view::npos) ? src : src.substr(0, delim);
       size_t eq = pair.find('=');

@@ -19,6 +19,11 @@
  * - cancel():   O(슬롯 내 항목 수) 최악의 경우, 실용적으로 O(1) 수준
  * - tick():     O(fired_count)
  *
+ * ## 스레드 안전성
+ * TimerWheel은 **단일 스레드 전용**입니다. `schedule()`, `cancel()`, `tick()`,
+ * `next_expiry_ms()` 모두 동일한 스레드(Reactor 이벤트 루프)에서 호출해야 합니다.
+ * 여러 스레드에서 동시에 접근하면 TSan 데이터 레이스가 발생합니다.
+ *
  * ## FixedPoolResource 연동
  * 내부 `Entry` 객체는 `<qbuem/core/arena.hpp>`의 `FixedPoolResource`를 사용하여
  * 힙 단편화 없는 O(1) 할당/해제를 달성합니다.
@@ -120,9 +125,11 @@ public:
 
     auto *e = new (raw) Entry{};
     e->fn        = std::move(fn);
+    // Guard BEFORE assignment: if wrap-around already brought next_id_ to 0,
+    // skip it here so kInvalid (0) is never returned as a valid TimerId.
+    if (next_id_ == kInvalid) next_id_ = 1;
     e->id        = next_id_++;
     e->expiry_ms = current_ms_ + delay_ms;
-    if (next_id_ == kInvalid) next_id_ = 1; // wrap-around 시 0 건너뜀
 
     insert(e);
     ++count_;
@@ -192,6 +199,12 @@ public:
    * @endcode
    *
    * @returns 대기 중 타이머가 없으면 `UINT64_MAX`, 있으면 남은 ms (최소 0).
+   *
+   * @warning **Thread safety**: TimerWheel is NOT thread-safe. This method
+   *   iterates `index_` without a lock. It MUST be called from the same
+   *   thread as `tick()`, `schedule()`, and `cancel()` (i.e., the Reactor
+   *   event loop thread). Calling it concurrently with any of those methods
+   *   causes a data race (TSan violation).
    */
   [[nodiscard]] uint64_t next_expiry_ms() const noexcept {
     if (count_ == 0) return std::numeric_limits<uint64_t>::max();
