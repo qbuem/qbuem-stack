@@ -28,6 +28,16 @@ struct RateLimitConfig {
   double rate_per_sec = 100.0;
 
   /**
+   * Maximum number of distinct keys retained in the per-thread bucket map.
+   *
+   * When the map exceeds this limit, the entry with the oldest last-seen
+   * timestamp is evicted (LRU).  Set to 0 to disable the cap (unbounded).
+   *
+   * Default: 10,000 entries.
+   */
+  size_t max_keys = 10'000;
+
+  /**
    * Bucket capacity (maximum burst).
    *
    * A fresh connection starts with a full bucket, so the first `burst`
@@ -94,8 +104,9 @@ inline Middleware rate_limit(RateLimitConfig cfg = {}) {
 
   double default_rate  = cfg.rate_per_sec;
   double default_burst = cfg.burst;
+  size_t max_keys      = cfg.max_keys;
 
-  return [default_rate, default_burst,
+  return [default_rate, default_burst, max_keys,
           key_fn       = std::move(cfg.key_fn),
           override_fn  = std::move(cfg.per_key_override)](
              const Request &req, Response &res) -> bool {
@@ -103,6 +114,16 @@ inline Middleware rate_limit(RateLimitConfig cfg = {}) {
 
     std::string key = key_fn(req);
     auto now = std::chrono::steady_clock::now();
+
+    // LRU eviction: keep map bounded to prevent unbounded memory growth.
+    if (max_keys > 0 && buckets.size() >= max_keys) {
+      auto oldest = buckets.begin();
+      for (auto it = std::next(oldest); it != buckets.end(); ++it) {
+        if (it->second.last < oldest->second.last)
+          oldest = it;
+      }
+      buckets.erase(oldest);
+    }
 
     // Per-key dynamic override: allows whitelist / custom limits per IP.
     double rate  = default_rate;

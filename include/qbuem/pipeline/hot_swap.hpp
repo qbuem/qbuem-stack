@@ -47,11 +47,41 @@ enum class HotSwapError {
 // ─── HotSwapConfig ───────────────────────────────────────────────────────────
 
 /**
+ * @brief Drain timeout policy — controls what happens to in-flight items when drain times out.
+ */
+enum class DrainTimeoutPolicy {
+  /**
+   * @brief Move in-flight items to a Dead Letter Queue (DLQ).
+   *
+   * Items are preserved for inspection/retry. Requires the concrete pipeline to
+   * implement DLQ support. This is the default and safest option.
+   */
+  Dlq,
+
+  /**
+   * @brief Silently drop in-flight items.
+   *
+   * Fast but items are permanently lost. Use only when data loss is acceptable
+   * (e.g., metrics aggregation, non-critical events).
+   */
+  Drop,
+
+  /**
+   * @brief Resume processing with the new action without draining.
+   *
+   * In-flight items in the old action's channel continue to be processed by the
+   * new action implementation. Use when the new action is fully backward-compatible.
+   */
+  Resume,
+};
+
+/**
  * @brief Configuration for a single hot-swap operation.
  */
 struct HotSwapConfig {
-  std::string action_name;              ///< Name of the action stage to replace.
-  uint64_t    drain_timeout_ms = 5000;  ///< Maximum time (ms) to wait for in-flight items.
+  std::string        action_name;              ///< Name of the action stage to replace.
+  uint64_t           drain_timeout_ms = 5000;  ///< Maximum time (ms) to wait for in-flight items.
+  DrainTimeoutPolicy timeout_policy   = DrainTimeoutPolicy::Dlq; ///< Timeout behavior.
 };
 
 // ─── HotSwapMixin ─────────────────────────────────────────────────────────────

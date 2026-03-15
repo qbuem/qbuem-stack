@@ -28,6 +28,7 @@
  * @{
  */
 
+#include <array>
 #include <chrono>
 #include <memory>
 #include <optional>
@@ -112,9 +113,25 @@ public:
   template <typename T>
   [[nodiscard]] const T *get_ptr() const noexcept {
     const std::type_index key(typeid(T));
+    // Fast path: check inline cache (up to 4 most-recently-looked-up types).
+    for (uint8_t i = 0; i < cache_size_; ++i) {
+      if (cache_[i].key == key)
+        return static_cast<const T *>(cache_[i].ptr);
+    }
+    // Slow path: linear scan of linked list.
     for (const Node *n = head_.get(); n; n = n->next.get()) {
-      if (n->type_key == key)
-        return static_cast<const T *>(n->value.get());
+      if (n->type_key == key) {
+        const void *ptr = n->value.get();
+        // Populate cache (evict oldest entry when full via FIFO shift).
+        if (cache_size_ < kCacheCapacity) {
+          cache_[cache_size_++] = {key, ptr};
+        } else {
+          for (uint8_t i = 0; i + 1 < kCacheCapacity; ++i)
+            cache_[i] = cache_[i + 1];
+          cache_[kCacheCapacity - 1] = {key, ptr};
+        }
+        return static_cast<const T *>(ptr);
+      }
     }
     return nullptr;
   }
@@ -132,6 +149,14 @@ private:
   };
 
   std::shared_ptr<const Node> head_;
+
+  // Inline lookup cache: stores up to 4 most-recently-accessed (type, ptr) pairs.
+  // Mutable so const get_ptr<T>() can populate it.
+  // std::type_index has no default constructor; initialize slots with typeid(void).
+  struct CacheEntry { std::type_index key{typeid(void)}; const void *ptr = nullptr; };
+  static constexpr uint8_t kCacheCapacity = 4;
+  mutable std::array<CacheEntry, kCacheCapacity> cache_{};
+  mutable uint8_t cache_size_ = 0;
 };
 
 // ---------------------------------------------------------------------------

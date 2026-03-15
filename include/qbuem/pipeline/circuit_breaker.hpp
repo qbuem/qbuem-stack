@@ -74,9 +74,13 @@ public:
      * @returns Open 상태(fast fail)이면 false, 그 외 true.
      */
     bool allow_request() noexcept {
+        // Fast path: Closed or HalfOpen — no lock needed.
+        State s = state_.load(std::memory_order_acquire);
+        if (s != State::Open) return true;
+        // Slow path: Open — check timeout under lock and possibly transition.
         std::lock_guard lock(mtx_);
         try_recover();
-        return state_ != State::Open;
+        return state_.load(std::memory_order_relaxed) != State::Open;
     }
 
     /**
@@ -132,8 +136,7 @@ public:
      * @brief 현재 상태를 반환합니다.
      */
     State state() const noexcept {
-        std::lock_guard lock(mtx_);
-        return state_;
+        return state_.load(std::memory_order_acquire);
     }
 
     /**
@@ -159,14 +162,14 @@ public:
         std::lock_guard lock(mtx_);
         failures_  = 0;
         successes_ = 0;
-        state_     = State::Closed;
+        state_.store(State::Closed, std::memory_order_release);
         opened_at_ = {};
     }
 
 private:
     Config                                    cfg_;
     mutable std::mutex                        mtx_;
-    State                                     state_{State::Closed};
+    std::atomic<State>                        state_{State::Closed};
     size_t                                    failures_{0};
     size_t                                    successes_{0};
     std::chrono::steady_clock::time_point     opened_at_{};
@@ -191,8 +194,8 @@ private:
      * @note mtx_ 보유 상태에서 호출해야 합니다.
      */
     void transition(State to) noexcept {
-        State from = state_;
-        state_     = to;
+        State from = state_.load(std::memory_order_relaxed);
+        state_.store(to, std::memory_order_release);
 
         if (to == State::Open) {
             opened_at_ = std::chrono::steady_clock::now();

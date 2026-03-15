@@ -14,11 +14,31 @@
 
 #include <qbuem/common.hpp>
 
+#include <optional>
 #include <string>
 #include <string_view>
 #include <unordered_map>
 
 namespace qbuem {
+
+// ---------------------------------------------------------------------------
+// Heterogeneous hash/equality for string maps — allows string_view lookup
+// without constructing a std::string key.
+// ---------------------------------------------------------------------------
+struct StringViewHash {
+  using is_transparent = void;
+  std::size_t operator()(std::string_view sv) const noexcept {
+    return std::hash<std::string_view>{}(sv);
+  }
+};
+struct StringViewEqual {
+  using is_transparent = void;
+  bool operator()(std::string_view a, std::string_view b) const noexcept {
+    return a == b;
+  }
+};
+using StringMap = std::unordered_map<std::string, std::string,
+                                     StringViewHash, StringViewEqual>;
 
 enum class Method { Get, Post, Put, Delete, Patch, Options, Head, Unknown };
 
@@ -67,22 +87,26 @@ public:
   std::string_view remote_addr()   const { return remote_addr_; }
 
   std::string_view header(std::string_view key) const {
-    auto it = headers_.find(std::string(key));
+    auto it = headers_.find(key); // heterogeneous lookup — no string allocation
     return (it != headers_.end()) ? it->second : std::string_view{};
   }
 
   std::string_view param(std::string_view key) const {
-    auto it = params_.find(std::string(key));
+    auto it = params_.find(key); // heterogeneous lookup — no string allocation
     return (it != params_.end()) ? it->second : std::string_view{};
   }
 
   /**
    * Return the value of a URL query parameter (?key=val&...).
-   * Scans the raw query string without allocation.
+   *
+   * The query string is parsed lazily on the first call and cached.
+   * Subsequent calls are O(1) hash-map lookups with no allocation.
    * Values are returned percent-encoded; decode if needed.
    */
   std::string_view query(std::string_view key) const {
-    return scan_kv(query_string_, '&', key);
+    ensure_query_cache();
+    auto it = query_cache_->find(key);
+    return (it != query_cache_->end()) ? it->second : std::string_view{};
   }
 
   /**
@@ -118,6 +142,7 @@ public:
       path_         = std::string(raw.substr(0, q));
       query_string_ = std::string(raw.substr(q + 1));
     }
+    query_cache_.reset(); // invalidate lazy cache on path change
   }
 
   void set_body(std::string_view b) { body_ = std::string(b); }
@@ -167,13 +192,31 @@ private:
     return {};
   }
 
+  // Lazy-populate query_cache_ from query_string_ on first query() call.
+  void ensure_query_cache() const {
+    if (query_cache_) return;
+    query_cache_.emplace();
+    std::string_view src = query_string_;
+    while (!src.empty()) {
+      size_t delim = src.find('&');
+      std::string_view pair = (delim == std::string_view::npos) ? src : src.substr(0, delim);
+      size_t eq = pair.find('=');
+      if (eq != std::string_view::npos) {
+        (*query_cache_)[std::string(pair.substr(0, eq))] = std::string(pair.substr(eq + 1));
+      }
+      if (delim == std::string_view::npos) break;
+      src = src.substr(delim + 1);
+    }
+  }
+
   Method      method_       = Method::Unknown;
   std::string path_;
   std::string query_string_;
   std::string body_;
   std::string remote_addr_;  // client IP from socket (set by server, not headers)
-  std::unordered_map<std::string, std::string> headers_;
-  std::unordered_map<std::string, std::string> params_;
+  StringMap   headers_;
+  StringMap   params_;
+  mutable std::optional<StringMap> query_cache_; // lazy-parsed query string
 };
 
 } // namespace qbuem

@@ -51,6 +51,7 @@
 #include <functional>
 #include <limits>
 #include <memory>
+#include <unordered_map>
 
 namespace qbuem {
 
@@ -91,8 +92,8 @@ public:
    *                      동시 활성 타이머 최대 수보다 크게 설정하세요.
    *                      기본값 4096.
    */
-  explicit TimerWheel(size_t pool_capacity = 4096) noexcept
-      : pool_(pool_capacity) {}
+  explicit TimerWheel(size_t pool_capacity = 4096)
+      : pool_(pool_capacity) { index_.reserve(pool_capacity); }
 
   // 복사/이동 금지 (포인터 기반 내부 링크 구조)
   TimerWheel(const TimerWheel &) = delete;
@@ -131,28 +132,22 @@ public:
   /**
    * @brief 타이머를 취소합니다.
    *
-   * 슬롯 내 이중 연결 리스트를 통해 제거합니다.
-   * 취소는 상대적으로 드물게 발생하는 작업입니다.
+   * TimerId → Entry* 인덱스를 이용해 O(1)로 직접 제거합니다.
    *
    * @param id schedule()이 반환한 TimerId.
    * @returns 만료 전 취소 성공 시 true, 이미 실행됐거나 없으면 false.
    */
   bool cancel(TimerId id) {
     if (id == kInvalid) return false;
-    for (size_t lv = 0; lv < LEVELS; ++lv) {
-      for (size_t sl = 0; sl < SLOTS_PER_LEVEL; ++sl) {
-        for (Entry *e = slots_[lv][sl]; e; e = e->next) {
-          if (e->id == id) {
-            unlink(lv, sl, e);
-            e->~Entry();
-            pool_.deallocate(e);
-            --count_;
-            return true;
-          }
-        }
-      }
-    }
-    return false;
+    auto it = index_.find(id);
+    if (it == index_.end()) return false;
+    Entry *e = it->second;
+    index_.erase(it);
+    unlink(e->level_, e->slot_, e);
+    e->~Entry();
+    pool_.deallocate(e);
+    --count_;
+    return true;
   }
 
   /**
@@ -202,13 +197,9 @@ public:
     if (count_ == 0) return std::numeric_limits<uint64_t>::max();
 
     uint64_t earliest = std::numeric_limits<uint64_t>::max();
-    for (size_t lv = 0; lv < LEVELS; ++lv) {
-      for (size_t sl = 0; sl < SLOTS_PER_LEVEL; ++sl) {
-        for (const Entry *e = slots_[lv][sl]; e; e = e->next) {
-          if (e->expiry_ms < earliest)
-            earliest = e->expiry_ms;
-        }
-      }
+    for (const auto &[id, e] : index_) {
+      if (e->expiry_ms < earliest)
+        earliest = e->expiry_ms;
     }
     if (earliest <= current_ms_) return 0;
     return earliest - current_ms_;
@@ -237,6 +228,8 @@ private:
     uint64_t  expiry_ms = 0;
     Entry    *next      = nullptr;
     Entry    *prev      = nullptr;
+    uint8_t   level_    = 0;   ///< 현재 위치한 레벨 (O(1) 취소용)
+    uint8_t   slot_     = 0;   ///< 현재 위치한 슬롯 (O(1) 취소용)
   };
 
   /** @brief 각 레벨의 슬롯 해상도 (ms): 1ms, 256ms, 65536ms, 16777216ms. */
@@ -248,7 +241,7 @@ private:
    * expiry_ms와 current_ms_의 차이에 따라 레벨을 결정합니다.
    * @param e 삽입할 Entry 포인터.
    */
-  void insert(Entry *e) noexcept {
+  void insert(Entry *e) {
     uint64_t delta = (e->expiry_ms > current_ms_) ? (e->expiry_ms - current_ms_) : 0;
 
     size_t lv = 0;
@@ -265,6 +258,11 @@ private:
     } else {
       sl = static_cast<size_t>((e->expiry_ms / kSlotMs[lv]) & (SLOTS_PER_LEVEL - 1));
     }
+
+    // 위치 기록 (O(1) 취소용)
+    e->level_ = static_cast<uint8_t>(lv);
+    e->slot_  = static_cast<uint8_t>(sl);
+    index_[e->id] = e;
 
     // 헤드에 삽입
     e->next = slots_[lv][sl];
@@ -312,14 +310,15 @@ private:
       e->prev = nullptr;
 
       if (e->expiry_ms <= current_ms_) {
-        // 만료 — 콜백 실행 후 풀 반환
+        // 만료 — 인덱스에서 제거 후 콜백 실행, 풀 반환
+        index_.erase(e->id);
         if (e->fn) e->fn();
         e->~Entry();
         pool_.deallocate(e);
         --count_;
         ++fired;
       } else {
-        // 아직 만료 안 됨 — 올바른 슬롯에 재삽입
+        // 아직 만료 안 됨 — 올바른 슬롯에 재삽입 (insert가 index_ 갱신)
         insert(e);
       }
       e = nxt;
@@ -365,6 +364,7 @@ private:
         slots_[lv][sl] = nullptr;
       }
     }
+    index_.clear();
     count_ = 0;
   }
 
@@ -378,6 +378,9 @@ private:
 
   /** @brief 슬롯 배열 [레벨][슬롯] → 이중 연결 리스트 헤드. */
   Entry   *slots_[LEVELS][SLOTS_PER_LEVEL] = {};
+
+  /** @brief TimerId → Entry* 인덱스 — O(1) cancel() 및 next_expiry_ms() 지원. */
+  std::unordered_map<TimerId, Entry *> index_;
 
   /** @brief 생성 이후 누적된 가상 시계 (ms). */
   uint64_t current_ms_ = 0;

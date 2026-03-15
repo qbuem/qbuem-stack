@@ -91,6 +91,7 @@ public:
       storage_[i].next_ = free_list_head_.load(std::memory_order_relaxed);
       free_list_head_.store(&storage_[i], std::memory_order_relaxed);
     }
+    // free_count_ is initialized to Count via in-class initializer.
   }
 
   /** @brief 복사 생성자 삭제 — 버퍼들이 this 포인터를 보관하므로 이동/복사 불가. */
@@ -117,6 +118,7 @@ public:
               std::memory_order_release,
               std::memory_order_acquire)) {
         head->next_ = nullptr;
+        free_count_.fetch_sub(1, std::memory_order_relaxed);
         return head;
       }
     }
@@ -138,6 +140,7 @@ public:
         head, buf,
         std::memory_order_release,
         std::memory_order_acquire));
+    free_count_.fetch_add(1, std::memory_order_relaxed);
   }
 
   // ─── 상태 ─────────────────────────────────────────────────────────────────
@@ -145,18 +148,12 @@ public:
   /**
    * @brief 현재 사용 가능한 버퍼 수를 반환합니다.
    *
-   * free list를 순회하므로 O(n)입니다. 진단 목적으로만 사용하세요.
+   * O(1) — 원자 카운터를 읽습니다.
    *
-   * @returns free list에 남아 있는 버퍼 수.
+   * @returns 현재 free list에 남아 있는 버퍼 수.
    */
   [[nodiscard]] size_t available() const noexcept {
-    size_t n = 0;
-    Buffer *cur = free_list_head_.load(std::memory_order_acquire);
-    while (cur) {
-      ++n;
-      cur = cur->next_;
-    }
-    return n;
+    return free_count_.load(std::memory_order_relaxed);
   }
 
 private:
@@ -165,6 +162,9 @@ private:
 
   /** @brief lock-free free list 헤드 포인터. */
   std::atomic<Buffer *> free_list_head_{nullptr};
+
+  /** @brief free list 내 버퍼 수 — O(1) available() 지원. */
+  std::atomic<size_t> free_count_{Count};
 };
 
 } // namespace qbuem
