@@ -16,6 +16,26 @@
  * - 0.4.0: SO_REUSEPORT per-reactor accept, io_uring SQPOLL, AsyncMiddleware
  *           next(), Structured logging, 동적 Rate Limit, HTTP Trailer,
  *           Drain mode 강화
+ * - 0.5.0: Reactor::post(), Dispatcher::spawn(), cross-thread wakeup
+ * - 0.6.0: Context, ServiceRegistry, AsyncChannel, Action, StaticPipeline,
+ *           TaskGroup, DynamicPipeline, PipelineGraph, MessageBus
+ * - 0.7.0: SocketAddr, TcpListener, TcpStream, UdpSocket, IOSlice, IOVec<N>,
+ *           ReadBuf<N>, WriteBuf, BufferPool, zero_copy::, AsyncFile,
+ *           IFrameCodec, LengthPrefixedCodec, LineCodec, Http1Codec,
+ *           AcceptLoop, ConnectionPool, TimerWheel, PlainTransport
+ * - 0.8.0: RetryPolicy, CircuitBreaker, DeadLetterQueue, TraceContext,
+ *           Sampler, SpanExporter, PipelineTracer, kTLS, HugeBufferPool,
+ *           MmapArena, SENDMSG_ZC, ACCEPT/RECV_MULTISHOT
+ * - 0.9.0: hot_swap, PriorityChannel, PipelineFactory, SubpipelineAction,
+ *           SpscChannel, batch ops, stream operators, DebounceAction,
+ *           ThrottleAction, ScatterGatherAction, cpu_hints
+ * - 0.9.1: WindowedAction, SagaOrchestrator, IdempotencyFilter,
+ *           CheckpointStore, SloConfig, ErrorBudgetTracker, CanaryRouter
+ * - 0.9.2: NUMA-aware Dispatcher, PerfCounters, eBPF guide, PGO support,
+ *           FUTEX_WAIT/WAKE, PipelineVersion, DlqReprocessor
+ * - 1.0.0: Http1Handler, Http2Handler (HPACK), WebSocketHandler,
+ *           GrpcHandler<Req,Res>, gRPC↔Pipeline integration,
+ *           TraceMiddleware, InlineRequestBuffer, COMPONENTS support
  */
 
 /**
@@ -50,30 +70,30 @@ namespace qbuem {
  */
 struct Version {
   /** @brief Major 버전 번호. API 하위 호환이 깨질 때 증가합니다. */
-  static constexpr int major = 0;
+  static constexpr int major = 1;
 
   /** @brief Minor 버전 번호. 하위 호환을 유지하며 새 기능이 추가될 때 증가합니다. */
-  static constexpr int minor = 4;
+  static constexpr int minor = 0;
 
   /** @brief Patch 버전 번호. 버그 수정만 이루어질 때 증가합니다. */
   static constexpr int patch = 0;
 
   /** @brief "major.minor.patch" 형식의 버전 문자열 (null-terminated 보장). */
-  static constexpr std::string_view string = "0.4.0";
+  static constexpr std::string_view string = "1.0.0";
 };
 
 } // namespace qbuem
 
 /** @brief Major 버전 번호 (전처리기 조건 분기용). */
-#define QBUEM_VERSION_MAJOR 0
+#define QBUEM_VERSION_MAJOR 1
 
 /** @brief Minor 버전 번호 (전처리기 조건 분기용). */
-#define QBUEM_VERSION_MINOR 4
+#define QBUEM_VERSION_MINOR 0
 
 /** @brief Patch 버전 번호 (전처리기 조건 분기용). */
 #define QBUEM_VERSION_PATCH 0
 
 /** @brief "major.minor.patch" 형식의 버전 문자열 리터럴 (전처리기 조건 분기용). */
-#define QBUEM_VERSION_STRING "0.4.0"
+#define QBUEM_VERSION_STRING "1.0.0"
 
 /** @} */ // end of qbuem_version

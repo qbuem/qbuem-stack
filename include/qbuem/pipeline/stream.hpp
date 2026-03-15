@@ -21,12 +21,14 @@
  */
 
 #include <qbuem/common.hpp>
+#include <qbuem/core/reactor.hpp>
 #include <qbuem/core/task.hpp>
 #include <qbuem/pipeline/async_channel.hpp>
 
 #include <functional>
 #include <memory>
 #include <optional>
+#include <utility>
 #include <variant>
 #include <vector>
 
@@ -162,6 +164,31 @@ struct StreamFilterOp { Fn fn; };
 template <typename Fn>
 auto stream_filter(Fn fn) { return StreamFilterOp<Fn>{std::move(fn)}; }
 
+template <typename T, typename Fn>
+Stream<T> operator|(Stream<T> stream, StreamFilterOp<Fn> op) {
+  auto [out, chan] = make_stream<T>();
+
+  struct Pump {
+    static Task<void> run(Stream<T> in, std::shared_ptr<AsyncChannel<T>> out,
+                          Fn pred) {
+      for (;;) {
+        auto item = co_await in.next();
+        if (!item) { out->close(); co_return; }
+        if (pred(*item))
+          co_await out->send(std::move(*item));
+      }
+    }
+  };
+
+  auto pump = Pump::run(std::move(stream), chan, std::move(op.fn));
+  auto h    = pump.handle;
+  pump.detach();
+  if (auto* r = Reactor::current())
+    r->post([h]() mutable { h.resume(); });
+
+  return out;
+}
+
 /**
  * @brief chunk — N개씩 묶어 vector로 만듭니다.
  *
@@ -251,6 +278,193 @@ struct StreamScanOp { State init; Fn fn; };
 template <typename State, typename Fn>
 auto stream_scan(State init, Fn fn) {
   return StreamScanOp<State, Fn>{std::move(init), std::move(fn)};
+}
+
+/**
+ * @brief scan operator| — 상태 누적 변환을 스트림에 적용합니다.
+ *
+ * @tparam T     입력 아이템 타입.
+ * @tparam State 누적 상태 타입.
+ * @tparam Fn    `(State&, T) -> U` 변환 함수 타입.
+ */
+template <typename T, typename State, typename Fn>
+auto operator|(Stream<T> stream, StreamScanOp<State, Fn> op) {
+  using U = std::invoke_result_t<Fn, State&, T>;
+  auto [out, chan] = make_stream<U>();
+
+  struct Pump {
+    static Task<void> run(Stream<T> in, std::shared_ptr<AsyncChannel<U>> out,
+                          State state, Fn fn) {
+      for (;;) {
+        auto item = co_await in.next();
+        if (!item) { out->close(); co_return; }
+        U result = fn(state, std::move(*item));
+        co_await out->send(std::move(result));
+      }
+    }
+  };
+
+  auto pump = Pump::run(std::move(stream), chan,
+                        std::move(op.init), std::move(op.fn));
+  auto h    = pump.handle;
+  pump.detach();
+  if (auto* r = Reactor::current())
+    r->post([h]() mutable { h.resume(); });
+
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// flat_map
+// ---------------------------------------------------------------------------
+
+/**
+ * @brief flat_map — T를 Stream<U>로 변환 후 평탄화합니다.
+ *
+ * @param fn `(T) -> Stream<U>` 변환 함수.
+ *           각 입력 아이템에 대해 내부 스트림을 생성하고 모든 아이템을 출력합니다.
+ */
+template <typename Fn>
+struct StreamFlatMapOp { Fn fn; };
+
+template <typename Fn>
+auto stream_flat_map(Fn fn) { return StreamFlatMapOp<Fn>{std::move(fn)}; }
+
+template <typename T, typename Fn>
+auto operator|(Stream<T> stream, StreamFlatMapOp<Fn> op) {
+  // Determine U from fn(T{}) return type: Stream<U> -> channel() -> AsyncChannel<U>
+  // We use decltype on the channel element type.
+  using InnerStream = std::invoke_result_t<Fn, T>;
+  using ChanPtr     = decltype(std::declval<InnerStream>().channel());
+  using U           = typename ChanPtr::element_type::value_type; // AsyncChannel<U>
+
+  auto [out, chan] = make_stream<U>();
+
+  struct Pump {
+    static Task<void> run(Stream<T> in, std::shared_ptr<AsyncChannel<U>> out,
+                          Fn fn) {
+      for (;;) {
+        auto item = co_await in.next();
+        if (!item) { out->close(); co_return; }
+
+        // Produce inner stream from item
+        InnerStream inner = fn(std::move(*item));
+
+        // Drain inner stream into output
+        for (;;) {
+          auto inner_item = co_await inner.next();
+          if (!inner_item) break; // inner EOS — proceed to next outer item
+          co_await out->send(std::move(*inner_item));
+        }
+      }
+    }
+  };
+
+  auto pump = Pump::run(std::move(stream), chan, std::move(op.fn));
+  auto h    = pump.handle;
+  pump.detach();
+  if (auto* r = Reactor::current())
+    r->post([h]() mutable { h.resume(); });
+
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// zip
+// ---------------------------------------------------------------------------
+
+/**
+ * @brief zip — 두 스트림을 쌍(pair)으로 묶습니다.
+ *
+ * 두 스트림 중 하나가 EOS가 되면 출력 스트림도 닫힙니다.
+ *
+ * @tparam T 첫 번째 스트림 아이템 타입.
+ * @tparam U 두 번째 스트림 아이템 타입.
+ * @param a   첫 번째 스트림.
+ * @param b   두 번째 스트림.
+ * @param cap 출력 채널 용량.
+ * @returns `Stream<std::pair<T, U>>`.
+ */
+template <typename T, typename U>
+Stream<std::pair<T, U>> stream_zip(Stream<T> a, Stream<U> b, size_t cap = 256) {
+  auto [out, chan] = make_stream<std::pair<T, U>>(cap);
+
+  struct Pump {
+    static Task<void> run(Stream<T> sa, Stream<U> sb,
+                          std::shared_ptr<AsyncChannel<std::pair<T, U>>> out) {
+      for (;;) {
+        auto ia = co_await sa.next();
+        auto ib = co_await sb.next();
+        if (!ia || !ib) { out->close(); co_return; }
+        co_await out->send(std::pair<T, U>{std::move(*ia), std::move(*ib)});
+      }
+    }
+  };
+
+  auto pump = Pump::run(std::move(a), std::move(b), chan);
+  auto h    = pump.handle;
+  pump.detach();
+  if (auto* r = Reactor::current())
+    r->post([h]() mutable { h.resume(); });
+
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// merge
+// ---------------------------------------------------------------------------
+
+/**
+ * @brief merge — 여러 스트림을 하나로 병합합니다.
+ *
+ * 모든 입력 스트림이 EOS가 되면 출력 스트림도 닫힙니다.
+ * 각 스트림에서 독립적인 펌프 코루틴이 실행되어 먼저 도착한 아이템부터 전달됩니다.
+ *
+ * @tparam T 아이템 타입.
+ * @param streams 병합할 스트림 목록.
+ * @param cap     출력 채널 용량.
+ * @returns 병합된 `Stream<T>`.
+ */
+template <typename T>
+Stream<T> stream_merge(std::vector<Stream<T>> streams, size_t cap = 256) {
+  if (streams.empty()) {
+    // 빈 병합: 즉시 닫힌 스트림 반환
+    auto [out, chan] = make_stream<T>(2);
+    chan->close();
+    return out;
+  }
+
+  auto out_chan = std::make_shared<AsyncChannel<T>>(cap);
+  // atomic counter to track live stream pumps
+  auto live = std::make_shared<std::atomic<size_t>>(streams.size());
+
+  struct Pump {
+    static Task<void> run(Stream<T> in,
+                          std::shared_ptr<AsyncChannel<T>> out,
+                          std::shared_ptr<std::atomic<size_t>> live) {
+      for (;;) {
+        auto item = co_await in.next();
+        if (!item) {
+          // This stream ended; decrement live count
+          size_t remaining = live->fetch_sub(1, std::memory_order_acq_rel) - 1;
+          if (remaining == 0)
+            out->close();
+          co_return;
+        }
+        co_await out->send(std::move(*item));
+      }
+    }
+  };
+
+  for (auto& s : streams) {
+    auto pump = Pump::run(std::move(s), out_chan, live);
+    auto h    = pump.handle;
+    pump.detach();
+    if (auto* r = Reactor::current())
+      r->post([h]() mutable { h.resume(); });
+  }
+
+  return Stream<T>(out_chan);
 }
 
 } // namespace qbuem

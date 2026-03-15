@@ -98,7 +98,8 @@ public:
    * @param dispatcher 워커를 실행할 Dispatcher.
    */
   void start(Dispatcher &dispatcher) {
-    if (state_.exchange(State::Starting) != State::Created)
+    State expected = State::Created;
+    if (!state_.compare_exchange_strong(expected, State::Starting))
       return;
     for (auto &s : internal_.starters)
       s(dispatcher);
@@ -109,7 +110,8 @@ public:
    * @brief 입력을 닫고 모든 워커가 처리를 마칠 때까지 기다립니다.
    */
   Task<void> drain() {
-    if (state_.exchange(State::Draining) != State::Running)
+    State expected = State::Running;
+    if (!state_.compare_exchange_strong(expected, State::Draining))
       co_return;
     for (auto &d : internal_.drainers)
       co_await d();
@@ -234,8 +236,13 @@ public:
         d.spawn_on(0, make_resume_task(h));
       });
     } else {
-      // First action: head_ = action's in_channel
-      head_ = action_ptr->input();
+      // First action: head_ = action's in_channel.
+      // Only valid when CurOut == OrigIn (i.e., no prior add() calls).
+      if constexpr (std::is_same_v<CurOut, OrigIn>) {
+        head_ = action_ptr->input();
+      }
+      // If CurOut != OrigIn and tail_ is null, the builder was constructed
+      // incorrectly; head_ remains null and the pipeline is ill-formed.
     }
 
     auto next_tail = std::make_shared<AsyncChannel<ContextualItem<NextOut>>>(cfg.channel_cap);
@@ -265,9 +272,11 @@ public:
    */
   [[nodiscard]] StaticPipeline<OrigIn, CurOut> build() {
     if (!head_) {
-      // No actions added — trivial pass-through
+      // No actions added — trivial pass-through (only valid when OrigIn == CurOut)
       head_ = std::make_shared<AsyncChannel<ContextualItem<OrigIn>>>(256);
-      tail_ = head_; // In==Out, but type mismatch prevents this case anyway
+      if constexpr (std::is_same_v<OrigIn, CurOut>) {
+        tail_ = head_;
+      }
     }
     typename StaticPipeline<OrigIn, CurOut>::Internal internal{
         .head_channel = head_,

@@ -4,9 +4,9 @@ cmake_minimum_required(VERSION 3.20)
 # qbuem-stack — Zero Latency · Zero Cost · Zero Dependency WAS Layer
 # ============================================================================
 project(qbuem-stack
-    VERSION 0.4.0
+    VERSION 1.0.0
     LANGUAGES CXX
-    DESCRIPTION "qbuem-stack: zero-dependency C++20 WAS layer (HTTP core + async IO)"
+    DESCRIPTION "qbuem-stack: zero-dependency C++20 async server framework (HTTP/1.1, HTTP/2, WebSocket, gRPC, Pipeline)"
 )
 
 set(CMAKE_CXX_STANDARD 20)
@@ -28,6 +28,33 @@ endif()
 option(QBUEM_BUILD_TESTS    "Build unit tests"      ON)
 option(QBUEM_BUILD_EXAMPLES "Build examples"        ON)
 option(QBUEM_INSTALL        "Generate install rules" ON)
+
+# ── PGO (Profile-Guided Optimization) ───────────────────────────────────────
+# Usage:
+#   Pass 1 (instrumented):  cmake -DQBUEM_PGO_GENERATE=ON ..  && make && ./bench/wrk ...
+#   Pass 2 (optimized):     cmake -DQBUEM_PGO_USE=ON      ..  && make
+option(QBUEM_PGO_GENERATE "Build instrumented binary for PGO profiling" OFF)
+option(QBUEM_PGO_USE      "Build optimized binary using PGO profile"    OFF)
+
+if(QBUEM_PGO_GENERATE AND QBUEM_PGO_USE)
+  message(FATAL_ERROR "QBUEM_PGO_GENERATE and QBUEM_PGO_USE are mutually exclusive")
+endif()
+
+if(QBUEM_PGO_GENERATE)
+  message(STATUS "[qbuem-stack] PGO: instrumented build (pass 1)")
+  add_compile_options(-fprofile-generate=${CMAKE_BINARY_DIR}/pgo-data)
+  add_link_options(-fprofile-generate=${CMAKE_BINARY_DIR}/pgo-data)
+endif()
+
+if(QBUEM_PGO_USE)
+  if(NOT EXISTS "${CMAKE_BINARY_DIR}/pgo-data")
+    message(WARNING "[qbuem-stack] PGO: pgo-data directory not found — run pass 1 first")
+  else()
+    message(STATUS "[qbuem-stack] PGO: optimized build (pass 2, data=${CMAKE_BINARY_DIR}/pgo-data)")
+    add_compile_options(-fprofile-use=${CMAKE_BINARY_DIR}/pgo-data -fprofile-correction)
+    add_link_options(-fprofile-use=${CMAKE_BINARY_DIR}/pgo-data)
+  endif()
+endif()
 
 
 # ============================================================================
@@ -118,9 +145,32 @@ target_link_libraries(qbuem PUBLIC qbuem_core qbuem_http)
 qbuem_compile_options(qbuem)
 
 # ============================================================================
+# Backward-compatible alias targets
+# ---------------------------------------------------------------------------
+# 미래 리팩토링을 위해 새 이름을 미리 alias로 제공합니다.
+# 헤더 이동 없이 안전하게 신규 타겟 이름을 사용할 수 있습니다.
+#
+#   qbuem-stack::reactor  →  qbuem-stack::core
+#   qbuem-stack::net      →  qbuem-stack::http   (프로토콜 레이어)
+#   qbuem-stack::stack    →  qbuem-stack::qbuem  (전체 스택)
+# ============================================================================
+add_library(qbuem-stack::reactor ALIAS qbuem_core)
+add_library(qbuem-stack::net     ALIAS qbuem_http)
+add_library(qbuem-stack::stack   ALIAS qbuem)
+
+# ============================================================================
 # Install & CMake Package Export
 # ============================================================================
 if(QBUEM_INSTALL)
+    # ── Alias targets for find_package(qbuem-stack COMPONENTS ...) ─────────
+    # Component → alias target mapping:
+    #   core      → qbuem-stack::core    (reactor, async IO, arena, task)
+    #   http      → qbuem-stack::http    (parser, router, request/response)
+    #   qbuem     → qbuem-stack::qbuem   (full stack, all components)
+    # Downstream usage:
+    #   find_package(qbuem-stack REQUIRED COMPONENTS core http)
+    #   target_link_libraries(myapp PRIVATE qbuem-stack::core qbuem-stack::http)
+
     install(TARGETS qbuem_core qbuem_http qbuem
         EXPORT  qbuemTargets
         ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
