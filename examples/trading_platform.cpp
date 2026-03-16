@@ -57,6 +57,8 @@
 
 // ─── Includes ─────────────────────────────────────────────────────────────────
 
+#include <qbuem/core/awaiters.hpp>
+
 #include <qbuem/core/dispatcher.hpp>
 #include <qbuem/core/task.hpp>
 #include <qbuem/http/request.hpp>
@@ -86,6 +88,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <algorithm>
 #include <string>
 #include <thread>
 #include <unordered_map>
@@ -328,8 +331,9 @@ public:
     std::vector<OrderRecord> list(size_t limit = 50) const {
         std::lock_guard lock(mtx_);
         std::vector<OrderRecord> result;
-        for (auto it = orders_.rbegin(); it != orders_.rend() && result.size() < limit; ++it)
+        for (auto it = orders_.begin(); it != orders_.end() && result.size() < limit; ++it)
             result.push_back(it->second);
+        std::reverse(result.begin(), result.end());
         return result;
     }
 
@@ -768,8 +772,8 @@ struct TradingPlatform {
                 .channel_cap = 512,
                 .auto_scale  = true,
                 .slo = SloConfig{
-                    .p99_target_us  = 5'000,   // 5ms p99
-                    .error_budget   = 0.001,
+                    .p99_target  = std::chrono::microseconds{5'000},
+                    .error_budget = 0.001,
                 },
             });
 
@@ -790,8 +794,8 @@ struct TradingPlatform {
                 .channel_cap = 256,
                 .auto_scale  = true,
                 .slo = SloConfig{
-                    .p99_target_us  = 50'000,  // 50ms p99
-                    .error_budget   = 0.005,
+                    .p99_target  = std::chrono::microseconds{50'000},
+                    .error_budget = 0.005,
                 },
             });
 
@@ -816,63 +820,61 @@ struct TradingPlatform {
         dyn_pipe->start(d);
 
         // ── Static → Dynamic 브릿지 코루틴 (Context 보존) ─────────────
-        d.spawn([this]() mutable -> Task<void> {
-            for (;;) {
-                auto item = co_await risk_out->recv();
-                if (!item) break;
-                // Context 보존: ResponseChannel, RequestId, AuthSubject 모두 전달
-                co_await dyn_pipe->push(item->value, item->ctx);
-            }
-        }());
+        // NOTE: coroutine lambda 대신 static member function 사용
+        //       (GCC 13 coroutine lambda lifetime bug 회피)
+        d.spawn(run_bridge(risk_out, dyn_pipe));
 
         // ── 자동 스케일러 코루틴 ─────────────────────────────────────────
-        d.spawn([this]() mutable -> Task<void> {
-            for (;;) {
-                // 500ms 간격 모니터링
-                struct Sleep500ms {
-                    bool await_ready() noexcept { return false; }
-                    void await_suspend(std::coroutine_handle<> h) noexcept {
-                        std::thread([h]() mutable {
-                            std::this_thread::sleep_for(500ms);
-                            if (auto* r = Reactor::current()) r->post([h]{ h.resume(); });
-                            else h.resume();
-                        }).detach();
-                    }
-                    void await_resume() noexcept {}
-                };
-                co_await Sleep500ms{};
-
-                if (!auto_scale_on.load()) continue;
-
-                // validate 큐 깊이 모니터링 → 스케일 결정
-                size_t vdepth = validate_act->input()->size();
-                size_t edepth = enrich_act->input()->size();
-                size_t rdepth = risk_act->input()->size();
-
-                if (vdepth > 50) {
-                    validate_act->scale_out(*disp);
-                    std::printf("[autoscale] validate queue=%zu → scale_out\n", vdepth);
-                } else if (vdepth < 5) {
-                    validate_act->scale_in();
-                }
-
-                if (edepth > 50) {
-                    enrich_act->scale_out(*disp);
-                    std::printf("[autoscale] enrich queue=%zu → scale_out\n", edepth);
-                } else if (edepth < 5) {
-                    enrich_act->scale_in();
-                }
-
-                if (rdepth > 100) {
-                    risk_act->scale_out(*disp);
-                    std::printf("[autoscale] risk queue=%zu → scale_out\n", rdepth);
-                } else if (rdepth < 5) {
-                    risk_act->scale_in();
-                }
-            }
-        }());
+        d.spawn(run_autoscaler(this));
 
         std::puts("[platform] setup complete: static(3 actions) + dynamic(3 stages) + autoscaler");
+    }
+
+    // ── Static Member Coroutines (GCC 13 lambda lifetime bug 회피) ────────
+
+    /// Static → Dynamic 브릿지: Context 보존하며 양쪽 파이프라인 연결
+    static Task<void> run_bridge(
+        std::shared_ptr<AsyncChannel<ContextualItem<RiskResult>>> risk_out,
+        std::shared_ptr<DynamicPipeline<RiskResult>> dyn_pipe)
+    {
+        for (;;) {
+            auto item = co_await risk_out->recv();
+            if (!item) break;
+            co_await dyn_pipe->push(item->value, item->ctx);
+        }
+    }
+
+    /// 자동 스케일러: 큐 깊이 기반 scale_out/scale_in
+    static Task<void> run_autoscaler(TradingPlatform* p) {
+        for (;;) {
+            co_await qbuem::sleep(500);
+
+            if (!p->auto_scale_on.load()) continue;
+
+            // AsyncChannel size_approx() == 0 로 과부하 여부 감지
+            bool v_busy = p->validate_act->input()->size_approx() > 0;
+            bool e_busy = p->enrich_act->input()->size_approx() > 0;
+            bool r_busy = p->risk_act->input()->size_approx() > 0;
+
+            if (v_busy) {
+                p->validate_act->scale_out(*p->disp);
+                std::puts("[autoscale] validate busy → scale_out");
+            } else {
+                p->validate_act->scale_in();
+            }
+            if (e_busy) {
+                p->enrich_act->scale_out(*p->disp);
+                std::puts("[autoscale] enrich busy → scale_out");
+            } else {
+                p->enrich_act->scale_in();
+            }
+            if (r_busy) {
+                p->risk_act->scale_out(*p->disp);
+                std::puts("[autoscale] risk busy → scale_out");
+            } else {
+                p->risk_act->scale_in();
+            }
+        }
     }
 
     /// 주문을 파이프라인에 제출합니다.
@@ -1043,10 +1045,10 @@ static Handler make_get_stats(TradingPlatform& p) {
             .add("filled",         json::num(static_cast<uint64_t>(p.filled.load())))
             .add("rejected",       json::num(static_cast<uint64_t>(p.rejected.load())))
             .add("db_total",       json::num(static_cast<uint64_t>(p.db->count())))
-            // Static Pipeline 큐 깊이
-            .add("validate_queue", json::num(static_cast<uint64_t>(p.validate_act->input()->size())))
-            .add("enrich_queue",   json::num(static_cast<uint64_t>(p.enrich_act->input()->size())))
-            .add("risk_queue",     json::num(static_cast<uint64_t>(p.risk_act->input()->size())))
+            // Static Pipeline 큐 상태 (empty 여부)
+            .add("validate_empty", json::boolean(p.validate_act->input()->size_approx() == 0))
+            .add("enrich_empty",   json::boolean(p.enrich_act->input()->size_approx() == 0))
+            .add("risk_empty",     json::boolean(p.risk_act->input()->size_approx() == 0))
             // Dynamic Pipeline
             .add("dyn_stages",     json::num(static_cast<int>(dyn_stages)))
             .add("dyn_stage_names", stage_arr.build())
@@ -1193,14 +1195,7 @@ static Task<void> run_demo(TradingPlatform& p, Dispatcher& d) {
     std::puts("╚══════════════════════════════════════════════════════════╝\n");
 
     // 잠시 대기 (파이프라인 워커 완전 시작 대기)
-    struct Wait {
-        bool await_ready() noexcept { return false; }
-        void await_suspend(std::coroutine_handle<> h) noexcept {
-            std::thread([h]{ std::this_thread::sleep_for(200ms); h.resume(); }).detach();
-        }
-        void await_resume() noexcept {}
-    };
-    co_await Wait{};
+    co_await qbuem::sleep(200);
 
     // ── Phase 1: 정상 주문 처리 ─────────────────────────────────────────
     std::puts("─── Phase 1: 주문 제출 (8건) ───────────────────────────────");
@@ -1255,8 +1250,8 @@ static Task<void> run_demo(TradingPlatform& p, Dispatcher& d) {
 
     // hot_swap 후 주문 처리
     {
-        OrderCmd cmd{"ACC002", "POSCO", 382000.0, 1, false, true};
-        cmd.is_buy = true;
+        OrderCmd cmd{.account_id="ACC002", .symbol="POSCO", .price=382000.0,
+                     .quantity=1, .is_market=false, .is_buy=true};
         auto ctx = Context{}.put(RequestId{"demo-hotswap-1"}).put(AuthSubject{"ACC002"});
         auto rch = p.begin_order(cmd, ctx);
         if (rch) {
@@ -1272,7 +1267,8 @@ static Task<void> run_demo(TradingPlatform& p, Dispatcher& d) {
     std::puts("  [toggle] enrich2 disabled (pass-through mode)");
 
     {
-        OrderCmd cmd{"ACC001", "SAMSUNG", 73000.0, 5, false, true};
+        OrderCmd cmd{.account_id="ACC001", .symbol="SAMSUNG", .price=73000.0,
+                     .quantity=5, .is_market=false, .is_buy=true};
         auto ctx = Context{}.put(RequestId{"demo-toggle-1"}).put(AuthSubject{"ACC001"});
         auto rch = p.begin_order(cmd, ctx);
         if (rch) {
@@ -1293,10 +1289,10 @@ static Task<void> run_demo(TradingPlatform& p, Dispatcher& d) {
         static_cast<unsigned long long>(p.rejected.load()),
         p.db->count());
 
-    std::printf("  큐깊이: validate=%zu enrich=%zu risk=%zu\n",
-        p.validate_act->input()->size(),
-        p.enrich_act->input()->size(),
-        p.risk_act->input()->size());
+    std::printf("  큐상태: validate=%s enrich=%s risk=%s\n",
+        p.validate_act->input()->size_approx() == 0 ? "empty" : "pending",
+        p.enrich_act->input()->size_approx() == 0   ? "empty" : "pending",
+        p.risk_act->input()->size_approx() == 0     ? "empty" : "pending");
 
     std::printf("  DynamicPipeline stages: %zu (%s)\n",
         p.dyn_pipe->stage_count(),
@@ -1345,16 +1341,13 @@ int main() {
 
     app.use(rate_limit(RateLimitConfig{
         .rate_per_sec = 100.0,
-        .burst        = 20.0,
         .max_keys     = 10'000,
+        .burst        = 20.0,
     }));
 
     app.use(request_id("X-Request-ID"));
 
-    app.use(hsts(HstsConfig{
-        .max_age            = 31'536'000,
-        .include_subdomains = true,
-    }));
+    app.use(hsts(31'536'000, /*include_subdomains=*/true));
 
     // Bearer 인증 (모든 /api/v1/* 에 적용)
     static DemoKeyVerifier verifier;

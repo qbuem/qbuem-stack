@@ -43,6 +43,7 @@
 #include <cstring>
 
 #if defined(__linux__)
+#  include <sys/sendfile.h>
 #  include <sys/socket.h>
 #  include <netinet/tcp.h>
 #  if __has_include(<linux/tls.h>)
@@ -212,7 +213,6 @@ struct KtlsSessionParams256 {
     off_t   &offset,
     size_t   count = 0) noexcept {
 #if defined(__linux__)
-#  include <sys/sendfile.h> // ensure sendfile(2) is available at the call site
   size_t total = 0;
   for (;;) {
     size_t chunk = (count == 0 || (count - total) > (1u << 30))
@@ -286,7 +286,7 @@ struct KtlsSessionParams256 {
     const KtlsSessionParams &tx_params,
     const KtlsSessionParams &rx_params) noexcept {
   auto r = enable_ktls(sockfd, tx_params, rx_params);
-  if (!r && r.error() == errc::not_supported) {
+  if (!r && r.error() == std::errc::not_supported) {
     // kTLS not available on this kernel — silently fall back to user-space TLS.
     return {};
   }

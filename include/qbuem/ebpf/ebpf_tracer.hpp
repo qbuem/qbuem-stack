@@ -92,7 +92,7 @@ struct alignas(64) TraceEvent {
         return {reinterpret_cast<const char*>(label)};
     }
 };
-static_assert(sizeof(TraceEvent) == 64, "TraceEvent must be exactly 64 bytes");
+static_assert(sizeof(TraceEvent) == 128, "TraceEvent must be exactly 128 bytes");
 
 // ─── BPF 맵 통계 ─────────────────────────────────────────────────────────────
 

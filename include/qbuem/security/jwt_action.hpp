@@ -57,6 +57,20 @@
 
 namespace qbuem::security {
 
+// ─── ActionResult ─────────────────────────────────────────────────────────────
+
+/** @brief Pipeline 미들웨어 액션 결과 — 처리 계속/중단 결정. */
+struct ActionResult {
+    bool            should_continue{true};
+    std::error_code error;
+
+    /// @brief 다음 단계로 계속 진행합니다.
+    static ActionResult next() noexcept { return {true, {}}; }
+
+    /// @brief 파이프라인을 중단하고 에러를 반환합니다.
+    static ActionResult stop(std::error_code ec) noexcept { return {false, ec}; }
+};
+
 // ─── JwtClaims (Context 주입용) ──────────────────────────────────────────────
 
 /**

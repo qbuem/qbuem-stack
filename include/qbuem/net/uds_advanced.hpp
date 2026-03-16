@@ -92,7 +92,7 @@ struct PeerCredentials {
  * @note 수신 측에서 각 FD는 독립적으로 `dup()`됩니다.
  *       수신 후 반드시 `close()`해야 합니다.
  */
-[[nodiscard]] Result<ssize_t> send_fds(
+[[nodiscard]] inline Result<ssize_t> send_fds(
     int                       sockfd,
     std::span<const int>      fds,
     std::span<const uint8_t>  data = {}) noexcept {
@@ -152,7 +152,7 @@ struct RecvFdsResult {
     ssize_t data_bytes{0};  ///< 수신된 데이터 바이트 수
 };
 
-[[nodiscard]] Result<RecvFdsResult> recv_fds(
+[[nodiscard]] inline Result<RecvFdsResult> recv_fds(
     int                  sockfd,
     std::span<int>       fds_out,
     std::span<uint8_t>   data_buf = {}) noexcept {
@@ -217,7 +217,7 @@ struct RecvFdsResult {
  * @param sockfd  연결된 UDS SOCK_STREAM 소켓.
  * @returns peer 자격증명 또는 에러.
  */
-[[nodiscard]] Result<PeerCredentials> get_peer_credentials(int sockfd) noexcept {
+[[nodiscard]] inline Result<PeerCredentials> get_peer_credentials(int sockfd) noexcept {
 #if defined(__linux__)
     struct ucred cred{};
     socklen_t len = sizeof(cred);
@@ -250,7 +250,7 @@ struct RecvFdsResult {
  * @param listener 리스닝 소켓 fd (서버 측).
  * @returns 성공 시 `Result<void>`, 실패 시 에러.
  */
-[[nodiscard]] Result<void> bind_abstract(
+[[nodiscard]] inline Result<void> bind_abstract(
     std::string_view name, int type, int& listener) noexcept {
 #if defined(__linux__)
     listener = ::socket(AF_UNIX, type | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
@@ -289,7 +289,7 @@ struct RecvFdsResult {
  * @param type 소켓 타입.
  * @returns 연결된 소켓 fd 또는 에러.
  */
-[[nodiscard]] Result<int> connect_abstract(
+[[nodiscard]] inline Result<int> connect_abstract(
     std::string_view name, int type) noexcept {
 #if defined(__linux__)
     int fd = ::socket(AF_UNIX, type | SOCK_CLOEXEC, 0);

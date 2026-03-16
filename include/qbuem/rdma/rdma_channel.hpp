@@ -174,7 +174,7 @@ public:
     [[nodiscard]] virtual uint16_t port_lid(uint8_t port = 1) const noexcept = 0;
 
     /** @brief GID (RoCEv2 전용). */
-    [[nodiscard]] virtual void gid(uint8_t* out_gid,
+    virtual void gid(uint8_t* out_gid,
                                    uint8_t gid_index = 0) const noexcept = 0;
 };
 

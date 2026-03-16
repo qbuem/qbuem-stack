@@ -37,7 +37,7 @@
  *           GrpcHandler<Req,Res>, gRPC↔Pipeline integration,
  *           TraceMiddleware, InlineRequestBuffer, COMPONENTS support
  * - 1.1.0: AF_XDP + UMEM, cmake COMPONENTS full support,
- *           reactor/* forwarding headers, QUIC guide
+ *           reactor forwarding headers, QUIC guide
  * - 1.2.0: TimerWheel::cancel() O(1), Heterogeneous map lookup,
  *           Context::get<T>() inline cache, RadixTree binary search
  * - 1.3.0: Kqueue reactor sophistication (User-space Buffer Ring,
