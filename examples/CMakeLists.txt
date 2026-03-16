@@ -121,9 +121,7 @@ target_link_libraries(pipeline_observer_health_example PRIVATE qbuem-stack::qbue
 add_executable(subpipeline_migration_example subpipeline_migration_example.cpp)
 target_link_libraries(subpipeline_migration_example PRIVATE qbuem-stack::qbuem)
 
-# PipelineFactory: JSON 기반 DynamicPipeline / PipelineGraph 조립
-add_executable(pipeline_factory_example pipeline_factory_example.cpp)
-target_link_libraries(pipeline_factory_example PRIVATE qbuem-stack::qbuem)
+# PipelineFactory: 아래 qbuem-json TARGET 블록으로 이동 (qbuem_json 필수)
 
 # PriorityChannel + SpscChannel: 우선순위 채널, SPSC 락-프리 채널
 add_executable(priority_spsc_channel_example priority_spsc_channel_example.cpp)
@@ -165,6 +163,10 @@ if(TARGET qbuem_json::qbuem_json)
     add_executable(coro_json coro_json.cpp)
     target_link_libraries(coro_json PRIVATE qbuem-stack::qbuem qbuem_json::qbuem_json)
 
+    # pipeline_factory_example: qbuem-json 으로 config 파싱
+    add_executable(pipeline_factory_example pipeline_factory_example.cpp)
+    target_link_libraries(pipeline_factory_example PRIVATE qbuem-stack::qbuem qbuem_json::qbuem_json)
+
     # trading_platform: 종합 예제
     # WAS + StaticPipeline(3 Actions, auto_scale, SLO) + DynamicPipeline(hot_swap, toggle)
     # + MessageBus(SSE fan-out) + MockDB + qbuem-json + Context 전파 + Cross-reactor 응답 채널
@@ -172,7 +174,7 @@ if(TARGET qbuem_json::qbuem_json)
     target_link_libraries(trading_platform PRIVATE qbuem-stack::qbuem qbuem_json::qbuem_json)
 else()
     message(WARNING
-        "qbuem-json target not found — skipping coro_json, trading_platform examples.\n"
+        "qbuem-json target not found — skipping coro_json, pipeline_factory_example, trading_platform examples.\n"
         "  Set -DQBUEM_JSON_TAG=<tag> or ensure network access."
     )
 endif()
