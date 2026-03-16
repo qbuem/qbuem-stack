@@ -113,11 +113,11 @@ struct OrderCmd {
     bool        is_market = false;   ///< true=시장가, false=지정가
     bool        is_buy    = true;    ///< true=매수, false=매도
 
-    /// HTTP body(JSON)에서 역직렬화 — Nexus qbuem::read<OrderCmd>() 사용.
+    /// HTTP body(JSON)에서 역직렬화 — Nexus qbuem::fuse<OrderCmd>() 사용.
     /// 필수 필드 누락 시 std::nullopt 반환.
     static std::optional<OrderCmd> from_json(std::string_view body) {
         try {
-            auto cmd = qbuem::read<OrderCmd>(std::string(body));
+            auto cmd = qbuem::fuse<OrderCmd>(std::string(body));
             if (cmd.account_id.empty() || cmd.symbol.empty() || cmd.quantity == 0)
                 return std::nullopt;
             return cmd;
@@ -125,17 +125,27 @@ struct OrderCmd {
     }
 };
 
-/// Nexus ADL hook — JSON "type"/"side" 키를 is_market/is_buy 필드로 매핑.
-/// QBUEM_JSON_FIELDS 대신 수동 구현 (필드명 불일치).
-inline void from_qbuem_json(const qbuem::Value& v, OrderCmd& o) {
-    o.account_id = v.get("account_id") | std::string{};
-    o.symbol     = v.get("symbol")     | std::string{};
-    o.price      = v.get("price")      | 0.0;
-    o.quantity   = static_cast<int>(v.get("quantity") | 0.0);
-    std::string type_s = v.get("type") | std::string{};
-    std::string side_s = v.get("side") | std::string{};
-    o.is_market = (type_s == "market");
-    o.is_buy    = (side_s == "buy");
+/// Nexus Fusion ADL hook — JSON "type"/"side" 키를 is_market/is_buy 로 매핑.
+/// qbuem::fuse<OrderCmd>() 호출 시 사용 (zero-tape 직접 파싱).
+inline void nexus_pulse(std::string_view key, const char*& p, const char* end, OrderCmd& o) {
+    using namespace qbuem::json::detail;
+    switch (fnv1a_hash(key)) {
+        case fnv1a_hash_ce("account_id"): from_json_direct(p, end, o.account_id); break;
+        case fnv1a_hash_ce("symbol"):     from_json_direct(p, end, o.symbol);     break;
+        case fnv1a_hash_ce("price"):      from_json_direct(p, end, o.price);      break;
+        case fnv1a_hash_ce("quantity"):   from_json_direct(p, end, o.quantity);   break;
+        case fnv1a_hash_ce("type"): {
+            std::string s; from_json_direct(p, end, s);
+            o.is_market = (s == "market");
+            break;
+        }
+        case fnv1a_hash_ce("side"): {
+            std::string s; from_json_direct(p, end, s);
+            o.is_buy = (s == "buy");
+            break;
+        }
+        default: skip_direct(p, end); break;
+    }
 }
 
 /// [Static Stage 1] 유효성 검증 결과.
@@ -222,7 +232,7 @@ struct ScaleRequest {
 
     static std::optional<ScaleRequest> from_json(std::string_view body) {
         try {
-            auto r = qbuem::read<ScaleRequest>(std::string(body));
+            auto r = qbuem::fuse<ScaleRequest>(std::string(body));
             if (r.stage.empty() || r.workers <= 0) return std::nullopt;
             return r;
         } catch (...) { return std::nullopt; }
@@ -237,7 +247,7 @@ struct HotswapRequest {
 
     static std::optional<HotswapRequest> from_json(std::string_view body) {
         try {
-            auto r = qbuem::read<HotswapRequest>(std::string(body));
+            auto r = qbuem::fuse<HotswapRequest>(std::string(body));
             if (r.stage.empty() || r.mode.empty()) return std::nullopt;
             return r;
         } catch (...) { return std::nullopt; }
@@ -253,7 +263,7 @@ struct ToggleRequest {
 
     static std::optional<ToggleRequest> from_json(std::string_view body) {
         try {
-            auto r = qbuem::read<ToggleRequest>(std::string(body));
+            auto r = qbuem::fuse<ToggleRequest>(std::string(body));
             if (r.stage.empty()) return std::nullopt;
             return r;
         } catch (...) { return std::nullopt; }
