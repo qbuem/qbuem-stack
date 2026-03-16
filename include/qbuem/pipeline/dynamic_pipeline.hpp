@@ -90,6 +90,9 @@ public:
         ServiceRegistry* registry             = nullptr; ///< 서비스 레지스트리
     };
 
+    /// @brief 스테이지 함수 타입 — add_stage()에 전달 가능한 구체적 타입.
+    using StageFn = std::function<Task<Result<T>>(T, ActionEnv)>;
+
     /**
      * @brief DynamicPipeline을 생성합니다.
      * @param cfg 파이프라인 설정.

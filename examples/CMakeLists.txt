@@ -99,6 +99,56 @@ target_link_libraries(task_group_example PRIVATE qbuem-stack::qbuem)
 add_executable(ipc_pipeline_example ipc_pipeline_example.cpp)
 target_link_libraries(ipc_pipeline_example PRIVATE qbuem-stack::qbuem)
 
+# ── 신규 기능 예제 ────────────────────────────────────────────────────────────
+
+# UDP + Unix Domain Socket: UdpSocket, UnixSocket, SocketAddr
+add_executable(udp_unix_socket_example udp_unix_socket_example.cpp)
+target_link_libraries(udp_unix_socket_example PRIVATE qbuem-stack::qbuem)
+
+# NUMA + Huge Pages + CPU Hints + I/O Slice: pin_reactor_to_cpu, HugeBufferPool, prefetch_*
+add_executable(numa_hugepages_example numa_hugepages_example.cpp)
+target_link_libraries(numa_hugepages_example PRIVATE qbuem-stack::qbuem)
+
+# WindowedAction: TumblingWindow, SlidingWindow, SessionWindow, Watermark, EventTime
+add_executable(windowed_action_example windowed_action_example.cpp)
+target_link_libraries(windowed_action_example PRIVATE qbuem-stack::qbuem)
+
+# PipelineObserver + PipelineHealth: ActionMetrics, PipelineVersion, to_json/dot/mermaid
+add_executable(pipeline_observer_health_example pipeline_observer_health_example.cpp)
+target_link_libraries(pipeline_observer_health_example PRIVATE qbuem-stack::qbuem)
+
+# SubpipelineAction + MigrationAction + DlqReprocessor: 타입 마이그레이션
+add_executable(subpipeline_migration_example subpipeline_migration_example.cpp)
+target_link_libraries(subpipeline_migration_example PRIVATE qbuem-stack::qbuem)
+
+# PipelineFactory: JSON 기반 DynamicPipeline / PipelineGraph 조립
+add_executable(pipeline_factory_example pipeline_factory_example.cpp)
+target_link_libraries(pipeline_factory_example PRIVATE qbuem-stack::qbuem)
+
+# PriorityChannel + SpscChannel: 우선순위 채널, SPSC 락-프리 채널
+add_executable(priority_spsc_channel_example priority_spsc_channel_example.cpp)
+target_link_libraries(priority_spsc_channel_example PRIVATE qbuem-stack::qbuem)
+
+# Crypto + URL: constant_time_eq, CSPRNG, CSRF 토큰, url_encode/decode
+add_executable(crypto_url_example crypto_url_example.cpp)
+target_link_libraries(crypto_url_example PRIVATE qbuem-stack::qbuem)
+
+# 보안 미들웨어: security.hpp, token_auth, static_files, body_encoder
+add_executable(security_middleware_example security_middleware_example.cpp)
+target_link_libraries(security_middleware_example PRIVATE qbuem-stack::qbuem)
+
+# DB 연결 풀 + 세션 저장소: LockFreeConnectionPool, InMemorySessionStore
+add_executable(db_session_example db_session_example.cpp)
+target_link_libraries(db_session_example PRIVATE qbuem-stack::qbuem)
+
+# 하드웨어 I/O: PCIeDevice, RDMAChannel, EBPFTracer, NVMeIO, kTLS
+add_executable(hardware_io_example hardware_io_example.cpp)
+target_link_libraries(hardware_io_example PRIVATE qbuem-stack::qbuem)
+
+# Zero-copy + ArenaChannel + AsyncLogger: sendfile, splice, arena_channel
+add_executable(zero_copy_arena_channel_example zero_copy_arena_channel_example.cpp)
+target_link_libraries(zero_copy_arena_channel_example PRIVATE qbuem-stack::qbuem)
+
 # ── trading_platform: 종합 예제 ──────────────────────────────────────────────
 # WAS + StaticPipeline(3 Actions, auto_scale, SLO) + DynamicPipeline(hot_swap, toggle)
 # + MessageBus(SSE fan-out) + MockDB + JSON + Context 전파 + Cross-reactor 응답 채널

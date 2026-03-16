@@ -88,6 +88,20 @@ public:
   explicit StaticPipeline(Internal internal)
       : internal_(std::move(internal)) {}
 
+  // std::atomic<State> deletes the implicit move constructor; define it explicitly.
+  StaticPipeline(StaticPipeline&& other) noexcept
+      : internal_(std::move(other.internal_))
+      , state_(other.state_.load(std::memory_order_relaxed)) {}
+
+  StaticPipeline& operator=(StaticPipeline&& other) noexcept {
+    if (this != &other) {
+      internal_ = std::move(other.internal_);
+      state_.store(other.state_.load(std::memory_order_relaxed),
+                   std::memory_order_relaxed);
+    }
+    return *this;
+  }
+
   // -------------------------------------------------------------------------
   // Lifecycle
   // -------------------------------------------------------------------------
