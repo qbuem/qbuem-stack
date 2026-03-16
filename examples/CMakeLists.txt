@@ -99,6 +99,12 @@ target_link_libraries(task_group_example PRIVATE qbuem-stack::qbuem)
 add_executable(ipc_pipeline_example ipc_pipeline_example.cpp)
 target_link_libraries(ipc_pipeline_example PRIVATE qbuem-stack::qbuem)
 
+# ── trading_platform: 종합 예제 ──────────────────────────────────────────────
+# WAS + StaticPipeline(3 Actions, auto_scale, SLO) + DynamicPipeline(hot_swap, toggle)
+# + MessageBus(SSE fan-out) + MockDB + JSON + Context 전파 + Cross-reactor 응답 채널
+add_executable(trading_platform trading_platform.cpp)
+target_link_libraries(trading_platform PRIVATE qbuem-stack::qbuem)
+
 # ── coro_json: 비동기 코루틴 + qbuem-json 예제 ────────────────────────────────
 # qbuem-json 이 없을 경우 빌드를 건너뜀 (선택적 의존성).
 FetchContent_Declare(qbuem_json
