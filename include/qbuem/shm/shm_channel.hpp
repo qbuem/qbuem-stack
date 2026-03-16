@@ -202,6 +202,17 @@ public:
      */
     static Result<Ptr> open(std::string_view name) noexcept;
 
+    /**
+     * @brief SHM 이름을 파일시스템에서 제거합니다.
+     *
+     * 모든 핸들이 닫힌 뒤 실제 메모리가 해제됩니다.
+     * 프로세스 종료 후 `/dev/shm`에 남아있는 세그먼트를 정리할 때 사용합니다.
+     *
+     * @param name 채널 이름 (`create()`에 전달한 이름과 동일).
+     * @returns 성공 시 `Result<void>::ok()`, 실패 시 에러.
+     */
+    static Result<void> unlink(std::string_view name) noexcept;
+
     // ── 생산자 API ──────────────────────────────────────────────────────────
 
     /**
@@ -471,6 +482,18 @@ SHMChannel<T>::open(std::string_view name) noexcept {
 
     size_t cap = hdr->capacity;
     return Ptr(new SHMChannel<T>(std::move(*seg_res), cap));
+}
+
+template <typename T>
+Result<void> SHMChannel<T>::unlink(std::string_view name) noexcept {
+    std::string shm_name;
+    shm_name.reserve(name.size() + 1);
+    if (name.empty() || name[0] != '/') shm_name += '/';
+    shm_name.append(name.data(), name.size());
+
+    if (::shm_unlink(shm_name.c_str()) < 0 && errno != ENOENT)
+        return unexpected(std::make_error_code(std::errc::no_such_file_or_directory));
+    return Result<void>::ok();
 }
 
 template <typename T>

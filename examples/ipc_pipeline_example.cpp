@@ -45,20 +45,24 @@
 #include <vector>
 
 using namespace qbuem;
+using namespace qbuem::shm;
 using namespace std::chrono_literals;
 
 // ─── 도메인 타입 ─────────────────────────────────────────────────────────────
 
+/// @brief SHMChannel 전용 — trivially_copyable (고정 크기 배열)
 struct RawOrder {
-    uint64_t    order_id;
-    std::string symbol;
-    double      price;
-    int         qty;
+    uint64_t order_id;
+    char     symbol[16];  ///< 고정 크기 (std::string 사용 불가 — SHM 요건)
+    double   price;
+    int      qty;
 };
+static_assert(std::is_trivially_copyable_v<RawOrder>,
+              "RawOrder must be trivially copyable for SHMChannel");
 
 struct ParsedOrder {
     uint64_t    order_id;
-    std::string symbol;
+    std::string symbol;   ///< 파이프라인 내부에서는 std::string 사용
     double      price;
     int         qty;
     bool        valid;
@@ -81,10 +85,10 @@ static std::atomic<int> g_recorded{0};
 static Task<Result<ParsedOrder>> stage_parse(RawOrder raw, ActionEnv /*env*/) {
     ParsedOrder p;
     p.order_id = raw.order_id;
-    p.symbol   = raw.symbol;
+    p.symbol   = std::string(raw.symbol);  // char[16] → std::string
     p.price    = raw.price;
     p.qty      = raw.qty;
-    p.valid    = (raw.price > 0 && raw.qty > 0 && !raw.symbol.empty());
+    p.valid    = (raw.price > 0 && raw.qty > 0 && raw.symbol[0] != '\0');
     if (!p.valid) p.error_msg = "invalid price/qty/symbol";
     g_parsed.fetch_add(1, std::memory_order_relaxed);
     co_return p;

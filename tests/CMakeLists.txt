@@ -161,6 +161,16 @@ target_link_libraries(qbuem_canary_scatter_tests
     GTest::gtest_main
 )
 
+# ── Pipeline ↔ MessageBus IPC 연계 테스트 (with_source/with_sink/Source/Sink) ──
+add_executable(qbuem_pipeline_ipc_tests
+    pipeline_ipc_test.cpp
+)
+target_link_libraries(qbuem_pipeline_ipc_tests
+    PRIVATE
+    qbuem-stack::qbuem
+    GTest::gtest_main
+)
+
 include(GoogleTest)
 gtest_discover_tests(qbuem_shm_tests)
 gtest_discover_tests(qbuem_canary_scatter_tests)
@@ -176,3 +186,4 @@ gtest_discover_tests(qbuem_util_tests)
 gtest_discover_tests(qbuem_infra_tests)
 gtest_discover_tests(qbuem_middleware_tests)
 gtest_discover_tests(qbuem_pipeline_advanced_tests)
+gtest_discover_tests(qbuem_pipeline_ipc_tests)

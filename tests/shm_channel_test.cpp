@@ -160,6 +160,28 @@ TEST(SHMChannel, TrySendAfterCloseReturnsFalse) {
     ::shm_unlink(("/" + name).c_str());
 }
 
+TEST(SHMChannel, UnlinkRemovesSegment) {
+    auto name = next_shm_name();
+    // 생성 후 close → unlink 정상 동작 확인
+    {
+        auto res = SHMChannel<Msg32>::create(name, 8);
+        ASSERT_TRUE(res.has_value());
+        (*res)->close();
+    }
+    // unlink 성공
+    auto r = SHMChannel<Msg32>::unlink(name);
+    EXPECT_TRUE(r.has_value()) << r.error().message();
+    // 두 번 unlink 해도 에러 없음 (ENOENT → ok)
+    auto r2 = SHMChannel<Msg32>::unlink(name);
+    EXPECT_TRUE(r2.has_value());
+}
+
+TEST(SHMChannel, UnlinkNonexistentOk) {
+    // 존재하지 않는 이름도 ok (ENOENT 무음 처리)
+    auto r = SHMChannel<Msg32>::unlink("qbuem_nonexistent_test_xyz");
+    EXPECT_TRUE(r.has_value());
+}
+
 // ─── SHMBus LOCAL_ONLY ───────────────────────────────────────────────────────
 
 struct BusMsg {

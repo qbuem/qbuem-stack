@@ -66,8 +66,9 @@ static void demo_shm_channel() {
     assert(!ch->is_open());
     assert(!ch->try_send(SensorReading{}));  // closed → false
 
-    // 정리: shm_open은 unlink 필요 (여기서는 데모만)
-    ::shm_unlink("/test_sensor_ch");
+    // 정리: SHMChannel::unlink()로 /dev/shm 항목 제거
+    auto ul = SHMChannel<SensorReading>::unlink("test_sensor_ch");
+    assert(ul.has_value());
     std::puts("[SHMChannel] OK");
 }
 
