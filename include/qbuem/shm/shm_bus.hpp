@@ -372,7 +372,7 @@ template <typename T>
 class SHMSource {
 public:
     explicit SHMSource(std::string_view channel_name)
-        : name_(channel_name) {}
+        : name_(channel_name) {}  ///< 문자열을 복사하여 댕글링 방지
 
     /**
      * @brief 채널을 초기화하고 엽니다.
@@ -394,7 +394,7 @@ public:
     }
 
 private:
-    std::string_view              name_;
+    std::string                   name_;   ///< 소유권 있는 문자열 (string_view 댕글링 방지)
     typename SHMChannel<T>::Ptr   channel_;
 };
 
@@ -414,7 +414,7 @@ template <typename T>
 class SHMSink {
 public:
     explicit SHMSink(std::string_view channel_name, size_t capacity = 1024)
-        : name_(channel_name), capacity_(capacity) {}
+        : name_(channel_name), capacity_(capacity) {}  ///< 문자열을 복사하여 댕글링 방지
 
     /**
      * @brief 채널을 초기화하고 생성합니다.
@@ -437,7 +437,7 @@ public:
     }
 
 private:
-    std::string_view              name_;
+    std::string                   name_;      ///< 소유권 있는 문자열 (string_view 댕글링 방지)
     size_t                        capacity_;
     typename SHMChannel<T>::Ptr   channel_;
 };

@@ -95,6 +95,10 @@ target_link_libraries(idempotency_slo_example PRIVATE qbuem-stack::qbuem)
 add_executable(task_group_example task_group_example.cpp)
 target_link_libraries(task_group_example PRIVATE qbuem-stack::qbuem)
 
+# IPC Pipeline: SHMSource/SHMSink + MessageBusSource/MessageBusSink + with_source/with_sink
+add_executable(ipc_pipeline_example ipc_pipeline_example.cpp)
+target_link_libraries(ipc_pipeline_example PRIVATE qbuem-stack::qbuem)
+
 # ── coro_json: 비동기 코루틴 + qbuem-json 예제 ────────────────────────────────
 # qbuem-json 이 없을 경우 빌드를 건너뜀 (선택적 의존성).
 FetchContent_Declare(qbuem_json
