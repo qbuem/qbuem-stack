@@ -75,6 +75,26 @@ target_link_libraries(canary_example PRIVATE qbuem-stack::qbuem)
 add_executable(scatter_gather_example scatter_gather_example.cpp)
 target_link_libraries(scatter_gather_example PRIVATE qbuem-stack::qbuem)
 
+# RetryAction + CircuitBreaker + DeadLetterQueue: 결제 게이트웨이 복원력 패턴
+add_executable(resilience_example resilience_example.cpp)
+target_link_libraries(resilience_example PRIVATE qbuem-stack::qbuem)
+
+# SagaOrchestrator: 분산 트랜잭션 (이커머스 주문 처리)
+add_executable(saga_example saga_example.cpp)
+target_link_libraries(saga_example PRIVATE qbuem-stack::qbuem)
+
+# CheckpointedPipeline: 배치 로그 처리기 + 체크포인트 저장/복원
+add_executable(checkpoint_example checkpoint_example.cpp)
+target_link_libraries(checkpoint_example PRIVATE qbuem-stack::qbuem)
+
+# IdempotencyFilter + ErrorBudgetTracker + LatencyHistogram: 결제 중복제거 + SLO
+add_executable(idempotency_slo_example idempotency_slo_example.cpp)
+target_link_libraries(idempotency_slo_example PRIVATE qbuem-stack::qbuem)
+
+# TaskGroup: 구조적 동시성 (병렬 서비스 조회, 팬아웃, 취소)
+add_executable(task_group_example task_group_example.cpp)
+target_link_libraries(task_group_example PRIVATE qbuem-stack::qbuem)
+
 # ── coro_json: 비동기 코루틴 + qbuem-json 예제 ────────────────────────────────
 # qbuem-json 이 없을 경우 빌드를 건너뜀 (선택적 의존성).
 FetchContent_Declare(qbuem_json
