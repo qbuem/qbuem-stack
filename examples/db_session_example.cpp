@@ -18,6 +18,7 @@
  * - ISessionStore::touch()     — TTL 갱신
  */
 
+#include <qbuem_json/qbuem_json.hpp>
 #include <qbuem/core/dispatcher.hpp>
 #include <qbuem/core/session_store.hpp>
 #include <qbuem/core/task.hpp>
@@ -32,6 +33,13 @@
 #include <string>
 #include <thread>
 #include <vector>
+
+/// 세션 페이로드 DTO — ISessionStore 에 저장되는 JSON 데이터.
+struct SessionData {
+    int         user_id = 0;
+    std::string role;
+};
+QBUEM_JSON_FIELDS(SessionData, user_id, role)
 
 using namespace qbuem;
 using namespace qbuem::db;
@@ -292,7 +300,7 @@ static Task<void> demo_session_store_task() {
 
     // 세션 생성
     auto set_r = co_await store.set(
-        "sess-001", R"({"user_id":42,"role":"admin"})", 3600s);
+        "sess-001", qbuem::write(SessionData{42, "admin"}), 3600s);
     std::printf("  set(sess-001): %s\n",
                 set_r ? "ok" : set_r.error().message().c_str());
 
@@ -313,7 +321,7 @@ static Task<void> demo_session_store_task() {
     std::printf("  touch(sess-001): %s\n", touch_r ? "ok" : "실패");
 
     // 두 번째 세션 생성
-    co_await store.set("sess-002", R"({"user_id":7,"role":"user"})", 1800s);
+    co_await store.set("sess-002", qbuem::write(SessionData{7, "user"}), 1800s);
 
     // 세션 수 확인
     std::printf("  세션 수: %zu\n", store.count());
