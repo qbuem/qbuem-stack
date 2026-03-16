@@ -177,12 +177,12 @@ public:
   [[nodiscard]] Task<ReprocessResult> reprocess(DlqT &dlq) {
     ReprocessResult result;
 
-    auto items = dlq.drain_all();
+    auto items = dlq.drain();
     for (auto &item : items) {
       bool handled = false;
 
       for (auto &entry : entries_) {
-        auto r = entry.migrate_and_push(item.value);
+        auto r = entry.migrate_and_push(item.item);
         if (r && *r) {
           ++result.migrated;
           handled = true;
