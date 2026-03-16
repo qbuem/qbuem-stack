@@ -63,6 +63,18 @@ target_link_libraries(stream_ops_example PRIVATE qbuem-stack::qbuem)
 add_executable(tcp_echo_server tcp_echo_server.cpp)
 target_link_libraries(tcp_echo_server PRIVATE qbuem-stack::qbuem)
 
+# SHMChannel + SHMBus: 공유 메모리 채널 create/send/recv, 버스 declare/publish/subscribe
+add_executable(shm_channel_example shm_channel_example.cpp)
+target_link_libraries(shm_channel_example PRIVATE qbuem-stack::qbuem)
+
+# CanaryRouter: 점진적 카나리 배포, 지표 수집, 자동/수동 롤백
+add_executable(canary_example canary_example.cpp)
+target_link_libraries(canary_example PRIVATE qbuem-stack::qbuem)
+
+# ScatterGatherAction: 분산/병렬/집계 파이프라인, max_parallel 배치 제한
+add_executable(scatter_gather_example scatter_gather_example.cpp)
+target_link_libraries(scatter_gather_example PRIVATE qbuem-stack::qbuem)
+
 # ── coro_json: 비동기 코루틴 + qbuem-json 예제 ────────────────────────────────
 # qbuem-json 이 없을 경우 빌드를 건너뜀 (선택적 의존성).
 FetchContent_Declare(qbuem_json

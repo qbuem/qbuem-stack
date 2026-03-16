@@ -140,7 +140,30 @@ target_link_libraries(qbuem_pipeline_advanced_tests
     GTest::gtest_main
 )
 
+# ── SHMChannel + SHMBus 기능 테스트 ──────────────────────────────────────────
+add_executable(qbuem_shm_tests
+    shm_channel_test.cpp
+)
+target_link_libraries(qbuem_shm_tests
+    PRIVATE
+    qbuem-stack::qbuem
+    GTest::gtest_main
+)
+
+# ── CanaryRouter + ScatterGatherAction / DebounceAction / ThrottleAction ──────
+add_executable(qbuem_canary_scatter_tests
+    canary_test.cpp
+    scatter_gather_test.cpp
+)
+target_link_libraries(qbuem_canary_scatter_tests
+    PRIVATE
+    qbuem-stack::qbuem
+    GTest::gtest_main
+)
+
 include(GoogleTest)
+gtest_discover_tests(qbuem_shm_tests)
+gtest_discover_tests(qbuem_canary_scatter_tests)
 gtest_discover_tests(qbuem_tests)
 gtest_discover_tests(qbuem_ext_tests)
 gtest_discover_tests(qbuem_v14_tests)

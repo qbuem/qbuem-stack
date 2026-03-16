@@ -318,9 +318,14 @@ public:
             co_return Result<void>{};
         };
 
-        // Spawn the accumulation coroutine if dispatcher is available
-        // The fn runs to completion consuming the channel; caller manages lifecycle
-        (void)fn; // fn is stored but invocation requires external Dispatcher
+        // Spawn the accumulation coroutine via the dispatcher (if started)
+        if (dispatcher_) {
+            auto run_accumulator =
+                [fn2 = std::move(fn), ch = accumulate_ch]() mutable -> Task<void> {
+                    co_await fn2(ch);
+                };
+            dispatcher_->spawn(run_accumulator());
+        }
 
         return subscribe(std::move(topic), std::move(handler), cap);
     }

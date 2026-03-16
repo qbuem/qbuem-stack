@@ -111,6 +111,7 @@ struct TopicDescriptor {
     uint64_t   type_id{0};          ///< 타입 식별자 (sizeof(T) XOR typeid 기반)
     size_t     capacity{0};         ///< 링 버퍼 용량
     void*      channel_ptr{nullptr};///< AsyncChannel<T>* 또는 SHMChannel<T>* (type-erased)
+    std::function<void(void*)> channel_deleter; ///< type-safe 소멸자
 
     /** @brief 이름을 설정합니다 (최대 63자). */
     void set_name(std::string_view n) noexcept {
@@ -139,7 +140,17 @@ public:
     static constexpr size_t kMaxTopics = 64;
 
     SHMBus() = default;
-    ~SHMBus() = default;
+
+    ~SHMBus() {
+        size_t n = topic_count_.load(std::memory_order_acquire);
+        for (size_t i = 0; i < n; ++i) {
+            auto& desc = topics_[i];
+            if (desc.channel_ptr && desc.channel_deleter) {
+                desc.channel_deleter(desc.channel_ptr);
+                desc.channel_ptr = nullptr;
+            }
+        }
+    }
 
     SHMBus(const SHMBus&) = delete;
     SHMBus& operator=(const SHMBus&) = delete;
@@ -175,12 +186,18 @@ public:
         desc.capacity = cap;
 
         if (scope == TopicScope::LOCAL_ONLY) {
-            desc.channel_ptr = new AsyncChannel<T>(cap);
+            desc.channel_ptr    = new AsyncChannel<T>(cap);
+            desc.channel_deleter = [](void* p) {
+                delete static_cast<AsyncChannel<T>*>(p);
+            };
         } else {
             // SYSTEM_WIDE: SHMChannel 생성 (생산자 측)
             auto res = SHMChannel<T>::create(name, cap);
             if (!res) return false;
-            desc.channel_ptr = res->release();
+            desc.channel_ptr    = res->release();
+            desc.channel_deleter = [](void* p) {
+                delete static_cast<SHMChannel<T>*>(p);
+            };
         }
 
         topic_count_.fetch_add(1, std::memory_order_release);
@@ -271,6 +288,7 @@ private:
     struct LocalSub final : ISubscription<T> {
         AsyncChannel<T>* ch;
         const char*      name_str;
+        T                buf_{};  ///< per-subscriber buffer (avoids static thread_local aliasing)
 
         LocalSub(AsyncChannel<T>* c, std::string_view n)
             : ch(c), name_str(n.data()) {}
@@ -278,19 +296,15 @@ private:
         Task<std::optional<const T*>> recv() override {
             auto item = co_await ch->recv();
             if (!item) co_return std::nullopt;
-            // AsyncChannel은 값을 복사하므로, 임시 저장소를 유지해야 함
-            // 실 구현에서는 per-subscriber 링 버퍼가 필요
-            static thread_local T buf;
-            buf = std::move(*item);
-            co_return &buf;
+            buf_ = std::move(*item);
+            co_return &buf_;
         }
 
         std::optional<const T*> try_recv() override {
-            static thread_local T buf;
             auto item = ch->try_recv();
             if (!item) return std::nullopt;
-            buf = std::move(*item);
-            return &buf;
+            buf_ = std::move(*item);
+            return &buf_;
         }
 
         [[nodiscard]] std::string_view topic() const noexcept override { return name_str; }

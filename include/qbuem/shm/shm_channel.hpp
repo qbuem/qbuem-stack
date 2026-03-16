@@ -37,14 +37,19 @@
  */
 
 #include <qbuem/common.hpp>
+#include <qbuem/core/awaiters.hpp>
 #include <qbuem/core/task.hpp>
 
 #include <atomic>
 #include <cstdint>
 #include <cstring>
+#include <fcntl.h>
 #include <memory>
 #include <optional>
 #include <string_view>
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 namespace qbuem::shm {
 
@@ -269,6 +274,7 @@ private:
 
     SHMSegment seg_;
     size_t     capacity_;
+    T          recv_buf_{};  ///< per-instance copy buffer (zero-copy facade)
 };
 
 // ─── 세그먼트 레이아웃 계산 헬퍼 ─────────────────────────────────────────────
@@ -281,9 +287,323 @@ private:
  * @param envelope   `SHMEnvelope`를 앞에 붙일지 여부.
  * @returns 필요한 세그먼트 크기 (페이지 경계로 정렬됨).
  */
-[[nodiscard]] size_t calc_segment_size(size_t capacity,
-                                        size_t msg_size,
-                                        bool   envelope = false) noexcept;
+[[nodiscard]] inline size_t calc_segment_size(size_t capacity,
+                                               size_t msg_size,
+                                               bool   envelope = false) noexcept {
+    size_t header_sz = sizeof(SHMHeader);
+    size_t ring_sz   = capacity * sizeof(MetadataSlot);
+    size_t per_slot  = envelope ? (sizeof(SHMEnvelope) + msg_size) : msg_size;
+    size_t arena_sz  = capacity * per_slot;
+    size_t total     = header_sz + ring_sz + arena_sz;
+    constexpr size_t kPage = 4096;
+    return (total + kPage - 1u) & ~(kPage - 1u);
+}
+
+// ─── SHMSegment implementation ───────────────────────────────────────────────
+
+inline SHMSegment::~SHMSegment() {
+    if (base_ && base_ != MAP_FAILED)
+        ::munmap(base_, size_);
+    if (fd_ >= 0)
+        ::close(fd_);
+}
+
+inline SHMSegment::SHMSegment(SHMSegment&& o) noexcept
+    : base_(o.base_), size_(o.size_), fd_(o.fd_) {
+    o.base_ = nullptr;
+    o.size_ = 0;
+    o.fd_   = -1;
+}
+
+inline SHMSegment& SHMSegment::operator=(SHMSegment&& o) noexcept {
+    if (this != &o) {
+        if (base_ && base_ != MAP_FAILED) ::munmap(base_, size_);
+        if (fd_ >= 0) ::close(fd_);
+        base_ = o.base_; size_ = o.size_; fd_ = o.fd_;
+        o.base_ = nullptr; o.size_ = 0; o.fd_ = -1;
+    }
+    return *this;
+}
+
+inline Result<SHMSegment> SHMSegment::create(std::string_view name,
+                                               size_t size) noexcept {
+    std::string shm_name;
+    shm_name.reserve(name.size() + 1);
+    if (name.empty() || name[0] != '/') shm_name += '/';
+    shm_name.append(name.data(), name.size());
+
+    int fd = ::shm_open(shm_name.c_str(), O_CREAT | O_RDWR | O_TRUNC, 0600);
+    if (fd < 0)
+        return unexpected(std::make_error_code(std::errc::io_error));
+
+    if (::ftruncate(fd, static_cast<off_t>(size)) < 0) {
+        ::close(fd);
+        ::shm_unlink(shm_name.c_str());
+        return unexpected(std::make_error_code(std::errc::io_error));
+    }
+
+    void* base = ::mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    if (base == MAP_FAILED) {
+        ::close(fd);
+        ::shm_unlink(shm_name.c_str());
+        return unexpected(std::make_error_code(std::errc::io_error));
+    }
+
+    SHMSegment seg;
+    seg.base_ = base;
+    seg.size_ = size;
+    seg.fd_   = fd;
+    return seg;
+}
+
+inline Result<SHMSegment> SHMSegment::open(std::string_view name) noexcept {
+    std::string shm_name;
+    shm_name.reserve(name.size() + 1);
+    if (name.empty() || name[0] != '/') shm_name += '/';
+    shm_name.append(name.data(), name.size());
+
+    int fd = ::shm_open(shm_name.c_str(), O_RDWR, 0600);
+    if (fd < 0)
+        return unexpected(std::make_error_code(std::errc::no_such_file_or_directory));
+
+    struct stat st{};
+    if (::fstat(fd, &st) < 0) {
+        ::close(fd);
+        return unexpected(std::make_error_code(std::errc::io_error));
+    }
+    size_t size = static_cast<size_t>(st.st_size);
+
+    void* base = ::mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    if (base == MAP_FAILED) {
+        ::close(fd);
+        return unexpected(std::make_error_code(std::errc::io_error));
+    }
+
+    SHMSegment seg;
+    seg.base_ = base;
+    seg.size_ = size;
+    seg.fd_   = fd;
+    return seg;
+}
+
+// ─── SHMChannel<T> template implementations ──────────────────────────────────
+
+template <typename T>
+SHMChannel<T>::SHMChannel(SHMSegment seg, size_t cap) noexcept
+    : seg_(std::move(seg)), capacity_(cap) {}
+
+template <typename T>
+SHMHeader* SHMChannel<T>::header() noexcept {
+    return static_cast<SHMHeader*>(seg_.base());
+}
+template <typename T>
+const SHMHeader* SHMChannel<T>::header() const noexcept {
+    return static_cast<const SHMHeader*>(seg_.base());
+}
+
+template <typename T>
+MetadataSlot* SHMChannel<T>::ring() noexcept {
+    return reinterpret_cast<MetadataSlot*>(
+        static_cast<uint8_t*>(seg_.base()) + sizeof(SHMHeader));
+}
+template <typename T>
+const MetadataSlot* SHMChannel<T>::ring() const noexcept {
+    return reinterpret_cast<const MetadataSlot*>(
+        static_cast<const uint8_t*>(seg_.base()) + sizeof(SHMHeader));
+}
+
+template <typename T>
+uint8_t* SHMChannel<T>::arena() noexcept {
+    return static_cast<uint8_t*>(seg_.base())
+         + sizeof(SHMHeader)
+         + capacity_ * sizeof(MetadataSlot);
+}
+template <typename T>
+const uint8_t* SHMChannel<T>::arena() const noexcept {
+    return static_cast<const uint8_t*>(seg_.base())
+         + sizeof(SHMHeader)
+         + capacity_ * sizeof(MetadataSlot);
+}
+
+template <typename T>
+uint32_t SHMChannel<T>::slot_to_offset(size_t slot_idx) const noexcept {
+    return static_cast<uint32_t>(slot_idx * sizeof(T));
+}
+
+template <typename T>
+Result<typename SHMChannel<T>::Ptr>
+SHMChannel<T>::create(std::string_view name, size_t capacity) noexcept {
+    // Round capacity up to next power of two
+    size_t cap = 1;
+    while (cap < capacity) cap <<= 1;
+
+    size_t seg_size = calc_segment_size(cap, sizeof(T));
+    auto seg_res = SHMSegment::create(name, seg_size);
+    if (!seg_res) return unexpected(seg_res.error());
+
+    // Placement-init header
+    auto* hdr = static_cast<SHMHeader*>(seg_res->base());
+    new (hdr) SHMHeader();
+    hdr->capacity = static_cast<uint32_t>(cap);
+    hdr->magic    = kSHMMagic;
+    hdr->state.store(1u, std::memory_order_release);
+
+    // Init Vyukov ring slots: seq[i] = i  (slot[i] is "free for write")
+    auto* slots = reinterpret_cast<MetadataSlot*>(
+        static_cast<uint8_t*>(seg_res->base()) + sizeof(SHMHeader));
+    for (size_t i = 0; i < cap; ++i) {
+        new (&slots[i]) MetadataSlot();
+        slots[i].seq.store(static_cast<uint64_t>(i), std::memory_order_relaxed);
+    }
+
+    return Ptr(new SHMChannel<T>(std::move(*seg_res), cap));
+}
+
+template <typename T>
+Result<typename SHMChannel<T>::Ptr>
+SHMChannel<T>::open(std::string_view name) noexcept {
+    auto seg_res = SHMSegment::open(name);
+    if (!seg_res) return unexpected(seg_res.error());
+
+    auto* hdr = static_cast<const SHMHeader*>(seg_res->base());
+    if (hdr->magic != kSHMMagic)
+        return unexpected(std::make_error_code(std::errc::invalid_argument));
+
+    size_t cap = hdr->capacity;
+    return Ptr(new SHMChannel<T>(std::move(*seg_res), cap));
+}
+
+template <typename T>
+bool SHMChannel<T>::try_send(const T& msg) noexcept {
+    auto* hdr = header();
+    if (!(hdr->state.load(std::memory_order_relaxed) & 1u)) return false;
+
+    uint64_t pos  = hdr->tail.load(std::memory_order_relaxed);
+    uint64_t mask = capacity_ - 1;
+
+    for (;;) {
+        auto& slot    = ring()[pos & mask];
+        uint64_t seq  = slot.seq.load(std::memory_order_acquire);
+        int64_t  diff = static_cast<int64_t>(seq) - static_cast<int64_t>(pos);
+
+        if (diff == 0) {
+            if (hdr->tail.compare_exchange_weak(pos, pos + 1,
+                                                std::memory_order_relaxed)) {
+                uint32_t off = static_cast<uint32_t>((pos & mask) * sizeof(T));
+                std::memcpy(arena() + off, &msg, sizeof(T));
+                slot.off = off;
+                slot.len = sizeof(T);
+                slot.seq.store(pos + 1, std::memory_order_release);
+                return true;
+            }
+            // CAS failed — pos already updated by CAS
+        } else if (diff < 0) {
+            return false;  // full
+        } else {
+            pos = hdr->tail.load(std::memory_order_relaxed);
+        }
+    }
+}
+
+template <typename T>
+std::optional<const T*> SHMChannel<T>::try_recv() noexcept {
+    auto* hdr = header();
+    uint64_t pos  = hdr->head.load(std::memory_order_relaxed);
+    uint64_t mask = capacity_ - 1;
+
+    for (;;) {
+        auto& slot    = ring()[pos & mask];
+        uint64_t seq  = slot.seq.load(std::memory_order_acquire);
+        int64_t  diff = static_cast<int64_t>(seq) - static_cast<int64_t>(pos + 1);
+
+        if (diff == 0) {
+            if (hdr->head.compare_exchange_weak(pos, pos + 1,
+                                                std::memory_order_relaxed)) {
+                std::memcpy(&recv_buf_, arena() + slot.off, sizeof(T));
+                // Release slot for reuse: next writable turn = pos + capacity
+                slot.seq.store(pos + mask + 1, std::memory_order_release);
+                return &recv_buf_;
+            }
+            // CAS failed — pos already updated
+        } else if (diff < 0) {
+            return std::nullopt;  // empty
+        } else {
+            pos = hdr->head.load(std::memory_order_relaxed);
+        }
+    }
+}
+
+template <typename T>
+Task<Result<void>> SHMChannel<T>::send(const T& msg) noexcept {
+    size_t spins = 0;
+    while (!try_send(msg)) {
+        if (!is_open())
+            co_return unexpected(std::make_error_code(std::errc::broken_pipe));
+        if (++spins > 128) {
+            co_await futex_wait_send();
+            spins = 0;
+        }
+    }
+    futex_wake_recv();
+    co_return Result<void>{};
+}
+
+template <typename T>
+Task<std::optional<const T*>> SHMChannel<T>::recv() noexcept {
+    size_t spins = 0;
+    for (;;) {
+        auto r = try_recv();
+        if (r) co_return r;
+        if (!is_open()) co_return std::nullopt;
+        if (++spins > 128) {
+            co_await futex_wait_recv();
+            spins = 0;
+        }
+    }
+}
+
+template <typename T>
+void SHMChannel<T>::close() noexcept {
+    header()->state.fetch_and(~1u, std::memory_order_release);
+    futex_wake_recv();
+    futex_wake_send();
+}
+
+template <typename T>
+bool SHMChannel<T>::is_open() const noexcept {
+    return (header()->state.load(std::memory_order_relaxed) & 1u) != 0u;
+}
+
+template <typename T>
+size_t SHMChannel<T>::size_approx() const noexcept {
+    const auto* hdr = header();
+    uint64_t t = hdr->tail.load(std::memory_order_relaxed);
+    uint64_t h = hdr->head.load(std::memory_order_relaxed);
+    return (t >= h) ? static_cast<size_t>(t - h) : 0u;
+}
+
+template <typename T>
+size_t SHMChannel<T>::capacity() const noexcept { return capacity_; }
+
+template <typename T>
+Task<void> SHMChannel<T>::futex_wait_recv() noexcept {
+    co_await qbuem::AsyncSleep{1};  // 1ms yield (fallback; replace with IORING_OP_FUTEX_WAIT)
+}
+
+template <typename T>
+void SHMChannel<T>::futex_wake_recv() noexcept {
+    // polling fallback — consumers wake up from AsyncSleep timer
+}
+
+template <typename T>
+Task<void> SHMChannel<T>::futex_wait_send() noexcept {
+    co_await qbuem::AsyncSleep{1};  // backpressure yield
+}
+
+template <typename T>
+void SHMChannel<T>::futex_wake_send() noexcept {
+    // polling fallback
+}
 
 } // namespace qbuem::shm
 

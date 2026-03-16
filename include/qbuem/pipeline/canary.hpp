@@ -31,6 +31,7 @@
  */
 
 #include <qbuem/common.hpp>
+#include <qbuem/core/awaiters.hpp>
 #include <qbuem/core/task.hpp>
 
 #include <atomic>
@@ -209,11 +210,10 @@ public:
       stable_metrics_.reset();
       canary_metrics_.reset();
 
-      // step_duration 동안 대기하며 지표 모니터링
+      // step_duration 동안 100ms 간격으로 폴링하며 지표 모니터링
       auto deadline = std::chrono::steady_clock::now() + cfg_.step_duration;
       while (std::chrono::steady_clock::now() < deadline) {
-        // 간단한 yield — 실제 환경에서는 co_await sleep 사용
-        co_await SleepAwaiter{};
+        co_await sleep(100);  // 100ms poll interval via AsyncSleep
 
         if (!rollout_active_.load()) co_return;
 
@@ -282,16 +282,6 @@ private:
 
     return std::nullopt;
   }
-
-  // 간단한 1-tick yield awaiter (실 사용 시 sleep awaiter 대체 권장)
-  struct SleepAwaiter {
-    bool await_ready() const noexcept { return false; }
-    void await_suspend(std::coroutine_handle<> h) noexcept {
-      // no-op: 즉시 재개 (실제 sleep은 TimerWheel / AsyncSleep 사용)
-      h.resume();
-    }
-    void await_resume() const noexcept {}
-  };
 
   // -------------------------------------------------------------------------
   // 데이터 멤버
