@@ -149,13 +149,7 @@ target_link_libraries(hardware_io_example PRIVATE qbuem-stack::qbuem)
 add_executable(zero_copy_arena_channel_example zero_copy_arena_channel_example.cpp)
 target_link_libraries(zero_copy_arena_channel_example PRIVATE qbuem-stack::qbuem)
 
-# ── trading_platform: 종합 예제 ──────────────────────────────────────────────
-# WAS + StaticPipeline(3 Actions, auto_scale, SLO) + DynamicPipeline(hot_swap, toggle)
-# + MessageBus(SSE fan-out) + MockDB + JSON + Context 전파 + Cross-reactor 응답 채널
-add_executable(trading_platform trading_platform.cpp)
-target_link_libraries(trading_platform PRIVATE qbuem-stack::qbuem)
-
-# ── coro_json: 비동기 코루틴 + qbuem-json 예제 ────────────────────────────────
+# ── coro_json + trading_platform: qbuem-json 의존 예제 ───────────────────────
 # qbuem-json 이 없을 경우 빌드를 건너뜀 (선택적 의존성).
 FetchContent_Declare(qbuem_json
     GIT_REPOSITORY https://github.com/qbuem/qbuem-json.git
@@ -170,9 +164,15 @@ endif()
 if(TARGET qbuem_json::qbuem_json)
     add_executable(coro_json coro_json.cpp)
     target_link_libraries(coro_json PRIVATE qbuem-stack::qbuem qbuem_json::qbuem_json)
+
+    # trading_platform: 종합 예제
+    # WAS + StaticPipeline(3 Actions, auto_scale, SLO) + DynamicPipeline(hot_swap, toggle)
+    # + MessageBus(SSE fan-out) + MockDB + qbuem-json + Context 전파 + Cross-reactor 응답 채널
+    add_executable(trading_platform trading_platform.cpp)
+    target_link_libraries(trading_platform PRIVATE qbuem-stack::qbuem qbuem_json::qbuem_json)
 else()
     message(WARNING
-        "qbuem-json target not found — skipping coro_json example.\n"
+        "qbuem-json target not found — skipping coro_json, trading_platform examples.\n"
         "  Set -DQBUEM_JSON_TAG=<tag> or ensure network access."
     )
 endif()

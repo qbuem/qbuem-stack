@@ -79,12 +79,14 @@
 #include <qbuem/pipeline/slo.hpp>
 #include <qbuem/pipeline/static_pipeline.hpp>
 #include <qbuem/qbuem_stack.hpp>
+#include <qbuem_json/qbuem_json.hpp>
 
 #include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -99,110 +101,36 @@ using namespace qbuem::middleware;
 using namespace std::chrono_literals;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// §1. 경량 JSON 헬퍼 (외부 의존성 없음)
+// §1. JSON 헬퍼 — qbuem-json 기반 (https://github.com/qbuem/qbuem-json)
 // ─────────────────────────────────────────────────────────────────────────────
 
 namespace json {
 
-/// 문자열을 JSON 인코딩합니다 (escape + 따옴표).
-inline std::string str(std::string_view s) {
-    std::string out;
-    out.reserve(s.size() + 2);
-    out += '"';
-    for (char c : s) {
-        if      (c == '"')  { out += "\\\""; }
-        else if (c == '\\') { out += "\\\\"; }
-        else if (c == '\n') { out += "\\n";  }
-        else if (c == '\r') { out += "\\r";  }
-        else if (c == '\t') { out += "\\t";  }
-        else                { out += c;       }
-    }
-    out += '"';
-    return out;
-}
-
-inline std::string num(double v)   { return std::to_string(v); }
-inline std::string num(uint64_t v) { return std::to_string(v); }
-inline std::string num(int v)      { return std::to_string(v); }
-inline std::string boolean(bool v) { return v ? "true" : "false"; }
-
-/// 단순 JSON 오브젝트 빌더.
-class Object {
-public:
-    template <typename V>
-    Object& add(std::string_view key, V&& val) {
-        if (!first_) buf_ += ',';
-        buf_ += str(key); buf_ += ':'; buf_ += std::forward<V>(val);
-        first_ = false;
-        return *this;
-    }
-    std::string build() const { return "{" + buf_ + "}"; }
-private:
-    std::string buf_;
-    bool first_ = true;
-};
-
-/// 단순 JSON 배열 빌더.
-class Array {
-public:
-    Array& add(std::string val) {
-        if (!first_) buf_ += ',';
-        buf_ += std::move(val);
-        first_ = false;
-        return *this;
-    }
-    std::string build() const { return "[" + buf_ + "]"; }
-private:
-    std::string buf_;
-    bool first_ = true;
-};
-
-/// 최소 파서: JSON body에서 문자열 필드를 추출합니다.
+/// JSON body에서 문자열 필드 추출.
+/// 필드가 없거나 파싱 실패 시 std::nullopt 반환.
 inline std::optional<std::string> parse_str(std::string_view body,
                                              std::string_view key) {
-    std::string needle = "\"" + std::string(key) + "\"";
-    auto pos = body.find(needle);
-    if (pos == std::string_view::npos) return std::nullopt;
-    pos += needle.size();
-    // skip whitespace and ':'
-    while (pos < body.size() && (body[pos] == ' ' || body[pos] == ':')) ++pos;
-    if (pos >= body.size() || body[pos] != '"') return std::nullopt;
-    ++pos; // skip opening quote
-    std::string result;
-    while (pos < body.size() && body[pos] != '"') {
-        if (body[pos] == '\\' && pos + 1 < body.size()) {
-            ++pos;
-            switch (body[pos]) {
-                case '"':  result += '"';  break;
-                case '\\': result += '\\'; break;
-                case 'n':  result += '\n'; break;
-                default:   result += body[pos]; break;
-            }
-        } else {
-            result += body[pos];
-        }
-        ++pos;
-    }
-    return result;
-}
-
-/// 최소 파서: JSON body에서 숫자 필드를 추출합니다.
-inline std::optional<double> parse_double(std::string_view body,
-                                           std::string_view key) {
-    std::string needle = "\"" + std::string(key) + "\"";
-    auto pos = body.find(needle);
-    if (pos == std::string_view::npos) return std::nullopt;
-    pos += needle.size();
-    while (pos < body.size() && (body[pos] == ' ' || body[pos] == ':')) ++pos;
-    if (pos >= body.size()) return std::nullopt;
     try {
-        size_t consumed = 0;
-        double val = std::stod(std::string(body.substr(pos)), &consumed);
-        if (consumed == 0) return std::nullopt;
-        return val;
+        qbuem::Document doc;
+        auto val = qbuem::parse(doc, body);
+        std::string result = val.get(std::string(key)) | std::string{};
+        return result.empty() ? std::nullopt : std::optional<std::string>(result);
     } catch (...) { return std::nullopt; }
 }
 
+/// JSON body에서 double 필드 추출.
+inline std::optional<double> parse_double(std::string_view body,
+                                           std::string_view key) {
+    try {
+        qbuem::Document doc;
+        auto val = qbuem::parse(doc, body);
+        constexpr double kMissing = std::numeric_limits<double>::lowest();
+        double result = val.get(std::string(key)) | kMissing;
+        return (result == kMissing) ? std::nullopt : std::optional<double>(result);
+    } catch (...) { return std::nullopt; }
+}
+
+/// JSON body에서 int 필드 추출.
 inline std::optional<int> parse_int(std::string_view body,
                                      std::string_view key) {
     auto v = parse_double(body, key);
@@ -422,44 +350,50 @@ public:
 // ─────────────────────────────────────────────────────────────────────────────
 
 static std::string order_record_to_json(const OrderRecord& r) {
-    return json::Object{}
-        .add("order_id",    json::num(r.order_id))
-        .add("account_id",  json::str(r.account_id))
-        .add("symbol",      json::str(r.symbol))
-        .add("side",        json::str(r.side))
-        .add("type",        json::str(r.type))
-        .add("price",       json::num(r.price))
-        .add("quantity",    json::num(r.quantity))
-        .add("status",      json::str(r.status))
-        .add("exec_price",  json::num(r.exec_price))
-        .add("created_at",  json::str(r.created_at))
-        .add("reason",      json::str(r.reason))
-        .build();
+    qbuem::Document doc;
+    auto obj = qbuem::parse(doc, "{}");
+    obj.insert("order_id",   r.order_id);
+    obj.insert("account_id", r.account_id);
+    obj.insert("symbol",     r.symbol);
+    obj.insert("side",       r.side);
+    obj.insert("type",       r.type);
+    obj.insert("price",      r.price);
+    obj.insert("quantity",   r.quantity);
+    obj.insert("status",     r.status);
+    obj.insert("exec_price", r.exec_price);
+    obj.insert("created_at", r.created_at);
+    obj.insert("reason",     r.reason);
+    return obj.dump();
 }
 
 static std::string order_result_to_json(const OrderResult& r) {
-    return json::Object{}
-        .add("order_id",   json::num(r.order_id))
-        .add("status",     json::str(r.status))
-        .add("exec_price", json::num(r.exec_price))
-        .add("message",    json::str(r.message))
-        .add("success",    json::boolean(r.success))
-        .build();
+    qbuem::Document doc;
+    auto obj = qbuem::parse(doc, "{}");
+    obj.insert("order_id",   r.order_id);
+    obj.insert("status",     r.status);
+    obj.insert("exec_price", r.exec_price);
+    obj.insert("message",    r.message);
+    obj.insert("success",    r.success);
+    return obj.dump();
 }
 
 static std::string json_error(std::string_view msg) {
-    return json::Object{}.add("error", json::str(msg)).build();
+    qbuem::Document doc;
+    auto obj = qbuem::parse(doc, "{}");
+    obj.insert("error", std::string(msg));
+    return obj.dump();
 }
 
 static std::string order_event_to_json(const OrderEvent& e) {
-    return json::Object{}
-        .add("order_id",   json::num(e.order_id))
-        .add("account_id", json::str(e.account_id))
-        .add("symbol",     json::str(e.symbol))
-        .add("status",     json::str(e.status))
-        .add("exec_price", json::num(e.exec_price))
-        .add("reason",     json::str(e.reason))
-        .build();
+    qbuem::Document doc;
+    auto obj = qbuem::parse(doc, "{}");
+    obj.insert("order_id",   e.order_id);
+    obj.insert("account_id", e.account_id);
+    obj.insert("symbol",     e.symbol);
+    obj.insert("status",     e.status);
+    obj.insert("exec_price", e.exec_price);
+    obj.insert("reason",     e.reason);
+    return obj.dump();
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -958,11 +892,15 @@ static AsyncHandler make_post_order(TradingPlatform& p) {
 static Handler make_get_orders(TradingPlatform& p) {
     return [&p](const Request& req, Response& res) {
         auto orders = p.db->list(100);
-        json::Array arr;
-        for (auto& r : orders) arr.add(order_record_to_json(r));
+        qbuem::Document doc;
+        auto arr = qbuem::parse(doc, "[]");
+        for (auto& r : orders) {
+            qbuem::Document rdoc;
+            arr.push_back(qbuem::parse(rdoc, order_record_to_json(r)));
+        }
         res.status(200)
            .header("Content-Type", "application/json")
-           .body(arr.build());
+           .body(arr.dump());
     };
 }
 
@@ -1001,10 +939,13 @@ static Handler make_cancel_order(TradingPlatform& p) {
             res.status(409).body(json_error("only filled orders can be cancelled")); return;
         }
         p.db->update_status(id, "cancelled", "user requested");
+        qbuem::Document doc;
+        auto obj = qbuem::parse(doc, "{}");
+        obj.insert("order_id", id);
+        obj.insert("status",   std::string("cancelled"));
         res.status(200)
            .header("Content-Type", "application/json")
-           .body(json::Object{}.add("order_id", json::num(id))
-                               .add("status", json::str("cancelled")).build());
+           .body(obj.dump());
     };
 }
 
@@ -1015,10 +956,13 @@ static AsyncHandler make_sse_events(TradingPlatform& p) {
         auto stream = p.bus->subscribe_stream<OrderEvent>("order.completed", 64);
 
         SseStream sse(res);
-        sse.send(json::Object{}.add("message", json::str("connected"))
-                               .add("topic",   json::str("order.completed"))
-                               .build(),
-                 "connected");
+        {
+            qbuem::Document doc;
+            auto obj = qbuem::parse(doc, "{}");
+            obj.insert("message", std::string("connected"));
+            obj.insert("topic",   std::string("order.completed"));
+            sse.send(obj.dump(), "connected");
+        }
 
         // 최대 30개 이벤트 수신 후 종료 (데모용)
         for (int i = 0; i < 30; ++i) {
@@ -1036,29 +980,30 @@ static Handler make_get_stats(TradingPlatform& p) {
         size_t dyn_stages = p.dyn_pipe->stage_count();
         auto stage_names = p.dyn_pipe->stage_names();
 
-        json::Array stage_arr;
-        for (auto& n : stage_names) stage_arr.add(json::str(n));
+        qbuem::Document arr_doc;
+        auto stage_arr = qbuem::parse(arr_doc, "[]");
+        for (auto& n : stage_names) stage_arr.push_back(n);
 
-        std::string stats = json::Object{}
-            // 주문 통계
-            .add("submitted",      json::num(static_cast<uint64_t>(p.submitted.load())))
-            .add("filled",         json::num(static_cast<uint64_t>(p.filled.load())))
-            .add("rejected",       json::num(static_cast<uint64_t>(p.rejected.load())))
-            .add("db_total",       json::num(static_cast<uint64_t>(p.db->count())))
-            // Static Pipeline 큐 상태 (empty 여부)
-            .add("validate_empty", json::boolean(p.validate_act->input()->size_approx() == 0))
-            .add("enrich_empty",   json::boolean(p.enrich_act->input()->size_approx() == 0))
-            .add("risk_empty",     json::boolean(p.risk_act->input()->size_approx() == 0))
-            // Dynamic Pipeline
-            .add("dyn_stages",     json::num(static_cast<int>(dyn_stages)))
-            .add("dyn_stage_names", stage_arr.build())
-            // 설정
-            .add("auto_scale",     json::boolean(p.auto_scale_on.load()))
-            .build();
+        qbuem::Document doc;
+        auto stats = qbuem::parse(doc, "{}");
+        // 주문 통계
+        stats.insert("submitted",       static_cast<uint64_t>(p.submitted.load()));
+        stats.insert("filled",          static_cast<uint64_t>(p.filled.load()));
+        stats.insert("rejected",        static_cast<uint64_t>(p.rejected.load()));
+        stats.insert("db_total",        static_cast<uint64_t>(p.db->count()));
+        // Static Pipeline 큐 상태 (empty 여부)
+        stats.insert("validate_empty",  p.validate_act->input()->size_approx() == 0);
+        stats.insert("enrich_empty",    p.enrich_act->input()->size_approx() == 0);
+        stats.insert("risk_empty",      p.risk_act->input()->size_approx() == 0);
+        // Dynamic Pipeline
+        stats.insert("dyn_stages",      static_cast<int>(dyn_stages));
+        stats.insert("dyn_stage_names", stage_arr);
+        // 설정
+        stats.insert("auto_scale",      p.auto_scale_on.load());
 
         res.status(200)
            .header("Content-Type", "application/json")
-           .body(stats);
+           .body(stats.dump());
     };
 }
 
@@ -1084,13 +1029,14 @@ static Handler make_post_scale(TradingPlatform& p) {
             res.status(400).body(json_error("stage must be: validate|enrich|risk")); return;
         }
 
+        qbuem::Document doc;
+        auto obj = qbuem::parse(doc, "{}");
+        obj.insert("stage",   *stage);
+        obj.insert("workers", *workers);
+        obj.insert("message", std::string("scale applied"));
         res.status(200)
            .header("Content-Type", "application/json")
-           .body(json::Object{}
-               .add("stage",   json::str(*stage))
-               .add("workers", json::num(*workers))
-               .add("message", json::str("scale applied"))
-               .build());
+           .body(obj.dump());
     };
 }
 
@@ -1121,13 +1067,14 @@ static Handler make_post_hotswap(TradingPlatform& p) {
             res.status(400).body(json_error("mode must be: fast|normal")); return;
         }
 
+        qbuem::Document doc;
+        auto obj = qbuem::parse(doc, "{}");
+        obj.insert("stage",   *stage);
+        obj.insert("mode",    *mode);
+        obj.insert("success", ok);
         res.status(ok ? 200 : 404)
            .header("Content-Type", "application/json")
-           .body(json::Object{}
-               .add("stage",  json::str(*stage))
-               .add("mode",   json::str(*mode))
-               .add("success", json::boolean(ok))
-               .build());
+           .body(obj.dump());
     };
 }
 
@@ -1148,13 +1095,14 @@ static Handler make_post_toggle(TradingPlatform& p) {
 
         std::printf("[toggle] stage=%s enabled=%s\n", stage->c_str(), en ? "true" : "false");
 
+        qbuem::Document doc;
+        auto obj = qbuem::parse(doc, "{}");
+        obj.insert("stage",   *stage);
+        obj.insert("enabled", en);
+        obj.insert("success", ok);
         res.status(ok ? 200 : 404)
            .header("Content-Type", "application/json")
-           .body(json::Object{}
-               .add("stage",   json::str(*stage))
-               .add("enabled", json::boolean(en))
-               .add("success", json::boolean(ok))
-               .build());
+           .body(obj.dump());
     };
 }
 
