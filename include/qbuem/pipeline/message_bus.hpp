@@ -318,9 +318,14 @@ public:
             co_return Result<void>{};
         };
 
-        // Spawn the accumulation coroutine if dispatcher is available
-        // The fn runs to completion consuming the channel; caller manages lifecycle
-        (void)fn; // fn is stored but invocation requires external Dispatcher
+        // Spawn the accumulation coroutine via the dispatcher (if started)
+        if (dispatcher_) {
+            auto run_accumulator =
+                [fn2 = std::move(fn), ch = accumulate_ch]() mutable -> Task<void> {
+                    co_await fn2(ch);
+                };
+            dispatcher_->spawn(run_accumulator());
+        }
 
         return subscribe(std::move(topic), std::move(handler), cap);
     }
@@ -546,6 +551,128 @@ public:
 
 private:
     StaticPipeline<In, Out> pipeline_;
+};
+
+// =============================================================================
+// MessageBusSource<T> — MessageBus 구독 → Pipeline Source 브릿지
+// =============================================================================
+
+/**
+ * @brief MessageBus 토픽 구독을 Pipeline Source로 연결하는 어댑터.
+ *
+ * `PipelineBuilder::with_source()`와 함께 사용하여 MessageBus 토픽에서
+ * 발행된 메시지를 파이프라인의 입력으로 직접 흘릴 수 있습니다.
+ *
+ * ### 사용 예시
+ * ```cpp
+ * auto pipeline = PipelineBuilder<OrderEvent, OrderEvent>{}
+ *     .with_source(MessageBusSource<OrderEvent>(bus, "orders"))
+ *     .add<ProcessedOrder>(process_fn)
+ *     .build();
+ * pipeline.start(dispatcher);
+ * ```
+ *
+ * @tparam T 메시지 타입.
+ */
+template <typename T>
+class MessageBusSource {
+public:
+    /**
+     * @brief MessageBusSource를 생성합니다.
+     *
+     * @param bus   연결할 MessageBus 인스턴스 (수명이 Source보다 길어야 함).
+     * @param topic 구독할 토픽 이름.
+     * @param cap   내부 스트림 채널 용량 (기본 256).
+     */
+    MessageBusSource(MessageBus& bus, std::string topic, size_t cap = 256)
+        : bus_(bus), topic_(std::move(topic)), cap_(cap) {}
+
+    /**
+     * @brief subscribe_stream<T>()를 호출해 스트림 채널을 초기화합니다.
+     * @returns 항상 `Result<void>::ok()`.
+     */
+    Result<void> init() noexcept {
+        stream_ch_ = bus_.subscribe_stream<T>(topic_, cap_);
+        return Result<void>::ok();
+    }
+
+    /**
+     * @brief 스트림 채널에서 다음 메시지를 읽습니다.
+     *
+     * @returns 메시지 포인터 또는 nullopt (채널 닫힘).
+     *          반환된 포인터는 다음 next() 호출 전까지만 유효합니다.
+     */
+    Task<std::optional<const T*>> next() {
+        auto val = co_await stream_ch_->recv();
+        if (!val) co_return std::nullopt;
+        buf_ = std::move(*val);
+        co_return &buf_;
+    }
+
+    /**
+     * @brief 스트림 채널을 닫아 파이프라인 펌프를 종료합니다.
+     */
+    void close() {
+        if (stream_ch_) stream_ch_->close();
+    }
+
+private:
+    MessageBus&                      bus_;
+    std::string                      topic_;
+    size_t                           cap_;
+    std::shared_ptr<AsyncChannel<T>> stream_ch_;
+    T                                buf_{};  ///< recv된 값 보관 버퍼 (포인터 반환용)
+};
+
+// =============================================================================
+// MessageBusSink<T> — Pipeline Tail → MessageBus 발행 브릿지
+// =============================================================================
+
+/**
+ * @brief Pipeline 출력을 MessageBus 토픽으로 발행하는 싱크 어댑터.
+ *
+ * `PipelineBuilder::with_sink()`와 함께 사용하여 파이프라인의 마지막 단계
+ * 출력을 MessageBus 토픽으로 자동 발행할 수 있습니다.
+ *
+ * ### 사용 예시
+ * ```cpp
+ * auto pipeline = PipelineBuilder<RawEvent, ProcessedEvent>{}
+ *     .add<ProcessedEvent>(process_fn)
+ *     .with_sink(MessageBusSink<ProcessedEvent>(bus, "processed_events"))
+ *     .build();
+ * pipeline.start(dispatcher);
+ * ```
+ *
+ * @tparam T 메시지 타입.
+ */
+template <typename T>
+class MessageBusSink {
+public:
+    /**
+     * @brief MessageBusSink를 생성합니다.
+     *
+     * @param bus   발행할 MessageBus 인스턴스 (수명이 Sink보다 길어야 함).
+     * @param topic 발행할 토픽 이름.
+     */
+    MessageBusSink(MessageBus& bus, std::string topic)
+        : bus_(bus), topic_(std::move(topic)) {}
+
+    /** @brief 초기화 (no-op). */
+    Result<void> init() noexcept { return Result<void>::ok(); }
+
+    /**
+     * @brief 파이프라인에서 받은 메시지를 MessageBus 토픽으로 발행합니다.
+     *
+     * @param msg 발행할 메시지.
+     * @returns 발행 성공 여부.
+     */
+    Task<Result<void>> sink(const T& msg) {
+        return bus_.publish(topic_, msg);
+    }
+
+private:
+    MessageBus&  bus_;
+    std::string  topic_;
 };
 
 } // namespace qbuem

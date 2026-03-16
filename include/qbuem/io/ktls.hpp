@@ -43,7 +43,9 @@
 #include <cstring>
 
 #if defined(__linux__)
+#  include <sys/sendfile.h>
 #  include <sys/socket.h>
+#  include <netinet/in.h>
 #  include <netinet/tcp.h>
 #  if __has_include(<linux/tls.h>)
 #    include <linux/tls.h>
@@ -178,6 +180,81 @@ struct KtlsSessionParams256 {
 }
 
 // ---------------------------------------------------------------------------
+// sendfile + kTLS zero-copy 암호화 전송
+// ---------------------------------------------------------------------------
+
+/**
+ * @brief kTLS 소켓에서 `sendfile(2)`로 파일을 zero-copy 암호화 전송합니다.
+ *
+ * ## 동작 원리
+ * kTLS가 활성화된 소켓에서 `sendfile(2)`를 호출하면 커널이:
+ * 1. 파일 데이터를 page cache → socket buffer로 zero-copy 이전.
+ * 2. NIC 전송 전 kTLS 레이어에서 AES-GCM 암호화 수행.
+ * 3. 결과적으로 **user-space 복사 없이 암호화된 TLS 레코드** 전송.
+ *
+ * ## 전제 조건
+ * - `prepare_socket_for_ktls()` + `enable_tx()` 완료 후 호출.
+ * - Linux 4.17+ (TLS_TX sendfile 지원).
+ *
+ * ## 대용량 파일 처리
+ * `count == 0`이면 `offset`부터 파일 끝까지 전송합니다.
+ * 단일 호출로 전송하지 못한 바이트는 재호출(루프)을 통해 완료합니다.
+ *
+ * @param sockfd  kTLS TX가 활성화된 소켓 fd.
+ * @param filefd  전송할 파일의 fd (`O_RDONLY`로 열린 파일).
+ * @param offset  파일 내 시작 오프셋. 호출 후 실제 전송 바이트만큼 전진.
+ * @param count   전송할 최대 바이트 수. 0이면 파일 끝까지.
+ * @returns 전송된 총 바이트 수 또는 에러.
+ *
+ * @note 비Linux 환경에서는 `errc::not_supported`를 반환합니다.
+ */
+[[nodiscard]] inline Result<size_t> ktls_sendfile(
+    int      sockfd,
+    int      filefd,
+    off_t   &offset,
+    size_t   count = 0) noexcept {
+#if defined(__linux__)
+  size_t total = 0;
+  for (;;) {
+    size_t chunk = (count == 0 || (count - total) > (1u << 30))
+                       ? (1u << 30)  // 最大 1GB 청크
+                       : (count - total);
+    ssize_t sent = ::sendfile(sockfd, filefd, &offset, chunk);
+    if (sent > 0) {
+      total += static_cast<size_t>(sent);
+      if (count != 0 && total >= count) break;
+      continue;
+    }
+    if (sent == 0) break; // EOF
+    if (errno == EINTR) continue;
+    if (errno == EAGAIN || errno == EWOULDBLOCK) {
+      // 논블로킹 소켓: 현재까지 전송된 양 반환
+      if (total > 0) break;
+      return unexpected(std::error_code{errno, std::system_category()});
+    }
+    return unexpected(std::error_code{errno, std::system_category()});
+  }
+  return total;
+#else
+  (void)sockfd; (void)filefd; (void)offset; (void)count;
+  return unexpected(std::make_error_code(std::errc::not_supported));
+#endif
+}
+
+/**
+ * @brief kTLS sendfile 헬퍼: 파일 전체를 offset 0부터 전송합니다.
+ *
+ * @param sockfd  kTLS TX 소켓 fd.
+ * @param filefd  전송할 파일 fd.
+ * @returns 전송된 총 바이트 수 또는 에러.
+ */
+[[nodiscard]] inline Result<size_t> ktls_sendfile_all(
+    int sockfd, int filefd) noexcept {
+  off_t offset = 0;
+  return ktls_sendfile(sockfd, filefd, offset, 0);
+}
+
+// ---------------------------------------------------------------------------
 // kTLS graceful fallback
 // ---------------------------------------------------------------------------
 
@@ -210,7 +287,7 @@ struct KtlsSessionParams256 {
     const KtlsSessionParams &tx_params,
     const KtlsSessionParams &rx_params) noexcept {
   auto r = enable_ktls(sockfd, tx_params, rx_params);
-  if (!r && r.error() == errc::not_supported) {
+  if (!r && r.error() == std::errc::not_supported) {
     // kTLS not available on this kernel — silently fall back to user-space TLS.
     return {};
   }

@@ -116,9 +116,9 @@ public:
      * @param chan_cap  채널 용량 (0이면 default_channel_cap 사용).
      */
     template <typename FnT>
+        requires ActionFn<FnT, T, T>
     void add_stage(std::string name, FnT fn,
                    size_t workers = 0, size_t chan_cap = 0) {
-        requires ActionFn<FnT, T, T>;
 
         auto full_fn = to_full_action_fn<FnT, T, T>(std::move(fn));
 
@@ -175,8 +175,8 @@ public:
      * @returns 성공 시 true, 스테이지를 찾지 못하면 false.
      */
     template <typename FnT>
+        requires ActionFn<FnT, T, T>
     bool hot_swap(std::string_view name, FnT new_fn, int /*timeout_ms*/ = 5000) {
-        requires ActionFn<FnT, T, T>;
 
         auto full_fn = to_full_action_fn<FnT, T, T>(std::move(new_fn));
 

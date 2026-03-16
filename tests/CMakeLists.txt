@@ -33,6 +33,157 @@ target_link_libraries(qbuem_ext_tests
     GTest::gtest_main
 )
 
+# ── v1.4.0: DB Abstraction + SHM Messaging tests ─────────────────────────────
+add_executable(qbuem_v14_tests
+    db_value_test.cpp
+    shm_layout_test.cpp
+)
+target_link_libraries(qbuem_v14_tests
+    PRIVATE
+    qbuem-stack::qbuem
+    GTest::gtest_main
+)
+
+# ── v1.5.0: Security & TLS tests ─────────────────────────────────────────────
+add_executable(qbuem_v15_tests
+    security_v15_test.cpp
+)
+target_link_libraries(qbuem_v15_tests
+    PRIVATE
+    qbuem-stack::qbuem
+    GTest::gtest_main
+)
+
+# ── v1.6.0: PCIe/VFIO + MSI-X + UDS Advanced tests ──────────────────────────
+add_executable(qbuem_v16_tests
+    pcie_layout_test.cpp
+)
+target_link_libraries(qbuem_v16_tests
+    PRIVATE
+    qbuem-stack::qbuem
+    GTest::gtest_main
+)
+
+# ── v1.7.0: RDMA + eBPF + NVMe IO tests ──────────────────────────────────────
+add_executable(qbuem_v17_tests
+    spdk_layout_test.cpp
+)
+target_link_libraries(qbuem_v17_tests
+    PRIVATE
+    qbuem-stack::qbuem
+    GTest::gtest_main
+)
+
+# ── 고도화: LockFreeConnectionPool + FutexSync + JwtAuthAction tests ──────────
+add_executable(qbuem_enhancement_tests
+    enhancement_test.cpp
+)
+target_link_libraries(qbuem_enhancement_tests
+    PRIVATE
+    qbuem-stack::qbuem
+    GTest::gtest_main
+)
+
+# ── Pipeline Guide: 패턴 & 레시피 통합 테스트 ────────────────────────────────
+add_executable(qbuem_pipeline_guide_tests
+    pipeline_guide_test.cpp
+)
+target_link_libraries(qbuem_pipeline_guide_tests
+    PRIVATE
+    qbuem-stack::qbuem
+    GTest::gtest_main
+)
+
+# ── URL / Codec / IO Buffer tests ─────────────────────────────────────────────
+add_executable(qbuem_util_tests
+    url_test.cpp
+    codec_test.cpp
+    io_buf_test.cpp
+)
+target_link_libraries(qbuem_util_tests
+    PRIVATE
+    qbuem-stack::qbuem
+    GTest::gtest_main
+)
+
+# ── Tracing / Timer / Arena / AsyncLogger / SocketAddr tests ──────────────────
+add_executable(qbuem_infra_tests
+    tracing_test.cpp
+    timer_wheel_test.cpp
+    arena_test.cpp
+    async_logger_test.cpp
+    socket_addr_test.cpp
+)
+target_link_libraries(qbuem_infra_tests
+    PRIVATE
+    qbuem-stack::qbuem
+    GTest::gtest_main
+)
+
+# ── HTTP Middleware tests ──────────────────────────────────────────────────────
+add_executable(qbuem_middleware_tests
+    http_middleware_test.cpp
+)
+target_link_libraries(qbuem_middleware_tests
+    PRIVATE
+    qbuem-stack::qbuem
+    GTest::gtest_main
+)
+
+# ── Advanced Pipeline: Observability / Health / Saga / Checkpoint / Idempotency
+add_executable(qbuem_pipeline_advanced_tests
+    pipeline_advanced_test.cpp
+)
+target_link_libraries(qbuem_pipeline_advanced_tests
+    PRIVATE
+    qbuem-stack::qbuem
+    GTest::gtest_main
+)
+
+# ── SHMChannel + SHMBus 기능 테스트 ──────────────────────────────────────────
+add_executable(qbuem_shm_tests
+    shm_channel_test.cpp
+)
+target_link_libraries(qbuem_shm_tests
+    PRIVATE
+    qbuem-stack::qbuem
+    GTest::gtest_main
+)
+
+# ── CanaryRouter + ScatterGatherAction / DebounceAction / ThrottleAction ──────
+add_executable(qbuem_canary_scatter_tests
+    canary_test.cpp
+    scatter_gather_test.cpp
+)
+target_link_libraries(qbuem_canary_scatter_tests
+    PRIVATE
+    qbuem-stack::qbuem
+    GTest::gtest_main
+)
+
+# ── Pipeline ↔ MessageBus IPC 연계 테스트 (with_source/with_sink/Source/Sink) ──
+add_executable(qbuem_pipeline_ipc_tests
+    pipeline_ipc_test.cpp
+)
+target_link_libraries(qbuem_pipeline_ipc_tests
+    PRIVATE
+    qbuem-stack::qbuem
+    GTest::gtest_main
+)
+
 include(GoogleTest)
+gtest_discover_tests(qbuem_shm_tests)
+gtest_discover_tests(qbuem_canary_scatter_tests)
 gtest_discover_tests(qbuem_tests)
 gtest_discover_tests(qbuem_ext_tests)
+gtest_discover_tests(qbuem_v14_tests)
+gtest_discover_tests(qbuem_v15_tests)
+gtest_discover_tests(qbuem_v16_tests)
+gtest_discover_tests(qbuem_v17_tests)
+gtest_discover_tests(qbuem_enhancement_tests)
+gtest_discover_tests(qbuem_pipeline_guide_tests)
+gtest_discover_tests(qbuem_util_tests)
+gtest_discover_tests(qbuem_infra_tests)
+gtest_discover_tests(qbuem_middleware_tests)
+gtest_discover_tests(qbuem_pipeline_advanced_tests)
+gtest_discover_tests(qbuem_pipeline_ipc_tests)

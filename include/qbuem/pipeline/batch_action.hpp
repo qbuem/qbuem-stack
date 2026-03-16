@@ -122,7 +122,7 @@ public:
    */
   void start(Dispatcher& dispatcher,
              std::shared_ptr<AsyncChannel<ContextualItem<Out>>> out = nullptr) {
-    out_channel_ = out;
+    out_channel_ = out ? out : std::make_shared<AsyncChannel<ContextualItem<Out>>>(cfg_.channel_cap);
     stop_src_    = std::make_unique<std::stop_source>();
 
     for (size_t i = 0; i < cfg_.workers; ++i) {

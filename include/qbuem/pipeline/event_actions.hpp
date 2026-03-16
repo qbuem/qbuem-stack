@@ -633,34 +633,43 @@ private:
       // done_chan: 모든 하위 작업 완료 시 신호
       auto done_chan = std::make_shared<AsyncChannel<int>>(2);
 
-      // 2. 병렬 처리 (max_parallel 제한)
-      // 현재 구현: max_parallel 이하면 전부 즉시 spawn
-      // 초과 시 순차적으로 처리 (단순화)
+      // 2. 병렬 처리 — max_parallel 단위로 배치 spawn
       size_t dispatch_count = std::min(total, cfg_.max_parallel);
-      (void)dispatch_count;
 
       ServiceRegistry* reg =
           cfg_.registry ? cfg_.registry : &global_registry();
 
-      for (size_t i = 0; i < total; ++i) {
-        ActionEnv env{
-            .ctx        = orig_ctx,
-            .stop       = stop_token,
-            .worker_idx = worker_idx + i,
-            .registry   = reg,
-        };
+      for (size_t batch_start = 0; batch_start < total;
+           batch_start += dispatch_count) {
+        size_t batch_end = std::min(batch_start + dispatch_count, total);
+        size_t batch_sz  = batch_end - batch_start;
 
-        auto task = SubTask::run(
-            std::move(sub_items[i]), i, env, results, pending, done_chan,
-            process_);
-        auto h = task.handle;
-        task.detach();
-        if (auto* r = Reactor::current())
-          r->post([h]() mutable { h.resume(); });
+        auto batch_done    = std::make_shared<AsyncChannel<int>>(2);
+        auto batch_pending = std::make_shared<std::atomic<size_t>>(batch_sz);
+
+        for (size_t i = batch_start; i < batch_end; ++i) {
+          ActionEnv env{
+              .ctx        = orig_ctx,
+              .stop       = stop_token,
+              .worker_idx = worker_idx + i,
+              .registry   = reg,
+          };
+
+          auto task = SubTask::run(
+              std::move(sub_items[i]), i, env, results, batch_pending,
+              batch_done, process_);
+          auto h = task.handle;
+          task.detach();
+          if (auto* r = Reactor::current())
+            r->post([h]() mutable { h.resume(); });
+        }
+
+        // 현재 배치 완료 대기 후 다음 배치 진행
+        co_await batch_done->recv();
       }
-
-      // 3. 모든 SubIn 처리 완료 대기
-      co_await done_chan->recv();
+      // done_chan은 배치 루프로 대체됨
+      (void)done_chan;
+      (void)pending;
 
       // 4. Gather: 성공한 SubOut만 수집
       std::vector<SubOut> sub_results;

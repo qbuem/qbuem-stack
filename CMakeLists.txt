@@ -400,6 +400,10 @@ target_link_libraries(qbuem PUBLIC
     qbuem_crypto
     qbuem_result
 )
+# SHMChannel uses shm_open/shm_unlink — link librt on Linux (glibc < 2.17 requires it)
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    target_link_libraries(qbuem PUBLIC rt)
+endif()
 qbuem_compile_options(qbuem)
 
 # ============================================================================

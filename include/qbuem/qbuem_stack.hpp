@@ -5,6 +5,34 @@
 #include <qbuem/http/router.hpp>
 #include <qbuem/version.hpp>
 
+// v1.4.0: Unified DB Abstraction
+#include <qbuem/db/value.hpp>
+#include <qbuem/db/driver.hpp>
+#include <qbuem/db/simd_parser.hpp>
+
+// v1.4.0: SHM Messaging Infrastructure
+#include <qbuem/shm/shm_channel.hpp>
+#include <qbuem/shm/shm_bus.hpp>
+
+// v1.5.0: Zero-dep Security & TLS
+#include <qbuem/security/simd_jwt.hpp>
+#include <qbuem/io/ktls.hpp>
+
+// v1.6.0: Embedded & PCIe Integration
+#include <qbuem/pcie/pcie_device.hpp>
+#include <qbuem/pcie/msix_reactor.hpp>
+#include <qbuem/net/uds_advanced.hpp>
+
+// v1.7.0: High-End Connectivity
+#include <qbuem/rdma/rdma_channel.hpp>
+#include <qbuem/ebpf/ebpf_tracer.hpp>
+#include <qbuem/spdk/nvme_io.hpp>
+
+// 고도화: Lock-free Pool, Futex-uring Sync, JWT Pipeline Action
+#include <qbuem/db/connection_pool.hpp>
+#include <qbuem/shm/futex_sync.hpp>
+#include <qbuem/security/jwt_action.hpp>
+
 #include <atomic>
 #include <chrono>
 #include <cstdint>

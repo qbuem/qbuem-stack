@@ -7,6 +7,104 @@ target_link_libraries(async_timer PRIVATE qbuem-stack::qbuem)
 add_executable(kqueue_sophistication kqueue_sophistication.cpp)
 target_link_libraries(kqueue_sophistication PRIVATE qbuem-stack::qbuem)
 
+# ── Pipeline Guide 예제 ───────────────────────────────────────────────────────
+
+# §5-1: Fan-out (Broadcast) / Fan-in (Merge) — PipelineGraph 1→N / N→1
+add_executable(pipeline_fanout pipeline_fanout.cpp)
+target_link_libraries(pipeline_fanout PRIVATE qbuem-stack::qbuem)
+
+# §6A Recipe A: Sensor Fusion — ServiceRegistry N:1 Sync Gather
+add_executable(pipeline_sensor_fusion pipeline_sensor_fusion.cpp)
+target_link_libraries(pipeline_sensor_fusion PRIVATE qbuem-stack::qbuem)
+
+# §6B Recipe B: Hardware Batching (NPU) — BatchAction
+add_executable(pipeline_hardware_batching pipeline_hardware_batching.cpp)
+target_link_libraries(pipeline_hardware_batching PRIVATE qbuem-stack::qbuem)
+
+# §3-2 + §6C: DynamicPipeline Hot-swap + DLQ
+add_executable(pipeline_dynamic_hotswap pipeline_dynamic_hotswap.cpp)
+target_link_libraries(pipeline_dynamic_hotswap PRIVATE qbuem-stack::qbuem)
+
+# ── Feature examples ─────────────────────────────────────────────────────────
+
+# Middleware: CORS, RateLimit, RequestID, HSTS, BearerAuth, SSE
+add_executable(middleware_example middleware_example.cpp)
+target_link_libraries(middleware_example PRIVATE qbuem-stack::qbuem)
+
+# WebSocket: RFC 6455 frame encode/decode, compute_accept_key
+add_executable(websocket_example websocket_example.cpp)
+target_link_libraries(websocket_example PRIVATE qbuem-stack::qbuem)
+
+# Codec: LengthPrefixedCodec, LineCodec
+add_executable(codec_example codec_example.cpp)
+target_link_libraries(codec_example PRIVATE qbuem-stack::qbuem)
+
+# Tracing: W3C TraceContext, PipelineTracer, Samplers, SpanExporter
+add_executable(tracing_example tracing_example.cpp)
+target_link_libraries(tracing_example PRIVATE qbuem-stack::qbuem)
+
+# TimerWheel: schedule, cancel, tick, next_expiry_ms
+add_executable(timer_wheel_example timer_wheel_example.cpp)
+target_link_libraries(timer_wheel_example PRIVATE qbuem-stack::qbuem)
+
+# Arena + FixedPoolResource + AsyncLogger
+add_executable(arena_example arena_example.cpp)
+target_link_libraries(arena_example PRIVATE qbuem-stack::qbuem)
+
+# MessageBus: Pub/Sub subscribe, publish, try_publish
+add_executable(message_bus_example message_bus_example.cpp)
+target_link_libraries(message_bus_example PRIVATE qbuem-stack::qbuem)
+
+# Stream operators: map, filter, throttle, debounce, tumbling_window
+add_executable(stream_ops_example stream_ops_example.cpp)
+target_link_libraries(stream_ops_example PRIVATE qbuem-stack::qbuem)
+
+# TCP Echo Server: TcpListener, TcpStream, accept loop
+add_executable(tcp_echo_server tcp_echo_server.cpp)
+target_link_libraries(tcp_echo_server PRIVATE qbuem-stack::qbuem)
+
+# SHMChannel + SHMBus: 공유 메모리 채널 create/send/recv, 버스 declare/publish/subscribe
+add_executable(shm_channel_example shm_channel_example.cpp)
+target_link_libraries(shm_channel_example PRIVATE qbuem-stack::qbuem)
+
+# CanaryRouter: 점진적 카나리 배포, 지표 수집, 자동/수동 롤백
+add_executable(canary_example canary_example.cpp)
+target_link_libraries(canary_example PRIVATE qbuem-stack::qbuem)
+
+# ScatterGatherAction: 분산/병렬/집계 파이프라인, max_parallel 배치 제한
+add_executable(scatter_gather_example scatter_gather_example.cpp)
+target_link_libraries(scatter_gather_example PRIVATE qbuem-stack::qbuem)
+
+# RetryAction + CircuitBreaker + DeadLetterQueue: 결제 게이트웨이 복원력 패턴
+add_executable(resilience_example resilience_example.cpp)
+target_link_libraries(resilience_example PRIVATE qbuem-stack::qbuem)
+
+# SagaOrchestrator: 분산 트랜잭션 (이커머스 주문 처리)
+add_executable(saga_example saga_example.cpp)
+target_link_libraries(saga_example PRIVATE qbuem-stack::qbuem)
+
+# CheckpointedPipeline: 배치 로그 처리기 + 체크포인트 저장/복원
+add_executable(checkpoint_example checkpoint_example.cpp)
+target_link_libraries(checkpoint_example PRIVATE qbuem-stack::qbuem)
+
+# IdempotencyFilter + ErrorBudgetTracker + LatencyHistogram: 결제 중복제거 + SLO
+add_executable(idempotency_slo_example idempotency_slo_example.cpp)
+target_link_libraries(idempotency_slo_example PRIVATE qbuem-stack::qbuem)
+
+# TaskGroup: 구조적 동시성 (병렬 서비스 조회, 팬아웃, 취소)
+add_executable(task_group_example task_group_example.cpp)
+target_link_libraries(task_group_example PRIVATE qbuem-stack::qbuem)
+
+# IPC Pipeline: SHMSource/SHMSink + MessageBusSource/MessageBusSink + with_source/with_sink
+add_executable(ipc_pipeline_example ipc_pipeline_example.cpp)
+target_link_libraries(ipc_pipeline_example PRIVATE qbuem-stack::qbuem)
+
+# ── trading_platform: 종합 예제 ──────────────────────────────────────────────
+# WAS + StaticPipeline(3 Actions, auto_scale, SLO) + DynamicPipeline(hot_swap, toggle)
+# + MessageBus(SSE fan-out) + MockDB + JSON + Context 전파 + Cross-reactor 응답 채널
+add_executable(trading_platform trading_platform.cpp)
+target_link_libraries(trading_platform PRIVATE qbuem-stack::qbuem)
+
 # ── coro_json: 비동기 코루틴 + qbuem-json 예제 ────────────────────────────────
 # qbuem-json 이 없을 경우 빌드를 건너뜀 (선택적 의존성).
 FetchContent_Declare(qbuem_json

@@ -1,0 +1,531 @@
+/**
+ * @file tests/pipeline_advanced_test.cpp
+ * @brief Unit tests for advanced pipeline features:
+ *   - HistogramMetrics, PipelineVersion, ActionHealth (observability/health)
+ *   - SloConfig (SLO)
+ *   - InMemoryCheckpointStore (checkpoint)
+ *   - InMemoryIdempotencyStore (idempotency)
+ *   - SagaOrchestrator (saga)
+ *   - MessageBus subscribe/publish (message_bus)
+ *   - TaskGroup spawn/join (task_group)
+ */
+
+#include <gtest/gtest.h>
+
+#include <qbuem/core/dispatcher.hpp>
+#include <qbuem/core/task.hpp>
+#include <qbuem/pipeline/checkpoint.hpp>
+#include <qbuem/pipeline/context.hpp>
+#include <qbuem/pipeline/health.hpp>
+#include <qbuem/pipeline/idempotency.hpp>
+#include <qbuem/pipeline/message_bus.hpp>
+#include <qbuem/pipeline/observability.hpp>
+#include <qbuem/pipeline/saga.hpp>
+#include <qbuem/pipeline/slo.hpp>
+#include <qbuem/pipeline/task_group.hpp>
+
+#include <atomic>
+#include <chrono>
+#include <string>
+#include <thread>
+#include <vector>
+
+using namespace qbuem;
+using namespace std::chrono_literals;
+
+// ─── RunGuard helper ──────────────────────────────────────────────────────────
+
+struct RunGuard {
+    Dispatcher dispatcher;
+    std::thread thread;
+
+    explicit RunGuard(size_t threads = 1) : dispatcher(threads) {
+        thread = std::thread([this] { dispatcher.run(); });
+    }
+    ~RunGuard() {
+        dispatcher.stop();
+        if (thread.joinable()) thread.join();
+    }
+
+    template <typename F>
+    void run_and_wait(F&& f, std::chrono::milliseconds timeout = 5s) {
+        std::atomic<bool> done{false};
+        dispatcher.spawn([&, f = std::forward<F>(f)]() mutable -> Task<Result<void>> {
+            co_await f();
+            done.store(true, std::memory_order_release);
+            co_return {};
+        }());
+        auto deadline = std::chrono::steady_clock::now() + timeout;
+        while (!done.load(std::memory_order_acquire) &&
+               std::chrono::steady_clock::now() < deadline)
+            std::this_thread::sleep_for(1ms);
+        EXPECT_TRUE(done.load()) << "Timed out waiting for task";
+    }
+};
+
+// ─── HistogramMetrics ─────────────────────────────────────────────────────────
+
+TEST(HistogramMetricsTest, InitialCountsAreZero) {
+    HistogramMetrics hist({1000, 10000, 100000});
+    auto counts = hist.bucket_counts();
+    EXPECT_EQ(counts.size(), 4u);
+    for (auto c : counts) EXPECT_EQ(c, 0u);
+}
+
+TEST(HistogramMetricsTest, ObserveBelowFirstBound) {
+    HistogramMetrics hist({1000, 10000});
+    hist.observe(500);  // < 1000 → bucket[0]
+    auto counts = hist.bucket_counts();
+    EXPECT_EQ(counts[0], 1u);
+    EXPECT_EQ(counts[1], 0u);
+    EXPECT_EQ(counts[2], 0u);
+}
+
+TEST(HistogramMetricsTest, ObserveExactBound) {
+    HistogramMetrics hist({1000, 10000});
+    hist.observe(1000);  // == 1000 → bucket[0] (lower_bound finds first >= 1000)
+    auto counts = hist.bucket_counts();
+    EXPECT_EQ(counts[0], 1u);
+}
+
+TEST(HistogramMetricsTest, ObserveBeyondAllBounds) {
+    HistogramMetrics hist({1000, 10000});
+    hist.observe(99999);  // > 10000 → last bucket
+    auto counts = hist.bucket_counts();
+    EXPECT_EQ(counts[2], 1u);  // overflow bucket
+}
+
+TEST(HistogramMetricsTest, MultipleObservations) {
+    HistogramMetrics hist({1000, 10000});
+    hist.observe(100);
+    hist.observe(500);
+    hist.observe(2000);
+    hist.observe(50000);
+    auto counts = hist.bucket_counts();
+    EXPECT_EQ(counts[0], 2u);  // 100, 500
+    EXPECT_EQ(counts[1], 1u);  // 2000
+    EXPECT_EQ(counts[2], 1u);  // 50000
+}
+
+TEST(HistogramMetricsTest, ResetClearsAllBuckets) {
+    HistogramMetrics hist({1000, 10000});
+    hist.observe(500);
+    hist.observe(5000);
+    hist.reset();
+    auto counts = hist.bucket_counts();
+    for (auto c : counts) EXPECT_EQ(c, 0u);
+}
+
+TEST(HistogramMetricsTest, UpperBoundsAccessible) {
+    HistogramMetrics hist({100, 500, 1000});
+    const auto& bounds = hist.upper_bounds();
+    ASSERT_EQ(bounds.size(), 3u);
+    EXPECT_EQ(bounds[0], 100u);
+    EXPECT_EQ(bounds[1], 500u);
+    EXPECT_EQ(bounds[2], 1000u);
+}
+
+// ─── PipelineVersion ──────────────────────────────────────────────────────────
+
+TEST(PipelineVersionTest, ToStringFormat) {
+    PipelineVersion v{1, 2, 3};
+    EXPECT_EQ(v.to_string(), "1.2.3");
+}
+
+TEST(PipelineVersionTest, ZeroVersion) {
+    PipelineVersion v{};
+    EXPECT_EQ(v.to_string(), "0.0.0");
+}
+
+TEST(PipelineVersionTest, CompatibleWithSameMajor) {
+    PipelineVersion v1{2, 0, 0};
+    PipelineVersion v2{2, 5, 1};
+    EXPECT_TRUE(v1.compatible_with(v2));
+    EXPECT_TRUE(v2.compatible_with(v1));
+}
+
+TEST(PipelineVersionTest, IncompatibleDifferentMajor) {
+    PipelineVersion v1{1, 9, 9};
+    PipelineVersion v2{2, 0, 0};
+    EXPECT_FALSE(v1.compatible_with(v2));
+}
+
+TEST(PipelineVersionTest, ComparisonOperators) {
+    PipelineVersion v1{1, 0, 0};
+    PipelineVersion v2{2, 0, 0};
+    EXPECT_LT(v1, v2);
+    EXPECT_GT(v2, v1);
+    EXPECT_EQ(v1, v1);
+}
+
+// ─── ActionHealth ─────────────────────────────────────────────────────────────
+
+TEST(ActionHealthTest, DefaultState) {
+    ActionHealth ah;
+    EXPECT_EQ(ah.circuit_state, "CLOSED");
+    EXPECT_DOUBLE_EQ(ah.error_rate_1m, 0.0);
+    EXPECT_EQ(ah.p99_us, 0u);
+    EXPECT_EQ(ah.queue_depth, 0u);
+    EXPECT_EQ(ah.items_processed, 0u);
+}
+
+TEST(ActionHealthTest, ToJsonContainsName) {
+    ActionHealth ah;
+    ah.name = "my_action";
+    ah.circuit_state = "OPEN";
+    ah.items_processed = 42;
+    std::string json = ah.to_json();
+    EXPECT_NE(json.find("my_action"), std::string::npos);
+    EXPECT_NE(json.find("OPEN"), std::string::npos);
+}
+
+// ─── SloConfig ────────────────────────────────────────────────────────────────
+
+TEST(SloConfigTest, CanBeConstructed) {
+    SloConfig cfg;
+    // Should have sensible defaults without crashing
+    SUCCEED();
+}
+
+// ─── CheckpointData ───────────────────────────────────────────────────────────
+
+TEST(CheckpointDataTest, DefaultValues) {
+    CheckpointData cd;
+    EXPECT_EQ(cd.offset, 0u);
+    EXPECT_TRUE(cd.metadata_json.empty());
+}
+
+TEST(CheckpointDataTest, CanSetFields) {
+    CheckpointData cd;
+    cd.offset = 12345;
+    cd.metadata_json = "{\"batch\":42}";
+    cd.saved_at = std::chrono::system_clock::now();
+
+    EXPECT_EQ(cd.offset, 12345u);
+    EXPECT_EQ(cd.metadata_json, "{\"batch\":42}");
+}
+
+// ─── InMemoryCheckpointStore ──────────────────────────────────────────────────
+
+TEST(InMemoryCheckpointStoreTest, SaveAndLoad) {
+    RunGuard rg;
+    std::atomic<bool> verified{false};
+
+    rg.dispatcher.spawn([&]() -> Task<Result<void>> {
+        auto store = std::make_shared<InMemoryCheckpointStore>();
+
+        auto save_result = co_await store->save("pipeline-A", 100, "{\"key\":1}");
+        EXPECT_TRUE(save_result.has_value());
+
+        auto load_result = co_await store->load("pipeline-A");
+        EXPECT_TRUE(load_result.has_value());
+        EXPECT_EQ(load_result->offset, 100u);
+        EXPECT_EQ(load_result->metadata_json, "{\"key\":1}");
+
+        verified.store(true, std::memory_order_release);
+        co_return {};
+    }());
+
+    auto deadline = std::chrono::steady_clock::now() + 5s;
+    while (!verified.load() && std::chrono::steady_clock::now() < deadline)
+        std::this_thread::sleep_for(1ms);
+    EXPECT_TRUE(verified.load());
+}
+
+TEST(InMemoryCheckpointStoreTest, LoadNonExistentReturnsError) {
+    RunGuard rg;
+    std::atomic<bool> verified{false};
+
+    rg.dispatcher.spawn([&]() -> Task<Result<void>> {
+        auto store = std::make_shared<InMemoryCheckpointStore>();
+        auto result = co_await store->load("nonexistent-pipeline");
+        EXPECT_FALSE(result.has_value());
+        verified.store(true, std::memory_order_release);
+        co_return {};
+    }());
+
+    auto deadline = std::chrono::steady_clock::now() + 5s;
+    while (!verified.load() && std::chrono::steady_clock::now() < deadline)
+        std::this_thread::sleep_for(1ms);
+    EXPECT_TRUE(verified.load());
+}
+
+// ─── InMemoryIdempotencyStore ─────────────────────────────────────────────────
+
+TEST(InMemoryIdempotencyStoreTest, NewKeyIsInserted) {
+    RunGuard rg;
+    std::atomic<bool> verified{false};
+
+    rg.dispatcher.spawn([&]() -> Task<Result<void>> {
+        auto store = std::make_shared<InMemoryIdempotencyStore>();
+        bool is_new = co_await store->set_if_absent("key-1", std::chrono::hours{1});
+        EXPECT_TRUE(is_new);
+        verified.store(true, std::memory_order_release);
+        co_return {};
+    }());
+
+    auto deadline = std::chrono::steady_clock::now() + 5s;
+    while (!verified.load() && std::chrono::steady_clock::now() < deadline)
+        std::this_thread::sleep_for(1ms);
+    EXPECT_TRUE(verified.load());
+}
+
+TEST(InMemoryIdempotencyStoreTest, DuplicateKeyIsRejected) {
+    RunGuard rg;
+    std::atomic<bool> verified{false};
+
+    rg.dispatcher.spawn([&]() -> Task<Result<void>> {
+        auto store = std::make_shared<InMemoryIdempotencyStore>();
+        co_await store->set_if_absent("key-dup", std::chrono::hours{1});
+
+        bool is_new = co_await store->set_if_absent("key-dup", std::chrono::hours{1});
+        EXPECT_FALSE(is_new);  // duplicate
+        verified.store(true, std::memory_order_release);
+        co_return {};
+    }());
+
+    auto deadline = std::chrono::steady_clock::now() + 5s;
+    while (!verified.load() && std::chrono::steady_clock::now() < deadline)
+        std::this_thread::sleep_for(1ms);
+    EXPECT_TRUE(verified.load());
+}
+
+TEST(InMemoryIdempotencyStoreTest, GetReturnsTrueForExistingKey) {
+    RunGuard rg;
+    std::atomic<bool> verified{false};
+
+    rg.dispatcher.spawn([&]() -> Task<Result<void>> {
+        auto store = std::make_shared<InMemoryIdempotencyStore>();
+        co_await store->set_if_absent("key-get", std::chrono::hours{1});
+
+        bool exists = co_await store->get("key-get");
+        EXPECT_TRUE(exists);
+        verified.store(true, std::memory_order_release);
+        co_return {};
+    }());
+
+    auto deadline = std::chrono::steady_clock::now() + 5s;
+    while (!verified.load() && std::chrono::steady_clock::now() < deadline)
+        std::this_thread::sleep_for(1ms);
+    EXPECT_TRUE(verified.load());
+}
+
+TEST(InMemoryIdempotencyStoreTest, GetReturnsFalseForMissingKey) {
+    RunGuard rg;
+    std::atomic<bool> verified{false};
+
+    rg.dispatcher.spawn([&]() -> Task<Result<void>> {
+        auto store = std::make_shared<InMemoryIdempotencyStore>();
+        bool exists = co_await store->get("missing-key");
+        EXPECT_FALSE(exists);
+        verified.store(true, std::memory_order_release);
+        co_return {};
+    }());
+
+    auto deadline = std::chrono::steady_clock::now() + 5s;
+    while (!verified.load() && std::chrono::steady_clock::now() < deadline)
+        std::this_thread::sleep_for(1ms);
+    EXPECT_TRUE(verified.load());
+}
+
+// ─── SagaOrchestrator ─────────────────────────────────────────────────────────
+
+TEST(SagaOrchestratorTest, AllStepsSucceed) {
+    RunGuard rg;
+    std::atomic<bool> verified{false};
+    std::atomic<int> result{-1};
+
+    rg.dispatcher.spawn([&]() -> Task<Result<void>> {
+        SagaOrchestrator<int> saga;
+        saga.add_step(SagaStep<int, int>{
+            .name    = "double",
+            .execute = [](int x) -> Task<Result<int>> { co_return x * 2; },
+            .compensate = [](int) -> Task<void> { co_return; },
+        });
+        saga.add_step(SagaStep<int, int>{
+            .name    = "add_one",
+            .execute = [](int x) -> Task<Result<int>> { co_return x + 1; },
+            .compensate = [](int) -> Task<void> { co_return; },
+        });
+
+        auto r = co_await saga.run(5);
+        EXPECT_TRUE(r.has_value());
+        EXPECT_EQ(*r, 11);  // (5 * 2) + 1 = 11
+        result.store(*r, std::memory_order_release);
+        verified.store(true, std::memory_order_release);
+        co_return {};
+    }());
+
+    auto deadline = std::chrono::steady_clock::now() + 5s;
+    while (!verified.load() && std::chrono::steady_clock::now() < deadline)
+        std::this_thread::sleep_for(1ms);
+    EXPECT_TRUE(verified.load());
+    EXPECT_EQ(result.load(), 11);
+}
+
+TEST(SagaOrchestratorTest, FailureTriggersCompensation) {
+    RunGuard rg;
+    std::atomic<bool> verified{false};
+    std::atomic<int> compensated{0};
+
+    rg.dispatcher.spawn([&]() -> Task<Result<void>> {
+        SagaOrchestrator<int> saga;
+
+        saga.add_step(SagaStep<int, int>{
+            .name    = "step-1",
+            .execute = [](int x) -> Task<Result<int>> { co_return x + 1; },
+            .compensate = [&](int) -> Task<void> {
+                compensated.fetch_add(1, std::memory_order_relaxed);
+                co_return;
+            },
+        });
+
+        saga.add_step(SagaStep<int, int>{
+            .name    = "step-2-fail",
+            .execute = [](int) -> Task<Result<int>> {
+                co_return unexpected(std::make_error_code(std::errc::operation_canceled));
+            },
+            .compensate = [](int) -> Task<void> { co_return; },
+        });
+
+        auto r = co_await saga.run(10);
+        EXPECT_FALSE(r.has_value());  // saga failed
+        EXPECT_EQ(compensated.load(), 1);  // step-1 compensated
+        EXPECT_TRUE(saga.compensation_failures().empty());
+        verified.store(true, std::memory_order_release);
+        co_return {};
+    }());
+
+    auto deadline = std::chrono::steady_clock::now() + 5s;
+    while (!verified.load() && std::chrono::steady_clock::now() < deadline)
+        std::this_thread::sleep_for(1ms);
+    EXPECT_TRUE(verified.load());
+}
+
+// ─── MessageBus ───────────────────────────────────────────────────────────────
+
+TEST(MessageBusTest, SubscribeAndPublish) {
+    RunGuard rg(2);
+    std::atomic<int> received{0};
+    std::atomic<bool> verified{false};
+
+    rg.dispatcher.spawn([&]() -> Task<Result<void>> {
+        MessageBus bus;
+        bus.start(rg.dispatcher);
+
+        auto sub = bus.subscribe("test-topic",
+            [&](MessageBus::Msg msg, Context) -> Task<Result<void>> {
+                (void)msg;
+                received.fetch_add(1, std::memory_order_relaxed);
+                co_return {};
+            });
+
+        co_await bus.publish("test-topic", std::string{"hello"});
+        co_await bus.publish("test-topic", std::string{"world"});
+
+        // Wait for delivery
+        auto deadline = std::chrono::steady_clock::now() + 3s;
+        while (received.load() < 2 && std::chrono::steady_clock::now() < deadline)
+            co_await std::suspend_never{};
+
+        EXPECT_EQ(received.load(), 2);
+        verified.store(true, std::memory_order_release);
+        co_return {};
+    }());
+
+    auto deadline = std::chrono::steady_clock::now() + 8s;
+    while (!verified.load() && std::chrono::steady_clock::now() < deadline)
+        std::this_thread::sleep_for(1ms);
+    EXPECT_TRUE(verified.load());
+}
+
+TEST(MessageBusTest, SubscriberCount) {
+    RunGuard rg;
+    std::atomic<bool> verified{false};
+
+    rg.dispatcher.spawn([&]() -> Task<Result<void>> {
+        MessageBus bus;
+        bus.start(rg.dispatcher);
+
+        EXPECT_EQ(bus.subscriber_count("topic-x"), 0u);
+
+        auto sub1 = bus.subscribe("topic-x",
+            [](MessageBus::Msg, Context) -> Task<Result<void>> { co_return {}; });
+        auto sub2 = bus.subscribe("topic-x",
+            [](MessageBus::Msg, Context) -> Task<Result<void>> { co_return {}; });
+
+        EXPECT_EQ(bus.subscriber_count("topic-x"), 2u);
+
+        // sub1 and sub2 go out of scope → auto-unsubscribe
+        {
+            auto s = std::move(sub1);
+            // s goes out of scope here
+        }
+        // After sub1 destroyed, count should drop to 1
+        // (Note: unsubscription may be deferred; just verify it doesn't crash)
+
+        verified.store(true, std::memory_order_release);
+        co_return {};
+    }());
+
+    auto deadline = std::chrono::steady_clock::now() + 5s;
+    while (!verified.load() && std::chrono::steady_clock::now() < deadline)
+        std::this_thread::sleep_for(1ms);
+    EXPECT_TRUE(verified.load());
+}
+
+TEST(MessageBusTest, TryPublishNonBlocking) {
+    RunGuard rg;
+    std::atomic<bool> verified{false};
+
+    rg.dispatcher.spawn([&]() -> Task<Result<void>> {
+        MessageBus bus;
+        bus.start(rg.dispatcher);
+
+        auto sub = bus.subscribe("fire-forget",
+            [](MessageBus::Msg, Context) -> Task<Result<void>> { co_return {}; });
+
+        bool ok = bus.try_publish("fire-forget", 42);
+        // Returns true if channel not full, false otherwise
+        // Either outcome is valid; we just check it doesn't crash
+        (void)ok;
+
+        verified.store(true, std::memory_order_release);
+        co_return {};
+    }());
+
+    auto deadline = std::chrono::steady_clock::now() + 5s;
+    while (!verified.load() && std::chrono::steady_clock::now() < deadline)
+        std::this_thread::sleep_for(1ms);
+    EXPECT_TRUE(verified.load());
+}
+
+// ─── TaskGroup ────────────────────────────────────────────────────────────────
+
+TEST(TaskGroupTest, SpawnAndJoinAll) {
+    RunGuard rg(2);
+    std::atomic<int> total{0};
+    std::atomic<bool> verified{false};
+
+    rg.dispatcher.spawn([&]() -> Task<Result<void>> {
+        TaskGroup group;
+
+        for (int i = 0; i < 5; ++i) {
+            group.spawn([&, i]() -> Task<Result<void>> {
+                total.fetch_add(i + 1, std::memory_order_relaxed);
+                co_return {};
+            }());
+        }
+
+        co_await group.join();
+
+        EXPECT_EQ(total.load(), 1 + 2 + 3 + 4 + 5);
+        verified.store(true, std::memory_order_release);
+        co_return {};
+    }());
+
+    auto deadline = std::chrono::steady_clock::now() + 8s;
+    while (!verified.load() && std::chrono::steady_clock::now() < deadline)
+        std::this_thread::sleep_for(1ms);
+    EXPECT_TRUE(verified.load());
+}

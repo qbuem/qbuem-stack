@@ -202,6 +202,93 @@ public:
         drainers_(std::move(drainers)),
         stoppers_(std::move(stoppers)) {}
 
+  // -------------------------------------------------------------------------
+  // Source / Sink 연결
+  // -------------------------------------------------------------------------
+
+  /**
+   * @brief 외부 소스(SHMSource, MessageBusSource 등)를 Pipeline Head에 연결합니다.
+   *
+   * with_source()를 add() 호출 전에 사용합니다. 소스가 attach되면
+   * Pipeline의 push()도 여전히 동작하지만 소스 펌프와 채널을 공유합니다.
+   * 소스만 사용하고 싶다면 push()를 호출하지 마세요.
+   *
+   * @tparam SourceT  `init() -> Result<void>` 와
+   *                  `next() -> Task<std::optional<const CurOut*>>`를 갖는 타입.
+   * @param  src      소스 인스턴스 (이동됨).
+   * @param  cap      소스 → 파이프라인 내부 채널 용량 (기본 256).
+   * @returns 현재 빌더 (체이닝 가능).
+   */
+  template <typename SourceT>
+  PipelineBuilder<OrigIn, CurOut> with_source(SourceT src, size_t cap = 256) {
+    auto src_ptr = std::make_shared<SourceT>(std::move(src));
+
+    // Source 전용 채널: 소스 펌프 → 이 채널 → 첫 번째 add() 액션
+    auto src_ch =
+        std::make_shared<AsyncChannel<ContextualItem<CurOut>>>(cap);
+
+    head_ = src_ch;  // pipeline.push() 진입점 (소스와 공유)
+    tail_ = src_ch;  // 첫 번째 add()가 이 채널을 입력으로 wiring
+
+    starters_.push_back([src_ptr, src_ch](Dispatcher& d) mutable {
+      auto init_res = src_ptr->init();
+      if (!init_res) return;  // init 실패 시 무음 처리
+
+      d.spawn([src_ptr, src_ch]() mutable -> Task<void> {
+        for (;;) {
+          auto opt = co_await src_ptr->next();
+          if (!opt.has_value() || opt.value() == nullptr) {
+            src_ch->close();
+            co_return;
+          }
+          auto r = co_await src_ch->send(
+              ContextualItem<CurOut>{*opt.value(), {}});
+          if (!r) co_return;
+        }
+      }());
+    });
+
+    return PipelineBuilder<OrigIn, CurOut>(head_, tail_,
+                                           std::move(starters_),
+                                           std::move(drainers_),
+                                           std::move(stoppers_));
+  }
+
+  /**
+   * @brief 외부 싱크(SHMSink, MessageBusSink 등)를 Pipeline Tail에 연결합니다.
+   *
+   * with_sink()는 add() 체인 뒤, build() 전에 호출합니다.
+   * 싱크가 attach되면 Pipeline의 output() 채널도 여전히 접근 가능합니다.
+   *
+   * @tparam SinkT  `init() -> Result<void>` 와
+   *                `sink(const CurOut&) -> Task<Result<void>>`를 갖는 타입.
+   * @param  snk    싱크 인스턴스 (이동됨).
+   * @returns 현재 빌더 (체이닝 가능).
+   */
+  template <typename SinkT>
+  PipelineBuilder<OrigIn, CurOut> with_sink(SinkT snk) {
+    auto snk_ptr  = std::make_shared<SinkT>(std::move(snk));
+    auto drain_ch = tail_;  // 현재 tail (마지막 액션 출력 채널)
+
+    starters_.push_back([snk_ptr, drain_ch](Dispatcher& d) mutable {
+      auto init_res = snk_ptr->init();
+      if (!init_res) return;
+
+      d.spawn([snk_ptr, drain_ch]() mutable -> Task<void> {
+        for (;;) {
+          auto item = co_await drain_ch->recv();
+          if (!item) co_return;
+          co_await snk_ptr->sink(item->value);
+        }
+      }());
+    });
+
+    return PipelineBuilder<OrigIn, CurOut>(head_, tail_,
+                                           std::move(starters_),
+                                           std::move(drainers_),
+                                           std::move(stoppers_));
+  }
+
   /**
    * @brief 새 처리 단계를 추가합니다.
    *
