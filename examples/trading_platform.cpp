@@ -86,7 +86,6 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
-#include <limits>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -101,47 +100,7 @@ using namespace qbuem::middleware;
 using namespace std::chrono_literals;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// §1. JSON 헬퍼 — qbuem-json 기반 (https://github.com/qbuem/qbuem-json)
-// ─────────────────────────────────────────────────────────────────────────────
-
-namespace json {
-
-/// JSON body에서 문자열 필드 추출.
-/// 필드가 없거나 파싱 실패 시 std::nullopt 반환.
-inline std::optional<std::string> parse_str(std::string_view body,
-                                             std::string_view key) {
-    try {
-        qbuem::Document doc;
-        auto val = qbuem::parse(doc, body);
-        std::string result = val.get(std::string(key)) | std::string{};
-        return result.empty() ? std::nullopt : std::optional<std::string>(result);
-    } catch (...) { return std::nullopt; }
-}
-
-/// JSON body에서 double 필드 추출.
-inline std::optional<double> parse_double(std::string_view body,
-                                           std::string_view key) {
-    try {
-        qbuem::Document doc;
-        auto val = qbuem::parse(doc, body);
-        constexpr double kMissing = std::numeric_limits<double>::lowest();
-        double result = val.get(std::string(key)) | kMissing;
-        return (result == kMissing) ? std::nullopt : std::optional<double>(result);
-    } catch (...) { return std::nullopt; }
-}
-
-/// JSON body에서 int 필드 추출.
-inline std::optional<int> parse_int(std::string_view body,
-                                     std::string_view key) {
-    auto v = parse_double(body, key);
-    if (!v) return std::nullopt;
-    return static_cast<int>(*v);
-}
-
-} // namespace json
-
-// ─────────────────────────────────────────────────────────────────────────────
-// §2. 도메인 타입 (DTO 설계)
+// §2. 도메인 타입 + HTTP DTO (직렬화/역직렬화 내장)
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// HTTP로 들어온 주문 명령 (Pipeline 입력 타입).
@@ -153,6 +112,35 @@ struct OrderCmd {
     int         quantity  = 0;
     bool        is_market = false;   ///< true=시장가, false=지정가
     bool        is_buy    = true;    ///< true=매수, false=매도
+
+    /// HTTP body(JSON)에서 역직렬화.
+    /// 필수 필드 누락 시 std::nullopt 반환.
+    static std::optional<OrderCmd> from_json(std::string_view body) {
+        try {
+            qbuem::Document doc;
+            auto val = qbuem::parse(doc, body);
+
+            std::string account_id = val.get("account_id") | std::string{};
+            std::string symbol     = val.get("symbol")     | std::string{};
+            std::string type_s     = val.get("type")       | std::string{};
+            std::string side_s     = val.get("side")       | std::string{};
+            double      price      = val.get("price")      | 0.0;
+            int         quantity   = static_cast<int>(val.get("quantity") | 0.0);
+
+            if (account_id.empty() || symbol.empty() || quantity == 0 ||
+                type_s.empty() || side_s.empty())
+                return std::nullopt;
+
+            OrderCmd cmd;
+            cmd.account_id = std::move(account_id);
+            cmd.symbol     = std::move(symbol);
+            cmd.price      = price;
+            cmd.quantity   = quantity;
+            cmd.is_market  = (type_s == "market");
+            cmd.is_buy     = (side_s == "buy");
+            return cmd;
+        } catch (...) { return std::nullopt; }
+    }
 };
 
 /// [Static Stage 1] 유효성 검증 결과.
@@ -194,6 +182,23 @@ struct OrderRecord {
     double      exec_price  = 0.0;
     std::string created_at;
     std::string reason;                  ///< 거부/취소 사유
+
+    std::string to_json() const {
+        qbuem::Document doc;
+        auto obj = qbuem::parse(doc, "{}");
+        obj.insert("order_id",   order_id);
+        obj.insert("account_id", account_id);
+        obj.insert("symbol",     symbol);
+        obj.insert("side",       side);
+        obj.insert("type",       type);
+        obj.insert("price",      price);
+        obj.insert("quantity",   quantity);
+        obj.insert("status",     status);
+        obj.insert("exec_price", exec_price);
+        obj.insert("created_at", created_at);
+        obj.insert("reason",     reason);
+        return obj.dump();
+    }
 };
 
 /// HTTP 응답 DTO (Pipeline → HTTP 핸들러).
@@ -203,6 +208,17 @@ struct OrderResult {
     double      exec_price = 0.0;
     std::string message;
     bool        success    = false;
+
+    std::string to_json() const {
+        qbuem::Document doc;
+        auto obj = qbuem::parse(doc, "{}");
+        obj.insert("order_id",   order_id);
+        obj.insert("status",     status);
+        obj.insert("exec_price", exec_price);
+        obj.insert("message",    message);
+        obj.insert("success",    success);
+        return obj.dump();
+    }
 };
 
 /// MessageBus 이벤트 (SSE 스트리밍용).
@@ -213,6 +229,18 @@ struct OrderEvent {
     std::string status;
     double      exec_price = 0.0;
     std::string reason;
+
+    std::string to_json() const {
+        qbuem::Document doc;
+        auto obj = qbuem::parse(doc, "{}");
+        obj.insert("order_id",   order_id);
+        obj.insert("account_id", account_id);
+        obj.insert("symbol",     symbol);
+        obj.insert("status",     status);
+        obj.insert("exec_price", exec_price);
+        obj.insert("reason",     reason);
+        return obj.dump();
+    }
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -225,6 +253,202 @@ struct ResponseChannel {
 };
 
 // RequestId, AuthSubject는 context.hpp에 이미 정의된 내장 타입 사용
+
+// ── 어드민 요청 DTO ──────────────────────────────────────────────────────────
+
+/// POST /api/v1/admin/scale 요청.
+struct ScaleRequest {
+    std::string stage;
+    int         workers = 0;
+
+    static std::optional<ScaleRequest> from_json(std::string_view body) {
+        try {
+            qbuem::Document doc;
+            auto val = qbuem::parse(doc, body);
+            ScaleRequest r;
+            r.stage   = val.get("stage")   | std::string{};
+            r.workers = static_cast<int>(val.get("workers") | 0.0);
+            if (r.stage.empty() || r.workers <= 0) return std::nullopt;
+            return r;
+        } catch (...) { return std::nullopt; }
+    }
+};
+
+/// POST /api/v1/admin/hotswap 요청.
+struct HotswapRequest {
+    std::string stage;
+    std::string mode;
+
+    static std::optional<HotswapRequest> from_json(std::string_view body) {
+        try {
+            qbuem::Document doc;
+            auto val = qbuem::parse(doc, body);
+            HotswapRequest r;
+            r.stage = val.get("stage") | std::string{};
+            r.mode  = val.get("mode")  | std::string{};
+            if (r.stage.empty() || r.mode.empty()) return std::nullopt;
+            return r;
+        } catch (...) { return std::nullopt; }
+    }
+};
+
+/// POST /api/v1/admin/toggle 요청.
+struct ToggleRequest {
+    std::string stage;
+    bool        enabled = false;
+
+    static std::optional<ToggleRequest> from_json(std::string_view body) {
+        try {
+            qbuem::Document doc;
+            auto val = qbuem::parse(doc, body);
+            ToggleRequest r;
+            r.stage = val.get("stage") | std::string{};
+            std::string en_s = val.get("enabled") | std::string{};
+            if (r.stage.empty() || en_s.empty()) return std::nullopt;
+            r.enabled = (en_s == "true");
+            return r;
+        } catch (...) { return std::nullopt; }
+    }
+};
+
+// ── HTTP 응답 DTO ────────────────────────────────────────────────────────────
+
+/// 에러 응답.
+struct ErrorResponse {
+    std::string error;
+
+    std::string to_json() const {
+        qbuem::Document doc;
+        auto obj = qbuem::parse(doc, "{}");
+        obj.insert("error", error);
+        return obj.dump();
+    }
+};
+
+/// DELETE /api/v1/orders/:id 응답.
+struct CancelResponse {
+    uint64_t    order_id = 0;
+    std::string status;
+
+    std::string to_json() const {
+        qbuem::Document doc;
+        auto obj = qbuem::parse(doc, "{}");
+        obj.insert("order_id", order_id);
+        obj.insert("status",   status);
+        return obj.dump();
+    }
+};
+
+/// SSE 연결 확인 이벤트.
+struct SseConnectedEvent {
+    std::string message;
+    std::string topic;
+
+    std::string to_json() const {
+        qbuem::Document doc;
+        auto obj = qbuem::parse(doc, "{}");
+        obj.insert("message", message);
+        obj.insert("topic",   topic);
+        return obj.dump();
+    }
+};
+
+/// POST /api/v1/admin/scale 응답.
+struct ScaleResponse {
+    std::string stage;
+    int         workers = 0;
+    std::string message;
+
+    std::string to_json() const {
+        qbuem::Document doc;
+        auto obj = qbuem::parse(doc, "{}");
+        obj.insert("stage",   stage);
+        obj.insert("workers", workers);
+        obj.insert("message", message);
+        return obj.dump();
+    }
+};
+
+/// POST /api/v1/admin/hotswap 응답.
+struct HotswapResponse {
+    std::string stage;
+    std::string mode;
+    bool        success = false;
+
+    std::string to_json() const {
+        qbuem::Document doc;
+        auto obj = qbuem::parse(doc, "{}");
+        obj.insert("stage",   stage);
+        obj.insert("mode",    mode);
+        obj.insert("success", success);
+        return obj.dump();
+    }
+};
+
+/// POST /api/v1/admin/toggle 응답.
+struct ToggleResponse {
+    std::string stage;
+    bool        enabled = false;
+    bool        success = false;
+
+    std::string to_json() const {
+        qbuem::Document doc;
+        auto obj = qbuem::parse(doc, "{}");
+        obj.insert("stage",   stage);
+        obj.insert("enabled", enabled);
+        obj.insert("success", success);
+        return obj.dump();
+    }
+};
+
+/// GET /api/v1/orders 응답 (목록).
+struct OrderListResponse {
+    std::vector<OrderRecord> orders;
+
+    std::string to_json() const {
+        qbuem::Document doc;
+        auto arr = qbuem::parse(doc, "[]");
+        for (auto& r : orders) {
+            qbuem::Document rdoc;
+            arr.push_back(qbuem::parse(rdoc, r.to_json()));
+        }
+        return arr.dump();
+    }
+};
+
+/// GET /api/v1/stats 응답.
+struct StatsResponse {
+    uint64_t                 submitted      = 0;
+    uint64_t                 filled         = 0;
+    uint64_t                 rejected       = 0;
+    uint64_t                 db_total       = 0;
+    bool                     validate_empty = false;
+    bool                     enrich_empty   = false;
+    bool                     risk_empty     = false;
+    int                      dyn_stages     = 0;
+    std::vector<std::string> dyn_stage_names;
+    bool                     auto_scale     = false;
+
+    std::string to_json() const {
+        qbuem::Document arr_doc;
+        auto stage_arr = qbuem::parse(arr_doc, "[]");
+        for (auto& n : dyn_stage_names) stage_arr.push_back(n);
+
+        qbuem::Document doc;
+        auto obj = qbuem::parse(doc, "{}");
+        obj.insert("submitted",       submitted);
+        obj.insert("filled",          filled);
+        obj.insert("rejected",        rejected);
+        obj.insert("db_total",        db_total);
+        obj.insert("validate_empty",  validate_empty);
+        obj.insert("enrich_empty",    enrich_empty);
+        obj.insert("risk_empty",      risk_empty);
+        obj.insert("dyn_stages",      dyn_stages);
+        obj.insert("dyn_stage_names", stage_arr);
+        obj.insert("auto_scale",      auto_scale);
+        return obj.dump();
+    }
+};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // §4. Mock DB (thread-safe 인메모리 저장소)
@@ -346,58 +570,7 @@ public:
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// §7. JSON 변환 헬퍼
-// ─────────────────────────────────────────────────────────────────────────────
-
-static std::string order_record_to_json(const OrderRecord& r) {
-    qbuem::Document doc;
-    auto obj = qbuem::parse(doc, "{}");
-    obj.insert("order_id",   r.order_id);
-    obj.insert("account_id", r.account_id);
-    obj.insert("symbol",     r.symbol);
-    obj.insert("side",       r.side);
-    obj.insert("type",       r.type);
-    obj.insert("price",      r.price);
-    obj.insert("quantity",   r.quantity);
-    obj.insert("status",     r.status);
-    obj.insert("exec_price", r.exec_price);
-    obj.insert("created_at", r.created_at);
-    obj.insert("reason",     r.reason);
-    return obj.dump();
-}
-
-static std::string order_result_to_json(const OrderResult& r) {
-    qbuem::Document doc;
-    auto obj = qbuem::parse(doc, "{}");
-    obj.insert("order_id",   r.order_id);
-    obj.insert("status",     r.status);
-    obj.insert("exec_price", r.exec_price);
-    obj.insert("message",    r.message);
-    obj.insert("success",    r.success);
-    return obj.dump();
-}
-
-static std::string json_error(std::string_view msg) {
-    qbuem::Document doc;
-    auto obj = qbuem::parse(doc, "{}");
-    obj.insert("error", std::string(msg));
-    return obj.dump();
-}
-
-static std::string order_event_to_json(const OrderEvent& e) {
-    qbuem::Document doc;
-    auto obj = qbuem::parse(doc, "{}");
-    obj.insert("order_id",   e.order_id);
-    obj.insert("account_id", e.account_id);
-    obj.insert("symbol",     e.symbol);
-    obj.insert("status",     e.status);
-    obj.insert("exec_price", e.exec_price);
-    obj.insert("reason",     e.reason);
-    return obj.dump();
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// §8. Static Pipeline 스테이지 함수
+// §7. Static Pipeline 스테이지 함수
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Stage 1: 유효성 검증 (포맷/범위 체크)
@@ -525,7 +698,7 @@ static Task<Result<RiskResult>> stage_risk_check(EnrichedOrder e, ActionEnv env)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// §9. Dynamic Pipeline 스테이지 함수
+// §8. Dynamic Pipeline 스테이지 함수
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Dynamic Stage "persist": MockDB 저장, order_id 생성
@@ -657,7 +830,7 @@ static auto make_notify_stage(std::shared_ptr<MessageBus> bus,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// §10. TradingPlatform — 전체 상태 보유 구조체
+// §9. TradingPlatform — 전체 상태 보유 구조체
 // ─────────────────────────────────────────────────────────────────────────────
 
 struct TradingPlatform {
@@ -828,26 +1001,17 @@ struct TradingPlatform {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// §11. HTTP 핸들러
+// §10. HTTP 핸들러
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// POST /api/v1/orders — 주문 제출 (Pipeline 처리 후 응답)
 static AsyncHandler make_post_order(TradingPlatform& p) {
     return [&p](const Request& req, Response& res) -> Task<void> {
-        auto body = req.body();
-
-        // JSON 파싱
-        auto account_id = json::parse_str(body, "account_id");
-        auto symbol     = json::parse_str(body, "symbol");
-        auto price      = json::parse_double(body, "price");
-        auto quantity   = json::parse_int(body, "quantity");
-        auto type_str   = json::parse_str(body, "type");
-        auto side_str   = json::parse_str(body, "side");
-
-        if (!account_id || !symbol || !quantity || !type_str || !side_str) {
+        auto cmd = OrderCmd::from_json(req.body());
+        if (!cmd) {
             res.status(400)
                .header("Content-Type", "application/json")
-               .body(json_error("required: account_id, symbol, quantity, type, side"));
+               .body(ErrorResponse{"required: account_id, symbol, quantity, type, side"}.to_json());
             co_return;
         }
 
@@ -856,20 +1020,12 @@ static AsyncHandler make_post_order(TradingPlatform& p) {
             .put(RequestId{std::string(req.header("X-Request-ID"))})
             .put(AuthSubject{std::string(req.header("X-Auth-Sub"))});
 
-        OrderCmd cmd;
-        cmd.account_id = *account_id;
-        cmd.symbol     = *symbol;
-        cmd.price      = price.value_or(0.0);
-        cmd.quantity   = *quantity;
-        cmd.is_market  = (*type_str == "market");
-        cmd.is_buy     = (*side_str == "buy");
-
         // Pipeline에 제출 (비동기)
-        auto resp_ch = p.begin_order(cmd, ctx);
+        auto resp_ch = p.begin_order(*cmd, ctx);
         if (!resp_ch) {
             res.status(503)
                .header("Content-Type", "application/json")
-               .body(json_error("pipeline overloaded, retry later"));
+               .body(ErrorResponse{"pipeline overloaded, retry later"}.to_json());
             co_return;
         }
 
@@ -878,74 +1034,61 @@ static AsyncHandler make_post_order(TradingPlatform& p) {
         if (!result) {
             res.status(500)
                .header("Content-Type", "application/json")
-               .body(json_error("internal pipeline error"));
+               .body(ErrorResponse{"internal pipeline error"}.to_json());
             co_return;
         }
 
         res.status(result->success ? 201 : 422)
            .header("Content-Type", "application/json")
-           .body(order_result_to_json(*result));
+           .body(result->to_json());
     };
 }
 
 /// GET /api/v1/orders — 전체 주문 목록
 static Handler make_get_orders(TradingPlatform& p) {
-    return [&p](const Request& req, Response& res) {
-        auto orders = p.db->list(100);
-        qbuem::Document doc;
-        auto arr = qbuem::parse(doc, "[]");
-        for (auto& r : orders) {
-            qbuem::Document rdoc;
-            arr.push_back(qbuem::parse(rdoc, order_record_to_json(r)));
-        }
+    return [&p](const Request& /*req*/, Response& res) {
         res.status(200)
            .header("Content-Type", "application/json")
-           .body(arr.dump());
+           .body(OrderListResponse{p.db->list(100)}.to_json());
     };
 }
 
 /// GET /api/v1/orders/:id — 단일 주문 조회
 static Handler make_get_order(TradingPlatform& p) {
     return [&p](const Request& req, Response& res) {
-        auto id_str = req.param("id");
         uint64_t id = 0;
-        try { id = std::stoull(std::string(id_str)); }
+        try { id = std::stoull(std::string(req.param("id"))); }
         catch (...) {
-            res.status(400).body(json_error("invalid order id"));
+            res.status(400).body(ErrorResponse{"invalid order id"}.to_json());
             return;
         }
         auto rec = p.db->get(id);
         if (!rec) {
-            res.status(404).body(json_error("order not found"));
+            res.status(404).body(ErrorResponse{"order not found"}.to_json());
             return;
         }
         res.status(200)
            .header("Content-Type", "application/json")
-           .body(order_record_to_json(*rec));
+           .body(rec->to_json());
     };
 }
 
 /// DELETE /api/v1/orders/:id — 주문 취소
 static Handler make_cancel_order(TradingPlatform& p) {
     return [&p](const Request& req, Response& res) {
-        auto id_str = req.param("id");
         uint64_t id = 0;
-        try { id = std::stoull(std::string(id_str)); } catch (...) {
-            res.status(400).body(json_error("invalid order id")); return;
+        try { id = std::stoull(std::string(req.param("id"))); } catch (...) {
+            res.status(400).body(ErrorResponse{"invalid order id"}.to_json()); return;
         }
         auto rec = p.db->get(id);
-        if (!rec) { res.status(404).body(json_error("order not found")); return; }
+        if (!rec) { res.status(404).body(ErrorResponse{"order not found"}.to_json()); return; }
         if (rec->status != "filled") {
-            res.status(409).body(json_error("only filled orders can be cancelled")); return;
+            res.status(409).body(ErrorResponse{"only filled orders can be cancelled"}.to_json()); return;
         }
         p.db->update_status(id, "cancelled", "user requested");
-        qbuem::Document doc;
-        auto obj = qbuem::parse(doc, "{}");
-        obj.insert("order_id", id);
-        obj.insert("status",   std::string("cancelled"));
         res.status(200)
            .header("Content-Type", "application/json")
-           .body(obj.dump());
+           .body(CancelResponse{id, "cancelled"}.to_json());
     };
 }
 
@@ -956,19 +1099,13 @@ static AsyncHandler make_sse_events(TradingPlatform& p) {
         auto stream = p.bus->subscribe_stream<OrderEvent>("order.completed", 64);
 
         SseStream sse(res);
-        {
-            qbuem::Document doc;
-            auto obj = qbuem::parse(doc, "{}");
-            obj.insert("message", std::string("connected"));
-            obj.insert("topic",   std::string("order.completed"));
-            sse.send(obj.dump(), "connected");
-        }
+        sse.send(SseConnectedEvent{"connected", "order.completed"}.to_json(), "connected");
 
         // 최대 30개 이벤트 수신 후 종료 (데모용)
         for (int i = 0; i < 30; ++i) {
             auto ev = co_await stream->recv();
             if (!ev) break;
-            sse.send(order_event_to_json(*ev), "order");
+            sse.send(ev->to_json(), "order");
         }
         sse.close();
     };
@@ -977,33 +1114,21 @@ static AsyncHandler make_sse_events(TradingPlatform& p) {
 /// GET /api/v1/stats — 파이프라인 상태 및 워커 수
 static Handler make_get_stats(TradingPlatform& p) {
     return [&p](const Request& /*req*/, Response& res) {
-        size_t dyn_stages = p.dyn_pipe->stage_count();
-        auto stage_names = p.dyn_pipe->stage_names();
-
-        qbuem::Document arr_doc;
-        auto stage_arr = qbuem::parse(arr_doc, "[]");
-        for (auto& n : stage_names) stage_arr.push_back(n);
-
-        qbuem::Document doc;
-        auto stats = qbuem::parse(doc, "{}");
-        // 주문 통계
-        stats.insert("submitted",       static_cast<uint64_t>(p.submitted.load()));
-        stats.insert("filled",          static_cast<uint64_t>(p.filled.load()));
-        stats.insert("rejected",        static_cast<uint64_t>(p.rejected.load()));
-        stats.insert("db_total",        static_cast<uint64_t>(p.db->count()));
-        // Static Pipeline 큐 상태 (empty 여부)
-        stats.insert("validate_empty",  p.validate_act->input()->size_approx() == 0);
-        stats.insert("enrich_empty",    p.enrich_act->input()->size_approx() == 0);
-        stats.insert("risk_empty",      p.risk_act->input()->size_approx() == 0);
-        // Dynamic Pipeline
-        stats.insert("dyn_stages",      static_cast<int>(dyn_stages));
-        stats.insert("dyn_stage_names", stage_arr);
-        // 설정
-        stats.insert("auto_scale",      p.auto_scale_on.load());
+        StatsResponse s;
+        s.submitted       = static_cast<uint64_t>(p.submitted.load());
+        s.filled          = static_cast<uint64_t>(p.filled.load());
+        s.rejected        = static_cast<uint64_t>(p.rejected.load());
+        s.db_total        = static_cast<uint64_t>(p.db->count());
+        s.validate_empty  = p.validate_act->input()->size_approx() == 0;
+        s.enrich_empty    = p.enrich_act->input()->size_approx() == 0;
+        s.risk_empty      = p.risk_act->input()->size_approx() == 0;
+        s.dyn_stages      = static_cast<int>(p.dyn_pipe->stage_count());
+        s.dyn_stage_names = p.dyn_pipe->stage_names();
+        s.auto_scale      = p.auto_scale_on.load();
 
         res.status(200)
            .header("Content-Type", "application/json")
-           .body(stats.dump());
+           .body(s.to_json());
     };
 }
 
@@ -1011,32 +1136,24 @@ static Handler make_get_stats(TradingPlatform& p) {
 /// Body: {"stage": "validate"|"enrich"|"risk", "workers": N}
 static Handler make_post_scale(TradingPlatform& p) {
     return [&p](const Request& req, Response& res) {
-        auto body    = req.body();
-        auto stage   = json::parse_str(body, "stage");
-        auto workers = json::parse_int(body, "workers");
-
-        if (!stage || !workers) {
-            res.status(400).body(json_error("required: stage, workers")); return;
+        auto req_dto = ScaleRequest::from_json(req.body());
+        if (!req_dto) {
+            res.status(400).body(ErrorResponse{"required: stage, workers"}.to_json()); return;
         }
 
-        if (*stage == "validate") {
-            p.validate_act->scale_to(static_cast<size_t>(*workers), *p.disp);
-        } else if (*stage == "enrich") {
-            p.enrich_act->scale_to(static_cast<size_t>(*workers), *p.disp);
-        } else if (*stage == "risk") {
-            p.risk_act->scale_to(static_cast<size_t>(*workers), *p.disp);
+        if (req_dto->stage == "validate") {
+            p.validate_act->scale_to(static_cast<size_t>(req_dto->workers), *p.disp);
+        } else if (req_dto->stage == "enrich") {
+            p.enrich_act->scale_to(static_cast<size_t>(req_dto->workers), *p.disp);
+        } else if (req_dto->stage == "risk") {
+            p.risk_act->scale_to(static_cast<size_t>(req_dto->workers), *p.disp);
         } else {
-            res.status(400).body(json_error("stage must be: validate|enrich|risk")); return;
+            res.status(400).body(ErrorResponse{"stage must be: validate|enrich|risk"}.to_json()); return;
         }
 
-        qbuem::Document doc;
-        auto obj = qbuem::parse(doc, "{}");
-        obj.insert("stage",   *stage);
-        obj.insert("workers", *workers);
-        obj.insert("message", std::string("scale applied"));
         res.status(200)
            .header("Content-Type", "application/json")
-           .body(obj.dump());
+           .body(ScaleResponse{req_dto->stage, req_dto->workers, "scale applied"}.to_json());
     };
 }
 
@@ -1044,70 +1161,53 @@ static Handler make_post_scale(TradingPlatform& p) {
 /// Body: {"stage": "persist", "mode": "fast"|"normal"}
 static Handler make_post_hotswap(TradingPlatform& p) {
     return [&p](const Request& req, Response& res) {
-        auto body  = req.body();
-        auto stage = json::parse_str(body, "stage");
-        auto mode  = json::parse_str(body, "mode");
-
-        if (!stage || !mode) {
-            res.status(400).body(json_error("required: stage, mode")); return;
+        auto req_dto = HotswapRequest::from_json(req.body());
+        if (!req_dto) {
+            res.status(400).body(ErrorResponse{"required: stage, mode"}.to_json()); return;
         }
 
-        if (*stage != "persist") {
-            res.status(400).body(json_error("only 'persist' stage supports hotswap")); return;
+        if (req_dto->stage != "persist") {
+            res.status(400).body(ErrorResponse{"only 'persist' stage supports hotswap"}.to_json()); return;
         }
 
         bool ok;
-        if (*mode == "fast") {
+        if (req_dto->mode == "fast") {
             ok = p.dyn_pipe->hot_swap("persist", make_persist_fast_stage(p.db));
             std::puts("[hotswap] persist → FAST mode");
-        } else if (*mode == "normal") {
+        } else if (req_dto->mode == "normal") {
             ok = p.dyn_pipe->hot_swap("persist", make_persist_stage(p.db));
             std::puts("[hotswap] persist → NORMAL mode");
         } else {
-            res.status(400).body(json_error("mode must be: fast|normal")); return;
+            res.status(400).body(ErrorResponse{"mode must be: fast|normal"}.to_json()); return;
         }
 
-        qbuem::Document doc;
-        auto obj = qbuem::parse(doc, "{}");
-        obj.insert("stage",   *stage);
-        obj.insert("mode",    *mode);
-        obj.insert("success", ok);
         res.status(ok ? 200 : 404)
            .header("Content-Type", "application/json")
-           .body(obj.dump());
+           .body(HotswapResponse{req_dto->stage, req_dto->mode, ok}.to_json());
     };
 }
 
 /// POST /api/v1/admin/toggle — DynamicPipeline 스테이지 활성/비활성
-/// Body: {"stage": "enrich2", "enabled": true|false}
+/// Body: {"stage": "enrich2", "enabled": "true"|"false"}
 static Handler make_post_toggle(TradingPlatform& p) {
     return [&p](const Request& req, Response& res) {
-        auto body    = req.body();
-        auto stage   = json::parse_str(body, "stage");
-        auto enabled = json::parse_str(body, "enabled");  // "true"|"false"
-
-        if (!stage || !enabled) {
-            res.status(400).body(json_error("required: stage, enabled")); return;
+        auto req_dto = ToggleRequest::from_json(req.body());
+        if (!req_dto) {
+            res.status(400).body(ErrorResponse{"required: stage, enabled"}.to_json()); return;
         }
 
-        bool en = (*enabled == "true");
-        bool ok = p.dyn_pipe->set_enabled(*stage, en);
+        bool ok = p.dyn_pipe->set_enabled(req_dto->stage, req_dto->enabled);
+        std::printf("[toggle] stage=%s enabled=%s\n",
+                    req_dto->stage.c_str(), req_dto->enabled ? "true" : "false");
 
-        std::printf("[toggle] stage=%s enabled=%s\n", stage->c_str(), en ? "true" : "false");
-
-        qbuem::Document doc;
-        auto obj = qbuem::parse(doc, "{}");
-        obj.insert("stage",   *stage);
-        obj.insert("enabled", en);
-        obj.insert("success", ok);
         res.status(ok ? 200 : 404)
            .header("Content-Type", "application/json")
-           .body(obj.dump());
+           .body(ToggleResponse{req_dto->stage, req_dto->enabled, ok}.to_json());
     };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// §12. 데모 시뮬레이션
+// §11. 데모 시뮬레이션
 // ─────────────────────────────────────────────────────────────────────────────
 
 struct DemoOrder {
@@ -1264,7 +1364,7 @@ static Task<void> run_demo(TradingPlatform& p, Dispatcher& d) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// §13. main()
+// §12. main()
 // ─────────────────────────────────────────────────────────────────────────────
 
 int main() {
@@ -1324,7 +1424,7 @@ int main() {
             std::string(req.path()).c_str(), msg.c_str());
         res.status(500)
            .header("Content-Type", "application/json")
-           .body(json_error(msg));
+           .body(ErrorResponse{msg}.to_json());
     });
 
     // ── 데모 시뮬레이션 코루틴 시작 ─────────────────────────────────────
