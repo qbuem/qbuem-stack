@@ -2,8 +2,8 @@
 
 **Zero Latency · Zero Allocation · Zero Dependency**
 
-> **Current Version: v2.0.0** — All TODOs complete + 고도화 done.
-> 
+> **Current Version: v2.1.0** — Pipeline ↔ MessageBus ↔ SHM 완전 연계 완료.
+>
 > High-performance C++ infrastructure for Web, Messaging, and Data Pipelines.
 
 ---
@@ -56,6 +56,22 @@
 - [x] **RDMA (RoCE)**: Extending zero-copy messaging cross-host via IBVerbs/RoCE. (`include/qbuem/rdma/rdma_channel.hpp`)
 - [x] **eBPF Observability**: Standardized cluster-wide tracing via BPF CO-RE. (`include/qbuem/ebpf/ebpf_tracer.hpp`)
 - [x] **User-space Storage (SPDK)**: io_uring passthrough for direct NVMe access. (`include/qbuem/spdk/nvme_io.hpp`)
+
+## ✅ Completed: v2.1.0 — Pipeline ↔ IPC 완전 연계
+
+### v2.1.0 — Pipeline IPC Bridge & Reliability
+
+- [x] **PipelineBuilder::with_source()**: 외부 소스(SHMSource, MessageBusSource)를 Pipeline Head에 연결. 소스 펌프 코루틴 자동 생성. (`include/qbuem/pipeline/static_pipeline.hpp`)
+- [x] **PipelineBuilder::with_sink()**: 외부 싱크(SHMSink, MessageBusSink)를 Pipeline Tail에 연결. drain 코루틴 자동 생성. (`include/qbuem/pipeline/static_pipeline.hpp`)
+- [x] **MessageBusSource\<T\>**: MessageBus 토픽 구독 → Pipeline 소스 브릿지. `init()+next()` 프로토콜. (`include/qbuem/pipeline/message_bus.hpp`)
+- [x] **MessageBusSink\<T\>**: Pipeline Tail → MessageBus 발행 브릿지. `init()+sink()` 프로토콜. (`include/qbuem/pipeline/message_bus.hpp`)
+- [x] **SHMSource\<T\>**: `SHMChannel<T>` Consumer 측 Pipeline 어댑터. `name_`을 `std::string`으로 소유 (dangling ref 방지). (`include/qbuem/shm/shm_bus.hpp`)
+- [x] **SHMSink\<T\>**: `SHMChannel<T>` Producer 측 Pipeline 어댑터. (`include/qbuem/shm/shm_bus.hpp`)
+- [x] **SHMChannel\<T\>::unlink()**: SHM 세그먼트 파일시스템 이름 제거 (멱등, ENOENT → ok). (`include/qbuem/shm/shm_channel.hpp`)
+- [x] **ipc_pipeline_example.cpp**: 5개 시나리오 복합 통합 예시 (SHM→Pipeline, Pipeline→MessageBus, 전체 체인). (`examples/ipc_pipeline_example.cpp`)
+- [x] **pipeline_ipc_test.cpp**: Pipeline ↔ MessageBus IPC 통합 테스트 7개. (`tests/pipeline_ipc_test.cpp`)
+
+---
 
 ## ✅ Completed: v2.0.0 — 고도화 (Enhancement)
 
