@@ -178,6 +178,9 @@ public:
     static Result<std::unique_ptr<NVMeIOContext>> open(
         std::string_view dev_path, uint32_t queue_depth = 256) noexcept;
 
+    NVMeIOContext() = default;
+    NVMeIOContext(const NVMeIOContext&) = delete;
+    NVMeIOContext& operator=(const NVMeIOContext&) = delete;
     virtual ~NVMeIOContext() = default;
 
     // ── DMA 버퍼 할당 ──────────────────────────────────────────────────────

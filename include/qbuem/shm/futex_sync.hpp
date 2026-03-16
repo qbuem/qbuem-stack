@@ -216,12 +216,21 @@ public:
      *
      * @returns 성공이면 LockGuard, 실패이면 nullopt.
      */
-    std::optional<LockGuard> try_lock() noexcept;
+    std::optional<LockGuard> try_lock() noexcept {
+        uint32_t expected = 0;
+        if (fw_.compare_exchange(expected, 1, std::memory_order_acquire))
+            return LockGuard{this};
+        return std::nullopt;
+    }
 
     /**
      * @brief 뮤텍스를 해제합니다.
      */
-    void unlock() noexcept;
+    void unlock() noexcept {
+        fw_.store(0, std::memory_order_release);
+        // wake any waiter
+        ::syscall(SYS_futex, &fw_.value, FUTEX_WAKE, 1, nullptr, nullptr, 0);
+    }
 
     /** @brief 잠겨 있는지 확인합니다. */
     [[nodiscard]] bool is_locked() const noexcept {
@@ -264,14 +273,25 @@ public:
      *
      * @returns 성공이면 true (카운트 감소됨), 실패이면 false.
      */
-    bool try_acquire() noexcept;
+    bool try_acquire() noexcept {
+        uint32_t cur = fw_.load(std::memory_order_relaxed);
+        while (cur > 0) {
+            if (fw_.compare_exchange(cur, cur - 1, std::memory_order_acquire))
+                return true;
+        }
+        return false;
+    }
 
     /**
      * @brief 세마포어를 해제합니다 (카운트 증가 + waiter 깨움).
      *
      * @param count 증가할 카운트 (기본 1).
      */
-    void release(uint32_t count = 1) noexcept;
+    void release(uint32_t count = 1) noexcept {
+        fw_.fetch_add(count, std::memory_order_release);
+        ::syscall(SYS_futex, &fw_.value, FUTEX_WAKE,
+                  static_cast<int>(count), nullptr, nullptr, 0);
+    }
 
     /** @brief 현재 카운트를 반환합니다. */
     [[nodiscard]] uint32_t value() const noexcept {

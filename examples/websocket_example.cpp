@@ -5,6 +5,7 @@
 #include <qbuem/server/websocket_handler.hpp>
 #include <qbuem/http/request.hpp>
 
+#include <arpa/inet.h>
 #include <iostream>
 #include <string>
 #include <vector>
@@ -35,10 +36,12 @@ void websocket_echo_example() {
     auto encoded = WebSocketHandler::encode_frame(frame);
     std::cout << "[ws] Encoded frame bytes: " << encoded.size() << "\n";
 
-    // 프레임 디코딩 (수신 측)
-    WsFrame decoded;
-    auto status = WebSocketHandler::decode_frame(encoded, decoded);
-    if (status == WsDecodeStatus::Complete) {
+    // 프레임 디코딩 (수신 측) — decode_frame returns Result<WsFrame>
+    size_t consumed = 0;
+    auto decode_result = WebSocketHandler::decode_frame(
+        std::span<const uint8_t>{encoded.data(), encoded.size()}, consumed);
+    if (decode_result) {
+        const WsFrame& decoded = *decode_result;
         std::string msg(
             reinterpret_cast<const char*>(decoded.payload.data()),
             decoded.payload.size());
@@ -86,11 +89,12 @@ void masked_frame_example() {
     std::cout << "[ws] Masked binary frame: " << encoded.size() << " bytes\n";
 
     // 디코딩 — 서버에서 언마스킹
-    WsFrame decoded;
-    auto status = WebSocketHandler::decode_frame(encoded, decoded);
-    if (status == WsDecodeStatus::Complete) {
+    size_t consumed2 = 0;
+    auto decode_result2 = WebSocketHandler::decode_frame(
+        std::span<const uint8_t>{encoded.data(), encoded.size()}, consumed2);
+    if (decode_result2) {
         std::cout << "[ws] Unmasked payload: ";
-        for (auto b : decoded.payload)
+        for (auto b : decode_result2->payload)
             std::cout << std::hex << (int)b << " ";
         std::cout << std::dec << "\n";
     }

@@ -142,7 +142,7 @@ public:
    * @param req 업그레이드를 요청한 원본 HTTP 요청.
    * @returns 성공 시 `Result<void>::ok()`, 유효하지 않은 요청이면 에러 코드.
    */
-  Task<Result<void>> upgrade(int fd, const http::Request& req) {
+  Task<Result<void>> upgrade(int fd, const Request& req) {
     std::string_view ws_key = req.header("Sec-WebSocket-Key");
     if (ws_key.empty()) {
       // 400 Bad Request: Sec-WebSocket-Key 누락
@@ -344,8 +344,7 @@ public:
     co_return Result<void>::ok();
   }
 
-private:
-  // ── 프레임 인코딩/디코딩 ────────────────────────────────────────────────
+  // ── 정적 유틸리티 (테스트 및 예제용으로 공개) ───────────────────────────
 
   /**
    * @brief WsFrame을 RFC 6455 §5.2 형식의 바이트 시퀀스로 인코딩합니다.
@@ -600,6 +599,7 @@ private:
    * @param data 전송할 데이터.
    * @returns 성공 시 true, 에러 시 false.
    */
+private:
   static bool write_all(int fd, std::string_view data) noexcept {
     const char *ptr      = data.data();
     size_t      remaining = data.size();

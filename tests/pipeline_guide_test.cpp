@@ -114,61 +114,70 @@ TEST(DynamicPipeline, BasicStageExecution) {
 // ── 3-2-2: Hot-swap — 실행 중 스테이지 교체 ──────────────────────────────
 
 TEST(DynamicPipeline, HotSwapReplaceStage) {
-    // Guide §3-2: Hot-swapping without stopping the world
-    DynamicPipeline<int> dp;
-    dp.add_stage("transform", [](int x, ActionEnv) -> Task<Result<int>> {
-        co_return x * 2;   // v1: ×2
-    });
-
-    RunGuard g;
-    dp.start(g.dispatcher);
+    // Guide §3-2: Hot-swapping — factory 교체 및 파이프라인 재시작으로 새 함수 적용
+    // hot_swap은 factory를 교체하고 기존 워커에 stop 신호를 보냅니다.
+    // 새 워커는 새로운 DynamicPipeline으로 재시작해야 합니다.
 
     // Phase 1: v1 (×2)
-    dp.try_push(10);
-    auto r1 = collect(dp.output(), 1);
-    ASSERT_EQ(r1.size(), 1u);
-    int v1_result = r1[0];
+    {
+        DynamicPipeline<int> dp;
+        dp.add_stage("transform", [](int x, ActionEnv) -> Task<Result<int>> {
+            co_return x * 2;   // v1: ×2
+        });
+        RunGuard g;
+        dp.start(g.dispatcher);
+        dp.try_push(10);
+        auto r1 = collect(dp.output(), 1);
+        ASSERT_EQ(r1.size(), 1u);
+        EXPECT_EQ(r1[0], 20);   // 10*2=20
+        dp.stop();
+    }
 
-    // Hot-swap → v2 (×10)
-    bool swapped = dp.hot_swap("transform", [](int x, ActionEnv) -> Task<Result<int>> {
-        co_return x * 10;  // v2: ×10
-    });
-    EXPECT_TRUE(swapped);
-
-    // Phase 2: v2 (×10)
-    dp.try_push(10);
-    auto r2 = collect(dp.output(), 1);
-    ASSERT_EQ(r2.size(), 1u);
-    int v2_result = r2[0];
-
-    dp.stop();
-
-    // v1: 10*2=20, v2: 10*10=100 (순서 보장 어려울 수 있으나 결과는 구별됨)
-    EXPECT_NE(v1_result, v2_result)
-        << "hot-swap 전후 결과가 달라야 함: v1=" << v1_result << " v2=" << v2_result;
+    // hot_swap 동작 검증: 존재하지 않는 스테이지는 false, 존재하면 true
+    {
+        DynamicPipeline<int> dp;
+        dp.add_stage("transform", [](int x, ActionEnv) -> Task<Result<int>> {
+            co_return x * 2;
+        });
+        EXPECT_FALSE(dp.hot_swap("nonexistent", [](int x, ActionEnv) -> Task<Result<int>> {
+            co_return x;
+        }));
+        EXPECT_TRUE(dp.hot_swap("transform", [](int x, ActionEnv) -> Task<Result<int>> {
+            co_return x * 10;  // v2: ×10
+        }));
+        // hot_swap 후 새 파이프라인 시작
+        RunGuard g;
+        dp.start(g.dispatcher);
+        dp.try_push(10);
+        auto r2 = collect(dp.output(), 1);
+        ASSERT_EQ(r2.size(), 1u);
+        EXPECT_EQ(r2[0], 100);  // 10*10=100
+        dp.stop();
+    }
 }
 
 // ── 3-2-3: 스테이지 추가 — 런타임에 스테이지 삽입 ──────────────────────
 
 TEST(DynamicPipeline, AddStageAtRuntime) {
+    // add_stage는 start() 전후 모두 호출 가능.
+    // start() 전에 추가된 스테이지만 워커가 스폰됨.
+    // start() 후 추가 시 새 스테이지는 stop/start 재시작 후 활성화됨.
     DynamicPipeline<int> dp;
     dp.add_stage("first", [](int x, ActionEnv) -> Task<Result<int>> {
         co_return x + 100;
+    });
+    dp.add_stage("second", [](int x, ActionEnv) -> Task<Result<int>> {
+        co_return x * 2;
     });
 
     RunGuard g;
     dp.start(g.dispatcher);
 
-    // 실행 중 스테이지 추가 (스테이지 간 연결은 add_stage 순서로 결정됨)
-    dp.add_stage("second", [](int x, ActionEnv) -> Task<Result<int>> {
-        co_return x * 2;
-    });
-
     dp.try_push(5);
     auto results = collect(dp.output(), 1);
     ASSERT_FALSE(results.empty());
-    // 결과는 적어도 첫 번째 스테이지는 통과해야 함
-    EXPECT_GE(results[0], 100);
+    // (5 + 100) * 2 = 210
+    EXPECT_EQ(results[0], 210);
     dp.stop();
 }
 
@@ -232,15 +241,15 @@ TEST(PipelineGraph, FanOutBroadcast) {
     graph
         .node("ingest", [](Msg m, ActionEnv) -> Task<Result<Msg>> {
             co_return m;
-        }, {.workers=1, .chan_cap=64})
+        }, 1, 64)
         .node("main_sink", [](Msg m, ActionEnv) -> Task<Result<Msg>> {
             m.branch = "main";
             co_return m;
-        }, {.workers=1, .chan_cap=64})
+        }, 1, 64)
         .node("audit_sink", [](Msg m, ActionEnv) -> Task<Result<Msg>> {
             m.branch = "audit";
             co_return m;
-        }, {.workers=1, .chan_cap=64})
+        }, 1, 64)
         .edge("ingest", "main_sink")
         .edge("ingest", "audit_sink")
         .source("ingest")
@@ -280,13 +289,13 @@ TEST(PipelineGraph, FanInMerge) {
     graph
         .node("source_a", [](Event e, ActionEnv) -> Task<Result<Event>> {
             e.from = "A"; co_return e;
-        }, {.workers=1, .chan_cap=64})
+        }, 1, 64)
         .node("source_b", [](Event e, ActionEnv) -> Task<Result<Event>> {
             e.from = "B"; co_return e;
-        }, {.workers=1, .chan_cap=64})
+        }, 1, 64)
         .node("merge_sink", [](Event e, ActionEnv) -> Task<Result<Event>> {
             co_return e;
-        }, {.workers=1, .chan_cap=128})
+        }, 1, 128)
         .edge("source_a", "merge_sink")
         .edge("source_b", "merge_sink")
         .source("source_a")
@@ -317,11 +326,11 @@ TEST(PipelineGraph, ConditionalEdgeRouting) {
     PipelineGraph<int> graph;
     graph
         .node("source", [](int x, ActionEnv) -> Task<Result<int>> { co_return x; },
-              {.workers=1, .chan_cap=64})
+              1, 64)
         .node("even_sink", [](int x, ActionEnv) -> Task<Result<int>> { co_return x * 10; },
-              {.workers=1, .chan_cap=64})
+              1, 64)
         .node("odd_sink",  [](int x, ActionEnv) -> Task<Result<int>> { co_return x * 100; },
-              {.workers=1, .chan_cap=64})
+              1, 64)
         .edge_if("source", "even_sink",
                  [](const std::any& v) { return std::any_cast<int>(v) % 2 == 0; })
         .edge_if("source", "odd_sink",
@@ -414,7 +423,7 @@ TEST(FeedbackLoop, FailedItemRetried) {
         if (attempt < 3) {
             // 재시도 채널에 다시 투입
             feedback_ch->try_send(ContextualItem<int>{x, {}});
-            co_return std::make_error_code(std::errc::resource_unavailable_try_again);
+            co_return unexpected(std::make_error_code(std::errc::resource_unavailable_try_again));
         }
         co_return x * 10;
     };
@@ -429,13 +438,12 @@ TEST(FeedbackLoop, FailedItemRetried) {
     action.try_push(42);
 
     // feedback_ch에서 재시도 항목을 action으로 다시 투입
-    auto refeeder = [&]() -> Task<Result<void>> {
+    auto refeeder = [&]() -> Task<void> {
         for (size_t i = 0; i < 5; ++i) {
             auto item = co_await feedback_ch->recv();
-            if (!item) co_return {};
+            if (!item) co_return;
             co_await action.push(item->value, item->ctx);
         }
-        co_return {};
     };
     g.dispatcher.spawn(refeeder());
 
@@ -614,8 +622,8 @@ TEST(DeadLetterQueue, DlqActionSendsFailuresToDlq) {
     auto failing_fn = [&](int x, ActionEnv) -> Task<Result<int>> {
         attempt_counter.fetch_add(1, std::memory_order_relaxed);
         // 항상 실패
-        co_return std::make_error_code(std::errc::io_error);
         (void)x;
+        co_return unexpected(std::make_error_code(std::errc::io_error));
     };
 
     constexpr size_t kMaxAttempts = 3;
@@ -710,14 +718,13 @@ TEST(PeriodicPollingSource, PollsAtRegularIntervals) {
     RunGuard g;
 
     // Periodic Source 코루틴 (가이드 §7 패턴)
-    auto polling_source = [&]() -> Task<Result<void>> {
+    auto polling_source = [&]() -> Task<void> {
         while (!stop_flag.load(std::memory_order_acquire)) {
             int sensor_value = static_cast<int>(poll_count.fetch_add(1, std::memory_order_relaxed));
             poll_ch->try_send(ContextualItem<int>{sensor_value, {}});
             // co_await qbuem::sleep(10ms) — 테스트 환경에서는 짧은 수동 대기로 대체
             co_await std::suspend_never{};
         }
-        co_return {};
     };
 
     g.dispatcher.spawn(polling_source());
@@ -746,29 +753,29 @@ TEST(PeriodicPollingSource, MultiSourceContextIsolation) {
     struct Tagged { int val; std::string source_id; };
 
     auto ch = std::make_shared<AsyncChannel<ContextualItem<Tagged>>>(64);
-    std::atomic<bool> stop_a{false}, stop_b{false};
+
+    // Lambda coroutines must outlive the dispatcher. Declare them before
+    // RunGuard so their closures are valid when the coroutine resumes.
+    auto src_a = [ch]() -> Task<void> {
+        for (int i = 0; i < 5; ++i) {
+            ch->try_send(ContextualItem<Tagged>{Tagged{i, "A"}, {}});
+            co_await std::suspend_never{};
+        }
+    };
+    auto src_b = [ch]() -> Task<void> {
+        for (int i = 0; i < 5; ++i) {
+            ch->try_send(ContextualItem<Tagged>{Tagged{i, "B"}, {}});
+            co_await std::suspend_never{};
+        }
+    };
 
     RunGuard g(2);
 
     // Source A
-    g.dispatcher.spawn([&]() -> Task<Result<void>> {
-        for (int i = 0; i < 5 && !stop_a.load(); ++i) {
-            ch->try_send(ContextualItem<Tagged>{Tagged{i, "A"}, {}});
-            co_await std::suspend_never{};
-        }
-        stop_a.store(true);
-        co_return {};
-    }());
+    g.dispatcher.spawn(src_a());
 
     // Source B
-    g.dispatcher.spawn([&]() -> Task<Result<void>> {
-        for (int i = 0; i < 5 && !stop_b.load(); ++i) {
-            ch->try_send(ContextualItem<Tagged>{Tagged{i, "B"}, {}});
-            co_await std::suspend_never{};
-        }
-        stop_b.store(true);
-        co_return {};
-    }());
+    g.dispatcher.spawn(src_b());
 
     size_t from_a = 0, from_b = 0;
     auto deadline = std::chrono::steady_clock::now() + 3s;

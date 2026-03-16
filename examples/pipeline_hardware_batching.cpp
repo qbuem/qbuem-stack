@@ -64,7 +64,7 @@ npu_infer(std::vector<CameraFrame> batch, ActionEnv /*env*/) {
 static Task<Result<InferenceResult>>
 postprocess(InferenceResult r) {
     if (r.confidence < 0.5f) {
-        co_return std::make_error_code(std::errc::invalid_argument);
+        co_return unexpected(std::make_error_code(std::errc::invalid_argument));
     }
     co_return r;
 }
@@ -96,11 +96,11 @@ int main() {
     post.start(dispatcher, final_out);
 
     // BatchAction 출력 → postprocess 입력 브릿지 코루틴
-    auto bridge = [&]() -> Task<Result<void>> {
+    auto bridge = [&]() -> Task<void> {
         auto src = npu.output();
         while (true) {
             auto item = co_await src->recv();
-            if (!item) co_return {};
+            if (!item) co_return;
             co_await post.push(item->value, item->ctx);
         }
     };

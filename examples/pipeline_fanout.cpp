@@ -65,9 +65,9 @@ int main() {
     //
     PipelineGraph<LogEntry> graph;
     graph
-        .node("ingest",    ingest,    {.workers=1, .chan_cap=64})
-        .node("normalize", normalize, {.workers=2, .chan_cap=64})
-        .node("audit",     audit,     {.workers=1, .chan_cap=64})
+        .node("ingest",    ingest,    1, 64)
+        .node("normalize", normalize, 2, 64)
+        .node("audit",     audit,     1, 64)
         // Fan-out: ingest → normalize, ingest → audit
         .edge("ingest", "normalize")
         .edge("ingest", "audit")

@@ -80,7 +80,7 @@ struct alignas(64) TraceEvent {
     EventType type{EventType::Custom};
     uint16_t  flags{0};         ///< 이벤트별 플래그
     uint8_t   label[24]{};      ///< 이벤트 레이블 (null-terminated, 최대 23자)
-    uint64_t  val[2]{};         ///< 이벤트별 추가 데이터 (e.g. fd, bytes)
+    uint64_t  val{0};           ///< 이벤트별 추가 데이터 (e.g. fd, bytes)
 
     /** @brief 레이블을 안전하게 설정합니다. */
     void set_label(std::string_view s) noexcept {
@@ -92,7 +92,7 @@ struct alignas(64) TraceEvent {
         return {reinterpret_cast<const char*>(label)};
     }
 };
-static_assert(sizeof(TraceEvent) == 128, "TraceEvent must be exactly 128 bytes");
+static_assert(sizeof(TraceEvent) == 64, "TraceEvent must be exactly 64 bytes (one cache line)");
 
 // ─── BPF 맵 통계 ─────────────────────────────────────────────────────────────
 
@@ -143,6 +143,9 @@ public:
     static Result<std::unique_ptr<EBPFTracer>> create(
         std::string_view bpf_obj_path = "") noexcept;
 
+    EBPFTracer() = default;
+    EBPFTracer(const EBPFTracer&) = delete;
+    EBPFTracer& operator=(const EBPFTracer&) = delete;
     virtual ~EBPFTracer() = default;
 
     // ── 측정점 관리 ────────────────────────────────────────────────────────

@@ -170,6 +170,18 @@ public:
   void spawn(Task<void> task);
 
   /**
+   * @brief Task<Result<void>> 오버로드 — 결과를 무시하고 fire-and-forget 실행.
+   *
+   * Task<Result<void>>를 Task<void>로 변환하여 spawn합니다.
+   * 코루틴 내부 에러는 무시됩니다 (로깅이 필요하면 직접 처리).
+   */
+  void spawn(Task<Result<void>> task) {
+    spawn([](Task<Result<void>> t) -> Task<void> {
+        co_await std::move(t);
+    }(std::move(task)));
+  }
+
+  /**
    * @brief 코루틴 Task를 특정 워커에서 fire-and-forget으로 실행합니다.
    *
    * @param reactor_idx 0 ~ thread_count()-1 범위의 워커 인덱스.

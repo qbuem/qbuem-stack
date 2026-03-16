@@ -154,6 +154,9 @@ public:
     static Result<std::unique_ptr<RDMAContext>> open(
         std::string_view dev_name = "") noexcept;
 
+    RDMAContext() = default;
+    RDMAContext(const RDMAContext&) = delete;
+    RDMAContext& operator=(const RDMAContext&) = delete;
     virtual ~RDMAContext() = default;
 
     /**

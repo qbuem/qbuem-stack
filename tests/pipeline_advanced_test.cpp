@@ -508,7 +508,7 @@ TEST(TaskGroupTest, SpawnAndJoinAll) {
     std::atomic<bool> verified{false};
 
     rg.dispatcher.spawn([&]() -> Task<Result<void>> {
-        TaskGroup group(rg.dispatcher);
+        TaskGroup group;
 
         for (int i = 0; i < 5; ++i) {
             group.spawn([&, i]() -> Task<Result<void>> {
@@ -517,7 +517,7 @@ TEST(TaskGroupTest, SpawnAndJoinAll) {
             }());
         }
 
-        co_await group.join_all();
+        co_await group.join();
 
         EXPECT_EQ(total.load(), 1 + 2 + 3 + 4 + 5);
         verified.store(true, std::memory_order_release);

@@ -4,6 +4,7 @@
  */
 #include <qbuem/core/timer_wheel.hpp>
 
+#include <atomic>
 #include <cstdio>
 #include <iostream>
 #include <string>

@@ -13,6 +13,7 @@
 #include <vector>
 
 using namespace qbuem::codec;
+using qbuem::BufferView;
 
 // ─── LengthPrefixedCodec ──────────────────────────────────────────────────────
 

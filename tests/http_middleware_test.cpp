@@ -178,14 +178,17 @@ TEST(RequestIdMiddlewareTest, CustomHeaderName) {
 
 class AcceptAllVerifier final : public ITokenVerifier {
 public:
-    std::optional<TokenClaims> verify(std::string_view) override {
-        return TokenClaims{"user-123", {"admin", "user"}, {}};
+    std::optional<TokenClaims> verify(std::string_view) noexcept override {
+        TokenClaims c;
+        c.subject = "user-123";
+        c.custom["role"] = "admin";
+        return c;
     }
 };
 
 class RejectAllVerifier final : public ITokenVerifier {
 public:
-    std::optional<TokenClaims> verify(std::string_view) override {
+    std::optional<TokenClaims> verify(std::string_view) noexcept override {
         return std::nullopt;
     }
 };
@@ -231,8 +234,9 @@ TEST(TokenAuthTest, MissingAuthorizationHeaderBlocks) {
 TEST(TokenClaimsTest, SubjectAndRolesAccessible) {
     TokenClaims claims;
     claims.subject = "user-42";
-    claims.roles   = {"reader", "writer"};
+    claims.custom["role0"] = "reader";
+    claims.custom["role1"] = "writer";
     EXPECT_EQ(claims.subject, "user-42");
-    EXPECT_EQ(claims.roles.size(), 2u);
-    EXPECT_EQ(claims.roles[0], "reader");
+    EXPECT_EQ(claims.custom.size(), 2u);
+    EXPECT_EQ(claims.custom["role0"], "reader");
 }

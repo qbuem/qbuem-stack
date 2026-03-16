@@ -135,6 +135,24 @@ public:
   }
 
   /**
+   * @brief 서비스를 조회하거나, 없으면 기본 생성자로 생성해 등록합니다.
+   *
+   * T는 기본 생성 가능해야 합니다. 스레드 안전합니다.
+   *
+   * @tparam T 서비스 타입.
+   * @returns 서비스 참조 (항상 유효).
+   */
+  template <typename T>
+  [[nodiscard]] T& get_or_create() {
+    auto ptr = get<T>();
+    if (!ptr) {
+      ptr = std::make_shared<T>();
+      register_singleton<T>(ptr);
+    }
+    return *ptr;
+  }
+
+  /**
    * @brief 부모 레지스트리를 반환합니다.
    */
   [[nodiscard]] ServiceRegistry *parent() const noexcept { return parent_; }

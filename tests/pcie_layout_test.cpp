@@ -17,20 +17,17 @@
 // ─── PCIeDevice / BDF ────────────────────────────────────────────────────────
 
 TEST(PcieLayout, BDFConstruction) {
-    using namespace qbuem::pcie;
-
-    BDF bdf{0, 1, 5};
-    EXPECT_EQ(bdf.bus,      0u);
-    EXPECT_EQ(bdf.device,   1u);
-    EXPECT_EQ(bdf.function, 5u);
+    // BDF is PCIeDevice::BDF = std::string_view
+    qbuem::pcie::PCIeDevice::BDF bdf = "0000:00:01.5";
+    EXPECT_FALSE(bdf.empty());
+    EXPECT_EQ(bdf, "0000:00:01.5");
 }
 
 TEST(PcieLayout, BDFToString) {
-    using namespace qbuem::pcie;
-    BDF bdf{0x03, 0x00, 0x01};
-    // to_string() は "03:00.1" 형식을 반환해야 합니다
-    auto s = bdf.to_string();
-    EXPECT_FALSE(s.empty());
+    qbuem::pcie::PCIeDevice::BDF bdf = "0000:03:00.1";
+    // BDF is std::string_view — directly usable as string
+    EXPECT_EQ(bdf, "0000:03:00.1");
+    EXPECT_FALSE(bdf.empty());
 }
 
 TEST(PcieLayout, BarMappingFields) {
@@ -86,7 +83,7 @@ TEST(MsixLayout, MSIXReactorIsNotCopyable) {
 // ─── UDS Advanced ────────────────────────────────────────────────────────────
 
 TEST(UdsAdvanced, PeerCredentialsFields) {
-    using namespace qbuem::net;
+    using namespace qbuem::uds;
     PeerCredentials pc{1234, 1000, 1000};
     EXPECT_EQ(pc.pid, 1234);
     EXPECT_EQ(pc.uid, 1000u);
@@ -94,7 +91,7 @@ TEST(UdsAdvanced, PeerCredentialsFields) {
 }
 
 TEST(UdsAdvanced, RecvFdsResultFields) {
-    using namespace qbuem::net;
+    using namespace qbuem::uds;
     RecvFdsResult r{};
     r.fd_count   = 0;
     r.data_bytes = 0;
@@ -103,25 +100,25 @@ TEST(UdsAdvanced, RecvFdsResultFields) {
 }
 
 TEST(UdsAdvanced, SendFdsReturnTypeCheck) {
-    // send_fds / recv_fds 는 qbuem::Result<ssize_t> / Result<RecvFdsResult> 반환
-    using F1 = qbuem::Result<ssize_t>(*)(int, std::span<const int>, std::span<const uint8_t>);
-    using F2 = qbuem::Result<qbuem::net::RecvFdsResult>(*)(int, std::span<int>, std::span<uint8_t>);
-    EXPECT_TRUE((std::is_same_v<F1, decltype(&qbuem::net::send_fds)>));
-    EXPECT_TRUE((std::is_same_v<F2, decltype(&qbuem::net::recv_fds)>));
+    // send_fds / recv_fds 는 qbuem::Result<ssize_t> / Result<RecvFdsResult> 반환 (noexcept)
+    using F1 = qbuem::Result<ssize_t>(*)(int, std::span<const int>, std::span<const uint8_t>) noexcept;
+    using F2 = qbuem::Result<qbuem::uds::RecvFdsResult>(*)(int, std::span<int>, std::span<uint8_t>) noexcept;
+    EXPECT_TRUE((std::is_same_v<F1, decltype(&qbuem::uds::send_fds)>));
+    EXPECT_TRUE((std::is_same_v<F2, decltype(&qbuem::uds::recv_fds)>));
 }
 
 TEST(UdsAdvanced, GetPeerCredentialsSignature) {
-    using F = qbuem::Result<qbuem::net::PeerCredentials>(*)(int) noexcept;
-    EXPECT_TRUE((std::is_same_v<F, decltype(&qbuem::net::get_peer_credentials)>));
+    using F = qbuem::Result<qbuem::uds::PeerCredentials>(*)(int) noexcept;
+    EXPECT_TRUE((std::is_same_v<F, decltype(&qbuem::uds::get_peer_credentials)>));
 }
 
 TEST(UdsAdvanced, BindAbstractSignature) {
     // bind_abstract(string_view name, int type, int& listener) -> Result<void>
     using F = qbuem::Result<void>(*)(std::string_view, int, int&) noexcept;
-    EXPECT_TRUE((std::is_same_v<F, decltype(&qbuem::net::bind_abstract)>));
+    EXPECT_TRUE((std::is_same_v<F, decltype(&qbuem::uds::bind_abstract)>));
 }
 
 TEST(UdsAdvanced, ConnectAbstractSignature) {
     using F = qbuem::Result<int>(*)(std::string_view, int) noexcept;
-    EXPECT_TRUE((std::is_same_v<F, decltype(&qbuem::net::connect_abstract)>));
+    EXPECT_TRUE((std::is_same_v<F, decltype(&qbuem::uds::connect_abstract)>));
 }

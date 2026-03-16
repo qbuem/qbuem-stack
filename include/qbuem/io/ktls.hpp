@@ -45,6 +45,7 @@
 #if defined(__linux__)
 #  include <sys/sendfile.h>
 #  include <sys/socket.h>
+#  include <netinet/in.h>
 #  include <netinet/tcp.h>
 #  if __has_include(<linux/tls.h>)
 #    include <linux/tls.h>

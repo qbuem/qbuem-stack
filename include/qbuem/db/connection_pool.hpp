@@ -33,6 +33,7 @@
  */
 
 #include <qbuem/common.hpp>
+#include <qbuem/core/reactor.hpp>
 #include <qbuem/core/task.hpp>
 #include <qbuem/core/timer_wheel.hpp>
 #include <qbuem/db/driver.hpp>

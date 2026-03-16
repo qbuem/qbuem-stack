@@ -44,7 +44,7 @@ static Task<Result<int>> transform_v2(int x, ActionEnv) {
 // 검증 스테이지: 음수 거부 → DLQ
 static Task<Result<int>> validate(int x, ActionEnv) {
     if (x < 0) {
-        co_return std::make_error_code(std::errc::invalid_argument);
+        co_return unexpected(std::make_error_code(std::errc::invalid_argument));
     }
     co_return x;
 }

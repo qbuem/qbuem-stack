@@ -298,12 +298,15 @@ TEST(SHMCalc, GrowsWithCapacity) {
 }
 
 TEST(SHMCalc, GrowsWithMsgSize) {
-    EXPECT_GT(calc_segment_size(16, 128, false),
-              calc_segment_size(16,   8, false));
+    // Use capacity=64 so that the arena size difference (64*(128-8)=7680)
+    // exceeds one page and produces a measurably different segment size.
+    EXPECT_GT(calc_segment_size(64, 128, false),
+              calc_segment_size(64,   8, false));
 }
 
 TEST(SHMCalc, EnvelopeAddsSize) {
-    size_t wo = calc_segment_size(16, 64, false);
-    size_t wi = calc_segment_size(16, 64, true);
-    EXPECT_GE(wi, wo + 16 * sizeof(SHMEnvelope));
+    // Use capacity=64 so the envelope overhead (64*128=8192) exceeds one page.
+    size_t wo = calc_segment_size(64, 64, false);
+    size_t wi = calc_segment_size(64, 64, true);
+    EXPECT_GE(wi, wo + 64 * sizeof(SHMEnvelope));
 }

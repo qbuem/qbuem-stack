@@ -31,16 +31,16 @@ static std::vector<int> split_ints(int n, int count) {
 // ─── ScatterGatherAction 생성 검증 ────────────────────────────────────────────
 
 TEST(ScatterGatherAction, ConstructionDoesNotThrow) {
-    EXPECT_NO_THROW({
-        ScatterGatherAction<int, int, int, int> action(
-            [](int n) -> std::vector<int> { return {n}; },
-            [](int x, ActionEnv) -> Task<Result<int>> { co_return Result<int>(x); },
-            [](int /*orig*/, std::vector<int> v) -> int {
-                return v.empty() ? 0 : v[0];
-            },
-            {.max_parallel = 4, .channel_cap = 32}
-        );
-    });
+    // EXPECT_NO_THROW doesn't work with commas in template args; just construct directly
+    ScatterGatherAction<int, int, int, int> action(
+        [](int n) -> std::vector<int> { return {n}; },
+        [](int x, ActionEnv) -> Task<Result<int>> { co_return Result<int>(x); },
+        [](int /*orig*/, std::vector<int> v) -> int {
+            return v.empty() ? 0 : v[0];
+        },
+        {.max_parallel = 4, .channel_cap = 32}
+    );
+    SUCCEED(); // reached without exception
 }
 
 TEST(ScatterGatherAction, InputChannelIsNotNull) {

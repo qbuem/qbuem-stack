@@ -168,8 +168,9 @@ TEST(CanaryRouter, StableMetricsUpdatedOnPush) {
     for (int i = 0; i < 5; ++i)
         router.push(i);
 
-    // stable 지표에 성공이 기록되어야 함
-    EXPECT_GT(router.stable_metrics().avg_latency_us(), 0u);
+    // stable 지표에 성공이 기록되어야 함 (latency는 sub-µs일 수 있어 0일 수 있음)
+    EXPECT_GT(router.stable_metrics().total.load(), 0u);
+    EXPECT_GT(router.stable_metrics().latency_count.load(), 0u);
     EXPECT_DOUBLE_EQ(router.stable_metrics().error_rate(), 0.0);
 }
 

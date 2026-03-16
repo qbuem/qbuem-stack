@@ -365,14 +365,15 @@ inline void hw_seed_fill(void *buf, size_t len) {
 [[nodiscard]] inline bool has_rdseed() noexcept {
 #if defined(__x86_64__) || defined(__i386__)
   static const bool cached = []() noexcept -> bool {
-    uint32_t ebx = 0;
+    uint32_t eax = 0, ebx = 0, ecx = 0, edx = 0;
 #  if defined(__GNUC__) || defined(__clang__)
+    // cpuid(leaf=7, subleaf=0): EBX bit 18 = RDSEED
     __asm__ volatile (
       "cpuid"
-      : "=b"(ebx)
-      : "a"(7), "c"(0)
-      : "ecx", "edx"
+      : "=a"(eax), "=b"(ebx), "=c"(ecx), "=d"(edx)
+      : "a"(7u), "c"(0u)
     );
+    (void)eax; (void)ecx; (void)edx;
 #  endif
     return (ebx >> 18) & 1u;
   }();

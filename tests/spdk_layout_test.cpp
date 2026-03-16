@@ -32,15 +32,15 @@ TEST(RdmaLayout, CompletionFields) {
     using namespace qbuem::rdma;
     Completion c{};
     c.wr_id    = 99;
-    c.bytes    = 4096;
-    c.status   = 0;
-    c.opcode   = 0;
-    EXPECT_EQ(c.wr_id,  99u);
-    EXPECT_EQ(c.bytes,  4096u);
+    c.byte_len = 4096;
+    c.status   = Completion::Status::Success;
+    c.opcode   = Completion::Opcode::Send;
+    EXPECT_EQ(c.wr_id,    99u);
+    EXPECT_EQ(c.byte_len, 4096u);
 
-    // ok() should be true when status == 0
+    // ok() should be true when status == Success
     EXPECT_TRUE(c.ok());
-    c.status = 1;
+    c.status = Completion::Status::LocalLengthError;
     EXPECT_FALSE(c.ok());
 }
 
@@ -60,8 +60,8 @@ TEST(RdmaLayout, RDMAChannelIsNotCopyable) {
 
 TEST(EbpfLayout, TraceEventSize) {
     using namespace qbuem::ebpf;
-    // TraceEvent는 정확히 64바이트 (캐시 라인)
-    static_assert(sizeof(TraceEvent) == 64, "TraceEvent must be 64 bytes");
+    // TraceEvent는 정확히 64바이트 (단일 캐시 라인)
+    static_assert(sizeof(TraceEvent) == 64, "TraceEvent must be exactly 64 bytes");
     EXPECT_EQ(sizeof(TraceEvent), 64u);
 }
 

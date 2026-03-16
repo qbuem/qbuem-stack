@@ -44,7 +44,7 @@ void trace_context_example() {
     auto root = TraceContext::generate();
     std::cout << "[trace] Root traceparent: " << root.to_traceparent() << "\n";
     std::cout << "[trace] TraceId valid: " << root.trace_id.is_valid() << "\n";
-    std::cout << "[trace] SpanId valid:  " << root.span_id.is_valid() << "\n";
+    std::cout << "[trace] SpanId valid:  " << root.parent_span_id.is_valid() << "\n";
 
     // 자식 스팬 생성
     auto child = root.child_span();
@@ -56,7 +56,7 @@ void trace_context_example() {
     if (parsed) {
         std::cout << "[trace] Parsed traceparent valid: "
                   << parsed->trace_id.is_valid() << "\n";
-        std::cout << "[trace] Sampled: " << static_cast<int>(parsed->trace_flags) << "\n";
+        std::cout << "[trace] Sampled: " << static_cast<int>(parsed->flags) << "\n";
     }
 }
 
@@ -92,9 +92,9 @@ void tracer_example() {
     // 자식 스팬 — 같은 TraceContext로 연결
     auto root_ctx = TraceContext::generate();
     {
-        auto span = pt.start_span_with_context("serialize_response",
-                                                "api-pipeline", "serialize",
-                                                root_ctx);
+        auto span = pt.start_span("serialize_response",
+                                  "api-pipeline", "serialize",
+                                  root_ctx);
         span.set_attribute("content_type", "application/json");
         span.set_status(SpanStatus::Ok);
     }
@@ -130,8 +130,8 @@ void sampler_example() {
     // ParentBasedSampler — 부모 플래그 따름
     ParentBasedSampler parent;
     TraceContext sampled_ctx = TraceContext::generate();
-    sampled_ctx.trace_flags = 0x01; // sampled
-    SamplingContext pctx{"pipe", "action", "span", sampled_ctx};
+    sampled_ctx.flags = 0x01; // sampled
+    SamplingContext pctx{"pipe", "action", "span", &sampled_ctx};
     auto d3 = parent.should_sample(pctx);
     std::cout << "[sampler] ParentBasedSampler (parent sampled): "
               << (d3 == SamplingDecision::RECORD_AND_SAMPLE ? "SAMPLE" : "DROP") << "\n";

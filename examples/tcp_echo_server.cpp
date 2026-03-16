@@ -35,7 +35,7 @@ Task<Result<void>> handle_connection(TcpStream stream) {
         if (!n || *n == 0) break;  // 연결 종료
 
         // 에코: 읽은 데이터를 그대로 전송
-        BufferView view{reinterpret_cast<const uint8_t*>(buf.data()), *n};
+        std::span<const std::byte> view{buf.data(), *n};
         auto sent = co_await stream.write(view);
         if (!sent) break;
 
@@ -51,10 +51,7 @@ Task<Result<void>> accept_loop(TcpListener& listener, Dispatcher& dispatcher) {
         auto stream = co_await listener.accept();
         if (!stream) break;  // 리스너 종료
 
-        auto peer = stream->peer_addr();
-        char peer_buf[128];
-        peer.to_chars(peer_buf, sizeof(peer_buf));
-        std::cout << "[tcp] New connection from " << peer_buf << "\n";
+        std::cout << "[tcp] New connection accepted\n";
 
         // 연결 핸들러를 별도 코루틴으로 spawn
         dispatcher.spawn(handle_connection(std::move(*stream)));

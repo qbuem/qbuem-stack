@@ -73,6 +73,8 @@ inline void set_unhandled_exception_handler(
  *  reported if `detach()` races with `final_suspend()` on different threads.
  */
 template <typename T = void> struct Task {
+  using value_type = T;
+
   struct promise_type {
     std::optional<T> value; // optional allows non-default-constructible T
     std::coroutine_handle<> continuation;

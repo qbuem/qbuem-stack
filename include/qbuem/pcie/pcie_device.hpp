@@ -161,7 +161,15 @@ struct DmaBuffer {
     }
 
 private:
-    void free() noexcept;
+    void free() noexcept {
+        if (vaddr && size) {
+#if defined(__linux__)
+            ::munmap(vaddr, size);
+#endif
+            vaddr = nullptr;
+            size  = 0;
+        }
+    }
 };
 
 // ─── PCIeDevice ──────────────────────────────────────────────────────────────

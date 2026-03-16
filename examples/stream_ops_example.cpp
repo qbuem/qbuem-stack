@@ -34,14 +34,14 @@ Task<Result<void>> stream_map_filter(Dispatcher& dispatcher) {
     Stream<int> src(ch);
 
     // map: ×2
-    auto doubled = src | stream_map<int>([](int x) -> Task<Result<int>> {
+    auto doubled = src | stream_map([](int x) -> Task<Result<int>> {
         co_return x * 2;
-    }, dispatcher, 64);
+    });
 
     // filter: 짝수만
-    auto evens = doubled | stream_filter<int>([](const int& x) {
+    auto evens = doubled | stream_filter([](const int& x) {
         return x % 4 == 0; // 원래 값 기준 짝수 (doubled 기준으론 4의 배수)
-    }, dispatcher, 64);
+    });
 
     std::vector<int> results;
     while (true) {

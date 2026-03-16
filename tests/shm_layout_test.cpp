@@ -84,10 +84,11 @@ TEST(SHMLayout, CalcSegmentSizeGrowsWithCapacity) {
 }
 
 TEST(SHMLayout, CalcSegmentSizeEnvelopeAdds128) {
-    size_t without = calc_segment_size(16, 64, false);
-    size_t with_   = calc_segment_size(16, 64, true);
+    // Use capacity=64 so the envelope overhead (64*128=8192) exceeds one page.
+    size_t without = calc_segment_size(64, 64, false);
+    size_t with_   = calc_segment_size(64, 64, true);
     // envelope가 붙으면 capacity * 128B 이상 커져야 합니다
-    EXPECT_GE(with_, without + 16 * 128u);
+    EXPECT_GE(with_, without + 64 * 128u);
 }
 
 // ─── TopicDescriptor ─────────────────────────────────────────────────────────
