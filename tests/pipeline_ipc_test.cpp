@@ -153,11 +153,16 @@ TEST(PipelineBuilderWithSinkTest, SinkReceivesPipelineOutput) {
         .build();
     pipeline.start(guard.dispatcher);
 
-    guard.run_and_wait([&pipeline]() -> Task<void> {
+    guard.run_and_wait([&pipeline, received]() -> Task<void> {
         co_await pipeline.push(1);
         co_await pipeline.push(2);
         co_await pipeline.push(3);
-        std::this_thread::sleep_for(30ms);
+        // Spin-wait (up to 2s) for all subscriber callbacks to complete
+        // instead of a fixed sleep, so this is robust under scheduler load.
+        auto deadline = std::chrono::steady_clock::now() + 2s;
+        while (received->load(std::memory_order_acquire) < 3 &&
+               std::chrono::steady_clock::now() < deadline)
+            std::this_thread::sleep_for(1ms);
     });
 
     pipeline.stop();  // close channels so worker coroutines exit before dispatcher stops
@@ -185,12 +190,16 @@ TEST(PipelineBuilderWithSourceTest, SourceFeedsDataIntoPipeline) {
         .build();
     pipeline.start(guard.dispatcher);
 
-    guard.run_and_wait([&bus]() -> Task<void> {
+    guard.run_and_wait([&bus, processed]() -> Task<void> {
         std::this_thread::sleep_for(5ms);
         co_await bus.publish("input.items", 10);
         co_await bus.publish("input.items", 20);
         co_await bus.publish("input.items", 30);
-        std::this_thread::sleep_for(30ms);
+        // Spin-wait (up to 2s) for all items to be processed by the pipeline.
+        auto deadline = std::chrono::steady_clock::now() + 2s;
+        while (processed->load(std::memory_order_acquire) < 3 &&
+               std::chrono::steady_clock::now() < deadline)
+            std::this_thread::sleep_for(1ms);
     });
 
     pipeline.stop();  // close channels so worker coroutines exit before dispatcher stops
@@ -221,11 +230,16 @@ TEST(PipelineIpcIntegration, SourceStageSinkEndToEnd) {
         .build();
     pipeline.start(guard.dispatcher);
 
-    guard.run_and_wait([&bus]() -> Task<void> {
+    guard.run_and_wait([&bus, result_count]() -> Task<void> {
         std::this_thread::sleep_for(5ms);
         for (int i = 1; i <= 5; ++i)
             co_await bus.publish("raw", i);
-        std::this_thread::sleep_for(50ms);
+        // Spin-wait (up to 2s) for all subscriber callbacks to complete
+        // instead of a fixed sleep, so this is robust under scheduler load.
+        auto deadline = std::chrono::steady_clock::now() + 2s;
+        while (result_count->load(std::memory_order_acquire) < 5 &&
+               std::chrono::steady_clock::now() < deadline)
+            std::this_thread::sleep_for(1ms);
     });
 
     pipeline.stop();  // close channels so worker coroutines exit before dispatcher stops
