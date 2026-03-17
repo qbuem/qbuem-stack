@@ -2,24 +2,24 @@
 
 **Zero Latency · Zero Allocation · Zero Dependency**
 
-> **Current Version: v2.1.0** — 모든 기능 구현 완료. Pipeline ↔ MessageBus ↔ SHM 완전 연계.
+> **Current Version: v2.1.0** — All features implemented. Pipeline ↔ MessageBus ↔ SHM fully integrated.
 >
 > High-performance C++ infrastructure for Web Application Servers (WAS), Inter-Process Communication (IPC), and Data Processing.
 
 ---
 
-## 🏗 Core Principles
+## Core Principles
 
 | Principle | Implementation Strategy |
 | :--- | :--- |
 | **Zero Latency** | SIMD HTTP Parser · `io_uring`/`kqueue` Batching · `sendfile(2)` · `kTLS` |
 | **Zero Allocation** | Per-request Arena · `FixedPoolResource` for event entries · Lock-free RingBuffers |
-| **Zero Dependency** | Kernel-native syscalls only · No external library dependencies in public headers. |
-| **Shared-Nothing** | Thread-per-core architecture · NUMA-aware pinning · Minimal cross-thread sync. |
+| **Zero Dependency** | Kernel-native syscalls only · No external library dependencies in public headers |
+| **Shared-Nothing** | Thread-per-core architecture · NUMA-aware pinning · Minimal cross-thread sync |
 
 ---
 
-## 🗺 Documentation Map
+## Documentation Map
 
 - **[Roadmap & Progress](./TODO.md)**: Current status and future milestones.
 - **[Strategic Vision](./docs/strategic-evaluation.md)**: Why `qbuem-stack` is a universal platform.
@@ -29,10 +29,11 @@
 - **[Versatility Guide](./docs/versatility-guide.md)**: Application in Media Streaming, AI/NPU, FinTech, and Edge.
 - **[Windows Support](./docs/windows-support.md)**: Native IOCP integration and Win32 alignment.
 - **[DB Abstraction](./docs/db-abstraction.md)**: Zero-allocation database driver interface.
+- **[Examples Guide](./examples/README.md)**: 44 categorized examples with detailed READMEs.
 
 ---
 
-## 🚀 Quick Start
+## Quick Start
 
 ```cpp
 #include <qbuem/qbuem_stack.hpp>
@@ -57,7 +58,7 @@ int main() {
 }
 ```
 
-### Pipeline + IPC 통합 예시
+### Pipeline + IPC Integration
 
 ```cpp
 #include <qbuem/pipeline/static_pipeline.hpp>
@@ -69,18 +70,20 @@ using namespace qbuem::shm;
 
 // SHMChannel → SHMSource → Pipeline → MessageBusSink → MessageBus
 auto pipeline = PipelineBuilder<RawOrder, RawOrder>{}
-    .with_source(SHMSource<RawOrder>("trading.raw_orders"))  // SHM 입력
+    .with_source(SHMSource<RawOrder>("trading.raw_orders"))  // SHM input
     .add<ParsedOrder>(stage_parse)
     .add<ValidatedOrder>(stage_validate)
-    .with_sink(MessageBusSink<ValidatedOrder>(bus, "validated"))  // MessageBus 출력
+    .with_sink(MessageBusSink<ValidatedOrder>(bus, "validated"))  // MessageBus output
     .build();
 
 pipeline.start(dispatcher);
 ```
 
+See [examples/06-ipc-messaging/ipc_pipeline](./examples/06-ipc-messaging/ipc_pipeline/README.md) for the complete 5-scenario walkthrough.
+
 ---
 
-## 🏛 Layered Architecture (The 9 Levels)
+## Layered Architecture (The 9 Levels)
 
 1. **Foundation**: `result`, `arena`, `crypto`
 2. **Async Core**: `task`, `reactor`, `dispatcher`
@@ -94,7 +97,7 @@ pipeline.start(dispatcher);
 
 ---
 
-## 🛠 Feature Support Matrix
+## Feature Support Matrix
 
 | Category | Features |
 | :--- | :--- |
@@ -109,25 +112,51 @@ pipeline.start(dispatcher);
 
 ---
 
-## 📊 Performance Benchmarks (v2.1.0)
+## Performance Benchmarks (v2.1.0)
 
 | Component | Metric | Result |
 | :--- | :--- | :--- |
-| **Event Dispatch** | Latency | ~6μs (macOS/kqueue) ✅ |
-| **AsyncChannel** | Throughput | 44M ops/s (MPMC) ✅ |
-| **SHMChannel** | IPC Latency | < 150ns (inter-process) ✅ |
-| **HTTP Parser** | Throughput | 317 MB/s (SIMD) ✅ |
-| **Memory Alloc** | `FixedPool` | 4.5 ns / alloc ✅ |
-| **Router Lookup** | Latency | 112 ns (RadixTree) ✅ |
-| **MessageBus** | Fan-out | lock-free, O(subscribers) ✅ |
+| **Event Dispatch** | Latency | ~6 μs (macOS/kqueue) |
+| **AsyncChannel** | Throughput | 44M ops/s (MPMC) |
+| **SHMChannel** | IPC Latency | < 150 ns (inter-process) |
+| **HTTP Parser** | Throughput | 317 MB/s (SIMD) |
+| **Memory Alloc** | `FixedPool` | 4.5 ns / alloc |
+| **Router Lookup** | Latency | 112 ns (RadixTree) |
+| **MessageBus** | Fan-out | lock-free, O(subscribers) |
 
 ---
 
-## 🗓 Roadmap Highlights
+## Examples
 
-- **v2.1.0 (Current)**: Pipeline ↔ MessageBus ↔ SHM 완전 연계, `SHMChannel::unlink()`, IPC 통합 테스트.
-- **v2.2.0 (Next)**: HTTP/3 native (quiche 동봉), QUIC transport 지원.
-- **v2.3.0**: AF_XDP production 예제, eBPF CO-RE 고도화.
+The [`examples/`](./examples/) directory contains **44 programs** organized into 11 categories, each with a detailed README.
+
+| Category | Highlights |
+| :--- | :--- |
+| [01 Foundation](./examples/01-foundation/) | `hello_world`, `async_timer` — start here |
+| [02 Network](./examples/02-network/) | TCP echo, UDP, Unix socket, WebSocket |
+| [03 Memory](./examples/03-memory/) | Arena, zero-copy, NUMA + huge pages |
+| [04 Codec & Security](./examples/04-codec-security/) | Length-prefix/line codecs, crypto, security middleware |
+| [05 Pipeline](./examples/05-pipeline/) | Fan-out, hot-swap, batching, sensor fusion, windowed processing |
+| [06 IPC & Messaging](./examples/06-ipc-messaging/) | SHMChannel, **flagship IPC pipeline**, MessageBus, SPSC |
+| [07 Resilience](./examples/07-resilience/) | Retry + CircuitBreaker + DLQ, Saga, Canary, Checkpoint, SLO |
+| [08 Observability](./examples/08-observability/) | W3C tracing, TimerWheel, TaskGroup structured concurrency |
+| [09 Database](./examples/09-database/) | Connection pool, session store, coroutine JSON |
+| [10 Hardware](./examples/10-hardware/) | PCIe VFIO, RDMA, eBPF, NVMe, kTLS, kqueue |
+| [11 Advanced Apps](./examples/11-advanced-apps/) | Autonomous driving fusion, HFT platform, game server, I/O dashboard |
+
+**Recommended learning path:**
+```
+hello_world → async_timer → tcp_echo_server → arena → pipeline/fanout
+    → ipc_pipeline → resilience → trading_platform
+```
+
+---
+
+## Roadmap Highlights
+
+- **v2.1.0 (Current)**: Pipeline ↔ MessageBus ↔ SHM full integration, `SHMChannel::unlink()`, IPC integration tests.
+- **v2.2.0 (Next)**: HTTP/3 native (quiche bundled), QUIC transport support.
+- **v2.3.0**: AF_XDP production examples, eBPF CO-RE enhancements.
 
 ---
 
