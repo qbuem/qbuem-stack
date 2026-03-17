@@ -64,12 +64,12 @@ public:
    */
   explicit HistogramMetrics(std::initializer_list<uint64_t> upper_bounds)
       : bounds_(upper_bounds), buckets_(upper_bounds.size() + 1) {
-    for (auto &b : buckets_) b.store(0, std::memory_order_relaxed);
+    for (auto &b : buckets_) b.val.store(0, std::memory_order_relaxed);
   }
 
   explicit HistogramMetrics(std::vector<uint64_t> upper_bounds)
       : bounds_(std::move(upper_bounds)), buckets_(bounds_.size() + 1) {
-    for (auto &b : buckets_) b.store(0, std::memory_order_relaxed);
+    for (auto &b : buckets_) b.val.store(0, std::memory_order_relaxed);
   }
 
   /**
@@ -81,7 +81,7 @@ public:
     // Binary search for the first bucket whose upper bound >= us.
     auto it = std::lower_bound(bounds_.begin(), bounds_.end(), us);
     size_t idx = static_cast<size_t>(it - bounds_.begin());
-    buckets_[idx].fetch_add(1, std::memory_order_relaxed);
+    buckets_[idx].val.fetch_add(1, std::memory_order_relaxed);
   }
 
   /**
@@ -92,9 +92,28 @@ public:
   [[nodiscard]] std::vector<uint64_t> bucket_counts() const noexcept {
     std::vector<uint64_t> counts(buckets_.size());
     for (size_t i = 0; i < buckets_.size(); ++i)
-      counts[i] = buckets_[i].load(std::memory_order_relaxed);
+      counts[i] = buckets_[i].val.load(std::memory_order_relaxed);
     return counts;
   }
+
+  /**
+   * @brief 버킷 카운트를 사용자 배열에 직접 기록합니다 (힙 할당 없음).
+   *
+   * 스냅샷 생성 등 hot path에서 vector 할당 없이 버킷 값을 읽을 때 사용합니다.
+   *
+   * @param out 쓸 배열 포인터. 크기 >= bucket_count() 필요.
+   * @param n   배열 크기 (초과분은 무시됨).
+   * @returns 실제 기록된 버킷 수.
+   */
+  size_t fill_bucket_counts(uint64_t* out, size_t n) const noexcept {
+    size_t cnt = std::min(n, buckets_.size());
+    for (size_t i = 0; i < cnt; ++i)
+      out[i] = buckets_[i].val.load(std::memory_order_relaxed);
+    return cnt;
+  }
+
+  /** @brief 버킷 수 = upper_bounds.size() + 1. */
+  [[nodiscard]] size_t bucket_count() const noexcept { return buckets_.size(); }
 
   /** @brief 버킷 상한 경계 목록을 반환합니다. */
   [[nodiscard]] const std::vector<uint64_t> &upper_bounds() const noexcept {
@@ -103,12 +122,17 @@ public:
 
   /** @brief 모든 카운터를 0으로 초기화합니다. */
   void reset() noexcept {
-    for (auto &b : buckets_) b.store(0, std::memory_order_relaxed);
+    for (auto &b : buckets_) b.val.store(0, std::memory_order_relaxed);
   }
 
 private:
-  std::vector<uint64_t>            bounds_;   ///< 버킷 상한 경계 (µs)
-  std::vector<std::atomic<uint64_t>> buckets_; ///< 버킷별 카운터
+  /// @brief 캐시라인 정렬 버킷 — 인접 버킷 간 false sharing 방지.
+  struct alignas(64) Bucket {
+    std::atomic<uint64_t> val{0};
+  };
+
+  std::vector<uint64_t> bounds_;  ///< 버킷 상한 경계 (µs)
+  std::vector<Bucket>   buckets_; ///< 버킷별 카운터 (64 바이트 패딩)
 };
 
 // ─── ActionMetrics ────────────────────────────────────────────────────────────

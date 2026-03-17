@@ -57,6 +57,7 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <condition_variable>
 #include <cstdio>
 #include <memory>
 #include <mutex>
@@ -266,12 +267,18 @@ struct EKFState {
     double vel_var{0.5};
 };
 
-static EKFState g_ekf{};
+// g_ekf_mtx 로 모든 EKF 상태 접근을 보호합니다.
+// fuse_perception 이 co_await 전에 mutex 를 해제하므로
+// 코루틴 프레임에 mutex 가 올라가지 않습니다.
+static std::mutex  g_ekf_mtx;
+static EKFState    g_ekf{};
 
-static void ekf_predict(double dt, const ImuSample& imu) {
+// ── mutex 미획득 내부 헬퍼 (항상 g_ekf_mtx 보유 상태에서만 호출) ──
+
+static void ekf_predict_nolock(double dt, const ImuSample& imu) {
     // 속도 적분 (가속도 기반)
-    g_ekf.vel.x += (imu.accel.x - 0.0) * dt;
-    g_ekf.vel.y += (imu.accel.y - 0.0) * dt;
+    g_ekf.vel.x += imu.accel.x * dt;
+    g_ekf.vel.y += imu.accel.y * dt;
     // 위치 적분
     g_ekf.pos.x += g_ekf.vel.x * dt;
     g_ekf.pos.y += g_ekf.vel.y * dt;
@@ -281,7 +288,7 @@ static void ekf_predict(double dt, const ImuSample& imu) {
     g_ekf.vel_var += 0.05 * dt;
 }
 
-static void ekf_update_gnss(const GnssPosition& gnss) {
+static void ekf_update_gnss_nolock(const GnssPosition& gnss) {
     constexpr double kMpD = 111320.0;
     constexpr double kLat0 = 37.5665, kLon0 = 126.9780;
     double obs_x = (gnss.lon - kLon0) * kMpD * std::cos(kLat0 * M_PI / 180.0);
@@ -330,15 +337,24 @@ static Task<Result<RawSensorBundle>> calibrate(RawSensorBundle b, ActionEnv) {
 // Stage 3: EKF 퓨전 — GNSS + IMU 상태 추정
 static Task<Result<PerceptionResult>> fuse_perception(RawSensorBundle b, ActionEnv) {
     constexpr double kDt = 0.05;  // 50ms 사이클
-    ekf_predict(kDt, b.imu);
-    ekf_update_gnss(b.gnss);
+
+    // mutex 보호 구간: predict + update + snapshot 을 원자적으로 수행.
+    // co_await 이전에 lock 을 해제해 mutex 가 코루틴 프레임에 올라가지 않습니다.
+    EKFState snap;
+    {
+        std::lock_guard<std::mutex> lk(g_ekf_mtx);
+        ekf_predict_nolock(kDt, b.imu);
+        ekf_update_gnss_nolock(b.gnss);
+        snap = g_ekf;  // 상태 복사 후 즉시 해제
+    }
 
     PerceptionResult r;
-    r.cycle_id       = b.cycle_id;
-    r.ego_pos_enu    = g_ekf.pos;
-    r.ego_vel        = g_ekf.vel;
-    r.ego_heading_deg = g_ekf.heading;
-    r.lane_offset_m  = b.camera.lane_offset_m;
+    r.objects.reserve(8);  // 최대 추적 객체 수 사전 할당 — push_back 재할당 방지
+    r.cycle_id        = b.cycle_id;
+    r.ego_pos_enu     = snap.pos;
+    r.ego_vel         = snap.vel;
+    r.ego_heading_deg = snap.heading;
+    r.lane_offset_m   = b.camera.lane_offset_m;
 
     // 신뢰도: GNSS HDOP + LiDAR 밀도 + 레이더 품질
     double gnss_q  = std::max(0.0, 1.0 - (b.gnss.hdop - 1.0) / 5.0);
@@ -349,7 +365,8 @@ static Task<Result<PerceptionResult>> fuse_perception(RawSensorBundle b, ActionE
 }
 
 // Stage 4: 객체 추적 (SORT 간소화 버전)
-static uint32_t g_track_id{0};
+// atomic fetch_add 로 data race 제거 (pipeline 이 멀티워커일 때도 안전)
+static std::atomic<uint32_t> g_track_id{0};
 static Task<Result<PerceptionResult>> track_objects(PerceptionResult r, ActionEnv) {
     // Radar + LiDAR 교차 검증으로 전방 객체 추적
     double radar_range = r.ego_pos_enu.x; // dummy — 실제론 별도 트래커
@@ -358,7 +375,7 @@ static Task<Result<PerceptionResult>> track_objects(PerceptionResult r, ActionEn
     // 예시: 전방 LiDAR 기반 추적 객체 생성
     // (실제 SORT: 헝가리안 알고리즘 + 칼만 필터 per-track)
     TrackedObject obj;
-    obj.id = ++g_track_id % 16;  // track_id 순환 (최대 16개)
+    obj.id = g_track_id.fetch_add(1, std::memory_order_relaxed) % 16;
     // 객체 위치: ENU 기준 자차 전방
     double cos_h = std::cos(r.ego_heading_deg * M_PI / 180.0);
     double sin_h = std::sin(r.ego_heading_deg * M_PI / 180.0);
@@ -387,8 +404,9 @@ static Task<Result<PerceptionResult>> track_objects(PerceptionResult r, ActionEn
 // §6  Sink — 퍼셉션 최종 수집
 // ─────────────────────────────────────────────────────────────────────────────
 
-static std::atomic<int>  g_perception_count{0};
-static std::atomic<int>  g_emergency_count{0};
+// alignas(64): 인접 카운터 간 false sharing 방지 (각 카운터가 독립된 캐시라인 점유)
+alignas(64) static std::atomic<int> g_perception_count{0};
+alignas(64) static std::atomic<int> g_emergency_count{0};
 
 struct PerceptionSink {
     Result<void> init() { return {}; }
@@ -413,8 +431,8 @@ struct PerceptionSink {
 // §7  DynamicPipeline 스테이지 — Planning / Control / Emergency
 // ─────────────────────────────────────────────────────────────────────────────
 
-static std::atomic<int> g_plan_count{0};
-static std::atomic<int> g_alert_count{0};
+alignas(64) static std::atomic<int> g_plan_count{0};
+alignas(64) static std::atomic<int> g_alert_count{0};
 
 // 장애물 위험도 계산
 static Task<Result<PerceptionResult>> obstacle_check(PerceptionResult r, ActionEnv) {
@@ -477,8 +495,12 @@ static const char* state_name(VehicleState s) {
 // §9  코루틴 엔트리 포인트
 // ─────────────────────────────────────────────────────────────────────────────
 
-static std::atomic<bool> g_perception_done{false};
-static std::atomic<bool> g_planning_done{false};
+static std::atomic<bool>    g_perception_done{false};
+static std::atomic<bool>    g_planning_done{false};
+
+// sleep 폴링 대신 condition_variable 로 완료 신호 — CPU 대기 시간 최소화
+static std::mutex              g_done_mtx;
+static std::condition_variable g_done_cv;
 
 // GCC ICE 우회: 코루틴 프레임에 큰 구조체를 올리지 않도록 힙 할당 사용
 [[gnu::noinline]]
@@ -512,6 +534,7 @@ static Task<void> run_perception(
         co_await pipe->push(*b);
     }
     g_perception_done.store(true, std::memory_order_release);
+    g_done_cv.notify_all();
     co_return;
 }
 
@@ -549,6 +572,7 @@ static Task<void> run_planning(
         obj.id       = static_cast<uint32_t>(i % 8);
         obj.ttc_sec  = ttc;
         obj.critical = (ttc < 3.0);
+        r.objects.reserve(1);  // push_back 시 재할당 방지
         r.objects.push_back(obj);
         r.emergency_flag = obj.critical;
         r.confidence = 0.85;
@@ -569,6 +593,7 @@ static Task<void> run_planning(
         co_await bus.publish("vehicle_state", r);
     }
     g_planning_done.store(true, std::memory_order_release);
+    g_done_cv.notify_all();
     co_return;
 }
 
@@ -618,12 +643,11 @@ int main() {
     disp.spawn(run_perception(perc_pipe, kCycles));
 
     {
-        auto dl = std::chrono::steady_clock::now() + 8s;
-        while (!g_perception_done.load(std::memory_order_acquire) &&
-               std::chrono::steady_clock::now() < dl)
-            std::this_thread::sleep_for(20ms);
-        std::this_thread::sleep_for(300ms);
+        std::unique_lock<std::mutex> lk(g_done_mtx);
+        g_done_cv.wait_for(lk, 8s,
+            []{ return g_perception_done.load(std::memory_order_acquire); });
     }
+    std::this_thread::sleep_for(300ms);  // 파이프라인 drain 대기
 
     // ── §C  DynamicPipeline — Planning / Control ────────────────────────────
     std::printf("\n── §C  Planning DynamicPipeline 구성 ──\n");
@@ -638,12 +662,11 @@ int main() {
     disp.spawn(run_planning(plan_dp, bus, kCycles));
 
     {
-        auto dl = std::chrono::steady_clock::now() + 8s;
-        while (!g_planning_done.load(std::memory_order_acquire) &&
-               std::chrono::steady_clock::now() < dl)
-            std::this_thread::sleep_for(20ms);
-        std::this_thread::sleep_for(300ms);
+        std::unique_lock<std::mutex> lk(g_done_mtx);
+        g_done_cv.wait_for(lk, 8s,
+            []{ return g_planning_done.load(std::memory_order_acquire); });
     }
+    std::this_thread::sleep_for(300ms);  // 파이프라인 drain 대기
 
     disp.stop();
     worker.join();

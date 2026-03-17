@@ -47,6 +47,15 @@
 
 namespace qbuem {
 
+/// @brief std::string_view 투명 해시 — publish/subscribe 토픽 조회 시
+///        `std::string(topic)` 임시 객체 생성을 방지합니다.
+struct StringHash {
+    using is_transparent = void;
+    std::size_t operator()(std::string_view sv) const noexcept {
+        return std::hash<std::string_view>{}(sv);
+    }
+};
+
 /**
  * @brief 토픽 기반 발행/구독 메시지 버스.
  *
@@ -190,7 +199,7 @@ public:
         std::shared_ptr<TopicState> state;
         {
             std::shared_lock lock(topics_mtx_);
-            auto it = topics_.find(std::string(topic));
+            auto it = topics_.find(topic);
             if (it == topics_.end())
                 co_return Result<void>{};
             state = it->second;
@@ -205,6 +214,9 @@ public:
         std::vector<std::function<bool(const Msg&)>> direct_senders;
         {
             std::shared_lock lock(state->mtx);
+            // sub 수 만큼 미리 예약 — publish 마다 재할당 방지
+            channels.reserve(state->subs.size());
+            direct_senders.reserve(state->subs.size());
             for (auto& sub : state->subs) {
                 if (sub.direct_sender)
                     direct_senders.push_back(sub.direct_sender);
@@ -239,7 +251,7 @@ public:
         std::shared_ptr<TopicState> state;
         {
             std::shared_lock lock(topics_mtx_);
-            auto it = topics_.find(std::string(topic));
+            auto it = topics_.find(topic);
             if (it == topics_.end())
                 return true; // no subscribers, silently drop
             state = it->second;
@@ -349,7 +361,7 @@ public:
         std::shared_ptr<TopicState> state;
         {
             std::shared_lock lock(topics_mtx_);
-            auto it = topics_.find(std::string(topic));
+            auto it = topics_.find(topic);
             if (it == topics_.end())
                 return;
             state = it->second;
@@ -371,7 +383,7 @@ public:
      */
     [[nodiscard]] size_t subscriber_count(std::string_view topic) const {
         std::shared_lock outer(topics_mtx_);
-        auto it = topics_.find(std::string(topic));
+        auto it = topics_.find(topic);
         if (it == topics_.end())
             return 0;
         std::shared_lock inner(it->second->mtx);
@@ -471,7 +483,7 @@ private:
         std::shared_ptr<TopicState> state;
         {
             std::shared_lock lock(topics_mtx_);
-            auto it = topics_.find(std::string(topic));
+            auto it = topics_.find(topic);
             if (it == topics_.end())
                 return;
             state = it->second;
@@ -487,8 +499,9 @@ private:
     // -------------------------------------------------------------------------
     // 데이터 멤버
     // -------------------------------------------------------------------------
-    mutable std::shared_mutex                                    topics_mtx_;
-    std::unordered_map<std::string, std::shared_ptr<TopicState>> topics_;
+    mutable std::shared_mutex                                                   topics_mtx_;
+    std::unordered_map<std::string, std::shared_ptr<TopicState>,
+                       StringHash, std::equal_to<>>                             topics_;
     Dispatcher*                                                  dispatcher_ = nullptr;
 };
 

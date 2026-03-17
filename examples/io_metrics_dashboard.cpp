@@ -133,21 +133,34 @@ struct MetricSnapshot {
 // §2  글로벌 집계 상태 (lock-free)
 // ─────────────────────────────────────────────────────────────────────────────
 
+// 캐시라인 패딩 카운터 — classify() 가 여러 워커에서 동시에 다른 type_count 버킷을
+// 증가시킬 때 false sharing 을 방지합니다 (6개 × 8 B = 48 B → 2 캐시라인 공유).
+struct alignas(64) PaddedCounter {
+    std::atomic<uint64_t> val{0};
+};
+
 struct GlobalStats {
     // 전체 카운터
     std::atomic<uint64_t> total_ops{0};
     std::atomic<uint64_t> total_bytes{0};
     std::atomic<uint64_t> error_count{0};
-    std::atomic<uint64_t> type_count[static_cast<int>(IOEventType::_Count)]{};
 
-    // EWMA 처리량 (α = 0.15, 1초 단위 갱신)
+    // 이벤트 유형별 카운터 — 각 버킷이 독립 캐시라인 점유
+    PaddedCounter type_count[static_cast<int>(IOEventType::_Count)]{};
+
+    // EWMA 처리량 (α = 0.15) — ewma_mtx 로 보호
+    // build_snapshot() 이 멀티워커 파이프라인에서 동시 호출될 수 있으므로 mutex 사용
+    mutable std::mutex ewma_mtx;
     double ewma_ops{0};
     double ewma_bytes{0};
 
     // 슬라이딩 1초 윈도우
     std::atomic<uint64_t> window_ops{0};
     std::atomic<uint64_t> window_bytes{0};
-    Clock::time_point window_start{Clock::now()};
+    // 비원자 time_point 대신 ns 단위 정수 atomic — ewma_mtx 보호 구간에서만 읽고 씀
+    uint64_t window_start_ns{static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(
+            Clock::now().time_since_epoch()).count())};
 
     // 레이턴시 히스토그램 (1µs ~ 1s, 로그 스케일 버킷)
     // 버킷 경계: 10, 50, 100, 500, 1000, 5000, 10000, 50000, 100000, 500000 µs
@@ -172,19 +185,32 @@ static GlobalStats g_stats{};
 static const uint64_t kBounds[] = {10, 50, 100, 500, 1000, 5000, 10000, 50000, 100000, 500000};
 static const uint64_t kBoundMids[] = {5, 30, 75, 300, 750, 3000, 7500, 30000, 75000, 300000, 750000};
 
-static uint64_t percentile_us(const std::vector<uint64_t>& counts, double p) {
+// 4개 백분위를 버킷 배열 단일 패스로 동시 계산 — O(n) × 4 → O(n) × 1
+// 스택 배열(counts_buf)을 받아 벡터 할당도 없앰
+static void compute_percentiles(const uint64_t* counts, size_t n,
+                                 uint64_t& p50, uint64_t& p95,
+                                 uint64_t& p99, uint64_t& p999) noexcept {
     uint64_t total = 0;
-    for (auto c : counts) total += c;
-    if (total == 0) return 0;
-    uint64_t target = static_cast<uint64_t>(std::ceil(total * p / 100.0));
+    for (size_t i = 0; i < n; ++i) total += counts[i];
+    p50 = p95 = p99 = p999 = 0;
+    if (total == 0) return;
+
+    constexpr double kPs[4] = {50.0, 95.0, 99.0, 99.9};
+    uint64_t targets[4];
+    for (int j = 0; j < 4; ++j)
+        targets[j] = static_cast<uint64_t>(std::ceil(total * kPs[j] / 100.0));
+
+    uint64_t* results[4] = {&p50, &p95, &p99, &p999};
     uint64_t acc = 0;
-    for (size_t i = 0; i < counts.size(); ++i) {
+    int found = 0;
+    for (size_t i = 0; i < n && found < 4; ++i) {
         acc += counts[i];
-        if (acc >= target)
-            return (i < sizeof(kBoundMids)/sizeof(kBoundMids[0]))
-                ? kBoundMids[i] : 1000000;
+        while (found < 4 && acc >= targets[found]) {
+            *results[found] = (i < (sizeof(kBoundMids)/sizeof(kBoundMids[0])))
+                ? kBoundMids[i] : 1000000ULL;
+            ++found;
+        }
     }
-    return 1000000;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -194,7 +220,7 @@ static uint64_t percentile_us(const std::vector<uint64_t>& counts, double p) {
 // Stage 1: 이벤트 분류 + 바이트/에러 전역 집계
 static Task<Result<IOEvent>> classify(IOEvent ev, ActionEnv) {
     int idx = static_cast<int>(ev.type);
-    g_stats.type_count[idx].fetch_add(1, std::memory_order_relaxed);
+    g_stats.type_count[idx].val.fetch_add(1, std::memory_order_relaxed);
     g_stats.total_ops.fetch_add(1, std::memory_order_relaxed);
     if (ev.type == IOEventType::Read || ev.type == IOEventType::Write)
         g_stats.total_bytes.fetch_add(ev.bytes, std::memory_order_relaxed);
@@ -209,12 +235,12 @@ static Task<Result<IOEvent>> classify(IOEvent ev, ActionEnv) {
 // Stage 2: 레이턴시 기록
 static Task<Result<IOEvent>> measure(IOEvent ev, ActionEnv) {
     g_stats.latency_hist.observe(ev.latency_us);
-    // 최대 레이턴시 atomic CAS 업데이트
+    // 최대 레이턴시: 단일 CAS — CAS 실패 시 이미 더 큰 값이 들어온 것이므로 재시도 불필요
     uint64_t cur = g_stats.lat_max.load(std::memory_order_relaxed);
-    while (ev.latency_us > cur &&
-           !g_stats.lat_max.compare_exchange_weak(
-               cur, ev.latency_us,
-               std::memory_order_relaxed, std::memory_order_relaxed)) {}
+    if (ev.latency_us > cur)
+        g_stats.lat_max.compare_exchange_strong(
+            cur, ev.latency_us,
+            std::memory_order_relaxed, std::memory_order_relaxed);
     co_return ev;
 }
 
@@ -244,32 +270,42 @@ static MetricSnapshot build_snapshot() {
     snap.total_bytes  = g_stats.total_bytes.load(std::memory_order_relaxed);
     snap.error_count  = g_stats.error_count.load(std::memory_order_relaxed);
 
-    // 슬라이딩 윈도우 처리량 (EWMA)
-    auto now = Clock::now();
-    double elapsed = std::chrono::duration<double>(now - g_stats.window_start).count();
-    if (elapsed > 0.01) {
-        uint64_t wops   = g_stats.window_ops.exchange(0, std::memory_order_relaxed);
-        uint64_t wbytes = g_stats.window_bytes.exchange(0, std::memory_order_relaxed);
-        constexpr double kAlpha = 0.15;
-        g_stats.ewma_ops   += kAlpha * (wops   / elapsed - g_stats.ewma_ops);
-        g_stats.ewma_bytes += kAlpha * (wbytes / elapsed - g_stats.ewma_bytes);
-        g_stats.window_start = now;
+    // 슬라이딩 윈도우 처리량 (EWMA) — ewma_mtx 로 race 방지
+    // (pipeline 멀티워커가 동시에 build_snapshot 호출 가능)
+    {
+        auto now_ns = static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(
+                Clock::now().time_since_epoch()).count());
+        std::lock_guard<std::mutex> lk(g_stats.ewma_mtx);
+        double elapsed = static_cast<double>(now_ns - g_stats.window_start_ns) * 1e-9;
+        if (elapsed > 0.01) {
+            uint64_t wops   = g_stats.window_ops.exchange(0, std::memory_order_relaxed);
+            uint64_t wbytes = g_stats.window_bytes.exchange(0, std::memory_order_relaxed);
+            constexpr double kAlpha = 0.15;
+            g_stats.ewma_ops   += kAlpha * (wops   / elapsed - g_stats.ewma_ops);
+            g_stats.ewma_bytes += kAlpha * (wbytes / elapsed - g_stats.ewma_bytes);
+            g_stats.window_start_ns = now_ns;
+        }
+        snap.ops_per_sec   = g_stats.ewma_ops;
+        snap.bytes_per_sec = g_stats.ewma_bytes;
     }
-    snap.ops_per_sec   = g_stats.ewma_ops;
-    snap.bytes_per_sec = g_stats.ewma_bytes;
 
     if (snap.total_ops > 0)
         snap.error_rate_pct = 100.0 * snap.error_count / snap.total_ops;
 
-    auto counts = g_stats.latency_hist.bucket_counts();
-    snap.lat_p50  = percentile_us(counts, 50.0);
-    snap.lat_p95  = percentile_us(counts, 95.0);
-    snap.lat_p99  = percentile_us(counts, 99.0);
-    snap.lat_p999 = percentile_us(counts, 99.9);
-    snap.lat_max  = g_stats.lat_max.load(std::memory_order_relaxed);
+    // fill_bucket_counts: 스택 버퍼 사용 — 벡터 힙 할당 없이 버킷 읽기
+    // bucket_count() = 11 (경계 10개 + overflow 1개)
+    constexpr size_t kMaxBuckets = 16;
+    uint64_t counts_buf[kMaxBuckets]{};
+    size_t nbuckets = g_stats.latency_hist.fill_bucket_counts(counts_buf, kMaxBuckets);
+
+    // 4개 백분위 단일 패스 계산
+    compute_percentiles(counts_buf, nbuckets,
+                        snap.lat_p50, snap.lat_p95, snap.lat_p99, snap.lat_p999);
+    snap.lat_max = g_stats.lat_max.load(std::memory_order_relaxed);
 
     for (int i = 0; i < static_cast<int>(IOEventType::_Count); ++i)
-        snap.type_count[i] = g_stats.type_count[i].load(std::memory_order_relaxed);
+        snap.type_count[i] = g_stats.type_count[i].val.load(std::memory_order_relaxed);
 
     return snap;
 }
@@ -351,17 +387,18 @@ struct MockIOProducer {
                 .ts_us      = ts,
             };
 
-            // try_push (lock-free MPMC): 채널 포화 시 스핀 재시도 (최대 8회)
-            for (int retry = 0; retry < 8; ++retry) {
-                if (pipe.try_push(ev)) break;
-                // 채널 포화 → 8µs 대기 후 재시도 (파이프라인 소비 대기)
-                std::this_thread::sleep_for(std::chrono::microseconds(8));
+            // try_push (lock-free MPMC): 채널 포화 시 지수 백오프 재시도 (최대 8회)
+            // 고정 8µs 반복 대신 백오프로 불필요한 컨텍스트 스위치 절감
+            {
+                uint32_t backoff_us = 4;
+                for (int retry = 0; retry < 8; ++retry) {
+                    if (pipe.try_push(ev)) break;
+                    std::this_thread::sleep_for(std::chrono::microseconds(backoff_us));
+                    backoff_us = std::min(backoff_us * 2, uint32_t{256});
+                }
             }
             ts += 10 + (rng() % 40);  // 10~50µs 간격
-
-            // 매 200 이벤트마다 20µs 페이싱 — 파이프라인 소비 기회 제공
-            if ((i & 0xFF) == 0)
-                std::this_thread::sleep_for(std::chrono::microseconds(20));
+            // 주기 pacing sleep 제거: 파이프라인은 backpressure 로 자율 조절
         }
     }
 };
@@ -490,7 +527,12 @@ int main() {
     uint64_t final_ops    = g_stats.total_ops.load(std::memory_order_relaxed);
     uint64_t final_bytes  = g_stats.total_bytes.load(std::memory_order_relaxed);
     uint64_t final_errors = g_stats.error_count.load(std::memory_order_relaxed);
-    auto counts           = g_stats.latency_hist.bucket_counts();
+    // 최종 요약: fill_bucket_counts 로 heap 할당 없이 읽기
+    constexpr size_t kSummaryBuckets = 16;
+    uint64_t summary_buf[kSummaryBuckets]{};
+    size_t summary_n = g_stats.latency_hist.fill_bucket_counts(summary_buf, kSummaryBuckets);
+    uint64_t fp50{}, fp95{}, fp99{}, fp999{};
+    compute_percentiles(summary_buf, summary_n, fp50, fp95, fp99, fp999);
 
     std::printf("\n══════════════════════════════════════════════════════\n");
     std::printf("  IO 메트릭스 최종 요약\n");
@@ -501,14 +543,10 @@ int main() {
                 (unsigned long long)final_errors,
                 final_ops > 0 ? 100.0 * final_errors / final_ops : 0.0);
     std::printf("  스냅샷 수신   : %d 회\n", g_snap_received.load());
-    std::printf("  p50 레이턴시  : %llu µs\n",
-                (unsigned long long)percentile_us(counts, 50.0));
-    std::printf("  p95 레이턴시  : %llu µs\n",
-                (unsigned long long)percentile_us(counts, 95.0));
-    std::printf("  p99 레이턴시  : %llu µs\n",
-                (unsigned long long)percentile_us(counts, 99.0));
-    std::printf("  p99.9 레이턴시: %llu µs\n",
-                (unsigned long long)percentile_us(counts, 99.9));
+    std::printf("  p50 레이턴시  : %llu µs\n",  (unsigned long long)fp50);
+    std::printf("  p95 레이턴시  : %llu µs\n",  (unsigned long long)fp95);
+    std::printf("  p99 레이턴시  : %llu µs\n",  (unsigned long long)fp99);
+    std::printf("  p99.9 레이턴시: %llu µs\n",  (unsigned long long)fp999);
     std::printf("  최대 레이턴시 : %llu µs\n",
                 (unsigned long long)g_stats.lat_max.load(std::memory_order_relaxed));
     std::printf("──────────────────────────────────────────────────────\n");
@@ -516,7 +554,7 @@ int main() {
     // 이벤트 유형 분포
     std::printf("  이벤트 분포:\n");
     for (int i = 0; i < static_cast<int>(IOEventType::_Count); ++i) {
-        uint64_t c = g_stats.type_count[i].load(std::memory_order_relaxed);
+        uint64_t c = g_stats.type_count[i].val.load(std::memory_order_relaxed);
         double   p = final_ops > 0 ? 100.0 * c / final_ops : 0.0;
         std::printf("    %s %6llu  (%.1f%%)\n",
                     event_name(static_cast<IOEventType>(i)),
