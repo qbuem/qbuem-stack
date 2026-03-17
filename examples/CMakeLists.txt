@@ -147,6 +147,18 @@ target_link_libraries(hardware_io_example PRIVATE qbuem-stack::qbuem)
 add_executable(sensor_fusion_example sensor_fusion_example.cpp)
 target_link_libraries(sensor_fusion_example PRIVATE qbuem-stack::qbuem)
 
+# 자율주행 센서 퓨전: Mock HAL(Camera/Radar/LiDAR/IMU/GNSS/Ultrasonic)
+#   → StaticPipeline(validate→calibrate→EKF→SORT) + DynamicPipeline(AEB hot-swap)
+#   + MessageBus(vehicle_state)
+add_executable(autonomous_driving_fusion autonomous_driving_fusion.cpp)
+target_link_libraries(autonomous_driving_fusion PRIVATE qbuem-stack::qbuem)
+
+# 초고속 IO 메트릭스 대시보드: 4 Producer 스레드 × 20k 이벤트
+#   → StaticPipeline(classify→measure→aggregate→snap)
+#   + HistogramMetrics(p50/p95/p99/p999) + MessageBus 메트릭 fan-out
+add_executable(io_metrics_dashboard io_metrics_dashboard.cpp)
+target_link_libraries(io_metrics_dashboard PRIVATE qbuem-stack::qbuem)
+
 # Zero-copy + ArenaChannel + AsyncLogger: sendfile, splice, arena_channel
 add_executable(zero_copy_arena_channel_example zero_copy_arena_channel_example.cpp)
 target_link_libraries(zero_copy_arena_channel_example PRIVATE qbuem-stack::qbuem)
