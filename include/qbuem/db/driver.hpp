@@ -252,6 +252,9 @@ public:
 
     /** @brief 풀을 드레인(모든 연결 종료)합니다. */
     virtual Task<void> drain() = 0;
+
+    /** @brief 연결을 풀에 반환합니다. PooledConnection 소멸자에서 호출됩니다. */
+    virtual void return_connection(std::unique_ptr<IConnection>) noexcept {}
 };
 
 // ─── PoolConfig ───────────────────────────────────────────────────────────────

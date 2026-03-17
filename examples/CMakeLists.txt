@@ -143,6 +143,10 @@ target_link_libraries(security_middleware_example PRIVATE qbuem-stack::qbuem)
 add_executable(hardware_io_example hardware_io_example.cpp)
 target_link_libraries(hardware_io_example PRIVATE qbuem-stack::qbuem)
 
+# 센서 퓨전: Mock IMU + GPS + LiDAR → StaticPipeline → DynamicPipeline
+add_executable(sensor_fusion_example sensor_fusion_example.cpp)
+target_link_libraries(sensor_fusion_example PRIVATE qbuem-stack::qbuem)
+
 # Zero-copy + ArenaChannel + AsyncLogger: sendfile, splice, arena_channel
 add_executable(zero_copy_arena_channel_example zero_copy_arena_channel_example.cpp)
 target_link_libraries(zero_copy_arena_channel_example PRIVATE qbuem-stack::qbuem)

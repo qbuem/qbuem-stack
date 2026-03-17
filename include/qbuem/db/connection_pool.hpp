@@ -205,6 +205,13 @@ private:
     std::atomic<uint32_t> waiter_count_{0};
 
     std::atomic<bool>     draining_{false};
+
+    // ─── 유휴 연결 큐 (return_connection 용) ────────────────────────────
+    std::vector<std::unique_ptr<IConnection>> idle_conns_;
+
+public:
+    /** @brief IConnectionPool::return_connection — PooledConnection 소멸 시 호출됩니다. */
+    void return_connection(std::unique_ptr<IConnection> conn) noexcept override;
 };
 
 // ─── RAII 연결 가드 ──────────────────────────────────────────────────────────
@@ -230,8 +237,8 @@ public:
         : conn_(std::move(conn)), pool_(pool) {}
 
     ~PooledConnection() {
-        // IConnection 소멸자에서 풀 반환 로직을 트리거
-        // (구체 Connection이 pool 포인터를 알고 있어야 함)
+        if (pool_ && conn_)
+            pool_->return_connection(std::move(conn_));
         conn_.reset();
     }
 
@@ -257,6 +264,87 @@ private:
     std::unique_ptr<IConnection> conn_;
     IConnectionPool*             pool_{nullptr};
 };
+
+// ─── LockFreeConnectionPool inline implementations ───────────────────────────
+
+inline LockFreeConnectionPool::LockFreeConnectionPool(
+    ConnFactory factory, PoolConfig config) noexcept
+    : factory_(std::move(factory)), config_(config) {
+    // slots_ left empty — idle_conns_ is used for the simplified inline impl
+    idle_conns_.reserve(config_.max_size);
+}
+
+inline LockFreeConnectionPool::~LockFreeConnectionPool() {
+    draining_.store(true, std::memory_order_release);
+    std::lock_guard lock(waiter_mutex_);
+    idle_conns_.clear();
+}
+
+inline Task<Result<void>> LockFreeConnectionPool::warmup() noexcept {
+    for (size_t i = 0; i < config_.min_size; ++i) {
+        auto r = co_await factory_();
+        if (!r) co_return unexpected(r.error());
+        std::lock_guard lock(waiter_mutex_);
+        idle_conns_.push_back(std::move(*r));
+        idle_count_.fetch_add(1, std::memory_order_relaxed);
+        total_count_.fetch_add(1, std::memory_order_relaxed);
+    }
+    co_return Result<void>::ok();
+}
+
+inline Task<Result<std::unique_ptr<IConnection>>> LockFreeConnectionPool::acquire() {
+    if (draining_.load(std::memory_order_acquire))
+        co_return unexpected(std::make_error_code(std::errc::operation_canceled));
+
+    {
+        std::lock_guard lock(waiter_mutex_);
+        if (!idle_conns_.empty()) {
+            auto conn = std::move(idle_conns_.back());
+            idle_conns_.pop_back();
+            idle_count_.fetch_sub(1, std::memory_order_relaxed);
+            active_count_.fetch_add(1, std::memory_order_relaxed);
+            co_return std::move(conn);
+        }
+    }
+
+    // No idle connection — create a new one if under max
+    if (total_count_.load(std::memory_order_relaxed) < config_.max_size) {
+        auto r = co_await factory_();
+        if (!r) co_return unexpected(r.error());
+        total_count_.fetch_add(1, std::memory_order_relaxed);
+        active_count_.fetch_add(1, std::memory_order_relaxed);
+        co_return std::move(*r);
+    }
+
+    co_return unexpected(std::make_error_code(std::errc::resource_unavailable_try_again));
+}
+
+inline Task<void> LockFreeConnectionPool::drain() {
+    draining_.store(true, std::memory_order_release);
+    std::lock_guard lock(waiter_mutex_);
+    idle_conns_.clear();
+    idle_count_.store(0, std::memory_order_relaxed);
+    co_return;
+}
+
+inline void LockFreeConnectionPool::return_connection(
+    std::unique_ptr<IConnection> conn) noexcept {
+    if (!conn) return;
+    if (draining_.load(std::memory_order_acquire)) return;
+    active_count_.fetch_sub(1, std::memory_order_relaxed);
+    std::lock_guard lock(waiter_mutex_);
+    idle_conns_.push_back(std::move(conn));
+    idle_count_.fetch_add(1, std::memory_order_relaxed);
+}
+
+// Private stubs — not needed for demo but must link
+inline void LockFreeConnectionPool::enqueue_waiter(Waiter* /*w*/) noexcept {}
+inline void LockFreeConnectionPool::wake_one_waiter(uint32_t /*slot_idx*/) noexcept {}
+inline Task<bool> LockFreeConnectionPool::validate_or_reconnect(Slot& /*slot*/) noexcept {
+    co_return true;
+}
+inline void LockFreeConnectionPool::release_slot(uint32_t /*slot_idx*/) noexcept {}
+inline void LockFreeConnectionPool::schedule_idle_cleanup() noexcept {}
 
 } // namespace qbuem::db
 
