@@ -21,6 +21,23 @@
 using namespace qbuem;
 using namespace std::chrono_literals;
 
+// ─── Yield: 코루틴을 한 번 yield해 같은 리액터의 다른 코루틴이 실행되도록 함 ──
+
+// Suspends the current coroutine once and re-schedules it on the same reactor.
+// Use this instead of std::this_thread::sleep_for inside a coroutine's
+// spin-wait loop: sleep_for blocks the reactor thread, starving other
+// coroutines queued on the same reactor.
+struct Yield {
+    bool await_ready() noexcept { return false; }
+    void await_suspend(std::coroutine_handle<> h) noexcept {
+        if (auto* r = Reactor::current())
+            r->post([h]() mutable { h.resume(); });
+        else
+            h.resume();
+    }
+    void await_resume() noexcept {}
+};
+
 // ─── 공통 RunGuard ───────────────────────────────────────────────────────────
 
 struct RunGuard {
@@ -157,15 +174,20 @@ TEST(PipelineBuilderWithSinkTest, SinkReceivesPipelineOutput) {
         co_await pipeline.push(1);
         co_await pipeline.push(2);
         co_await pipeline.push(3);
-        // Spin-wait (up to 2s) for all subscriber callbacks to complete
-        // instead of a fixed sleep, so this is robust under scheduler load.
+        // Spin-wait (up to 2s) for all subscriber callbacks to complete.
+        // Use co_await Yield{} instead of sleep_for: sleep_for blocks the
+        // reactor thread, starving other coroutines (worker, sink_pump) that
+        // are queued on the same reactor.
         auto deadline = std::chrono::steady_clock::now() + 2s;
         while (received->load(std::memory_order_acquire) < 3 &&
                std::chrono::steady_clock::now() < deadline)
-            std::this_thread::sleep_for(1ms);
+            co_await Yield{};
     });
 
     pipeline.stop();  // close channels so worker coroutines exit before dispatcher stops
+    // Flush: ensure the reactor processes the post-stop wake events (worker,
+    // sink_pump) before the dispatcher shuts down, preventing frame leaks.
+    guard.run_and_wait([]() -> Task<void> { co_return; });
     EXPECT_EQ(received->load(), 3);
 }
 
@@ -196,13 +218,18 @@ TEST(PipelineBuilderWithSourceTest, SourceFeedsDataIntoPipeline) {
         co_await bus.publish("input.items", 20);
         co_await bus.publish("input.items", 30);
         // Spin-wait (up to 2s) for all items to be processed by the pipeline.
+        // Use co_await Yield{} instead of sleep_for to avoid blocking the
+        // reactor thread and starving coroutines on the same reactor.
         auto deadline = std::chrono::steady_clock::now() + 2s;
         while (processed->load(std::memory_order_acquire) < 3 &&
                std::chrono::steady_clock::now() < deadline)
-            std::this_thread::sleep_for(1ms);
+            co_await Yield{};
     });
 
     pipeline.stop();  // close channels so worker coroutines exit before dispatcher stops
+    // Flush: ensure post-stop pump coroutines (source_pump, pump_channels,
+    // worker) are processed by the reactor before the dispatcher shuts down.
+    guard.run_and_wait([]() -> Task<void> { co_return; });
     EXPECT_EQ(processed->load(), 3);
     EXPECT_EQ(sum->load(), 60);
 }
@@ -234,15 +261,19 @@ TEST(PipelineIpcIntegration, SourceStageSinkEndToEnd) {
         std::this_thread::sleep_for(5ms);
         for (int i = 1; i <= 5; ++i)
             co_await bus.publish("raw", i);
-        // Spin-wait (up to 2s) for all subscriber callbacks to complete
-        // instead of a fixed sleep, so this is robust under scheduler load.
+        // Spin-wait (up to 2s) for all subscriber callbacks to complete.
+        // Use co_await Yield{} instead of sleep_for to avoid blocking the
+        // reactor thread and starving coroutines on the same reactor.
         auto deadline = std::chrono::steady_clock::now() + 2s;
         while (result_count->load(std::memory_order_acquire) < 5 &&
                std::chrono::steady_clock::now() < deadline)
-            std::this_thread::sleep_for(1ms);
+            co_await Yield{};
     });
 
     pipeline.stop();  // close channels so worker coroutines exit before dispatcher stops
+    // Flush: ensure post-stop pump coroutines (source_pump, pump_channels,
+    // worker, sink_pump) are all processed before the dispatcher shuts down.
+    guard.run_and_wait([]() -> Task<void> { co_return; });
     EXPECT_EQ(result_count->load(), 5);
     EXPECT_EQ(result_sum->load(), (1 + 2 + 3 + 4 + 5) * 10);
 }

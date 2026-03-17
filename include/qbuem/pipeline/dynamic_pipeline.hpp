@@ -194,10 +194,14 @@ public:
             return false;
 
         auto& stage = *it;
-        // Update worker factory with new function
-        stage->worker_factory = [this, stage_ptr = stage, fn = std::move(full_fn)](size_t worker_idx) mutable
+        // Update worker factory with new function.
+        // Use weak_ptr (not shared_ptr) to avoid a Stage→worker_factory→Stage
+        // reference cycle that would prevent Stage from ever being freed.
+        std::weak_ptr<Stage> weak_stage = stage;
+        stage->worker_factory = [this, weak_stage, fn = std::move(full_fn)](size_t worker_idx) mutable
             -> Task<void> {
-            return stage_worker(stage_ptr, fn, worker_idx);
+            auto s = weak_stage.lock();
+            if (s) co_await stage_worker(s, fn, worker_idx);
         };
         // Signal existing workers to stop; new ones will be spawned on next start
         if (stage->stop_src)

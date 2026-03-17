@@ -135,11 +135,24 @@ public:
 
   /**
    * @brief 파이프라인을 즉시 정지합니다 (drain 없음).
+   *
+   * stoppers 호출에 더해 head/tail 채널을 직접 닫아
+   * source_pump, pump_channels, sink_pump 등 모든 펌프 코루틴이
+   * 같은 리액터 poll 사이클에서 종료 신호를 받도록 보장합니다.
    */
   void stop() {
     state_.store(State::Stopped);
     for (auto &s : internal_.stoppers)
       s();
+    // Close head and tail channels so all pump coroutines (pump_channels,
+    // sink_pump) are woken in the same reactor poll cycle as the action
+    // stoppers, preventing coroutine-frame leaks when the dispatcher stops.
+    // When In == Out and with_source is used, head and tail may refer to the
+    // same channel; closing it twice is harmless (close() is idempotent).
+    if (internal_.head_channel)
+      internal_.head_channel->close();
+    if (internal_.tail_channel)
+      internal_.tail_channel->close();
   }
 
   // -------------------------------------------------------------------------
@@ -255,6 +268,14 @@ public:
       // parameters are always heap-allocated in the coroutine frame.
       d.spawn(PipelineBuilder::source_pump<CurOut, SourceT>(src_ptr, src_ch));
     });
+
+    // Stopper: close the source (if it supports close()) so source_pump's
+    // next() returns nullopt and the coroutine frame is freed when the
+    // dispatcher stops.  The if constexpr guard lets source types that
+    // don't have close() (e.g. SHMSource) work without compilation errors.
+    if constexpr (requires { src_ptr->close(); }) {
+      stoppers_.push_back([src_ptr]() { src_ptr->close(); });
+    }
 
     return PipelineBuilder<OrigIn, CurOut>(head_, tail_,
                                            std::move(starters_),
@@ -381,7 +402,9 @@ private:
   std::vector<std::function<Task<void>()>>              drainers_;
   std::vector<std::function<void()>>                    stoppers_;
 
-  // Pump coroutine: forwards ContextualItem<T> between two channels
+  // Pump coroutine: forwards ContextualItem<T> between two channels.
+  // If dst is closed (send returns broken_pipe), closes src so any
+  // upstream source_pump is also notified and can terminate.
   template <typename T>
   static Task<void> pump_channels(
       std::shared_ptr<AsyncChannel<ContextualItem<T>>> src,
@@ -389,7 +412,8 @@ private:
     for (;;) {
       auto item = co_await src->recv();
       if (!item) { dst->close(); co_return; }
-      co_await dst->send(std::move(*item));
+      auto r = co_await dst->send(std::move(*item));
+      if (!r) { src->close(); co_return; }  // dst closed → propagate upstream
     }
   }
 

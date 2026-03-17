@@ -59,6 +59,26 @@ struct RunGuard {
         dispatcher.stop();
         if (thread.joinable()) thread.join();
     }
+
+    // Named coroutine — avoids GCC HALO stack-use-after-return in lambdas.
+    template <typename F>
+    static Task<void> flush_coro_(F f, std::shared_ptr<std::atomic<bool>> done) {
+        co_await f();
+        done->store(true, std::memory_order_release);
+    }
+
+    // Spawn a coroutine on the dispatcher and block until it completes.
+    // Used to flush pending reactor wake events after pipeline.stop() so
+    // coroutine frames are freed before the dispatcher shuts down.
+    template <typename F>
+    void run_and_wait(F&& f, std::chrono::milliseconds timeout = 5s) {
+        auto done = std::make_shared<std::atomic<bool>>(false);
+        dispatcher.spawn(flush_coro_(std::forward<F>(f), done));
+        auto deadline = std::chrono::steady_clock::now() + timeout;
+        while (!done->load(std::memory_order_acquire) &&
+               std::chrono::steady_clock::now() < deadline)
+            std::this_thread::sleep_for(1ms);
+    }
 };
 
 /// 채널에서 최대 `n`개 항목을 타임아웃 `timeout` 내에 수집합니다.
@@ -131,6 +151,9 @@ TEST(DynamicPipeline, HotSwapReplaceStage) {
         ASSERT_EQ(r1.size(), 1u);
         EXPECT_EQ(r1[0], 20);   // 10*2=20
         dp.stop();
+        // Flush: ensure the reactor processes the post-stop worker wake event
+        // so the coroutine frame is freed before the dispatcher shuts down.
+        g.run_and_wait([]() -> Task<void> { co_return; });
     }
 
     // hot_swap 동작 검증: 존재하지 않는 스테이지는 false, 존재하면 true
@@ -153,6 +176,9 @@ TEST(DynamicPipeline, HotSwapReplaceStage) {
         ASSERT_EQ(r2.size(), 1u);
         EXPECT_EQ(r2[0], 100);  // 10*10=100
         dp.stop();
+        // Flush: ensure the reactor processes the post-stop worker wake event
+        // so the coroutine frame is freed before the dispatcher shuts down.
+        g.run_and_wait([]() -> Task<void> { co_return; });
     }
 }
 
