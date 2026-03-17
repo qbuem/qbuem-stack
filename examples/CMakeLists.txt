@@ -180,10 +180,17 @@ if(TARGET qbuem_json::qbuem_json)
     # + MessageBus(SSE fan-out) + MockDB + qbuem-json + Context 전파 + Cross-reactor 응답 채널
     add_executable(trading_platform trading_platform.cpp)
     target_link_libraries(trading_platform PRIVATE qbuem-stack::qbuem qbuem_json::qbuem_json)
+
+    # game_server: 실시간 멀티플레이어 턴제 배틀 게임 서버
+    # WAS + StaticPipeline(validate/apply/finalize) + DynamicPipeline(persist/replay/notify)
+    # + MessageBus(방별 SSE + 리더보드 SSE) + GameRegistry(인메모리 게임 상태)
+    # + qbuem-json Nexus(nexus_pulse GameAction 역직렬화) + Bearer Auth + Rate Limit (치트 방지)
+    add_executable(game_server game_server.cpp)
+    target_link_libraries(game_server PRIVATE qbuem-stack::qbuem qbuem_json::qbuem_json)
 else()
     message(WARNING
         "qbuem-json target not found — skipping middleware_example, db_session_example, "
-        "coro_json, pipeline_factory_example, trading_platform examples.\n"
+        "coro_json, pipeline_factory_example, trading_platform, game_server examples.\n"
         "  Set -DQBUEM_JSON_TAG=<tag> or ensure network access."
     )
 endif()
