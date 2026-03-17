@@ -916,11 +916,17 @@ struct GameServer {
 // §9. HTTP 핸들러
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// POST /api/v1/rooms — 방 생성
+/// POST /api/v1/rooms — 방 생성 (생성자는 자동 참가)
 static Handler make_post_room(GameServer& s) {
     return [&s](const Request& req, Response& res) {
         auto dto = CreateRoomRequest::from_json(req.body());
         auto info = s.reg->create_room(dto ? dto->room_name : "untitled");
+        // 방 생성자는 자동으로 참가
+        auto creator = res.get_header("X-Auth-Sub");
+        if (!creator.empty()) {
+            if (auto joined = s.reg->join_room(info.room_id, std::string(creator)))
+                info = *joined;
+        }
         res.status(201)
            .header("Content-Type", "application/json")
            .body(qbuem::write(info));
@@ -957,11 +963,11 @@ static Handler make_post_join(GameServer& s) {
         try { id = std::stoull(std::string(req.param("id"))); } catch (...) {
             res.status(400).body(qbuem::write(ErrorResponse{"invalid room id"})); return;
         }
-        auto player = req.header("X-Auth-Sub");
+        auto player = res.get_header("X-Auth-Sub");
         if (player.empty()) {
             res.status(401).body(qbuem::write(ErrorResponse{"authentication required"})); return;
         }
-        auto info = s.reg->join_room(id, player);
+        auto info = s.reg->join_room(id, std::string(player));
         if (!info) {
             res.status(409).body(qbuem::write(ErrorResponse{"room full or finished"})); return;
         }
@@ -981,7 +987,7 @@ static AsyncHandler make_post_action(GameServer& s) {
             co_return;
         }
 
-        auto player = req.header("X-Auth-Sub");
+        auto player = res.get_header("X-Auth-Sub");
         if (player.empty()) {
             res.status(401).header("Content-Type", "application/json")
                .body(qbuem::write(ErrorResponse{"authentication required"}));
@@ -1280,8 +1286,22 @@ int main() {
     app.use(request_id("X-Request-ID"));
     app.use(hsts(31'536'000, /*include_subdomains=*/true));
 
+    // bearer_auth 미들웨어 — 공개(읽기전용) 경로는 인증 없이 통과
     static GameKeyVerifier verifier;
-    app.use(bearer_auth(verifier));
+    auto auth_mw = bearer_auth(verifier);
+    app.use([auth_mw](const Request& req, Response& res) -> bool {
+        std::string_view path = req.path();
+        // 인증 없이 접근 가능한 공개 경로
+        if (path == "/health") return true;
+        if (req.method() == Method::Get) {
+            if (path == "/api/v1/stats"    ||
+                path == "/api/v1/leaderboard" ||
+                path == "/api/v1/rooms"    ||
+                path.starts_with("/api/v1/rooms/"))
+                return true;
+        }
+        return auth_mw(req, res);
+    });
 
     // ── 라우트 등록 ───────────────────────────────────────────────────────
     app.post("/api/v1/rooms",                make_post_room(server));

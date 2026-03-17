@@ -202,13 +202,20 @@ public:
         Msg any_msg = std::move(msg);
 
         std::vector<std::shared_ptr<AsyncChannel<Msg>>> channels;
+        std::vector<std::function<bool(const Msg&)>> direct_senders;
         {
             std::shared_lock lock(state->mtx);
             for (auto& sub : state->subs) {
-                if (sub.channel)
+                if (sub.direct_sender)
+                    direct_senders.push_back(sub.direct_sender);
+                else if (sub.channel)
                     channels.push_back(sub.channel);
             }
         }
+
+        // Direct (subscribe_stream) senders — non-blocking to avoid deadlock
+        for (auto& ds : direct_senders)
+            ds(any_msg);
 
         for (auto& ch : channels) {
             auto result = co_await ch->send(any_msg);
@@ -246,8 +253,11 @@ public:
 
         std::shared_lock lock(state->mtx);
         for (auto& sub : state->subs) {
-            if (sub.channel && !sub.channel->try_send(any_msg))
-                all_ok = false;
+            if (sub.direct_sender) {
+                if (!sub.direct_sender(any_msg)) all_ok = false;
+            } else if (sub.channel) {
+                if (!sub.channel->try_send(any_msg)) all_ok = false;
+            }
         }
         return all_ok;
     }
@@ -274,14 +284,14 @@ public:
 
         Sub sub;
         sub.id = id;
-        sub.channel = std::make_shared<AsyncChannel<Msg>>(cap);
-        // Store the typed channel alongside the sub
-        auto typed_ch = stream_ch;
-        sub.handler = [typed_ch](Msg m, Context) -> Task<Result<void>> {
+        // Use direct_sender to forward type-erased Msg into the typed stream_ch.
+        // This bypasses the handler indirection (which requires a dispatcher worker)
+        // and makes subscribe_stream work without any background workers.
+        sub.direct_sender = [typed_ch = stream_ch](const Msg& m) -> bool {
             if (const T* p = std::any_cast<T>(&m)) {
-                co_await typed_ch->send(*p);
+                return typed_ch->try_send(*p);
             }
-            co_return Result<void>{};
+            return false;
         };
 
         {
@@ -417,6 +427,10 @@ private:
         size_t                                   id;
         Handler                                  handler;
         std::shared_ptr<AsyncChannel<Msg>>       channel;
+        // For subscribe_stream: bypass the handler indirection and directly
+        // try_send the type-erased message into a typed channel.
+        // Set instead of channel when subscribe_stream is used.
+        std::function<bool(const Msg&)>          direct_sender;
     };
 
     struct TopicState {
