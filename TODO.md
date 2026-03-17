@@ -2,9 +2,43 @@
 
 **Zero Latency · Zero Allocation · Zero Dependency**
 
-> **Current Version: v2.1.0** — Pipeline ↔ MessageBus ↔ SHM 완전 연계 완료.
+> **Current Version: v2.2.0** — Monadic HTTP Fetch Client (curl-free).
 >
 > High-performance C++ infrastructure for Web, Messaging, and Data Pipelines.
+
+---
+
+## 🚧 In Progress: v2.2.0 — Monadic HTTP Fetch Client
+
+> **Goal**: curl 없는 순수 C++20 HTTP 클라이언트 — `Result<T>` monadic 체이닝과 완전히 통합.
+
+### 1. Monadic `Result<T>` Extensions (`include/qbuem/common.hpp`)
+- [x] **`Result<T>::map(f)`**: 성공값 변환 — Functor 패턴. `Result<T>` → `Result<U>`.
+- [x] **`Result<T>::and_then(f)`**: flatMap — f가 `Result<U>` 반환. Monad 패턴.
+- [x] **`Result<T>::transform_error(f)`**: 에러 코드 변환. 에러 정규화에 사용.
+- [x] **`Result<T>::value_or(default)`**: 에러 시 기본값 반환.
+
+### 2. HTTP Fetch Client (`include/qbuem/http/fetch.hpp`)
+- [x] **`ParsedUrl`**: URL → scheme/host/port/path 분해. IPv6 리터럴 지원.
+- [x] **`FetchResponse`**: 클라이언트 응답 값 타입. `status()`, `ok()`, `header()`, `body()`.
+- [x] **`FetchRequest`**: 빌더 패턴. `method()`, `header()`, `body()`, `get()`, `post()`, `put()`, `del()`, `patch()`.
+- [x] **`fetch(url)`**: 팩토리 함수. JavaScript `fetch()` API와 유사한 진입점.
+- [x] **curl-free HTTP/1.1**: `TcpStream::connect()` 위에 직접 구현. 외부 의존성 0.
+- [x] **Response parser**: Content-Length + Transfer-Encoding: chunked 양쪽 처리.
+- [x] **stop_token 통합**: 모든 I/O 전 취소 확인.
+
+### 3. Example (`examples/02-network/http_fetch/`)
+- [x] **`http_fetch_example.cpp`**: GET, POST, monadic 체이닝, 에러 핸들링, URL 파서 시연.
+
+### 향후 계획 (v2.3.0+)
+- [ ] **HTTPS 지원**: kTLS 통합 `fetch_tls()` — OpenSSL 미사용.
+- [ ] **Connection Pool**: `FetchClient` — TCP 연결 재사용으로 Keep-Alive 지원.
+- [ ] **DNS 비동기 해석**: `getaddrinfo_a()` / io_uring 통합.
+- [ ] **Redirect 자동 처리**: 3xx → 최대 N회 자동 follow.
+- [ ] **Timeout 지원**: `send(st, timeout_ms)` — TimerWheel 연동.
+- [ ] **Multipart/Form-data**: 파일 업로드 지원.
+
+---
 
 ---
 
@@ -56,6 +90,19 @@
 - [x] **RDMA (RoCE)**: Extending zero-copy messaging cross-host via IBVerbs/RoCE. (`include/qbuem/rdma/rdma_channel.hpp`)
 - [x] **eBPF Observability**: Standardized cluster-wide tracing via BPF CO-RE. (`include/qbuem/ebpf/ebpf_tracer.hpp`)
 - [x] **User-space Storage (SPDK)**: io_uring passthrough for direct NVMe access. (`include/qbuem/spdk/nvme_io.hpp`)
+
+## ✅ Completed: v2.2.0 — Monadic HTTP Fetch Client
+
+### v2.2.0 — curl-free Monadic Fetch
+- [x] **Result::map/and_then/transform_error/value_or**: `common.hpp`에 Functor/Monad 연산 추가.
+- [x] **ParsedUrl**: RFC 3986 URL 파서 (scheme/host/port/path, IPv6 리터럴 지원).
+- [x] **FetchResponse**: 클라이언트 HTTP 응답 값 타입 (status, headers, body, ok()).
+- [x] **FetchRequest**: 빌더 패턴 HTTP 클라이언트 (method/header/body/get/post/put/del/patch).
+- [x] **fetch()**: JavaScript-like 팩토리 함수 진입점.
+- [x] **Zero-dependency HTTP/1.1**: `TcpStream` 위에 직접 구현. curl 불사용. (`include/qbuem/http/fetch.hpp`)
+- [x] **http_fetch_example.cpp**: 5개 패턴 시연 예제. (`examples/02-network/http_fetch/`)
+
+---
 
 ## ✅ Completed: v2.1.0 — Pipeline ↔ IPC 완전 연계
 

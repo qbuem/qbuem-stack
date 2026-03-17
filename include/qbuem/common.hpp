@@ -208,6 +208,93 @@ public:
   /** @brief 성공값의 멤버에 직접 접근하는 const 포인터 연산자. @throws std::bad_variant_access */
   const T *operator->() const { return &value(); }
 
+  // ─── Monadic operations ──────────────────────────────────────────────────
+
+  /**
+   * @brief 성공값을 변환하는 map 연산 (Functor).
+   *
+   * 성공 상태면 f(value)를 호출하여 Result<U>로 변환합니다.
+   * 에러 상태면 에러를 그대로 전달합니다.
+   *
+   * @code
+   * Result<int> r = parse_int("42");
+   * Result<std::string> s = r.map([](int n){ return std::to_string(n); });
+   * @endcode
+   */
+  template <typename F>
+  auto map(F &&f) const & -> Result<std::invoke_result_t<F, const T &>> {
+    using U = std::invoke_result_t<F, const T &>;
+    if (has_value()) return Result<U>(std::forward<F>(f)(value()));
+    return Result<U>::err(error());
+  }
+
+  template <typename F>
+  auto map(F &&f) && -> Result<std::invoke_result_t<F, T &&>> {
+    using U = std::invoke_result_t<F, T &&>;
+    if (has_value()) return Result<U>(std::forward<F>(f)(std::move(value())));
+    return Result<U>::err(error());
+  }
+
+  /**
+   * @brief 성공값을 Result<U>로 변환하는 flatMap 연산 (Monad).
+   *
+   * 성공 상태면 f(value)를 호출합니다. f는 Result<U>를 반환해야 합니다.
+   * 에러 상태면 에러를 그대로 전달합니다.
+   *
+   * @code
+   * Result<std::string> r = fetch_url(url);
+   * Result<ParsedData> d = r.and_then([](const std::string& body){
+   *     return parse_json(body);  // returns Result<ParsedData>
+   * });
+   * @endcode
+   */
+  template <typename F>
+  auto and_then(F &&f) const & -> std::invoke_result_t<F, const T &> {
+    using Ret = std::invoke_result_t<F, const T &>;
+    if (has_value()) return std::forward<F>(f)(value());
+    return Ret::err(error());
+  }
+
+  template <typename F>
+  auto and_then(F &&f) && -> std::invoke_result_t<F, T &&> {
+    using Ret = std::invoke_result_t<F, T &&>;
+    if (has_value()) return std::forward<F>(f)(std::move(value()));
+    return Ret::err(error());
+  }
+
+  /**
+   * @brief 에러를 변환하는 연산 (error functor).
+   *
+   * 에러 상태면 f(error())를 호출하여 새로운 Result<T>를 반환합니다.
+   * 성공 상태면 그대로 전달합니다.
+   *
+   * @code
+   * auto r = do_io().transform_error([](std::error_code ec) {
+   *     return std::make_error_code(std::errc::io_error);
+   * });
+   * @endcode
+   */
+  template <typename F>
+  Result<T> transform_error(F &&f) const & {
+    if (!has_value()) return Result<T>::err(std::forward<F>(f)(error()));
+    return *this;
+  }
+
+  /**
+   * @brief 에러 상태일 때 대체 값을 반환합니다.
+   *
+   * @code
+   * int n = parse_int(s).value_or(0);
+   * @endcode
+   */
+  T value_or(T default_value) const & {
+    return has_value() ? value() : std::move(default_value);
+  }
+
+  T value_or(T default_value) && {
+    return has_value() ? std::move(value()) : std::move(default_value);
+  }
+
 private:
   /** @brief 내부 팩토리 메서드(`err`)에서만 사용되는 기본 생성자. */
   Result() = default;

@@ -33,6 +33,9 @@
 #include <qbuem/shm/futex_sync.hpp>
 #include <qbuem/security/jwt_action.hpp>
 
+// v2.2.0: Monadic HTTP Fetch Client (curl-free)
+#include <qbuem/http/fetch.hpp>
+
 #include <atomic>
 #include <chrono>
 #include <cstdint>
