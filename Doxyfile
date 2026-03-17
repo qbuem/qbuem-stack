@@ -6,17 +6,17 @@
 # Project
 #---------------------------------------------------------------------------
 PROJECT_NAME           = "qbuem-stack"
-PROJECT_NUMBER         = "0.3.0"
-PROJECT_BRIEF          = "Zero Latency · Zero Cost · Zero Dependency C++20 WAS Layer"
+PROJECT_NUMBER         = "2.1.0"
+PROJECT_BRIEF          = "Zero Latency · Zero Allocation · Zero Dependency C++20 WAS/IPC/Pipeline Library"
 PROJECT_LOGO           =
 OUTPUT_DIRECTORY       = docs/api
 CREATE_SUBDIRS         = NO
-OUTPUT_LANGUAGE        = Korean
+OUTPUT_LANGUAGE        = English
 
 #---------------------------------------------------------------------------
 # Input
 #---------------------------------------------------------------------------
-INPUT                  = include/draco README.md
+INPUT                  = include/qbuem README.md examples
 FILE_PATTERNS          = *.hpp *.h *.md
 RECURSIVE              = YES
 EXCLUDE                =
@@ -88,7 +88,7 @@ ENABLE_PREPROCESSING   = YES
 MACRO_EXPANSION        = YES
 EXPAND_ONLY_PREDEF     = NO
 PREDEFINED             = __linux__ \
-                         DRACO_HAS_IOURING \
+                         QBUEM_HAS_IOURING \
                          QBUEM_HAS_QBUEM_JSON \
                          __cplusplus=202002L
 
