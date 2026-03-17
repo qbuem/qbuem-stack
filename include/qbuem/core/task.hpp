@@ -80,6 +80,12 @@ template <typename T = void> struct Task {
     std::coroutine_handle<> continuation;
     bool detached = false;
 
+    // Prevent GCC HALO (Heap Allocation Elision Optimization) from placing
+    // coroutine frames on the C stack, which causes stack-use-after-return
+    // under ASan when the coroutine suspends and the C stack frame is freed.
+    static void* operator new(std::size_t n) { return ::operator new(n); }
+    static void  operator delete(void* p) noexcept { ::operator delete(p); }
+
     Task get_return_object() {
       return Task{std::coroutine_handle<promise_type>::from_promise(*this)};
     }
@@ -168,6 +174,12 @@ template <> struct Task<void> {
   struct promise_type {
     std::coroutine_handle<> continuation;
     bool detached = false;
+
+    // Prevent GCC HALO (Heap Allocation Elision Optimization) from placing
+    // coroutine frames on the C stack, which causes stack-use-after-return
+    // under ASan when the coroutine suspends and the C stack frame is freed.
+    static void* operator new(std::size_t n) { return ::operator new(n); }
+    static void  operator delete(void* p) noexcept { ::operator delete(p); }
 
     Task get_return_object() {
       return Task{std::coroutine_handle<promise_type>::from_promise(*this)};

@@ -168,14 +168,15 @@ public:
      * @param chan_cap 내부 채널 용량.
      * @returns 구독 핸들 (소멸 시 자동 취소).
      */
-    Subscription subscribe(std::string topic, Handler handler, size_t chan_cap = 64) {
+    Subscription subscribe(std::string topic, Handler handler,
+                           size_t /*chan_cap*/ = 64) {
         auto state = get_or_create_topic(topic);
         size_t id = state->next_id.fetch_add(1, std::memory_order_relaxed);
 
         Sub sub;
         sub.id      = id;
         sub.handler = std::move(handler);
-        sub.channel = std::make_shared<AsyncChannel<Msg>>(chan_cap);
+        // No internal channel: handlers are dispatched directly via invoke_handler.
 
         {
             std::unique_lock lock(state->mtx);
@@ -210,18 +211,18 @@ public:
 
         Msg any_msg = std::move(msg);
 
-        std::vector<std::shared_ptr<AsyncChannel<Msg>>> channels;
+        std::vector<Handler> handlers;
         std::vector<std::function<bool(const Msg&)>> direct_senders;
         {
             std::shared_lock lock(state->mtx);
             // sub 수 만큼 미리 예약 — publish 마다 재할당 방지
-            channels.reserve(state->subs.size());
+            handlers.reserve(state->subs.size());
             direct_senders.reserve(state->subs.size());
             for (auto& sub : state->subs) {
                 if (sub.direct_sender)
                     direct_senders.push_back(sub.direct_sender);
-                else if (sub.channel)
-                    channels.push_back(sub.channel);
+                else if (sub.handler)
+                    handlers.push_back(sub.handler);
             }
         }
 
@@ -229,11 +230,10 @@ public:
         for (auto& ds : direct_senders)
             ds(any_msg);
 
-        for (auto& ch : channels) {
-            auto result = co_await ch->send(any_msg);
-            if (!result)
-                co_return result;
-        }
+        // Directly co_await each handler so publish() provides backpressure and
+        // the caller knows handlers have run before publish() returns.
+        for (auto& h : handlers)
+            co_await invoke_handler(h, any_msg, ctx);
         co_return Result<void>{};
     }
 
@@ -474,6 +474,11 @@ private:
         auto state = std::make_shared<TopicState>();
         topics_[topic] = state;
         return state;
+    }
+
+    // Named coroutine — prevents HALO from placing the frame on publish()'s stack.
+    static Task<void> invoke_handler(Handler h, Msg msg, Context ctx) {
+        co_await h(std::move(msg), std::move(ctx));
     }
 
     /**

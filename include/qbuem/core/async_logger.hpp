@@ -114,20 +114,26 @@ public:
   }
 
   /**
-   * @brief Enqueue a log entry (O(1), no allocation, no mutex).
+   * @brief Enqueue a log entry (O(1), no allocation).
    *
-   * Called from the reactor (hot) thread.  Drops silently if the buffer is
+   * Safe for concurrent producers (MPSC).  Drops silently if the buffer is
    * full — this is intentional to never block the hot path.
    */
   void log(std::string_view method, std::string_view path,
            int status, long duration_us) noexcept {
+    // Spinlock: claim a slot exclusively among concurrent producers.
+    while (producer_lock_.test_and_set(std::memory_order_acquire)) {}
+
     size_t head = head_.load(std::memory_order_relaxed);
     size_t next = (head + 1) & mask_; // wraps at capacity
-    if (next == tail_.load(std::memory_order_acquire))
+    if (next == tail_.load(std::memory_order_acquire)) {
+      producer_lock_.clear(std::memory_order_release);
       return; // buffer full — drop
+    }
 
     buf_[head & mask_].fill(method, path, status, duration_us);
     head_.store(next, std::memory_order_release);
+    producer_lock_.clear(std::memory_order_release);
   }
 
   /**
@@ -198,8 +204,9 @@ private:
   LogFormat fmt_;
   std::vector<LogEntry> buf_;
 
-  alignas(64) std::atomic<size_t> head_{0}; // producer writes
-  alignas(64) std::atomic<size_t> tail_{0}; // consumer reads
+  alignas(64) std::atomic<size_t> head_{0};        // producer writes
+  alignas(64) std::atomic_flag   producer_lock_ = ATOMIC_FLAG_INIT; // MPSC guard
+  alignas(64) std::atomic<size_t> tail_{0};        // consumer reads
 
   std::atomic<bool> running_{false};
   std::thread       thread_;

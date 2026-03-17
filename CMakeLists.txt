@@ -66,6 +66,52 @@ if(QBUEM_PGO_USE)
   endif()
 endif()
 
+# ── Sanitizers ───────────────────────────────────────────────────────────────
+# cmake -DQBUEM_SANITIZE=asan   (ASan + UBSan + LSan)
+# cmake -DQBUEM_SANITIZE=tsan   (TSan)
+# cmake -DQBUEM_SANITIZE=msan   (MSan, clang only)
+# ASan 과 TSan 은 동시 사용 불가.
+set(QBUEM_SANITIZE "" CACHE STRING "Sanitizer preset: asan | tsan | msan")
+
+if(QBUEM_SANITIZE STREQUAL "asan")
+    message(STATUS "[qbuem-stack] Sanitizer: ASan + UBSan + LeakSanitizer")
+    add_compile_options(
+        -fsanitize=address,undefined
+        -fno-omit-frame-pointer
+        -g -O1
+        -fno-optimize-sibling-calls
+        -DQBUEM_SANITIZE_ASAN=1
+    )
+    add_link_options(-fsanitize=address,undefined)
+elseif(QBUEM_SANITIZE STREQUAL "tsan")
+    message(STATUS "[qbuem-stack] Sanitizer: TSan")
+    add_compile_options(
+        -fsanitize=thread
+        -fno-omit-frame-pointer
+        -g -O1
+        -DQBUEM_SANITIZE_TSAN=1
+    )
+    add_link_options(-fsanitize=thread)
+elseif(QBUEM_SANITIZE STREQUAL "msan")
+    message(STATUS "[qbuem-stack] Sanitizer: MSan (clang only)")
+    add_compile_options(
+        -fsanitize=memory
+        -fno-omit-frame-pointer
+        -g -O1
+        -DQBUEM_SANITIZE_MSAN=1
+    )
+    add_link_options(-fsanitize=memory)
+endif()
+
+# ── Coverage (gcov/lcov) ──────────────────────────────────────────────────────
+# cmake -DQBUEM_COVERAGE=ON
+option(QBUEM_COVERAGE "Enable gcov coverage instrumentation" OFF)
+
+if(QBUEM_COVERAGE)
+    message(STATUS "[qbuem-stack] Coverage: gcov/lcov enabled")
+    add_compile_options(-g -O0 --coverage -fprofile-arcs -ftest-coverage)
+    add_link_options(--coverage)
+endif()
 
 # ============================================================================
 include(FetchContent)

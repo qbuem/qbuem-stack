@@ -35,6 +35,25 @@ EpollReactor::EpollReactor() {
 }
 
 EpollReactor::~EpollReactor() {
+  // Drain pending work queue: coroutine frames spawned via dispatcher.spawn()
+  // but never executed (because run() was never called) would otherwise leak.
+  // Channels should already be closed before the reactor is destroyed, so
+  // any blocked recv()/send() awaiters will return immediately on resume.
+  // We set ourselves as the current reactor so Reactor::current() is valid
+  // for any inline wakeup paths (e.g. Yield awaiter in Action::drain).
+  Reactor::set_current(this);
+  for (int drain_pass = 0; drain_pass < 64; ++drain_pass) {
+    std::vector<std::function<void()>> local;
+    {
+      std::lock_guard<std::mutex> lock(work_mutex_);
+      if (work_queue_.empty()) break;
+      local.swap(work_queue_);
+    }
+    for (auto &fn : local)
+      fn();
+  }
+  Reactor::set_current(nullptr);
+
   // Close all timerfd handles
   for (auto &[id, entry] : timers_by_id_) {
     close(entry.timerfd);
