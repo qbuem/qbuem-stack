@@ -4,9 +4,24 @@ This file provides structured context for AI coding assistants working in this r
 
 ---
 
+## Language Policy
+
+**All code, comments, documentation, and user-facing strings MUST be written in English.**
+
+This is a hard requirement that applies to:
+- All source file comments (`//`, `/* */`, `/** */` Doxygen)
+- All string literals visible to users (error messages, log output, example output)
+- All documentation files (`.md`, `.rst`)
+- All new code contributions by AI assistants
+
+Korean or other non-English text in code comments, docs, or strings is a review failure.
+Existing Korean comments in legacy files should be translated to English when touched.
+
+---
+
 ## Project Identity
 
-**qbuem-stack v2.1.0** — Zero Latency · Zero Allocation · Zero Dependency
+**qbuem-stack v2.2.0** — Zero Latency · Zero Allocation · Zero Dependency
 C++20 high-performance infrastructure library for WAS (Web Application Servers), IPC, and data pipelines.
 
 - **Language**: C++20 (concepts, coroutines `co_await`/`co_return`, `std::expected`, `std::span`, `std::format`)

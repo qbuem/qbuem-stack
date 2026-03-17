@@ -8,35 +8,51 @@
 
 ---
 
-## 🚧 In Progress: v2.2.0 — Monadic HTTP Fetch Client
+## ✅ Completed: v2.3.0 — HTTP Client Full Feature Set
 
-> **Goal**: curl 없는 순수 C++20 HTTP 클라이언트 — `Result<T>` monadic 체이닝과 완전히 통합.
+> **Goal**: Complete curl-free HTTP client — async DNS, timeout, redirects, connection pool, kTLS HTTPS.
 
-### 1. Monadic `Result<T>` Extensions (`include/qbuem/common.hpp`)
-- [x] **`Result<T>::map(f)`**: 성공값 변환 — Functor 패턴. `Result<T>` → `Result<U>`.
-- [x] **`Result<T>::and_then(f)`**: flatMap — f가 `Result<U>` 반환. Monad 패턴.
-- [x] **`Result<T>::transform_error(f)`**: 에러 코드 변환. 에러 정규화에 사용.
-- [x] **`Result<T>::value_or(default)`**: 에러 시 기본값 반환.
+### 1. Language Policy
+- [x] **English-only**: All code comments, docs, and user-facing strings must be in English. Rule added to `CLAUDE.md`.
 
-### 2. HTTP Fetch Client (`include/qbuem/http/fetch.hpp`)
-- [x] **`ParsedUrl`**: URL → scheme/host/port/path 분해. IPv6 리터럴 지원.
-- [x] **`FetchResponse`**: 클라이언트 응답 값 타입. `status()`, `ok()`, `header()`, `body()`.
-- [x] **`FetchRequest`**: 빌더 패턴. `method()`, `header()`, `body()`, `get()`, `post()`, `put()`, `del()`, `patch()`.
-- [x] **`fetch(url)`**: 팩토리 함수. JavaScript `fetch()` API와 유사한 진입점.
-- [x] **curl-free HTTP/1.1**: `TcpStream::connect()` 위에 직접 구현. 외부 의존성 0.
-- [x] **Response parser**: Content-Length + Transfer-Encoding: chunked 양쪽 처리.
-- [x] **stop_token 통합**: 모든 I/O 전 취소 확인.
+### 2. Async DNS Resolution (`include/qbuem/net/dns.hpp`)
+- [x] **`DnsResolver::resolve(host, port)`**: Non-blocking hostname → `SocketAddr` via detached thread + `Reactor::post()`.
+- [x] **IP literal fast-path**: `inet_pton` check in `await_ready()` — no thread spawned for numeric IPs.
+- [x] **IPv4 preference**: Prefers IPv4 results; falls back to IPv6 if no IPv4 record exists.
+- [x] **Reactor integration**: Coroutine resume posted to the originating reactor thread (thread-safe).
 
-### 3. Example (`examples/02-network/http_fetch/`)
-- [x] **`http_fetch_example.cpp`**: GET, POST, monadic 체이닝, 에러 핸들링, URL 파서 시연.
+### 3. Timeout Support (`include/qbuem/http/fetch.hpp`)
+- [x] **`FetchRequest::timeout(duration)`**: Reactor `register_timer()` fires and requests stop via combined stop_token.
+- [x] **Combined stop_token**: `CombinedStop` struct combines caller's stop_token with timeout stop_source.
+- [x] **Zero overhead when not set**: Timeout path is opt-in; no timer registered when `timeout_ms_ == 0`.
 
-### 향후 계획 (v2.3.0+)
-- [ ] **HTTPS 지원**: kTLS 통합 `fetch_tls()` — OpenSSL 미사용.
-- [ ] **Connection Pool**: `FetchClient` — TCP 연결 재사용으로 Keep-Alive 지원.
-- [ ] **DNS 비동기 해석**: `getaddrinfo_a()` / io_uring 통합.
-- [ ] **Redirect 자동 처리**: 3xx → 최대 N회 자동 follow.
-- [ ] **Timeout 지원**: `send(st, timeout_ms)` — TimerWheel 연동.
-- [ ] **Multipart/Form-data**: 파일 업로드 지원.
+### 4. Automatic Redirect Following (`include/qbuem/http/fetch.hpp`)
+- [x] **`FetchRequest::max_redirects(n)`**: Follow 3xx responses up to N hops.
+- [x] **303 → GET**: Automatically downgrades method to GET on `303 See Other`.
+- [x] **Location header**: Uses the `Location` response header as the next URL.
+
+### 5. DNS Integration in `fetch()` (`include/qbuem/http/fetch.hpp`)
+- [x] **Hostname resolution**: `send()` calls `DnsResolver::resolve()` — real hostname support (not just IP literals).
+- [x] **All comments English**: Entire `fetch.hpp` rewritten in English.
+
+### 6. FetchClient — Connection Pool + Keep-Alive (`include/qbuem/http/fetch_client.hpp`)
+- [x] **`FetchClient`**: Per-host TCP connection pool. `acquire()` / `release()` free-list.
+- [x] **Keep-Alive**: Sends `Connection: keep-alive`; returns sockets to pool on server keep-alive response.
+- [x] **Stale connection retry**: If a reused connection fails on write, retries with a fresh connection.
+- [x] **`set_max_idle_per_host(n)`**, **`set_timeout(d)`**, **`set_max_redirects(n)`** configuration.
+- [x] **`idle_count()`**, **`clear_pool()`** pool management.
+- [x] **Redirect + monadic chaining**: Full feature parity with `FetchRequest`.
+
+### 7. kTLS HTTPS (`include/qbuem/http/fetch_tls.hpp`)
+- [x] **`TlsStream`**: Wraps `TcpStream` + `io::enable_ktls()` activation. Graceful fallback on unsupported kernels.
+- [x] **`TlsSessionParams`**: Carries fd + TX/RX `KtlsSessionParams` from the caller's TLS handshake.
+- [x] **`TlsFetchRequest`**: HTTP/1.1 request builder over a kTLS-activated stream.
+- [x] **`fetch_tls(url, session)`**: Entry point. Caller provides post-handshake session; kernel handles AES-GCM.
+- [x] **Zero TLS library dependency**: kTLS offload path requires no OpenSSL/BoringSSL at I/O time.
+
+### 8. Example (`examples/02-network/http_fetch/`)
+- [x] **`http_fetch_example.cpp`**: 8 patterns: GET, POST, monadic chain, error, timeout, redirect, URL parser, FetchClient.
+- [x] **All English**: Comments and output strings translated to English.
 
 ---
 
@@ -91,16 +107,24 @@
 - [x] **eBPF Observability**: Standardized cluster-wide tracing via BPF CO-RE. (`include/qbuem/ebpf/ebpf_tracer.hpp`)
 - [x] **User-space Storage (SPDK)**: io_uring passthrough for direct NVMe access. (`include/qbuem/spdk/nvme_io.hpp`)
 
-## ✅ Completed: v2.2.0 — Monadic HTTP Fetch Client
+## ✅ Completed: v2.2.0 — v2.3.0 — Monadic HTTP Client (Full)
 
 ### v2.2.0 — curl-free Monadic Fetch
-- [x] **Result::map/and_then/transform_error/value_or**: `common.hpp`에 Functor/Monad 연산 추가.
-- [x] **ParsedUrl**: RFC 3986 URL 파서 (scheme/host/port/path, IPv6 리터럴 지원).
-- [x] **FetchResponse**: 클라이언트 HTTP 응답 값 타입 (status, headers, body, ok()).
-- [x] **FetchRequest**: 빌더 패턴 HTTP 클라이언트 (method/header/body/get/post/put/del/patch).
-- [x] **fetch()**: JavaScript-like 팩토리 함수 진입점.
-- [x] **Zero-dependency HTTP/1.1**: `TcpStream` 위에 직접 구현. curl 불사용. (`include/qbuem/http/fetch.hpp`)
-- [x] **http_fetch_example.cpp**: 5개 패턴 시연 예제. (`examples/02-network/http_fetch/`)
+- [x] **Result::map/and_then/transform_error/value_or**: Functor/Monad operations on `Result<T>`. (`common.hpp`)
+- [x] **ParsedUrl**: RFC 3986 URL parser (scheme/host/port/path, IPv6 literal support).
+- [x] **FetchResponse**: Client HTTP response value type (status, headers, body, ok()).
+- [x] **FetchRequest**: Builder-pattern HTTP client (method/header/body/get/post/put/del/patch).
+- [x] **fetch()**: JavaScript-like factory entry point.
+- [x] **Zero-dependency HTTP/1.1**: Built directly on `TcpStream`. No curl. (`include/qbuem/http/fetch.hpp`)
+- [x] **http_fetch_example.cpp**: 8-pattern example file. (`examples/02-network/http_fetch/`)
+
+### v2.3.0 — Full Feature Set (async DNS, timeout, redirect, pool, kTLS)
+- [x] **DnsResolver**: Non-blocking `getaddrinfo` via thread + `Reactor::post()`. (`include/qbuem/net/dns.hpp`)
+- [x] **Timeout**: `FetchRequest::timeout(d)` — reactor timer + combined stop_token.
+- [x] **Redirect**: `FetchRequest::max_redirects(n)` — automatic 3xx follow with 303→GET downgrade.
+- [x] **FetchClient**: Per-host connection pool, Keep-Alive, stale-connection retry. (`include/qbuem/http/fetch_client.hpp`)
+- [x] **TlsStream / fetch_tls()**: kTLS kernel offload for HTTPS. Caller provides TLS handshake + session keys. (`include/qbuem/http/fetch_tls.hpp`)
+- [x] **English-only**: All code comments and docs translated to English. Rule added to `CLAUDE.md`.
 
 ---
 

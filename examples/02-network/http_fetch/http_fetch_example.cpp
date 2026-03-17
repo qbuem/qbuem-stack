@@ -1,96 +1,101 @@
 /**
  * @file http_fetch_example.cpp
- * @brief qbuem monadic HTTP fetch 사용 예제 — curl-free HTTP/1.1 클라이언트
+ * @brief qbuem monadic HTTP fetch — curl-free HTTP/1.1 client examples.
  *
- * 이 예제는 다음 패턴들을 시연합니다:
+ * Demonstrates the following patterns:
  *
- *   1. 기본 GET 요청
- *   2. POST 요청 (JSON body)
- *   3. Monadic 체이닝 — Result::map() / and_then()
- *   4. 에러 핸들링 — transform_error() / value_or()
- *   5. URL 파싱 직접 사용
+ *   1. Basic GET request
+ *   2. POST request with JSON body
+ *   3. Monadic chaining — Result::map() / and_then() / value_or()
+ *   4. Error handling — transform_error() / value_or()
+ *   5. Request timeout
+ *   6. Automatic redirect following
+ *   7. URL parser direct usage
+ *   8. FetchClient — connection pooling + Keep-Alive
  *
- * 실행 전에 httpbin.org 또는 로컬 HTTP 서버가 필요합니다.
- * 네트워크가 없으면 URL을 127.0.0.1:8080 같은 로컬 서버로 바꾸세요.
+ * To run, point the URLs at a reachable HTTP server.
+ * Replace "httpbin.org" with "127.0.0.1:8080" if no network access is available.
  */
 
 #include <qbuem/http/fetch.hpp>
+#include <qbuem/http/fetch_client.hpp>
 #include <qbuem/core/dispatcher.hpp>
 #include <qbuem/core/task.hpp>
 
+#include <chrono>
 #include <print>
 #include <stop_token>
 #include <string_view>
 
 using namespace qbuem;
+using namespace std::chrono_literals;
 
-// ─── 예제 1: 기본 GET 요청 ────────────────────────────────────────────────────
+// ─── Example 1: Basic GET ─────────────────────────────────────────────────────
 
 Task<void> example_basic_get(std::stop_token st) {
-    std::println("[1] 기본 GET 요청");
+    std::println("[1] Basic GET request");
 
     auto resp = co_await fetch("http://httpbin.org/get").send(st);
 
     if (!resp) {
-        std::println("  오류: {}", resp.error().message());
+        std::println("  error: {}", resp.error().message());
         co_return;
     }
 
-    std::println("  상태 코드: {}", resp->status());
-    std::println("  ok(): {}", resp->ok());
-    std::println("  Content-Type: {}", resp->header("content-type"));
-    std::println("  Body 길이: {} bytes", resp->body().size());
-    std::println("  Body (처음 200자):\n{}", resp->body().substr(0, 200));
+    std::println("  status:       {}", resp->status());
+    std::println("  ok():         {}", resp->ok());
+    std::println("  content-type: {}", resp->header("content-type"));
+    std::println("  body length:  {} bytes", resp->body().size());
+    std::println("  body (first 200 chars):\n{}", resp->body().substr(0, 200));
 }
 
-// ─── 예제 2: POST 요청 ────────────────────────────────────────────────────────
+// ─── Example 2: POST with JSON body ──────────────────────────────────────────
 
 Task<void> example_post(std::stop_token st) {
-    std::println("\n[2] POST 요청 (JSON body)");
+    std::println("\n[2] POST request with JSON body");
 
-    constexpr std::string_view payload = R"({"user":"qbuem","version":"2.2.0"})";
+    constexpr std::string_view payload = R"({"library":"qbuem","version":"2.2.0"})";
 
     auto resp = co_await fetch("http://httpbin.org/post")
         .post()
         .header("Content-Type", "application/json")
-        .header("X-Request-ID", "fetch-example-001")
+        .header("X-Request-ID", "fetch-example-002")
         .body(payload)
         .send(st);
 
     if (!resp) {
-        std::println("  오류: {}", resp.error().message());
+        std::println("  error: {}", resp.error().message());
         co_return;
     }
 
-    std::println("  상태 코드: {}", resp->status());
-    std::println("  Body (처음 300자):\n{}", resp->body().substr(0, 300));
+    std::println("  status: {}", resp->status());
+    std::println("  body (first 300 chars):\n{}", resp->body().substr(0, 300));
 }
 
-// ─── 예제 3: Monadic 체이닝 ──────────────────────────────────────────────────
+// ─── Example 3: Monadic chaining ─────────────────────────────────────────────
 
 Task<void> example_monadic_chain(std::stop_token st) {
-    std::println("\n[3] Monadic 체이닝 — map() + and_then()");
+    std::println("\n[3] Monadic chaining — map() / and_then() / value_or()");
 
     auto resp = co_await fetch("http://httpbin.org/status/200").send(st);
 
-    // .map() — 성공값 변환 (Result<FetchResponse> → Result<int>)
+    // map(): transform success value (Result<FetchResponse> → Result<int>)
     auto status = resp.map([](const FetchResponse &r) { return r.status(); });
-    std::println("  map() 결과 status: {}", status.value_or(-1));
+    std::println("  map() status: {}", status.value_or(-1));
 
-    // .and_then() — 조건부 변환 (Result<FetchResponse> → Result<std::string>)
+    // and_then(): conditional transform (Result<FetchResponse> → Result<std::string>)
     auto body_or_err = resp.and_then([](const FetchResponse &r) -> Result<std::string> {
         if (!r.ok())
             return unexpected(std::make_error_code(std::errc::protocol_error));
         return std::string(r.body());
     });
 
-    if (body_or_err) {
-        std::println("  and_then() body 길이: {}", body_or_err->size());
-    } else {
-        std::println("  and_then() 에러: {}", body_or_err.error().message());
-    }
+    if (body_or_err)
+        std::println("  and_then() body length: {}", body_or_err->size());
+    else
+        std::println("  and_then() error: {}", body_or_err.error().message());
 
-    // 체이닝: map → and_then → value_or
+    // Full chain: map → and_then → value_or
     std::string summary = resp
         .map([](const FetchResponse &r) {
             return std::string("status=") + std::to_string(r.status());
@@ -100,56 +105,132 @@ Task<void> example_monadic_chain(std::stop_token st) {
         })
         .value_or("(error)");
 
-    std::println("  체이닝 결과: {}", summary);
+    std::println("  chain result: {}", summary);
 }
 
-// ─── 예제 4: 에러 핸들링 ─────────────────────────────────────────────────────
+// ─── Example 4: Error handling ────────────────────────────────────────────────
 
 Task<void> example_error_handling(std::stop_token st) {
-    std::println("\n[4] 에러 핸들링 — transform_error() + value_or()");
+    std::println("\n[4] Error handling — transform_error() / value_or()");
 
-    // 존재하지 않는 호스트 → 연결 에러
-    auto bad = co_await fetch("http://this-host-does-not-exist.qbuem/path").send(st);
+    // Non-existent host → connection error
+    auto bad = co_await fetch("http://this-host-does-not-exist.qbuem/path")
+        .send(st);
 
-    // transform_error(): 에러 코드 변환
+    // transform_error(): normalise / remap error codes
     auto normalized = bad.transform_error([](std::error_code ec) {
-        std::println("  원본 에러: {} ({})", ec.message(), ec.value());
+        std::println("  original error: {} ({})", ec.message(), ec.value());
         return std::make_error_code(std::errc::host_unreachable);
     });
+    std::println("  normalised error: {}", normalized.error().message());
 
-    std::println("  정규화된 에러: {}", normalized.error().message());
-
-    // value_or(): 에러 시 기본값
+    // value_or(): safe fallback on error
     int fallback_status = bad
         .map([](const FetchResponse &r) { return r.status(); })
         .value_or(0);
-    std::println("  value_or(0) 결과: {}", fallback_status);
+    std::println("  value_or(0): {}", fallback_status);
 }
 
-// ─── 예제 5: URL 파싱 직접 사용 ──────────────────────────────────────────────
+// ─── Example 5: Timeout ───────────────────────────────────────────────────────
+
+Task<void> example_timeout(std::stop_token st) {
+    std::println("\n[5] Request timeout");
+
+    // 1ms timeout — will almost certainly expire before the request completes
+    auto resp = co_await fetch("http://httpbin.org/delay/2")
+        .timeout(1ms)
+        .send(st);
+
+    if (!resp)
+        std::println("  timed out (expected): {}", resp.error().message());
+    else
+        std::println("  completed with status: {} (timeout may not have fired)", resp->status());
+}
+
+// ─── Example 6: Redirect following ───────────────────────────────────────────
+
+Task<void> example_redirect(std::stop_token st) {
+    std::println("\n[6] Automatic redirect following");
+
+    // /redirect/3 issues 3 × 302 redirects before responding 200
+    auto resp = co_await fetch("http://httpbin.org/redirect/3")
+        .max_redirects(5)
+        .send(st);
+
+    if (!resp) {
+        std::println("  error: {}", resp.error().message());
+        co_return;
+    }
+    std::println("  final status after 3 redirects: {}", resp->status());
+    std::println("  final body length: {} bytes", resp->body().size());
+}
+
+// ─── Example 7: URL parser direct usage ──────────────────────────────────────
 
 void example_url_parser() {
-    std::println("\n[5] URL 파서 직접 사용");
+    std::println("\n[7] URL parser direct usage");
 
     struct TestCase { std::string_view url; };
     TestCase cases[] = {
-        {"http://example.com/path?q=1"},
+        {"http://example.com/path?q=hello"},
         {"http://api.example.com:8080/v1/users"},
         {"https://secure.example.com/login"},
         {"http://[::1]:9090/grpc"},
         {"ftp://invalid-scheme"},
+        {"not-a-url"},
     };
 
     for (auto &tc : cases) {
         auto r = ParsedUrl::parse(tc.url);
-        if (r) {
-            std::println("  URL: {}", tc.url);
-            std::println("    scheme={} host={} port={} path={}",
-                         r->scheme, r->host, r->port, r->path);
-        } else {
-            std::println("  URL: {} → 파싱 실패: {}", tc.url, r.error().message());
-        }
+        if (r)
+            std::println("  {} → scheme={} host={} port={} path={}",
+                         tc.url, r->scheme, r->host, r->port, r->path);
+        else
+            std::println("  {} → parse failed: {}", tc.url, r.error().message());
     }
+}
+
+// ─── Example 8: FetchClient — connection pool + Keep-Alive ───────────────────
+
+Task<void> example_fetch_client(std::stop_token st) {
+    std::println("\n[8] FetchClient — connection pooling + Keep-Alive");
+
+    FetchClient client;
+    client.set_max_idle_per_host(4);
+    client.set_timeout(10s);
+    client.set_max_redirects(3);
+
+    // First request: DNS + TCP handshake (cold)
+    auto r1 = co_await client.request("http://httpbin.org/get").send(st);
+    if (!r1) {
+        std::println("  request 1 error: {}", r1.error().message());
+        co_return;
+    }
+    std::println("  request 1 status: {} (cold — new connection)", r1->status());
+    std::println("  idle connections after req 1: {}", client.idle_count());
+
+    // Second request to same host: may reuse the pooled connection
+    auto r2 = co_await client.request("http://httpbin.org/uuid").get().send(st);
+    if (!r2) {
+        std::println("  request 2 error: {}", r2.error().message());
+        co_return;
+    }
+    std::println("  request 2 status: {} (may reuse connection)", r2->status());
+    std::println("  idle connections after req 2: {}", client.idle_count());
+
+    // Monadic chaining on client responses works exactly like fetch()
+    auto uuid = r2
+        .map([](const FetchResponse &r) { return std::string(r.body()); })
+        .value_or("(error)");
+    std::println("  body (first 60 chars): {}", uuid.substr(0, 60));
+
+    // POST via client
+    auto r3 = co_await client.request("http://httpbin.org/post")
+        .post()
+        .header("Content-Type", "application/json")
+        .body(R"({"source":"fetch_client_example"})")
+        .send(st);
+    std::println("  POST status: {}", r3.map([](auto &r){ return r.status(); }).value_or(-1));
 }
 
 // ─── main ─────────────────────────────────────────────────────────────────────
@@ -164,8 +245,11 @@ Task<void> run_all() {
     co_await example_post(st);
     co_await example_monadic_chain(st);
     co_await example_error_handling(st);
+    co_await example_timeout(st);
+    co_await example_redirect(st);
+    co_await example_fetch_client(st);
 
-    std::println("\n모든 예제 완료.");
+    std::println("\nAll examples completed.");
 }
 
 int main() {
