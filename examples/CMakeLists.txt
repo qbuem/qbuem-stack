@@ -4,8 +4,10 @@ target_link_libraries(hello_world PRIVATE qbuem-stack::qbuem)
 add_executable(async_timer async_timer.cpp)
 target_link_libraries(async_timer PRIVATE qbuem-stack::qbuem)
 
-add_executable(kqueue_sophistication kqueue_sophistication.cpp)
-target_link_libraries(kqueue_sophistication PRIVATE qbuem-stack::qbuem)
+if(APPLE)
+    add_executable(kqueue_sophistication kqueue_sophistication.cpp)
+    target_link_libraries(kqueue_sophistication PRIVATE qbuem-stack::qbuem)
+endif()
 
 # ── Pipeline Guide 예제 ───────────────────────────────────────────────────────
 
@@ -27,9 +29,8 @@ target_link_libraries(pipeline_dynamic_hotswap PRIVATE qbuem-stack::qbuem)
 
 # ── Feature examples ─────────────────────────────────────────────────────────
 
-# Middleware: CORS, RateLimit, RequestID, HSTS, BearerAuth, SSE
-add_executable(middleware_example middleware_example.cpp)
-target_link_libraries(middleware_example PRIVATE qbuem-stack::qbuem)
+# Middleware: CORS, RateLimit, RequestID, HSTS, BearerAuth, SSE (qbuem-json 필수)
+# middleware_example: qbuem-json TARGET 블록으로 이동
 
 # WebSocket: RFC 6455 frame encode/decode, compute_accept_key
 add_executable(websocket_example websocket_example.cpp)
@@ -135,9 +136,8 @@ target_link_libraries(crypto_url_example PRIVATE qbuem-stack::qbuem)
 add_executable(security_middleware_example security_middleware_example.cpp)
 target_link_libraries(security_middleware_example PRIVATE qbuem-stack::qbuem)
 
-# DB 연결 풀 + 세션 저장소: LockFreeConnectionPool, InMemorySessionStore
-add_executable(db_session_example db_session_example.cpp)
-target_link_libraries(db_session_example PRIVATE qbuem-stack::qbuem)
+# DB 연결 풀 + 세션 저장소: LockFreeConnectionPool, InMemorySessionStore (qbuem-json 필수)
+# db_session_example: qbuem-json TARGET 블록으로 이동
 
 # 하드웨어 I/O: PCIeDevice, RDMAChannel, EBPFTracer, NVMeIO, kTLS
 add_executable(hardware_io_example hardware_io_example.cpp)
@@ -160,6 +160,14 @@ if(NOT qbuem_json_POPULATED)
 endif()
 
 if(TARGET qbuem_json::qbuem_json)
+    # Middleware: CORS, RateLimit, RequestID, HSTS, BearerAuth, SSE
+    add_executable(middleware_example middleware_example.cpp)
+    target_link_libraries(middleware_example PRIVATE qbuem-stack::qbuem qbuem_json::qbuem_json)
+
+    # DB 연결 풀 + 세션 저장소: LockFreeConnectionPool, InMemorySessionStore
+    add_executable(db_session_example db_session_example.cpp)
+    target_link_libraries(db_session_example PRIVATE qbuem-stack::qbuem qbuem_json::qbuem_json)
+
     add_executable(coro_json coro_json.cpp)
     target_link_libraries(coro_json PRIVATE qbuem-stack::qbuem qbuem_json::qbuem_json)
 
@@ -174,7 +182,8 @@ if(TARGET qbuem_json::qbuem_json)
     target_link_libraries(trading_platform PRIVATE qbuem-stack::qbuem qbuem_json::qbuem_json)
 else()
     message(WARNING
-        "qbuem-json target not found — skipping coro_json, pipeline_factory_example, trading_platform examples.\n"
+        "qbuem-json target not found — skipping middleware_example, db_session_example, "
+        "coro_json, pipeline_factory_example, trading_platform examples.\n"
         "  Set -DQBUEM_JSON_TAG=<tag> or ensure network access."
     )
 endif()

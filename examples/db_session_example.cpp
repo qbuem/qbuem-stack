@@ -45,6 +45,9 @@ using namespace qbuem;
 using namespace qbuem::db;
 using namespace std::chrono_literals;
 
+// qbuem_json 포함 시 qbuem::Value(JSON)와 qbuem::db::Value 이름 충돌 방지
+using DbValue = qbuem::db::Value;
+
 // ─────────────────────────────────────────────────────────────────────────────
 // §1  Mock DB 연결 구현
 // ─────────────────────────────────────────────────────────────────────────────
@@ -64,11 +67,11 @@ public:
         std::string_view column_name(uint16_t idx) const noexcept override {
             (void)idx; return {};
         }
-        Value get(uint16_t idx) const noexcept override {
-            (void)idx; return Value{};
+        DbValue get(uint16_t idx) const noexcept override {
+            (void)idx; return DbValue{};
         }
-        Value get(std::string_view name) const noexcept override {
-            (void)name; return Value{};
+        DbValue get(std::string_view name) const noexcept override {
+            (void)name; return DbValue{};
         }
 
         const std::vector<std::string>& cells() const { return cells_; }
@@ -101,17 +104,17 @@ public:
         : conn_id_(conn_id), sql_(std::move(sql)) {}
 
     Task<Result<std::unique_ptr<IResultSet>>>
-    execute(std::span<const Value> /*params*/ = {}) override {
+    execute(std::span<const DbValue> /*params*/ = {}) override {
         std::printf("  [MockStmt#%d] execute: %s\n", conn_id_, sql_.c_str());
         std::vector<std::vector<std::string>> rows = {
             {"id", "name"},
             {"1",  "Alice"},
         };
-        co_return std::make_unique<MockResultSet>(std::move(rows));
+        co_return std::unique_ptr<IResultSet>(std::make_unique<MockResultSet>(std::move(rows)));
     }
 
     Task<Result<uint64_t>>
-    execute_dml(std::span<const Value> /*params*/ = {}) override {
+    execute_dml(std::span<const DbValue> /*params*/ = {}) override {
         std::printf("  [MockStmt#%d] execute_dml: %s\n", conn_id_, sql_.c_str());
         co_return uint64_t{1};
     }
@@ -138,18 +141,18 @@ public:
     prepare(std::string_view sql) override {
         std::printf("  [MockConn#%d] prepare: %.*s\n",
                     id_, static_cast<int>(sql.size()), sql.data());
-        co_return std::make_unique<MockStatement>(id_, std::string(sql));
+        co_return std::unique_ptr<IStatement>(std::make_unique<MockStatement>(id_, std::string(sql)));
     }
 
     Task<Result<std::unique_ptr<IResultSet>>>
-    query(std::string_view sql, std::span<const Value> /*params*/ = {}) override {
+    query(std::string_view sql, std::span<const DbValue> /*params*/ = {}) override {
         std::printf("  [MockConn#%d] query: %.*s\n",
                     id_, static_cast<int>(sql.size()), sql.data());
         std::vector<std::vector<std::string>> rows = {
             {"id", "name"},
             {"1",  "Alice"},
         };
-        co_return std::make_unique<MockResultSet>(std::move(rows));
+        co_return std::unique_ptr<IResultSet>(std::make_unique<MockResultSet>(std::move(rows)));
     }
 
     Task<Result<std::unique_ptr<ITransaction>>>
@@ -180,7 +183,7 @@ static Task<void> demo_connection_pool_task() {
     LockFreeConnectionPool pool(
         []() -> Task<Result<std::unique_ptr<IConnection>>> {
             int id = ++g_conn_id_counter;
-            co_return std::make_unique<MockConnection>(id);
+            co_return std::unique_ptr<IConnection>(std::make_unique<MockConnection>(id));
         },
         PoolConfig{
             .min_size        = 2,
