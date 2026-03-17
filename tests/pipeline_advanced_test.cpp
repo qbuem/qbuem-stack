@@ -1,13 +1,6 @@
 /**
  * @file tests/pipeline_advanced_test.cpp
- * @brief Unit tests for advanced pipeline features:
- *   - HistogramMetrics, PipelineVersion, ActionHealth (observability/health)
- *   - SloConfig (SLO)
- *   - InMemoryCheckpointStore (checkpoint)
- *   - InMemoryIdempotencyStore (idempotency)
- *   - SagaOrchestrator (saga)
- *   - MessageBus subscribe/publish (message_bus)
- *   - TaskGroup spawn/join (task_group)
+ * @brief Unit tests for advanced pipeline features
  */
 
 #include <gtest/gtest.h>
@@ -26,6 +19,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <memory>
 #include <string>
 #include <thread>
 #include <vector>
@@ -47,19 +41,23 @@ struct RunGuard {
         if (thread.joinable()) thread.join();
     }
 
+    // Named coroutine (not lambda) to prevent GCC HALO placing the frame on
+    // run_and_wait's stack and causing stack-use-after-scope under ASan.
+    template <typename F>
+    static Task<void> run_coro(F f, std::shared_ptr<std::atomic<bool>> done) {
+        co_await f();
+        done->store(true, std::memory_order_release);
+    }
+
     template <typename F>
     void run_and_wait(F&& f, std::chrono::milliseconds timeout = 5s) {
-        std::atomic<bool> done{false};
-        dispatcher.spawn([&, f = std::forward<F>(f)]() mutable -> Task<Result<void>> {
-            co_await f();
-            done.store(true, std::memory_order_release);
-            co_return {};
-        }());
+        auto done = std::make_shared<std::atomic<bool>>(false);
+        dispatcher.spawn(run_coro(std::forward<F>(f), done));
         auto deadline = std::chrono::steady_clock::now() + timeout;
-        while (!done.load(std::memory_order_acquire) &&
+        while (!done->load(std::memory_order_acquire) &&
                std::chrono::steady_clock::now() < deadline)
             std::this_thread::sleep_for(1ms);
-        EXPECT_TRUE(done.load()) << "Timed out waiting for task";
+        EXPECT_TRUE(done->load()) << "Timed out waiting for task";
     }
 };
 
@@ -74,7 +72,7 @@ TEST(HistogramMetricsTest, InitialCountsAreZero) {
 
 TEST(HistogramMetricsTest, ObserveBelowFirstBound) {
     HistogramMetrics hist({1000, 10000});
-    hist.observe(500);  // < 1000 → bucket[0]
+    hist.observe(500);
     auto counts = hist.bucket_counts();
     EXPECT_EQ(counts[0], 1u);
     EXPECT_EQ(counts[1], 0u);
@@ -83,16 +81,16 @@ TEST(HistogramMetricsTest, ObserveBelowFirstBound) {
 
 TEST(HistogramMetricsTest, ObserveExactBound) {
     HistogramMetrics hist({1000, 10000});
-    hist.observe(1000);  // == 1000 → bucket[0] (lower_bound finds first >= 1000)
+    hist.observe(1000);
     auto counts = hist.bucket_counts();
     EXPECT_EQ(counts[0], 1u);
 }
 
 TEST(HistogramMetricsTest, ObserveBeyondAllBounds) {
     HistogramMetrics hist({1000, 10000});
-    hist.observe(99999);  // > 10000 → last bucket
+    hist.observe(99999);
     auto counts = hist.bucket_counts();
-    EXPECT_EQ(counts[2], 1u);  // overflow bucket
+    EXPECT_EQ(counts[2], 1u);
 }
 
 TEST(HistogramMetricsTest, MultipleObservations) {
@@ -102,9 +100,9 @@ TEST(HistogramMetricsTest, MultipleObservations) {
     hist.observe(2000);
     hist.observe(50000);
     auto counts = hist.bucket_counts();
-    EXPECT_EQ(counts[0], 2u);  // 100, 500
-    EXPECT_EQ(counts[1], 1u);  // 2000
-    EXPECT_EQ(counts[2], 1u);  // 50000
+    EXPECT_EQ(counts[0], 2u);
+    EXPECT_EQ(counts[1], 1u);
+    EXPECT_EQ(counts[2], 1u);
 }
 
 TEST(HistogramMetricsTest, ResetClearsAllBuckets) {
@@ -183,7 +181,6 @@ TEST(ActionHealthTest, ToJsonContainsName) {
 
 TEST(SloConfigTest, CanBeConstructed) {
     SloConfig cfg;
-    // Should have sensible defaults without crashing
     SUCCEED();
 }
 
@@ -200,7 +197,6 @@ TEST(CheckpointDataTest, CanSetFields) {
     cd.offset = 12345;
     cd.metadata_json = "{\"batch\":42}";
     cd.saved_at = std::chrono::system_clock::now();
-
     EXPECT_EQ(cd.offset, 12345u);
     EXPECT_EQ(cd.metadata_json, "{\"batch\":42}");
 }
@@ -209,133 +205,71 @@ TEST(CheckpointDataTest, CanSetFields) {
 
 TEST(InMemoryCheckpointStoreTest, SaveAndLoad) {
     RunGuard rg;
-    std::atomic<bool> verified{false};
-
-    rg.dispatcher.spawn([&]() -> Task<Result<void>> {
+    rg.run_and_wait([]() -> Task<void> {
         auto store = std::make_shared<InMemoryCheckpointStore>();
-
         auto save_result = co_await store->save("pipeline-A", 100, "{\"key\":1}");
         EXPECT_TRUE(save_result.has_value());
-
         auto load_result = co_await store->load("pipeline-A");
         EXPECT_TRUE(load_result.has_value());
         EXPECT_EQ(load_result->offset, 100u);
         EXPECT_EQ(load_result->metadata_json, "{\"key\":1}");
-
-        verified.store(true, std::memory_order_release);
-        co_return {};
-    }());
-
-    auto deadline = std::chrono::steady_clock::now() + 5s;
-    while (!verified.load() && std::chrono::steady_clock::now() < deadline)
-        std::this_thread::sleep_for(1ms);
-    EXPECT_TRUE(verified.load());
+    });
 }
 
 TEST(InMemoryCheckpointStoreTest, LoadNonExistentReturnsError) {
     RunGuard rg;
-    std::atomic<bool> verified{false};
-
-    rg.dispatcher.spawn([&]() -> Task<Result<void>> {
+    rg.run_and_wait([]() -> Task<void> {
         auto store = std::make_shared<InMemoryCheckpointStore>();
         auto result = co_await store->load("nonexistent-pipeline");
         EXPECT_FALSE(result.has_value());
-        verified.store(true, std::memory_order_release);
-        co_return {};
-    }());
-
-    auto deadline = std::chrono::steady_clock::now() + 5s;
-    while (!verified.load() && std::chrono::steady_clock::now() < deadline)
-        std::this_thread::sleep_for(1ms);
-    EXPECT_TRUE(verified.load());
+    });
 }
 
 // ─── InMemoryIdempotencyStore ─────────────────────────────────────────────────
 
 TEST(InMemoryIdempotencyStoreTest, NewKeyIsInserted) {
     RunGuard rg;
-    std::atomic<bool> verified{false};
-
-    rg.dispatcher.spawn([&]() -> Task<Result<void>> {
+    rg.run_and_wait([]() -> Task<void> {
         auto store = std::make_shared<InMemoryIdempotencyStore>();
         bool is_new = co_await store->set_if_absent("key-1", std::chrono::hours{1});
         EXPECT_TRUE(is_new);
-        verified.store(true, std::memory_order_release);
-        co_return {};
-    }());
-
-    auto deadline = std::chrono::steady_clock::now() + 5s;
-    while (!verified.load() && std::chrono::steady_clock::now() < deadline)
-        std::this_thread::sleep_for(1ms);
-    EXPECT_TRUE(verified.load());
+    });
 }
 
 TEST(InMemoryIdempotencyStoreTest, DuplicateKeyIsRejected) {
     RunGuard rg;
-    std::atomic<bool> verified{false};
-
-    rg.dispatcher.spawn([&]() -> Task<Result<void>> {
+    rg.run_and_wait([]() -> Task<void> {
         auto store = std::make_shared<InMemoryIdempotencyStore>();
         co_await store->set_if_absent("key-dup", std::chrono::hours{1});
-
         bool is_new = co_await store->set_if_absent("key-dup", std::chrono::hours{1});
-        EXPECT_FALSE(is_new);  // duplicate
-        verified.store(true, std::memory_order_release);
-        co_return {};
-    }());
-
-    auto deadline = std::chrono::steady_clock::now() + 5s;
-    while (!verified.load() && std::chrono::steady_clock::now() < deadline)
-        std::this_thread::sleep_for(1ms);
-    EXPECT_TRUE(verified.load());
+        EXPECT_FALSE(is_new);
+    });
 }
 
 TEST(InMemoryIdempotencyStoreTest, GetReturnsTrueForExistingKey) {
     RunGuard rg;
-    std::atomic<bool> verified{false};
-
-    rg.dispatcher.spawn([&]() -> Task<Result<void>> {
+    rg.run_and_wait([]() -> Task<void> {
         auto store = std::make_shared<InMemoryIdempotencyStore>();
         co_await store->set_if_absent("key-get", std::chrono::hours{1});
-
         bool exists = co_await store->get("key-get");
         EXPECT_TRUE(exists);
-        verified.store(true, std::memory_order_release);
-        co_return {};
-    }());
-
-    auto deadline = std::chrono::steady_clock::now() + 5s;
-    while (!verified.load() && std::chrono::steady_clock::now() < deadline)
-        std::this_thread::sleep_for(1ms);
-    EXPECT_TRUE(verified.load());
+    });
 }
 
 TEST(InMemoryIdempotencyStoreTest, GetReturnsFalseForMissingKey) {
     RunGuard rg;
-    std::atomic<bool> verified{false};
-
-    rg.dispatcher.spawn([&]() -> Task<Result<void>> {
+    rg.run_and_wait([]() -> Task<void> {
         auto store = std::make_shared<InMemoryIdempotencyStore>();
         bool exists = co_await store->get("missing-key");
         EXPECT_FALSE(exists);
-        verified.store(true, std::memory_order_release);
-        co_return {};
-    }());
-
-    auto deadline = std::chrono::steady_clock::now() + 5s;
-    while (!verified.load() && std::chrono::steady_clock::now() < deadline)
-        std::this_thread::sleep_for(1ms);
-    EXPECT_TRUE(verified.load());
+    });
 }
 
 // ─── SagaOrchestrator ─────────────────────────────────────────────────────────
 
 TEST(SagaOrchestratorTest, AllStepsSucceed) {
     RunGuard rg;
-    std::atomic<bool> verified{false};
-    std::atomic<int> result{-1};
-
-    rg.dispatcher.spawn([&]() -> Task<Result<void>> {
+    rg.run_and_wait([]() -> Task<void> {
         SagaOrchestrator<int> saga;
         saga.add_step(SagaStep<int, int>{
             .name    = "double",
@@ -347,39 +281,28 @@ TEST(SagaOrchestratorTest, AllStepsSucceed) {
             .execute = [](int x) -> Task<Result<int>> { co_return x + 1; },
             .compensate = [](int) -> Task<void> { co_return; },
         });
-
         auto r = co_await saga.run(5);
         EXPECT_TRUE(r.has_value());
         EXPECT_EQ(*r, 11);  // (5 * 2) + 1 = 11
-        result.store(*r, std::memory_order_release);
-        verified.store(true, std::memory_order_release);
-        co_return {};
-    }());
-
-    auto deadline = std::chrono::steady_clock::now() + 5s;
-    while (!verified.load() && std::chrono::steady_clock::now() < deadline)
-        std::this_thread::sleep_for(1ms);
-    EXPECT_TRUE(verified.load());
-    EXPECT_EQ(result.load(), 11);
+    });
 }
 
 TEST(SagaOrchestratorTest, FailureTriggersCompensation) {
     RunGuard rg;
-    std::atomic<bool> verified{false};
-    std::atomic<int> compensated{0};
+    rg.run_and_wait([]() -> Task<void> {
+        // atomic<int> in the coroutine frame (heap) — safe to capture by ref
+        // from compensate lambda because saga awaits compensation before returning.
+        std::atomic<int> compensated{0};
 
-    rg.dispatcher.spawn([&]() -> Task<Result<void>> {
         SagaOrchestrator<int> saga;
-
         saga.add_step(SagaStep<int, int>{
             .name    = "step-1",
             .execute = [](int x) -> Task<Result<int>> { co_return x + 1; },
-            .compensate = [&](int) -> Task<void> {
+            .compensate = [&compensated](int) -> Task<void> {
                 compensated.fetch_add(1, std::memory_order_relaxed);
                 co_return;
             },
         });
-
         saga.add_step(SagaStep<int, int>{
             .name    = "step-2-fail",
             .execute = [](int) -> Task<Result<int>> {
@@ -389,61 +312,40 @@ TEST(SagaOrchestratorTest, FailureTriggersCompensation) {
         });
 
         auto r = co_await saga.run(10);
-        EXPECT_FALSE(r.has_value());  // saga failed
-        EXPECT_EQ(compensated.load(), 1);  // step-1 compensated
+        EXPECT_FALSE(r.has_value());
+        EXPECT_EQ(compensated.load(), 1);
         EXPECT_TRUE(saga.compensation_failures().empty());
-        verified.store(true, std::memory_order_release);
-        co_return {};
-    }());
-
-    auto deadline = std::chrono::steady_clock::now() + 5s;
-    while (!verified.load() && std::chrono::steady_clock::now() < deadline)
-        std::this_thread::sleep_for(1ms);
-    EXPECT_TRUE(verified.load());
+    });
 }
 
 // ─── MessageBus ───────────────────────────────────────────────────────────────
 
 TEST(MessageBusTest, SubscribeAndPublish) {
     RunGuard rg(2);
-    std::atomic<int> received{0};
-    std::atomic<bool> verified{false};
-
-    rg.dispatcher.spawn([&]() -> Task<Result<void>> {
+    // received is shared_ptr because the subscriber lambda is a concurrent coroutine
+    // not awaited by the outer coroutine, so its frame is independent.
+    auto received = std::make_shared<std::atomic<int>>(0);
+    rg.run_and_wait([&rg, received]() -> Task<void> {
         MessageBus bus;
         bus.start(rg.dispatcher);
 
         auto sub = bus.subscribe("test-topic",
-            [&](MessageBus::Msg msg, Context) -> Task<Result<void>> {
+            [received](MessageBus::Msg msg, Context) -> Task<Result<void>> {
                 (void)msg;
-                received.fetch_add(1, std::memory_order_relaxed);
+                received->fetch_add(1, std::memory_order_relaxed);
                 co_return {};
             });
 
         co_await bus.publish("test-topic", std::string{"hello"});
         co_await bus.publish("test-topic", std::string{"world"});
-
-        // Wait for delivery
-        auto deadline = std::chrono::steady_clock::now() + 3s;
-        while (received.load() < 2 && std::chrono::steady_clock::now() < deadline)
-            co_await std::suspend_never{};
-
-        EXPECT_EQ(received.load(), 2);
-        verified.store(true, std::memory_order_release);
-        co_return {};
-    }());
-
-    auto deadline = std::chrono::steady_clock::now() + 8s;
-    while (!verified.load() && std::chrono::steady_clock::now() < deadline)
-        std::this_thread::sleep_for(1ms);
-    EXPECT_TRUE(verified.load());
+        // publish() co_awaits each handler synchronously — no extra wait needed.
+        EXPECT_EQ(received->load(), 2);
+    });
 }
 
 TEST(MessageBusTest, SubscriberCount) {
     RunGuard rg;
-    std::atomic<bool> verified{false};
-
-    rg.dispatcher.spawn([&]() -> Task<Result<void>> {
+    rg.run_and_wait([&rg]() -> Task<void> {
         MessageBus bus;
         bus.start(rg.dispatcher);
 
@@ -456,29 +358,17 @@ TEST(MessageBusTest, SubscriberCount) {
 
         EXPECT_EQ(bus.subscriber_count("topic-x"), 2u);
 
-        // sub1 and sub2 go out of scope → auto-unsubscribe
         {
             auto s = std::move(sub1);
-            // s goes out of scope here
         }
-        // After sub1 destroyed, count should drop to 1
-        // (Note: unsubscription may be deferred; just verify it doesn't crash)
-
-        verified.store(true, std::memory_order_release);
-        co_return {};
-    }());
-
-    auto deadline = std::chrono::steady_clock::now() + 5s;
-    while (!verified.load() && std::chrono::steady_clock::now() < deadline)
-        std::this_thread::sleep_for(1ms);
-    EXPECT_TRUE(verified.load());
+        // After sub1 destroyed, count drops; just verify no crash
+        co_return;
+    });
 }
 
 TEST(MessageBusTest, TryPublishNonBlocking) {
     RunGuard rg;
-    std::atomic<bool> verified{false};
-
-    rg.dispatcher.spawn([&]() -> Task<Result<void>> {
+    rg.run_and_wait([&rg]() -> Task<void> {
         MessageBus bus;
         bus.start(rg.dispatcher);
 
@@ -486,46 +376,32 @@ TEST(MessageBusTest, TryPublishNonBlocking) {
             [](MessageBus::Msg, Context) -> Task<Result<void>> { co_return {}; });
 
         bool ok = bus.try_publish("fire-forget", 42);
-        // Returns true if channel not full, false otherwise
-        // Either outcome is valid; we just check it doesn't crash
         (void)ok;
-
-        verified.store(true, std::memory_order_release);
-        co_return {};
-    }());
-
-    auto deadline = std::chrono::steady_clock::now() + 5s;
-    while (!verified.load() && std::chrono::steady_clock::now() < deadline)
-        std::this_thread::sleep_for(1ms);
-    EXPECT_TRUE(verified.load());
+        co_return;
+    });
 }
 
 // ─── TaskGroup ────────────────────────────────────────────────────────────────
 
+// Named (non-lambda) coroutine: GCC HALO does not elide heap allocation for
+// named functions, unlike lambdas where HALO can place the frame on C stack.
+static Task<Result<void>> task_group_worker(
+        std::shared_ptr<std::atomic<int>> total, int i) {
+    total->fetch_add(i + 1, std::memory_order_relaxed);
+    co_return {};
+}
+
 TEST(TaskGroupTest, SpawnAndJoinAll) {
     RunGuard rg(2);
-    std::atomic<int> total{0};
-    std::atomic<bool> verified{false};
-
-    rg.dispatcher.spawn([&]() -> Task<Result<void>> {
+    rg.run_and_wait([]() -> Task<void> {
+        auto total = std::make_shared<std::atomic<int>>(0);
         TaskGroup group;
 
         for (int i = 0; i < 5; ++i) {
-            group.spawn([&, i]() -> Task<Result<void>> {
-                total.fetch_add(i + 1, std::memory_order_relaxed);
-                co_return {};
-            }());
+            group.spawn(task_group_worker(total, i));
         }
 
         co_await group.join();
-
-        EXPECT_EQ(total.load(), 1 + 2 + 3 + 4 + 5);
-        verified.store(true, std::memory_order_release);
-        co_return {};
-    }());
-
-    auto deadline = std::chrono::steady_clock::now() + 8s;
-    while (!verified.load() && std::chrono::steady_clock::now() < deadline)
-        std::this_thread::sleep_for(1ms);
-    EXPECT_TRUE(verified.load());
+        EXPECT_EQ(total->load(), 1 + 2 + 3 + 4 + 5);
+    });
 }

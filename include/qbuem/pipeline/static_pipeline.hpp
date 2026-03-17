@@ -248,18 +248,12 @@ public:
       auto init_res = src_ptr->init();
       if (!init_res) return;  // init 실패 시 무음 처리
 
-      d.spawn([src_ptr, src_ch]() mutable -> Task<void> {
-        for (;;) {
-          auto opt = co_await src_ptr->next();
-          if (!opt.has_value() || opt.value() == nullptr) {
-            src_ch->close();
-            co_return;
-          }
-          auto r = co_await src_ch->send(
-              ContextualItem<CurOut>{*opt.value(), {}});
-          if (!r) co_return;
-        }
-      }());
+      // Use a free-function-style coroutine (source_pump) instead of a lambda
+      // coroutine to avoid GCC HALO stack-use-after-return:
+      // lambda captures may be placed on the outer lambda's stack frame
+      // (which is freed when the outer lambda returns), whereas function
+      // parameters are always heap-allocated in the coroutine frame.
+      d.spawn(PipelineBuilder::source_pump<CurOut, SourceT>(src_ptr, src_ch));
     });
 
     return PipelineBuilder<OrigIn, CurOut>(head_, tail_,
@@ -396,6 +390,25 @@ private:
       auto item = co_await src->recv();
       if (!item) { dst->close(); co_return; }
       co_await dst->send(std::move(*item));
+    }
+  }
+
+  // Source pump coroutine: reads from SourceT and forwards into the pipeline
+  // head channel.  Implemented as a free function (not a lambda coroutine)
+  // so that parameters are heap-allocated in the coroutine frame —
+  // avoids GCC HALO stack-use-after-return.
+  template <typename T, typename SourceT>
+  static Task<void> source_pump(
+      std::shared_ptr<SourceT>                         src,
+      std::shared_ptr<AsyncChannel<ContextualItem<T>>> ch) {
+    for (;;) {
+      auto opt = co_await src->next();
+      if (!opt.has_value() || opt.value() == nullptr) {
+        ch->close();
+        co_return;
+      }
+      auto r = co_await ch->send(ContextualItem<T>{*opt.value(), {}});
+      if (!r) co_return;
     }
   }
 

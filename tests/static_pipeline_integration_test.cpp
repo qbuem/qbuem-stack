@@ -108,6 +108,7 @@ TEST(StaticPipelineIntegration, ThreeStageChain) {
     }
   }
 
+  pipeline.stop();  // close channels so worker coroutines exit before dispatcher stops
   dispatcher.stop();
   run_thread.join();
 
@@ -174,6 +175,7 @@ TEST(StaticPipelineIntegration, ScaleOutUnderLoad) {
     std::this_thread::sleep_for(std::chrono::milliseconds(5));
   }
 
+  pipeline.stop();  // close channels so worker coroutines exit before dispatcher stops
   dispatcher.stop();
   run_thread.join();
 
@@ -363,6 +365,7 @@ TEST(StaticPipelineIntegration, ContextPropagationThroughStages) {
     }
   }
 
+  pipeline.stop();  // close channels so worker coroutines exit before dispatcher stops
   dispatcher.stop();
   run_thread.join();
 

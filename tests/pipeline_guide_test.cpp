@@ -450,6 +450,9 @@ TEST(FeedbackLoop, FailedItemRetried) {
     // 성공 결과 대기
     auto results = collect(out_ch, 1, 5000ms);
 
+    // Close feedback_ch first so the refeeder coroutine can exit cleanly,
+    // then stop the action so its worker coroutine exits before the guard destructs.
+    feedback_ch->close();
     action.stop();
 
     ASSERT_FALSE(results.empty()) << "피드백 루프로 재시도 후 결과가 없음";
