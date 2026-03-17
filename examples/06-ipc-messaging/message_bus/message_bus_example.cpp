@@ -115,7 +115,7 @@ int main() {
     std::cout << "=== MessageBus Pub/Sub ===\n";
 
     Dispatcher dispatcher(2);
-    std::thread run_th([&] { dispatcher.run(); });
+    std::jthread run_th([&] { dispatcher.run(); });
 
     std::atomic<bool> done1{false}, done2{false};
 

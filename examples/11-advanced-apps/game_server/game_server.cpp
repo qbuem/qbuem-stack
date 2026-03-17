@@ -1260,7 +1260,7 @@ static Task<void> run_demo(GameServer& s, Dispatcher& /*d*/) {
 int main() {
     // ── Pipeline Dispatcher (별도 스레드 풀) ─────────────────────────────
     Dispatcher pipeline_disp(4);
-    std::thread pipeline_thread([&pipeline_disp] { pipeline_disp.run(); });
+    std::jthread pipeline_thread([&pipeline_disp] { pipeline_disp.run(); });
 
     // ── GameServer 초기화 ─────────────────────────────────────────────────
     GameServer server;

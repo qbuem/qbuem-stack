@@ -228,7 +228,7 @@ int main() {
 
     // Zero-copy는 코루틴 기반
     Dispatcher disp(1);
-    std::thread t([&] { disp.run(); });
+    std::jthread t([&] { disp.run(); });
 
     disp.spawn([&]() -> Task<void> { co_await demo_zero_copy_task(); }());
 

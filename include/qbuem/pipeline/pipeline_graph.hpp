@@ -31,12 +31,12 @@
 
 #include <any>
 #include <atomic>
+#include <format>
 #include <functional>
 #include <memory>
 #include <optional>
 #include <queue>
 #include <shared_mutex>
-#include <sstream>
 #include <stop_token>
 #include <string>
 #include <string_view>
@@ -337,45 +337,41 @@ public:
     // -------------------------------------------------------------------------
 
     /**
-     * @brief Graphviz DOT 형식으로 토폴로지를 내보냅니다.
+     * @brief Export topology in Graphviz DOT format.
      */
     [[nodiscard]] std::string to_dot() const {
-        std::ostringstream oss;
-        oss << "digraph PipelineGraph {\n";
-        oss << "  rankdir=LR;\n";
+        std::string out = "digraph PipelineGraph {\n  rankdir=LR;\n";
         for (const auto& [name, n] : nodes_) {
-            // Node attributes
-            std::string shape = "box";
-            if (n->is_source) shape = "ellipse";
-            if (n->is_sink)   shape = "doublecircle";
-            oss << "  \"" << name << "\" [shape=" << shape << "];\n";
-            // Edges
+            std::string_view shape = n->is_source ? "ellipse"
+                                   : n->is_sink   ? "doublecircle"
+                                                  : "box";
+            out += std::format("  \"{}\" [shape={}];\n", name, shape);
             for (size_t i = 0; i < n->successors.size(); ++i) {
-                oss << "  \"" << name << "\" -> \"" << n->successors[i] << "\"";
                 if (n->predicates[i] != nullptr)
-                    oss << " [style=dashed, label=\"cond\"]";
-                oss << ";\n";
+                    out += std::format("  \"{}\" -> \"{}\" [style=dashed, label=\"cond\"];\n",
+                                       name, n->successors[i]);
+                else
+                    out += std::format("  \"{}\" -> \"{}\";\n", name, n->successors[i]);
             }
         }
-        oss << "}\n";
-        return oss.str();
+        out += "}\n";
+        return out;
     }
 
     /**
-     * @brief Mermaid 다이어그램 형식으로 토폴로지를 내보냅니다.
+     * @brief Export topology in Mermaid diagram format.
      */
     [[nodiscard]] std::string to_mermaid() const {
-        std::ostringstream oss;
-        oss << "graph LR\n";
+        std::string out = "graph LR\n";
         for (const auto& [name, n] : nodes_) {
             for (size_t i = 0; i < n->successors.size(); ++i) {
                 if (n->predicates[i] != nullptr)
-                    oss << "  " << name << " -->|cond| " << n->successors[i] << "\n";
+                    out += std::format("  {} -->|cond| {}\n", name, n->successors[i]);
                 else
-                    oss << "  " << name << " --> " << n->successors[i] << "\n";
+                    out += std::format("  {} --> {}\n", name, n->successors[i]);
             }
         }
-        return oss.str();
+        return out;
     }
 
     // -------------------------------------------------------------------------

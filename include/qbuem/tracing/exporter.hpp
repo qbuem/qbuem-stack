@@ -41,7 +41,6 @@
 #include <iostream>
 #include <memory>
 #include <mutex>
-#include <sstream>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -156,33 +155,31 @@ public:
       case SpanStatus::Unset: status_str = "Unset"; break;
     }
 
-    // 출력 조립
-    std::ostringstream oss;
-    oss << "[SPAN] " << span.name
-        << " pipeline=" << span.pipeline_name
-        << " action=" << span.action_name << '\n'
-        << "       trace=" << trace_buf
-        << " span=" << span_buf
-        << " parent=" << parent_buf << '\n'
-        << "       status=" << status_str
-        << " duration=" << duration_ms << "ms";
+    // Assemble output string.
+    std::string out = std::format(
+        "[SPAN] {} pipeline={} action={}\n"
+        "       trace={} span={} parent={}\n"
+        "       status={} duration={:.3f}ms",
+        span.name, span.pipeline_name, span.action_name,
+        trace_buf, span_buf, parent_buf,
+        status_str, duration_ms);
 
     if (span.status == SpanStatus::Error && !span.error_message.empty()) {
-      oss << '\n' << "       error: " << span.error_message;
+      out += std::format("\n       error: {}", span.error_message);
     }
 
     if (span.attribute_count > 0) {
-      oss << '\n' << "       attrs:";
+      out += "\n       attrs:";
       for (size_t i = 0; i < span.attribute_count; ++i) {
-        oss << ' ' << span.attributes[i].key << '=' << span.attributes[i].value;
+        out += std::format(" {}={}", span.attributes[i].key, span.attributes[i].value);
       }
     }
 
-    oss << '\n';
+    out += '\n';
 
     {
       std::lock_guard<std::mutex> lk(mtx_);
-      std::cerr << oss.str();
+      std::cerr << out;
     }
   }
 

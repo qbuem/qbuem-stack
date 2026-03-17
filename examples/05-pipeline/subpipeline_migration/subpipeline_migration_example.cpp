@@ -77,7 +77,7 @@ static void demo_subpipeline() {
     auto sub_action = std::make_shared<SubpipelineAction<EventV2, ProcessedEvent>>(std::move(inner));
 
     Dispatcher disp(2);
-    std::thread t([&] { disp.run(); });
+    std::jthread t([&] { disp.run(); });
 
     // 내부 파이프라인 시작 (SubpipelineAction 내부 파이프라인)
     sub_action->inner().start(disp);
@@ -207,7 +207,7 @@ int main() {
 
     // 마이그레이션 데모는 코루틴이므로 간단한 동기 실행
     Dispatcher disp(1);
-    std::thread t([&] { disp.run(); });
+    std::jthread t([&] { disp.run(); });
 
     std::atomic<bool> done1{false}, done2{false};
     disp.spawn([&]() -> Task<void> {

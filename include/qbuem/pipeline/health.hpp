@@ -2,24 +2,23 @@
 
 /**
  * @file qbuem/pipeline/health.hpp
- * @brief 파이프라인 상태 모니터링 — PipelineHealth, ActionHealth, PipelineVersion
+ * @brief Pipeline health monitoring — PipelineHealth, ActionHealth, PipelineVersion
  * @defgroup qbuem_pipeline_health Pipeline Health
  * @ingroup qbuem_pipeline
  *
- * 파이프라인과 개별 액션의 실시간 상태를 추적하고 토폴로지를 내보냅니다.
+ * Tracks real-time health of pipelines and individual actions, and exports topology.
  *
- * ## 상태 계층
+ * ## Health hierarchy
  * ```
- * PipelineHealth          ← 파이프라인 단위 집계
- *   └─ ActionHealth[]     ← 액션별 세부 지표
+ * PipelineHealth          <- pipeline-level aggregate
+ *   └─ ActionHealth[]     <- per-action detailed metrics
  * ```
  *
- * ## 버저닝
- * `PipelineVersion` + `set_version()` / `compatible_with()` 로
- * 스키마 변경을 안전하게 관리합니다.
+ * ## Versioning
+ * Use `PipelineVersion` + `set_version()` / `compatible_with()` to manage schema changes safely.
  *
- * ## 토폴로지 Export
- * `to_json()` — JSON, `to_dot()` — Graphviz DOT, `to_mermaid()` — Mermaid 다이어그램.
+ * ## Topology export
+ * `to_json()` — JSON, `to_dot()` — Graphviz DOT, `to_mermaid()` — Mermaid diagram.
  * @{
  */
 
@@ -29,6 +28,7 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <format>
 #include <functional>
 #include <optional>
 #include <shared_mutex>
@@ -45,23 +45,21 @@ namespace qbuem {
 // ---------------------------------------------------------------------------
 
 /**
- * @brief 시맨틱 버저닝 (major.minor.patch).
+ * @brief Semantic versioning (major.minor.patch).
  *
- * `compatible_with(other)` 는 major가 같으면 호환으로 간주합니다.
+ * `compatible_with(other)` treats matching major versions as compatible.
  */
 struct PipelineVersion {
   uint32_t major{0};
   uint32_t minor{0};
   uint32_t patch{0};
 
-  /// @brief 버전 문자열 반환 (e.g. "1.2.3").
+  /// @brief Return version string (e.g. "1.2.3").
   [[nodiscard]] std::string to_string() const {
-    return std::to_string(major) + '.' +
-           std::to_string(minor) + '.' +
-           std::to_string(patch);
+    return std::format("{}.{}.{}", major, minor, patch);
   }
 
-  /// @brief major 버전이 같으면 호환.
+  /// @brief Compatible if the major version matches.
   [[nodiscard]] bool compatible_with(const PipelineVersion &other) const noexcept {
     return major == other.major;
   }
@@ -74,38 +72,33 @@ struct PipelineVersion {
 // ---------------------------------------------------------------------------
 
 /**
- * @brief 액션 단위 실시간 건강 지표.
+ * @brief Real-time health metrics for a single action.
  */
 struct ActionHealth {
   std::string name;
 
-  // Circuit breaker 상태 (문자열; "CLOSED" / "OPEN" / "HALF_OPEN")
+  // Circuit breaker state: "CLOSED" / "OPEN" / "HALF_OPEN"
   std::string circuit_state{"CLOSED"};
 
-  // 최근 1분 에러율 (0.0 ~ 1.0)
+  // Error rate over the last 1 minute (0.0 – 1.0)
   double error_rate_1m{0.0};
 
-  // p99 레이턴시 (µs)
+  // p99 latency (µs)
   uint64_t p99_us{0};
 
-  // 현재 대기 중인 아이템 수
+  // Number of items currently queued
   size_t queue_depth{0};
 
-  // 처리한 총 아이템 수
+  // Total items processed
   uint64_t items_processed{0};
 
-  /// @brief JSON 문자열로 직렬화합니다.
+  /// @brief Serialize to a JSON string.
   [[nodiscard]] std::string to_json() const {
-    std::ostringstream ss;
-    ss << "{"
-       << "\"name\":\"" << name << "\","
-       << "\"circuit_state\":\"" << circuit_state << "\","
-       << "\"error_rate_1m\":" << error_rate_1m << ","
-       << "\"p99_us\":" << p99_us << ","
-       << "\"queue_depth\":" << queue_depth << ","
-       << "\"items_processed\":" << items_processed
-       << "}";
-    return ss.str();
+    return std::format(
+        "{{\"name\":\"{}\",\"circuit_state\":\"{}\","
+        "\"error_rate_1m\":{},\"p99_us\":{},\"queue_depth\":{},"
+        "\"items_processed\":{}}}",
+        name, circuit_state, error_rate_1m, p99_us, queue_depth, items_processed);
   }
 };
 
@@ -114,7 +107,7 @@ struct ActionHealth {
 // ---------------------------------------------------------------------------
 
 /**
- * @brief 파이프라인 전체 건강 상태.
+ * @brief Overall pipeline health status.
  */
 enum class HealthStatus { HEALTHY, DEGRADED, UNHEALTHY };
 
@@ -128,14 +121,14 @@ inline std::string_view to_string(HealthStatus s) noexcept {
 }
 
 /**
- * @brief 파이프라인 단위 건강 집계.
+ * @brief Pipeline-level health aggregate.
  */
 struct PipelineHealth {
   std::string    name;
   HealthStatus   status{HealthStatus::HEALTHY};
   std::vector<ActionHealth> actions;
 
-  // 재계산: 액션 상태를 토대로 파이프라인 상태를 집계합니다.
+  // Recompute pipeline status from action states.
   void recompute() {
     size_t open_count = 0;
     for (const auto &a : actions) {
@@ -149,18 +142,15 @@ struct PipelineHealth {
       status = HealthStatus::UNHEALTHY;
   }
 
-  /// @brief JSON 문자열로 직렬화합니다.
+  /// @brief Serialize to a JSON string.
   [[nodiscard]] std::string to_json() const {
-    std::ostringstream ss;
-    ss << "{\"name\":\"" << name << "\","
-       << "\"status\":\"" << to_string(status) << "\","
-       << "\"actions\":[";
+    std::string actions_json;
     for (size_t i = 0; i < actions.size(); ++i) {
-      if (i) ss << ',';
-      ss << actions[i].to_json();
+      if (i) actions_json += ',';
+      actions_json += actions[i].to_json();
     }
-    ss << "]}";
-    return ss.str();
+    return std::format("{{\"name\":\"{}\",\"status\":\"{}\",\"actions\":[{}]}}",
+                       name, to_string(status), actions_json);
   }
 };
 
@@ -169,26 +159,26 @@ struct PipelineHealth {
 // ---------------------------------------------------------------------------
 
 /**
- * @brief 파이프라인 건강 상태 레지스트리.
+ * @brief Registry of pipeline health states.
  *
- * 파이프라인 이름 → PipelineHealth 매핑을 관리합니다.
- * 스레드 안전합니다.
+ * Manages a pipeline-name → PipelineHealth mapping.
+ * Thread-safe.
  */
 class HealthRegistry {
 public:
-  /// @brief 글로벌 싱글턴 인스턴스.
+  /// @brief Global singleton instance.
   static HealthRegistry &global() {
     static HealthRegistry instance;
     return instance;
   }
 
-  /// @brief 파이프라인 건강 상태를 등록/갱신합니다.
+  /// @brief Register or update a pipeline health record.
   void update(PipelineHealth health) {
     std::unique_lock lock(mtx_);
     map_[health.name] = std::move(health);
   }
 
-  /// @brief 파이프라인 건강 상태를 조회합니다.
+  /// @brief Look up a pipeline health record.
   [[nodiscard]] std::optional<PipelineHealth> get(std::string_view name) const {
     std::shared_lock lock(mtx_);
     auto it = map_.find(std::string(name));
@@ -196,19 +186,18 @@ public:
     return it->second;
   }
 
-  /// @brief 등록된 모든 파이프라인을 JSON 배열로 직렬화합니다.
+  /// @brief Serialize all registered pipelines as a JSON array.
   [[nodiscard]] std::string all_json() const {
     std::shared_lock lock(mtx_);
-    std::ostringstream ss;
-    ss << '[';
+    std::string result = "[";
     bool first = true;
     for (const auto &[_, h] : map_) {
-      if (!first) ss << ',';
-      ss << h.to_json();
+      if (!first) result += ',';
+      result += h.to_json();
       first = false;
     }
-    ss << ']';
-    return ss.str();
+    result += ']';
+    return result;
   }
 
 private:
@@ -221,10 +210,10 @@ private:
 // ---------------------------------------------------------------------------
 
 /**
- * @brief 파이프라인 버전 레지스트리.
+ * @brief Pipeline version registry.
  *
- * `set_version(pipeline_name, version)` 으로 버전을 등록하고
- * `compatible_with(name, version)` 으로 호환성을 검사합니다.
+ * Register versions with `set_version(pipeline_name, version)` and check
+ * compatibility with `compatible_with(name, version)`.
  */
 class PipelineVersionRegistry {
 public:
@@ -261,38 +250,36 @@ private:
 // ---------------------------------------------------------------------------
 
 /**
- * @brief 파이프라인 그래프 토폴로지를 다양한 형식으로 내보냅니다.
+ * @brief Exports pipeline graph topology in various formats.
  *
- * PipelineGraph는 이미 to_dot() / to_mermaid()을 가지고 있으므로,
- * 이 헬퍼는 JSON 형식을 추가합니다.
+ * PipelineGraph already provides to_dot() / to_mermaid(); this helper adds JSON export.
  *
- * ## 사용법
+ * ## Usage
  * ```cpp
  * PipelineGraph<int> graph;
- * // ... 노드 및 엣지 추가 ...
+ * // ... add nodes and edges ...
  * std::string json = GraphTopologyExporter::to_json(graph);
  * ```
  */
 struct GraphTopologyExporter {
   /**
-   * @brief PipelineGraph 토폴로지를 JSON으로 직렬화합니다.
+   * @brief Serialize a PipelineGraph topology to JSON.
    *
-   * 그래프의 `.node_names()`, `.edge_list()`, `.source_names()`, `.sink_names()`
-   * 메서드를 사용합니다. 해당 메서드가 없으면 graph의 to_dot()을 파싱하여 추출합니다.
+   * Uses the graph's to_dot() output to extract nodes and edges.
    *
-   * @tparam Graph PipelineGraph<T> 타입.
-   * @param  graph 직렬화할 그래프.
-   * @returns JSON 문자열.
+   * @tparam Graph  PipelineGraph<T> type.
+   * @param  graph  Graph to serialize.
+   * @returns JSON string.
    */
   template <typename Graph>
   static std::string to_json(const Graph &graph) {
-    // dot 출력을 파싱하여 노드와 엣지를 추출합니다.
+    // Parse DOT output to extract nodes and edges.
     std::string dot = graph.to_dot();
     return dot_to_json(dot);
   }
 
 private:
-  // DOT 문자열에서 노드/엣지를 추출하여 JSON으로 변환합니다.
+  // Extract nodes/edges from a DOT string and convert to JSON.
   static std::string dot_to_json(const std::string &dot) {
     std::vector<std::string> nodes;
     std::vector<std::pair<std::string, std::string>> edges;
@@ -300,7 +287,7 @@ private:
     std::istringstream ss(dot);
     std::string line;
     while (std::getline(ss, line)) {
-      // 엣지 라인: "  A -> B;"
+      // Edge line: "  A -> B;"
       auto arrow = line.find("->");
       if (arrow != std::string::npos) {
         auto from_raw = line.substr(0, arrow);
@@ -311,7 +298,7 @@ private:
           return (a == std::string::npos) ? "" : s.substr(a, b - a + 1);
         };
         edges.push_back({trim(from_raw), trim(to_raw)});
-        // 노드 자동 수집
+        // Auto-collect nodes from edges.
         for (auto &n : {edges.back().first, edges.back().second}) {
           if (std::find(nodes.begin(), nodes.end(), n) == nodes.end())
             nodes.push_back(n);
@@ -319,19 +306,17 @@ private:
       }
     }
 
-    std::ostringstream out;
-    out << "{\"nodes\":[";
+    std::string nodes_json;
     for (size_t i = 0; i < nodes.size(); ++i) {
-      if (i) out << ',';
-      out << "\"" << nodes[i] << "\"";
+      if (i) nodes_json += ',';
+      nodes_json += std::format("\"{}\"", nodes[i]);
     }
-    out << "],\"edges\":[";
+    std::string edges_json;
     for (size_t i = 0; i < edges.size(); ++i) {
-      if (i) out << ',';
-      out << "[\"" << edges[i].first << "\",\"" << edges[i].second << "\"]";
+      if (i) edges_json += ',';
+      edges_json += std::format("[\"{}\",\"{}\"]", edges[i].first, edges[i].second);
     }
-    out << "]}";
-    return out.str();
+    return std::format("{{\"nodes\":[{}],\"edges\":[{}]}}", nodes_json, edges_json);
   }
 };
 

@@ -103,9 +103,9 @@ static Task<Result<ReviewSummary>> fetch_reviews(uint64_t product_id) {
 
 struct RunGuard {
     Dispatcher  dispatcher;
-    std::thread thread;
+    std::jthread thread;
     explicit RunGuard(size_t n = 2) : dispatcher(n) {
-        thread = std::thread([this] { dispatcher.run(); });
+        thread = std::jthread([this] { dispatcher.run(); });
     }
     ~RunGuard() { dispatcher.stop(); if (thread.joinable()) thread.join(); }
     template <typename F>

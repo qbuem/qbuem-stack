@@ -80,7 +80,7 @@ int main() {
     auto output = graph.output();
 
     graph.start(dispatcher);
-    std::thread run_th([&] { dispatcher.run(); });
+    std::jthread run_th([&] { dispatcher.run(); });
 
     // 메시지 투입
     constexpr size_t kItems = 5;

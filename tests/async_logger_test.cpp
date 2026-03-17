@@ -100,7 +100,7 @@ TEST(AsyncLoggerTest, ConcurrentLogFromMultipleThreads) {
     AsyncLogger logger(1024, stderr, LogFormat::Text);
     logger.start();
 
-    std::vector<std::thread> threads;
+    std::vector<std::jthread> threads;
     for (int t = 0; t < 4; ++t) {
         threads.emplace_back([&logger, t] {
             for (int i = 0; i < 20; ++i)

@@ -82,7 +82,7 @@ int main() {
     std::cout << "[tcp] Running for 5 seconds then shutting down...\n";
 
     Dispatcher dispatcher(1);
-    std::thread run_th([&] { dispatcher.run(); });
+    std::jthread run_th([&] { dispatcher.run(); });
 
     // Accept 루프 spawn
     dispatcher.spawn(accept_loop(*listener, dispatcher));

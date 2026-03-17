@@ -115,7 +115,7 @@ static void demo_priority_async() {
     };
 
     Dispatcher disp(2);
-    std::thread t([&] { disp.run(); });
+    std::jthread t([&] { disp.run(); });
 
     disp.spawn(consumer_fn());
     disp.spawn(producer_fn());
@@ -192,7 +192,7 @@ static void demo_spsc_async() {
     };
 
     Dispatcher disp(2);
-    std::thread t([&] { disp.run(); });
+    std::jthread t([&] { disp.run(); });
 
     disp.spawn(consumer());
     disp.spawn(producer());

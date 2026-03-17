@@ -199,29 +199,29 @@ public:
   // -------------------------------------------------------------------------
 
   /**
-   * @brief 플러그인 이름과 팩토리 함수를 등록합니다.
+   * @brief Register a plugin name and factory function.
    *
-   * @param plugin_name JSON의 "plugin" 필드에서 사용할 이름.
-   * @param factory     JSON config 객체를 받아 액션 함수를 반환하는 팩토리.
-   * @throws std::invalid_argument 이름이 비어 있거나 이미 등록된 경우.
+   * @param plugin_name  Name used in the JSON "plugin" field.
+   * @param factory      Factory that accepts a JSON config object and returns a stage function.
+   * @throws std::invalid_argument if the name is empty or already registered.
    */
   PipelineFactory &register_plugin(std::string plugin_name, PluginFactory factory) {
     if (plugin_name.empty())
       throw std::invalid_argument("plugin name must not be empty");
-    if (plugins_.count(plugin_name))
+    if (plugins_.contains(plugin_name))
       throw std::invalid_argument("plugin already registered: " + plugin_name);
     plugins_.emplace(std::move(plugin_name), std::move(factory));
     return *this;
   }
 
   /**
-   * @brief 플러그인이 등록되어 있는지 확인합니다.
+   * @brief Check whether a plugin is registered.
    *
-   * @param plugin_name 조회할 플러그인 이름.
-   * @returns 등록된 경우 true.
+   * @param plugin_name  Plugin name to look up.
+   * @returns true if registered.
    */
   [[nodiscard]] bool has_plugin(std::string_view plugin_name) const {
-    return plugins_.count(std::string(plugin_name)) > 0;
+    return plugins_.contains(std::string(plugin_name));
   }
 
   // -------------------------------------------------------------------------
