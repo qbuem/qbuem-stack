@@ -2,9 +2,59 @@
 
 **Zero Latency · Zero Allocation · Zero Dependency**
 
-> **Current Version: v2.1.0** — Pipeline ↔ MessageBus ↔ SHM 완전 연계 완료.
+> **Current Version: v2.2.0** — Monadic HTTP Fetch Client (curl-free).
 >
 > High-performance C++ infrastructure for Web, Messaging, and Data Pipelines.
+
+---
+
+## ✅ Completed: v2.3.0 — HTTP Client Full Feature Set
+
+> **Goal**: Complete curl-free HTTP client — async DNS, timeout, redirects, connection pool, kTLS HTTPS.
+
+### 1. Language Policy
+- [x] **English-only**: All code comments, docs, and user-facing strings must be in English. Rule added to `CLAUDE.md`.
+
+### 2. Async DNS Resolution (`include/qbuem/net/dns.hpp`)
+- [x] **`DnsResolver::resolve(host, port)`**: Non-blocking hostname → `SocketAddr` via detached thread + `Reactor::post()`.
+- [x] **IP literal fast-path**: `inet_pton` check in `await_ready()` — no thread spawned for numeric IPs.
+- [x] **IPv4 preference**: Prefers IPv4 results; falls back to IPv6 if no IPv4 record exists.
+- [x] **Reactor integration**: Coroutine resume posted to the originating reactor thread (thread-safe).
+
+### 3. Timeout Support (`include/qbuem/http/fetch.hpp`)
+- [x] **`FetchRequest::timeout(duration)`**: Reactor `register_timer()` fires and requests stop via combined stop_token.
+- [x] **Combined stop_token**: `CombinedStop` struct combines caller's stop_token with timeout stop_source.
+- [x] **Zero overhead when not set**: Timeout path is opt-in; no timer registered when `timeout_ms_ == 0`.
+
+### 4. Automatic Redirect Following (`include/qbuem/http/fetch.hpp`)
+- [x] **`FetchRequest::max_redirects(n)`**: Follow 3xx responses up to N hops.
+- [x] **303 → GET**: Automatically downgrades method to GET on `303 See Other`.
+- [x] **Location header**: Uses the `Location` response header as the next URL.
+
+### 5. DNS Integration in `fetch()` (`include/qbuem/http/fetch.hpp`)
+- [x] **Hostname resolution**: `send()` calls `DnsResolver::resolve()` — real hostname support (not just IP literals).
+- [x] **All comments English**: Entire `fetch.hpp` rewritten in English.
+
+### 6. FetchClient — Connection Pool + Keep-Alive (`include/qbuem/http/fetch_client.hpp`)
+- [x] **`FetchClient`**: Per-host TCP connection pool. `acquire()` / `release()` free-list.
+- [x] **Keep-Alive**: Sends `Connection: keep-alive`; returns sockets to pool on server keep-alive response.
+- [x] **Stale connection retry**: If a reused connection fails on write, retries with a fresh connection.
+- [x] **`set_max_idle_per_host(n)`**, **`set_timeout(d)`**, **`set_max_redirects(n)`** configuration.
+- [x] **`idle_count()`**, **`clear_pool()`** pool management.
+- [x] **Redirect + monadic chaining**: Full feature parity with `FetchRequest`.
+
+### 7. kTLS HTTPS (`include/qbuem/http/fetch_tls.hpp`)
+- [x] **`TlsStream`**: Wraps `TcpStream` + `io::enable_ktls()` activation. Graceful fallback on unsupported kernels.
+- [x] **`TlsSessionParams`**: Carries fd + TX/RX `KtlsSessionParams` from the caller's TLS handshake.
+- [x] **`TlsFetchRequest`**: HTTP/1.1 request builder over a kTLS-activated stream.
+- [x] **`fetch_tls(url, session)`**: Entry point. Caller provides post-handshake session; kernel handles AES-GCM.
+- [x] **Zero TLS library dependency**: kTLS offload path requires no OpenSSL/BoringSSL at I/O time.
+
+### 8. Example (`examples/02-network/http_fetch/`)
+- [x] **`http_fetch_example.cpp`**: 8 patterns: GET, POST, monadic chain, error, timeout, redirect, URL parser, FetchClient.
+- [x] **All English**: Comments and output strings translated to English.
+
+---
 
 ---
 
@@ -56,6 +106,27 @@
 - [x] **RDMA (RoCE)**: Extending zero-copy messaging cross-host via IBVerbs/RoCE. (`include/qbuem/rdma/rdma_channel.hpp`)
 - [x] **eBPF Observability**: Standardized cluster-wide tracing via BPF CO-RE. (`include/qbuem/ebpf/ebpf_tracer.hpp`)
 - [x] **User-space Storage (SPDK)**: io_uring passthrough for direct NVMe access. (`include/qbuem/spdk/nvme_io.hpp`)
+
+## ✅ Completed: v2.2.0 — v2.3.0 — Monadic HTTP Client (Full)
+
+### v2.2.0 — curl-free Monadic Fetch
+- [x] **Result::map/and_then/transform_error/value_or**: Functor/Monad operations on `Result<T>`. (`common.hpp`)
+- [x] **ParsedUrl**: RFC 3986 URL parser (scheme/host/port/path, IPv6 literal support).
+- [x] **FetchResponse**: Client HTTP response value type (status, headers, body, ok()).
+- [x] **FetchRequest**: Builder-pattern HTTP client (method/header/body/get/post/put/del/patch).
+- [x] **fetch()**: JavaScript-like factory entry point.
+- [x] **Zero-dependency HTTP/1.1**: Built directly on `TcpStream`. No curl. (`include/qbuem/http/fetch.hpp`)
+- [x] **http_fetch_example.cpp**: 8-pattern example file. (`examples/02-network/http_fetch/`)
+
+### v2.3.0 — Full Feature Set (async DNS, timeout, redirect, pool, kTLS)
+- [x] **DnsResolver**: Non-blocking `getaddrinfo` via thread + `Reactor::post()`. (`include/qbuem/net/dns.hpp`)
+- [x] **Timeout**: `FetchRequest::timeout(d)` — reactor timer + combined stop_token.
+- [x] **Redirect**: `FetchRequest::max_redirects(n)` — automatic 3xx follow with 303→GET downgrade.
+- [x] **FetchClient**: Per-host connection pool, Keep-Alive, stale-connection retry. (`include/qbuem/http/fetch_client.hpp`)
+- [x] **TlsStream / fetch_tls()**: kTLS kernel offload for HTTPS. Caller provides TLS handshake + session keys. (`include/qbuem/http/fetch_tls.hpp`)
+- [x] **English-only**: All code comments and docs translated to English. Rule added to `CLAUDE.md`.
+
+---
 
 ## ✅ Completed: v2.1.0 — Pipeline ↔ IPC 완전 연계
 

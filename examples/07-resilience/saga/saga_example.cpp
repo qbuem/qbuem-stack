@@ -151,9 +151,9 @@ static SagaOrchestrator<OrderContext> build_order_saga() {
 
 struct RunGuard {
     Dispatcher  dispatcher;
-    std::thread thread;
+    std::jthread thread;
     explicit RunGuard(size_t n = 1) : dispatcher(n) {
-        thread = std::thread([this] { dispatcher.run(); });
+        thread = std::jthread([this] { dispatcher.run(); });
     }
     ~RunGuard() { dispatcher.stop(); if (thread.joinable()) thread.join(); }
     template <typename F>

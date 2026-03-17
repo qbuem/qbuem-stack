@@ -181,7 +181,7 @@ int main() {
 
     // 코루틴 기반 데모 (RDMA, NVMe)
     Dispatcher disp(1);
-    std::thread t([&] { disp.run(); });
+    std::jthread t([&] { disp.run(); });
 
     disp.spawn([&]() -> Task<void> { co_await demo_rdma_task(); }());
     auto deadline = std::chrono::steady_clock::now() + 3s;

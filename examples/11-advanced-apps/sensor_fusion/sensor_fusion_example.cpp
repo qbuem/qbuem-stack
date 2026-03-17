@@ -332,7 +332,7 @@ int main() {
     constexpr int kFrames = 10;
 
     Dispatcher disp(2);
-    std::thread worker([&] { disp.run(); });
+    std::jthread worker([&] { disp.run(); });
 
     // ── §A  StaticPipeline: validate → preprocess → fuse → smooth → sink ──
     std::printf("── §A  StaticPipeline 구성 ──\n");

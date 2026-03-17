@@ -121,6 +121,41 @@ struct SocketAddr {
     return a;
   }
 
+  /**
+   * @brief Construct SocketAddr directly from a sockaddr_in binary struct.
+   *
+   * Avoids the inet_ntop → string → inet_pton round-trip used by from_ipv4().
+   * Use this in DNS resolution after getaddrinfo() returns a sockaddr_in.
+   *
+   * @param sa    Filled sockaddr_in from getaddrinfo/accept/etc.
+   * @param port  Port in host byte order.
+   */
+  static SocketAddr from_sockaddr_in(const sockaddr_in &sa,
+                                     uint16_t port) noexcept {
+    SocketAddr a;
+    a.family_     = Family::IPv4;
+    a.port_       = port;
+    a.addr_.ipv4_ = sa.sin_addr;
+    return a;
+  }
+
+  /**
+   * @brief Construct SocketAddr directly from a sockaddr_in6 binary struct.
+   *
+   * Avoids the inet_ntop → string → inet_pton round-trip used by from_ipv6().
+   *
+   * @param sa    Filled sockaddr_in6 from getaddrinfo/accept/etc.
+   * @param port  Port in host byte order.
+   */
+  static SocketAddr from_sockaddr_in6(const sockaddr_in6 &sa,
+                                      uint16_t port) noexcept {
+    SocketAddr a;
+    a.family_     = Family::IPv6;
+    a.port_       = port;
+    a.addr_.ipv6_ = sa.sin6_addr;
+    return a;
+  }
+
   // ─── 플랫폼 sockaddr 변환 ───────────────────────────────────────────────
 
   /**

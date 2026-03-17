@@ -6,7 +6,7 @@
 #
 # Category layout:
 #   01-foundation/        hello_world, async_timer
-#   02-network/           tcp_echo_server, udp_unix_socket, websocket
+#   02-network/           tcp_echo_server, udp_unix_socket, websocket, http_fetch
 #   03-memory/            arena, zero_copy_arena_channel, numa_hugepages
 #   04-codec-security/    codec, crypto_url, security_middleware
 #   05-pipeline/          fanout, hardware_batching, dynamic_hotswap,
@@ -47,6 +47,10 @@ target_link_libraries(udp_unix_socket_example PRIVATE qbuem-stack::qbuem)
 add_executable(websocket_example
     02-network/websocket/websocket_example.cpp)
 target_link_libraries(websocket_example PRIVATE qbuem-stack::qbuem)
+
+add_executable(http_fetch_example
+    02-network/http_fetch/http_fetch_example.cpp)
+target_link_libraries(http_fetch_example PRIVATE qbuem-stack::qbuem)
 
 # ── 03 Memory ─────────────────────────────────────────────────────────────────
 

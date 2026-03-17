@@ -42,14 +42,14 @@ struct Yield {
 
 struct RunGuard {
     Dispatcher dispatcher;
-    std::thread thread;
+    std::jthread thread;
 
     explicit RunGuard(size_t threads = 2) : dispatcher(threads) {
-        thread = std::thread([this] { dispatcher.run(); });
+        thread = std::jthread([this] { dispatcher.run(); });
     }
     ~RunGuard() {
         dispatcher.stop();
-        if (thread.joinable()) thread.join();
+        thread.join();
     }
 
     // Named coroutine to prevent GCC HALO placing the lambda frame on

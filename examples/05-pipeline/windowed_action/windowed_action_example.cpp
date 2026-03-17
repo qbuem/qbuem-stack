@@ -68,7 +68,7 @@ static void demo_tumbling() {
     auto out_ch = std::make_shared<AsyncChannel<ContextualItem<WindowResult>>>(64);
 
     Dispatcher disp(1);
-    std::thread t([&] { disp.run(); });
+    std::jthread t([&] { disp.run(); });
 
     wa.start(disp, out_ch);
 
@@ -134,7 +134,7 @@ static void demo_sliding() {
     auto out_ch = std::make_shared<AsyncChannel<ContextualItem<WindowResult>>>(128);
 
     Dispatcher disp(1);
-    std::thread t([&] { disp.run(); });
+    std::jthread t([&] { disp.run(); });
     wa.start(disp, out_ch);
 
     auto now = Clock::now();
@@ -183,7 +183,7 @@ static void demo_session() {
     auto out_ch = std::make_shared<AsyncChannel<ContextualItem<WindowResult>>>(64);
 
     Dispatcher disp(1);
-    std::thread t([&] { disp.run(); });
+    std::jthread t([&] { disp.run(); });
     wa.start(disp, out_ch);
 
     auto now = Clock::now();

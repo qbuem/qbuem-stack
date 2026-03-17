@@ -8,6 +8,7 @@
 #include <csignal>
 #include <cstring>
 #include <ctime>
+#include <format>
 #include <fcntl.h>
 #include <iostream>
 #include <mutex>
@@ -376,18 +377,14 @@ void App::enable_structured_log() {
     gmtime_r(&now, &tm);
     char ts[32];
     std::strftime(ts, sizeof(ts), "%Y-%m-%dT%H:%M:%SZ", &tm);
-    std::fprintf(stderr,
-                 "{\"ts\":\"%s\",\"method\":\"%.*s\",\"path\":\"%.*s\","
-                 "\"status\":%d,\"duration_us\":%ld,"
-                 "\"remote_addr\":\"%.*s\",\"request_id\":\"%.*s\","
-                 "\"trace_id\":\"%.*s\"}\n",
-                 ts,
-                 static_cast<int>(r.method.size()),      r.method.data(),
-                 static_cast<int>(r.path.size()),        r.path.data(),
-                 r.status, r.duration_us,
-                 static_cast<int>(r.remote_addr.size()), r.remote_addr.data(),
-                 static_cast<int>(r.request_id.size()),  r.request_id.data(),
-                 static_cast<int>(r.trace_id.size()),    r.trace_id.data());
+    auto line = std::format(
+        "{{\"ts\":\"{}\",\"method\":\"{}\",\"path\":\"{}\","
+        "\"status\":{},\"duration_us\":{},"
+        "\"remote_addr\":\"{}\",\"request_id\":\"{}\","
+        "\"trace_id\":\"{}\"}}\n",
+        ts, r.method, r.path, r.status, r.duration_us,
+        r.remote_addr, r.request_id, r.trace_id);
+    std::fputs(line.c_str(), stderr);
   };
 }
 
@@ -400,10 +397,9 @@ void App::enable_access_log() {
     gmtime_r(&now, &tm);
     char ts[32];
     std::strftime(ts, sizeof(ts), "%Y-%m-%dT%H:%M:%SZ", &tm);
-    std::fprintf(stderr, "[%s] %.*s %.*s %d %ldµs\n", ts,
-                 static_cast<int>(method.size()), method.data(),
-                 static_cast<int>(path.size()),   path.data(),
-                 status, duration_us);
+    auto line = std::format("[{}] {} {} {} {}µs\n",
+                            ts, method, path, status, duration_us);
+    std::fputs(line.c_str(), stderr);
   };
 }
 
@@ -415,13 +411,11 @@ void App::enable_json_log() {
     gmtime_r(&now, &tm);
     char ts[32];
     std::strftime(ts, sizeof(ts), "%Y-%m-%dT%H:%M:%SZ", &tm);
-    std::fprintf(stderr,
-                 "{\"ts\":\"%s\",\"method\":\"%.*s\","
-                 "\"path\":\"%.*s\",\"status\":%d,\"duration_us\":%ld}\n",
-                 ts,
-                 static_cast<int>(method.size()), method.data(),
-                 static_cast<int>(path.size()),   path.data(),
-                 status, duration_us);
+    auto line = std::format(
+        "{{\"ts\":\"{}\",\"method\":\"{}\","
+        "\"path\":\"{}\",\"status\":{},\"duration_us\":{}}}\n",
+        ts, method, path, status, duration_us);
+    std::fputs(line.c_str(), stderr);
   };
 }
 
@@ -1377,7 +1371,7 @@ void StackController::run() {
   std::signal(SIGINT,  sig_handler);
 
   // Start each app in its own thread.
-  std::vector<std::thread> threads;
+  std::vector<std::jthread> threads;
   threads.reserve(entries_.size());
   for (auto &e : entries_) {
     threads.emplace_back([&e]() {
@@ -1387,9 +1381,7 @@ void StackController::run() {
       }
     });
   }
-
-  for (auto &t : threads)
-    if (t.joinable()) t.join();
+  // std::jthread auto-joins on destruction.
 }
 
 } // namespace qbuem

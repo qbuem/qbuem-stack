@@ -346,7 +346,7 @@ int main() {
     std::printf("=== qbuem DB 연결 풀 + 세션 저장소 예제 ===\n\n");
 
     Dispatcher disp(2);
-    std::thread t([&] { disp.run(); });
+    std::jthread t([&] { disp.run(); });
 
     auto pool_fn    = []() -> Task<void> { co_await demo_connection_pool_task(); };
     auto session_fn = []() -> Task<void> { co_await demo_session_store_task(); };

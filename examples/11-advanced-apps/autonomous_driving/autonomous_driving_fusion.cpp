@@ -608,7 +608,7 @@ int main() {
     constexpr int kCycles = 30;  // 30 사이클 × 50ms = 1.5초 시뮬레이션
 
     Dispatcher disp(4);
-    std::thread worker([&] { disp.run(); });
+    std::jthread worker([&] { disp.run(); });
 
     // ── §A  MessageBus ──────────────────────────────────────────────────────
     MessageBus bus;

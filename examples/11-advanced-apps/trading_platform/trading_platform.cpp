@@ -1262,7 +1262,7 @@ static Task<void> run_demo(TradingPlatform& p, Dispatcher& d) {
 int main() {
     // ── Pipeline Dispatcher (HTTP App과 분리된 별도 스레드 풀) ───────────
     Dispatcher pipeline_disp(4);
-    std::thread pipeline_thread([&pipeline_disp] { pipeline_disp.run(); });
+    std::jthread pipeline_thread([&pipeline_disp] { pipeline_disp.run(); });
 
     // ── Trading Platform 초기화 ──────────────────────────────────────────
     TradingPlatform platform;

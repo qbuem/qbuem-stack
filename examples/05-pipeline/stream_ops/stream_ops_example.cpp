@@ -146,7 +146,7 @@ int main() {
     std::cout << "=== Stream Operators ===\n";
 
     Dispatcher dispatcher(2);
-    std::thread run_th([&] { dispatcher.run(); });
+    std::jthread run_th([&] { dispatcher.run(); });
 
     std::atomic<int> done{0};
 

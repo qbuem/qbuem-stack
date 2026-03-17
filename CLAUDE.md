@@ -4,9 +4,24 @@ This file provides structured context for AI coding assistants working in this r
 
 ---
 
+## Language Policy
+
+**All code, comments, documentation, and user-facing strings MUST be written in English.**
+
+This is a hard requirement that applies to:
+- All source file comments (`//`, `/* */`, `/** */` Doxygen)
+- All string literals visible to users (error messages, log output, example output)
+- All documentation files (`.md`, `.rst`)
+- All new code contributions by AI assistants
+
+Korean or other non-English text in code comments, docs, or strings is a review failure.
+Existing Korean comments in legacy files should be translated to English when touched.
+
+---
+
 ## Project Identity
 
-**qbuem-stack v2.1.0** — Zero Latency · Zero Allocation · Zero Dependency
+**qbuem-stack v2.2.0** — Zero Latency · Zero Allocation · Zero Dependency
 C++20 high-performance infrastructure library for WAS (Web Application Servers), IPC, and data pipelines.
 
 - **Language**: C++20 (concepts, coroutines `co_await`/`co_return`, `std::expected`, `std::span`, `std::format`)
@@ -204,6 +219,99 @@ FixedPoolResource<Entry, 256> pool;      // pool for event entries
 auto* e = pool.acquire();
 pool.release(e);
 ```
+
+---
+
+## Review Pass/Fail Criteria
+
+Every code contribution — human or AI — is evaluated against the four pillars below.
+**A single violation in a hot path is a review failure and must be fixed before merge.**
+
+---
+
+### Pillar 1 — Zero Latency
+
+The goal is deterministic, bounded latency on every hot path.
+
+| # | Rule | Failure example |
+|---|------|-----------------|
+| L1 | No blocking syscalls on a reactor thread | `read()`, `write()`, `sleep()`, `nanosleep()` called inside a coroutine without `co_await` |
+| L2 | No unbounded spin-waits | `while (!flag.load()) {}` without a yield or backoff |
+| L3 | No `std::mutex` on the hot path | Use lock-free atomics or SPSC queues; mutexes only on cold paths |
+| L4 | No `std::condition_variable` on the hot path | Replace with reactor `post()` / channel wakeup |
+| L5 | No `std::this_thread::sleep_for` on a reactor thread | Use `co_await timer` or schedule via `TimerWheel` |
+| L6 | poll/wait timeout ≤ 1 ms for reactors | `epoll_wait` / `io_uring_wait` / `kevent` must not block longer than 1 ms |
+| L7 | No `std::format` / string construction on the hot path | Format only in the flush thread (AsyncLogger pattern) |
+| L8 | All coroutine frame sizes must be bounded at compile time | No VLA or dynamic-size `co_await` inside a tight loop |
+
+---
+
+### Pillar 2 — Zero Copy
+
+Data must not be copied unless the type system forces it (i.e., `!std::is_trivially_copyable_v<T>`).
+
+| # | Rule | Failure example |
+|---|------|-----------------|
+| C1 | Pass buffers as `std::span<const std::byte>` or `std::span<T>`, never by value | `void process(std::vector<uint8_t> buf)` — copies the entire buffer |
+| C2 | Use `std::string_view` for read-only string arguments, never `std::string` | `void log(std::string msg)` on the hot path |
+| C3 | Network I/O uses scatter-gather (`iovec` / `io_uring` fixed buffers) | Single-buffer `send()`/`recv()` on high-throughput paths |
+| C4 | SHM types must satisfy `std::is_trivially_copyable_v<T>` — no hidden copies | `SHMChannel<std::string>` — copies via constructor |
+| C5 | Pipeline stage functions take `InputType` by value only when ownership is required; otherwise `const InputType&` or moved-in unique ownership | Copying a `ParsedEvent` into every downstream branch |
+| C6 | `std::move()` must be used when transferring ownership out of a stage | Returning `result` by copy when the local variable is never used again |
+| C7 | No intermediate `std::string` construction for binary data — use `std::span<std::byte>` | `std::string s(reinterpret_cast<const char*>(buf), len)` then passing `s` to the next stage |
+
+---
+
+### Pillar 3 — Zero Allocation
+
+No heap allocation on the hot path. "Hot path" = any code reached per-request or per-message.
+
+| # | Rule | Failure example |
+|---|------|-----------------|
+| A1 | No `new` / `delete` / `malloc` / `free` on the hot path | `auto* ctx = new RequestContext()` per request |
+| A2 | No `std::vector`, `std::string`, `std::map` construction on the hot path | `std::vector<int> results;` inside a stage function body |
+| A3 | Use `Arena` for per-request objects; call `arena.reset()` at end of request | Forgetting `reset()` causes unbounded arena growth |
+| A4 | Use `FixedPoolResource<T, N>` for fixed-size event pools | Allocating event entries with `std::make_shared<Event>()` |
+| A5 | `std::format` returns `std::string` — forbidden on hot path | Calling `std::format(...)` inside a stage function |
+| A6 | Coroutine frames must not allocate per-resume — avoid captures that force heap frame elision failure | Capturing `std::string` by value in a coroutine lambda |
+| A7 | `std::function` is forbidden on the hot path (heap-allocates closures > ~16 bytes) | Storing `std::function<void()>` in a per-message struct |
+| A8 | `std::shared_ptr` is forbidden on the hot path (atomic refcount = allocation + contention) | `std::shared_ptr<Packet>` passed between pipeline stages |
+| A9 | Exceptions are forbidden — they trigger heap allocation for the exception object | Any `throw` statement in hot-path code |
+| A10 | `co_await` inside a loop must not allocate a new coroutine frame each iteration | Spawning a new `Task<>` per loop iteration instead of reusing a persistent worker |
+
+---
+
+### Pillar 4 — Zero Dependency
+
+Core headers (`include/qbuem/`) must compile with zero third-party includes.
+
+| # | Rule | Failure example |
+|---|------|-----------------|
+| D1 | No third-party `#include` in any public header | `#include <nlohmann/json.hpp>` in a pipeline header |
+| D2 | No Boost headers anywhere in `include/` or `src/` | `#include <boost/asio.hpp>` |
+| D3 | Only C++20 standard library headers permitted in `include/` | `#include <fmt/format.h>` — use `<format>` instead |
+| D4 | Optional integrations (JSON, logging libs) belong in `examples/` only | JSON serialization logic inside `include/qbuem/pipeline/` |
+| D5 | CMake `target_link_libraries` for core targets must list only system libs | Adding `nlohmann_json` to `qbuem_stack` link deps |
+| D6 | `FetchContent` / `find_package` for non-test deps is forbidden | Pulling `spdlog` for core logging |
+
+---
+
+### Pillar 5 — C++20 Compliance
+
+All new and modified code must use C++20 features where applicable. Using an older equivalent is a review failure.
+
+| # | Rule | Failure example |
+|---|------|-----------------|
+| M1 | `std::jthread` instead of `std::thread` | `std::thread t([]{...}); t.join();` |
+| M2 | `container.contains(key)` instead of `container.count(key)` or `container.find(key) != end()` | `if (map.count(k))` |
+| M3 | `std::format(...)` instead of `snprintf` / `sprintf` / `fprintf` / `ostringstream` | `std::ostringstream ss; ss << x;` |
+| M4 | `std::span<T>` instead of raw pointer + size pairs | `void f(const T* data, size_t len)` |
+| M5 | Designated initializers for aggregate initialization | `MyConfig c; c.timeout = 5; c.retries = 3;` instead of `MyConfig{.timeout=5, .retries=3}` |
+| M6 | `[[nodiscard]]` on all functions returning `Result<T>`, `Task<T>`, or error codes | Unmarked `Result<void> init()` |
+| M7 | `std::stop_token` for cooperative cancellation — no manual `std::atomic<bool> running` flags | `std::atomic<bool> stop_flag_` as a thread stop mechanism |
+| M8 | `std::bit_cast<T>` instead of `reinterpret_cast` for type-punning of trivially-copyable types | `*reinterpret_cast<float*>(&int_val)` |
+| M9 | Concepts (`requires` / `concept`) for template constraints instead of SFINAE | `std::enable_if_t<...>` or `std::void_t<...>` |
+| M10 | Three-way comparison `operator<=>` for types that need ordering | Manual `operator<`, `operator>`, `operator<=`, `operator>=` |
 
 ---
 

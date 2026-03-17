@@ -62,7 +62,7 @@ int main() {
 
     Dispatcher dispatcher(1);
     dp.start(dispatcher);
-    std::thread run_th([&] { dispatcher.run(); });
+    std::jthread run_th([&] { dispatcher.run(); });
 
     auto output = dp.output();
 

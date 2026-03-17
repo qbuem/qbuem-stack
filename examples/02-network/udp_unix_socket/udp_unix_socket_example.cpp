@@ -162,7 +162,7 @@ int main() {
         }
 
         Dispatcher disp(1);
-        std::thread t([&] { disp.run(); });
+        std::jthread t([&] { disp.run(); });
 
         disp.spawn(udp_receiver(std::move(*recv_sock)));
 
@@ -192,7 +192,7 @@ int main() {
         }
 
         Dispatcher disp(2);
-        std::thread t([&] { disp.run(); });
+        std::jthread t([&] { disp.run(); });
 
         auto srv = std::move(*server_sock);
         disp.spawn(unix_server(std::move(srv)));

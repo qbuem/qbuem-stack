@@ -89,7 +89,7 @@ static void demo_linear_factory() {
     }
 
     Dispatcher disp(1);
-    std::thread t([&] { disp.run(); });
+    std::jthread t([&] { disp.run(); });
 
     dp->start(disp);
 
@@ -174,7 +174,7 @@ static void demo_plugin_registry() {
     }
 
     Dispatcher disp(1);
-    std::thread t([&] { disp.run(); });
+    std::jthread t([&] { disp.run(); });
     dp->start(disp);
 
     dp->try_push("  hello world  ");
@@ -253,7 +253,7 @@ static void demo_graph_factory() {
     }
 
     Dispatcher disp(1);
-    std::thread t([&] { disp.run(); });
+    std::jthread t([&] { disp.run(); });
     graph->start(disp);
 
     // 입력: -1(거부), 1, 2, 3 → sink 출력: 3, 6, 9 (scale=3)

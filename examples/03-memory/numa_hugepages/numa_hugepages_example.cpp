@@ -237,7 +237,7 @@ int main() {
 
     // Dispatcher 생성 후 NUMA 바인딩 데모
     Dispatcher disp(2);
-    std::thread t([&] { disp.run(); });
+    std::jthread t([&] { disp.run(); });
 
     demo_numa(disp);
     demo_io_slice();

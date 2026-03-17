@@ -85,7 +85,7 @@ TEST(StaticPipelineIntegration, ThreeStageChain) {
   // Dispatcher 생성 (1 스레드) + 이벤트 루프 백그라운드 실행
   Dispatcher dispatcher(1);
   pipeline.start(dispatcher);
-  std::thread run_thread([&] { dispatcher.run(); });
+  std::jthread run_thread([&] { dispatcher.run(); });
 
   // 아이템 투입
   std::vector<int> expected_values = {42, 7, 100};
@@ -158,7 +158,7 @@ TEST(StaticPipelineIntegration, ScaleOutUnderLoad) {
   auto output = pipeline.output();
   Dispatcher dispatcher(2);
   pipeline.start(dispatcher);
-  std::thread run_thread([&] { dispatcher.run(); });
+  std::jthread run_thread([&] { dispatcher.run(); });
 
   // 아이템 투입
   constexpr size_t kItems = 20;
@@ -214,7 +214,7 @@ TEST(StaticPipelineIntegration, DrainProcessesAllItems) {
 
   Dispatcher dispatcher(1);
   pipeline.start(dispatcher);
-  std::thread run_thread([&] { dispatcher.run(); });
+  std::jthread run_thread([&] { dispatcher.run(); });
 
   // 아이템 투입
   constexpr size_t kItems = 10;
@@ -344,7 +344,7 @@ TEST(StaticPipelineIntegration, ContextPropagationThroughStages) {
   auto output = pipeline.output();
   Dispatcher dispatcher(1);
   pipeline.start(dispatcher);
-  std::thread run_thread([&] { dispatcher.run(); });
+  std::jthread run_thread([&] { dispatcher.run(); });
 
   // Context에 RequestId를 담아서 push
   const std::string kReqId = "req-ctx-test-001";

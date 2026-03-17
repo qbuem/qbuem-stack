@@ -106,7 +106,7 @@ int main() {
     };
     dispatcher.spawn(bridge());
 
-    std::thread run_th([&] { dispatcher.run(); });
+    std::jthread run_th([&] { dispatcher.run(); });
 
     // 프레임 투입
     std::atomic<size_t> batches_sent{0};

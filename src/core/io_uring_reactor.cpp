@@ -487,7 +487,7 @@ Result<void> IOUringReactor::write_fixed(int fd, int buf_idx,
 
 Result<void> IOUringReactor::register_buf_ring(uint16_t bgid, size_t buf_size,
                                                size_t buf_count) {
-  if (impl_->buf_rings.count(bgid))
+  if (impl_->buf_rings.contains(bgid))
     return unexpected(std::make_error_code(std::errc::address_in_use));
 
   auto &entry      = impl_->buf_rings[bgid];

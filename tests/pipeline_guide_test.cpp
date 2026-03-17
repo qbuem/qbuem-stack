@@ -50,14 +50,14 @@ using namespace std::chrono_literals;
 /// GTest 환경에서 Dispatcher를 안전하게 실행/정지하는 RAII 래퍼
 struct RunGuard {
     Dispatcher dispatcher;
-    std::thread thread;
+    std::jthread thread;
 
     explicit RunGuard(size_t threads = 1) : dispatcher(threads) {
-        thread = std::thread([this] { dispatcher.run(); });
+        thread = std::jthread([this] { dispatcher.run(); });
     }
     ~RunGuard() {
         dispatcher.stop();
-        if (thread.joinable()) thread.join();
+        thread.join();
     }
 
     // Named coroutine — avoids GCC HALO stack-use-after-return in lambdas.

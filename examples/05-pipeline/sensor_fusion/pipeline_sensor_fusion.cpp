@@ -125,7 +125,7 @@ int main() {
     Dispatcher dispatcher(1);
     auto out_ch = std::make_shared<AsyncChannel<ContextualItem<FusedPose>>>(128);
     gather.start(dispatcher, out_ch);
-    std::thread run_th([&] { dispatcher.run(); });
+    std::jthread run_th([&] { dispatcher.run(); });
 
     // 10 프레임: IMU + GPS 각각 투입 (순서 섞음)
     constexpr size_t kFrames = 10;

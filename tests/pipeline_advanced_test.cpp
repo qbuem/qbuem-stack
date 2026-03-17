@@ -31,14 +31,14 @@ using namespace std::chrono_literals;
 
 struct RunGuard {
     Dispatcher dispatcher;
-    std::thread thread;
+    std::jthread thread;
 
     explicit RunGuard(size_t threads = 1) : dispatcher(threads) {
-        thread = std::thread([this] { dispatcher.run(); });
+        thread = std::jthread([this] { dispatcher.run(); });
     }
     ~RunGuard() {
         dispatcher.stop();
-        if (thread.joinable()) thread.join();
+        thread.join();
     }
 
     // Named coroutine (not lambda) to prevent GCC HALO placing the frame on

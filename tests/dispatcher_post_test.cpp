@@ -12,13 +12,12 @@ using namespace std::chrono_literals;
 // Helper: run a Dispatcher for up to `duration`, then stop it.
 // ---------------------------------------------------------------------------
 static void run_for(qbuem::Dispatcher &d, std::chrono::milliseconds duration) {
-  std::thread stopper([&] {
+  std::jthread stopper([&] {
     std::this_thread::sleep_for(duration);
     d.stop();
   });
   d.run();
-  if (stopper.joinable())
-    stopper.join();
+  // std::jthread auto-joins on destruction.
 }
 
 // ---------------------------------------------------------------------------
@@ -31,7 +30,7 @@ TEST(DispatcherPost, PostRunsOnWorker) {
   std::atomic<std::thread::id> worker_tid{};
 
   // Give the reactor thread time to start, then post.
-  std::thread poster([&] {
+  std::jthread poster([&] {
     std::this_thread::sleep_for(10ms);
     d.post([&] {
       called = true;
@@ -60,7 +59,7 @@ TEST(DispatcherPost, PostToSpecificReactor) {
 
   std::atomic<int> count{0};
 
-  std::thread poster([&] {
+  std::jthread poster([&] {
     std::this_thread::sleep_for(10ms);
     for (size_t i = 0; i < N; ++i) {
       d.post_to(i, [&] { count.fetch_add(1); });
@@ -89,7 +88,7 @@ TEST(DispatcherPost, SpawnFireAndForget) {
 
   std::atomic<int> counter{0};
 
-  std::thread poster([&] {
+  std::jthread poster([&] {
     std::this_thread::sleep_for(10ms);
     d.spawn(simple_coro(counter));
     for (int i = 0; i < 100 && counter.load() < 1; ++i)
@@ -112,7 +111,7 @@ TEST(DispatcherPost, SpawnOnSpecificReactor) {
 
   std::atomic<int> counter{0};
 
-  std::thread poster([&] {
+  std::jthread poster([&] {
     std::this_thread::sleep_for(10ms);
     d.spawn_on(0, simple_coro(counter));
     d.spawn_on(1, simple_coro(counter));

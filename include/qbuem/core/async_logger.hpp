@@ -27,6 +27,7 @@
 #include <cstdio>
 #include <cstring>
 #include <ctime>
+#include <format>
 #include <functional>
 #include <memory>
 #include <string>
@@ -100,14 +101,14 @@ public:
 
   /** @brief Spawn the background flush thread. */
   void start() {
-    running_.store(true, std::memory_order_relaxed);
-    thread_ = std::thread([this]() { flush_loop(); });
+    thread_ = std::jthread([this](std::stop_token st) { flush_loop(st); });
   }
 
   /** @brief Flush remaining entries and join the background thread. */
   void stop() {
-    if (running_.exchange(false, std::memory_order_acq_rel)) {
-      if (thread_.joinable()) thread_.join();
+    if (thread_.joinable()) {
+      thread_.request_stop();
+      thread_.join();
     }
     // Final drain (called from joining thread).
     drain();
@@ -150,8 +151,8 @@ public:
   }
 
 private:
-  void flush_loop() {
-    while (running_.load(std::memory_order_relaxed)) {
+  void flush_loop(std::stop_token st) {
+    while (!st.stop_requested()) {
       drain();
       // Sleep briefly to yield CPU — 1 ms is a good balance between
       // throughput and latency.
@@ -173,7 +174,7 @@ private:
   }
 
   // Format and write a single entry.
-  void write_entry(const LogEntry &e) noexcept {
+  void write_entry(const LogEntry &e) {
     std::tm tm{};
     std::time_t ts = static_cast<std::time_t>(e.timestamp_sec);
     gmtime_r(&ts, &tm);
@@ -181,22 +182,19 @@ private:
     char ts_buf[24];
     std::strftime(ts_buf, sizeof(ts_buf), "%Y-%m-%dT%H:%M:%SZ", &tm);
 
-    char line[640];
-    int len;
+    std::string line;
     if (fmt_ == LogFormat::Json) {
       // {"ts":"2024-…","method":"GET","path":"/…","status":200,"duration_us":123}
-      len = std::snprintf(line, sizeof(line),
-                          "{\"ts\":\"%s\",\"method\":\"%s\","
-                          "\"path\":\"%s\",\"status\":%d,\"duration_us\":%ld}\n",
-                          ts_buf, e.method, e.path, e.status, e.duration_us);
+      line = std::format(
+          "{{\"ts\":\"{}\",\"method\":\"{}\","
+          "\"path\":\"{}\",\"status\":{},\"duration_us\":{}}}\n",
+          ts_buf, e.method, e.path, e.status, e.duration_us);
     } else {
-      // [YYYY-MM-DDTHH:MM:SSZ] METHOD /path STATUS Xµs\n
-      len = std::snprintf(line, sizeof(line),
-                          "[%s] %s %s %d %ldµs\n",
-                          ts_buf, e.method, e.path, e.status, e.duration_us);
+      // [YYYY-MM-DDTHH:MM:SSZ] METHOD /path STATUS Xµs
+      line = std::format("[{}] {} {} {} {}µs\n",
+                         ts_buf, e.method, e.path, e.status, e.duration_us);
     }
-    if (len > 0)
-      std::fwrite(line, 1, static_cast<size_t>(len), out_);
+    std::fwrite(line.data(), 1, line.size(), out_);
   }
 
   size_t    mask_;                       // capacity - 1
@@ -208,8 +206,7 @@ private:
   alignas(64) std::atomic_flag   producer_lock_ = ATOMIC_FLAG_INIT; // MPSC guard
   alignas(64) std::atomic<size_t> tail_{0};        // consumer reads
 
-  std::atomic<bool> running_{false};
-  std::thread       thread_;
+  std::jthread      thread_;
 };
 
 } // namespace qbuem

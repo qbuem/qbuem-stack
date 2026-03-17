@@ -457,7 +457,7 @@ int main() {
     constexpr int kEventsPerThread = 20000;  // 총 80,000 이벤트
 
     Dispatcher disp(4);
-    std::thread worker([&] { disp.run(); });
+    std::jthread worker([&] { disp.run(); });
 
     // ── §A  MessageBus 설정 — "alerts" 토픽으로 경보 fan-out ──────────────────
     MessageBus bus;
@@ -499,7 +499,7 @@ int main() {
 
     auto t_start = Clock::now();
 
-    std::vector<std::thread> producers;
+    std::vector<std::jthread> producers;
     producers.reserve(kProducers);
     for (int t = 0; t < kProducers; ++t) {
         producers.emplace_back([&, t]() {

@@ -129,9 +129,9 @@ static Task<Result<ValidatedOrder>> stage_record(ValidatedOrder v, ActionEnv /*e
 
 struct RunGuard {
     Dispatcher  dispatcher;
-    std::thread thread;
+    std::jthread thread;
     explicit RunGuard(size_t n = 2) : dispatcher(n) {
-        thread = std::thread([this] { dispatcher.run(); });
+        thread = std::jthread([this] { dispatcher.run(); });
     }
     ~RunGuard() { dispatcher.stop(); if (thread.joinable()) thread.join(); }
     template <typename F>
