@@ -25,9 +25,25 @@
 
 using namespace qbuem;
 
-// ─── JSON 파싱 헬퍼 ──────────────────────────────────────────────────────────
+// ─── 응답 DTO (Nexus 엔진) ───────────────────────────────────────────────────
+struct UserResponse {
+    std::string message;
+    std::string status;
+    std::string version;
+    std::string user_id;
+};
+QBUEM_JSON_FIELDS(UserResponse, message, status, version, user_id)
+
+struct EchoResponse {
+    std::string echo_message;
+    std::string echo_name;
+    bool        ok = true;
+};
+QBUEM_JSON_FIELDS(EchoResponse, echo_message, echo_name, ok)
+
+// ─── JSON 파싱 헬퍼 (DOM 엔진) ───────────────────────────────────────────────
 // req.body() 는 raw bytes(std::string_view) 입니다.
-// 애플리케이션이 원하는 JSON 라이브러리로 직접 파싱합니다.
+// SafeValue 체인 시연용으로 DOM 엔진을 사용합니다.
 static qbuem::Value parse_body(const Request& req) {
     qbuem::Document doc;
     std::string_view b = req.body();
@@ -46,36 +62,28 @@ Task<void> async_user_handler(const Request& req, Response& res) {
 
     co_await sleep(0); // reactor 에 제어권을 한 번 양보 (coroutine 시연)
 
-    qbuem::Document doc;
-    auto out = qbuem::parse(doc, "{}");
-    out.insert("message", "Hello from qbuem-stack Async Coroutines!");
-    out.insert("status",  "success");
-    out.insert("version", Version::string);
-    out.insert("user_id", std::string(req.param("id")));
-
     res.status(200)
        .header("Content-Type", "application/json")
-       .body(out.dump());
+       .body(qbuem::write(UserResponse{
+           "Hello from qbuem-stack Async Coroutines!",
+           "success",
+           std::string(Version::string),
+           std::string(req.param("id")),
+       }));
     co_return;
 }
 
-// POST /echo — qbuem-json SafeValue 체인 시연
+// POST /echo — DOM SafeValue 체인으로 요청 파싱 + Nexus 로 응답 직렬화
 Task<void> echo_handler(const Request& req, Response& res) {
     qbuem::Value body = parse_body(req);
 
-    // .get("key") | fallback — 키 없거나 타입 불일치 시 nullopt 전파
+    // .get("key") | fallback — 키 없거나 타입 불일치 시 nullopt 전파 (DOM SafeValue 시연)
     std::string msg  = body.get("message") | std::string("(no message)");
     std::string name = body.get("name")    | std::string("(anonymous)");
 
-    qbuem::Document out_doc;
-    auto out = qbuem::parse(out_doc, "{}");
-    out.insert("echo_message", msg);
-    out.insert("echo_name",    name);
-    out.insert("ok", true);
-
     res.status(200)
        .header("Content-Type", "application/json")
-       .body(out.dump());
+       .body(qbuem::write(EchoResponse{msg, name, true}));
     co_return;
 }
 

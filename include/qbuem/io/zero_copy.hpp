@@ -32,6 +32,8 @@
 #  include <sys/sendfile.h>
 #  include <sys/socket.h>
 #  include <linux/errqueue.h>
+#  include <linux/in.h>    // IP_RECVERR
+#  include <linux/in6.h>   // IPV6_RECVERR
 #elif defined(__APPLE__)
 #  include <sys/socket.h>
 #  include <sys/types.h>

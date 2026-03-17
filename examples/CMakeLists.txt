@@ -4,8 +4,10 @@ target_link_libraries(hello_world PRIVATE qbuem-stack::qbuem)
 add_executable(async_timer async_timer.cpp)
 target_link_libraries(async_timer PRIVATE qbuem-stack::qbuem)
 
-add_executable(kqueue_sophistication kqueue_sophistication.cpp)
-target_link_libraries(kqueue_sophistication PRIVATE qbuem-stack::qbuem)
+if(APPLE)
+    add_executable(kqueue_sophistication kqueue_sophistication.cpp)
+    target_link_libraries(kqueue_sophistication PRIVATE qbuem-stack::qbuem)
+endif()
 
 # ── Pipeline Guide 예제 ───────────────────────────────────────────────────────
 
@@ -27,9 +29,8 @@ target_link_libraries(pipeline_dynamic_hotswap PRIVATE qbuem-stack::qbuem)
 
 # ── Feature examples ─────────────────────────────────────────────────────────
 
-# Middleware: CORS, RateLimit, RequestID, HSTS, BearerAuth, SSE
-add_executable(middleware_example middleware_example.cpp)
-target_link_libraries(middleware_example PRIVATE qbuem-stack::qbuem)
+# Middleware: CORS, RateLimit, RequestID, HSTS, BearerAuth, SSE (qbuem-json 필수)
+# middleware_example: qbuem-json TARGET 블록으로 이동
 
 # WebSocket: RFC 6455 frame encode/decode, compute_accept_key
 add_executable(websocket_example websocket_example.cpp)
@@ -121,9 +122,7 @@ target_link_libraries(pipeline_observer_health_example PRIVATE qbuem-stack::qbue
 add_executable(subpipeline_migration_example subpipeline_migration_example.cpp)
 target_link_libraries(subpipeline_migration_example PRIVATE qbuem-stack::qbuem)
 
-# PipelineFactory: JSON 기반 DynamicPipeline / PipelineGraph 조립
-add_executable(pipeline_factory_example pipeline_factory_example.cpp)
-target_link_libraries(pipeline_factory_example PRIVATE qbuem-stack::qbuem)
+# PipelineFactory: 아래 qbuem-json TARGET 블록으로 이동 (qbuem_json 필수)
 
 # PriorityChannel + SpscChannel: 우선순위 채널, SPSC 락-프리 채널
 add_executable(priority_spsc_channel_example priority_spsc_channel_example.cpp)
@@ -137,25 +136,34 @@ target_link_libraries(crypto_url_example PRIVATE qbuem-stack::qbuem)
 add_executable(security_middleware_example security_middleware_example.cpp)
 target_link_libraries(security_middleware_example PRIVATE qbuem-stack::qbuem)
 
-# DB 연결 풀 + 세션 저장소: LockFreeConnectionPool, InMemorySessionStore
-add_executable(db_session_example db_session_example.cpp)
-target_link_libraries(db_session_example PRIVATE qbuem-stack::qbuem)
+# DB 연결 풀 + 세션 저장소: LockFreeConnectionPool, InMemorySessionStore (qbuem-json 필수)
+# db_session_example: qbuem-json TARGET 블록으로 이동
 
 # 하드웨어 I/O: PCIeDevice, RDMAChannel, EBPFTracer, NVMeIO, kTLS
 add_executable(hardware_io_example hardware_io_example.cpp)
 target_link_libraries(hardware_io_example PRIVATE qbuem-stack::qbuem)
 
+# 센서 퓨전: Mock IMU + GPS + LiDAR → StaticPipeline → DynamicPipeline
+add_executable(sensor_fusion_example sensor_fusion_example.cpp)
+target_link_libraries(sensor_fusion_example PRIVATE qbuem-stack::qbuem)
+
+# 자율주행 센서 퓨전: Mock HAL(Camera/Radar/LiDAR/IMU/GNSS/Ultrasonic)
+#   → StaticPipeline(validate→calibrate→EKF→SORT) + DynamicPipeline(AEB hot-swap)
+#   + MessageBus(vehicle_state)
+add_executable(autonomous_driving_fusion autonomous_driving_fusion.cpp)
+target_link_libraries(autonomous_driving_fusion PRIVATE qbuem-stack::qbuem)
+
+# 초고속 IO 메트릭스 대시보드: 4 Producer 스레드 × 20k 이벤트
+#   → StaticPipeline(classify→measure→aggregate→snap)
+#   + HistogramMetrics(p50/p95/p99/p999) + MessageBus 메트릭 fan-out
+add_executable(io_metrics_dashboard io_metrics_dashboard.cpp)
+target_link_libraries(io_metrics_dashboard PRIVATE qbuem-stack::qbuem)
+
 # Zero-copy + ArenaChannel + AsyncLogger: sendfile, splice, arena_channel
 add_executable(zero_copy_arena_channel_example zero_copy_arena_channel_example.cpp)
 target_link_libraries(zero_copy_arena_channel_example PRIVATE qbuem-stack::qbuem)
 
-# ── trading_platform: 종합 예제 ──────────────────────────────────────────────
-# WAS + StaticPipeline(3 Actions, auto_scale, SLO) + DynamicPipeline(hot_swap, toggle)
-# + MessageBus(SSE fan-out) + MockDB + JSON + Context 전파 + Cross-reactor 응답 채널
-add_executable(trading_platform trading_platform.cpp)
-target_link_libraries(trading_platform PRIVATE qbuem-stack::qbuem)
-
-# ── coro_json: 비동기 코루틴 + qbuem-json 예제 ────────────────────────────────
+# ── coro_json + trading_platform: qbuem-json 의존 예제 ───────────────────────
 # qbuem-json 이 없을 경우 빌드를 건너뜀 (선택적 의존성).
 FetchContent_Declare(qbuem_json
     GIT_REPOSITORY https://github.com/qbuem/qbuem-json.git
@@ -168,11 +176,37 @@ if(NOT qbuem_json_POPULATED)
 endif()
 
 if(TARGET qbuem_json::qbuem_json)
+    # Middleware: CORS, RateLimit, RequestID, HSTS, BearerAuth, SSE
+    add_executable(middleware_example middleware_example.cpp)
+    target_link_libraries(middleware_example PRIVATE qbuem-stack::qbuem qbuem_json::qbuem_json)
+
+    # DB 연결 풀 + 세션 저장소: LockFreeConnectionPool, InMemorySessionStore
+    add_executable(db_session_example db_session_example.cpp)
+    target_link_libraries(db_session_example PRIVATE qbuem-stack::qbuem qbuem_json::qbuem_json)
+
     add_executable(coro_json coro_json.cpp)
     target_link_libraries(coro_json PRIVATE qbuem-stack::qbuem qbuem_json::qbuem_json)
+
+    # pipeline_factory_example: qbuem-json 으로 config 파싱
+    add_executable(pipeline_factory_example pipeline_factory_example.cpp)
+    target_link_libraries(pipeline_factory_example PRIVATE qbuem-stack::qbuem qbuem_json::qbuem_json)
+
+    # trading_platform: 종합 예제
+    # WAS + StaticPipeline(3 Actions, auto_scale, SLO) + DynamicPipeline(hot_swap, toggle)
+    # + MessageBus(SSE fan-out) + MockDB + qbuem-json + Context 전파 + Cross-reactor 응답 채널
+    add_executable(trading_platform trading_platform.cpp)
+    target_link_libraries(trading_platform PRIVATE qbuem-stack::qbuem qbuem_json::qbuem_json)
+
+    # game_server: 실시간 멀티플레이어 턴제 배틀 게임 서버
+    # WAS + StaticPipeline(validate/apply/finalize) + DynamicPipeline(persist/replay/notify)
+    # + MessageBus(방별 SSE + 리더보드 SSE) + GameRegistry(인메모리 게임 상태)
+    # + qbuem-json Nexus(nexus_pulse GameAction 역직렬화) + Bearer Auth + Rate Limit (치트 방지)
+    add_executable(game_server game_server.cpp)
+    target_link_libraries(game_server PRIVATE qbuem-stack::qbuem qbuem_json::qbuem_json)
 else()
     message(WARNING
-        "qbuem-json target not found — skipping coro_json example.\n"
+        "qbuem-json target not found — skipping middleware_example, db_session_example, "
+        "coro_json, pipeline_factory_example, trading_platform, game_server examples.\n"
         "  Set -DQBUEM_JSON_TAG=<tag> or ensure network access."
     )
 endif()

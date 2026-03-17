@@ -288,13 +288,10 @@ public:
       auto init_res = snk_ptr->init();
       if (!init_res) return;
 
-      d.spawn([snk_ptr, drain_ch]() mutable -> Task<void> {
-        for (;;) {
-          auto item = co_await drain_ch->recv();
-          if (!item) co_return;
-          co_await snk_ptr->sink(item->value);
-        }
-      }());
+      // Use a free-function-style coroutine to avoid GCC stack-use-after-return
+      // in lambda coroutines: function parameters are heap-allocated in the
+      // coroutine frame, whereas lambda captures may be stack-allocated (HALO).
+      d.spawn(PipelineBuilder::sink_pump<CurOut, SinkT>(drain_ch, snk_ptr));
     });
 
     return PipelineBuilder<OrigIn, CurOut>(head_, tail_,
@@ -399,6 +396,20 @@ private:
       auto item = co_await src->recv();
       if (!item) { dst->close(); co_return; }
       co_await dst->send(std::move(*item));
+    }
+  }
+
+  // Sink pump coroutine: drains channel and forwards each value to SinkT::sink().
+  // Implemented as a free function (not a lambda coroutine) so that parameters
+  // are heap-allocated in the coroutine frame — avoids GCC HALO stack-use-after-return.
+  template <typename T, typename SinkT>
+  static Task<void> sink_pump(
+      std::shared_ptr<AsyncChannel<ContextualItem<T>>> ch,
+      std::shared_ptr<SinkT>                          snk) {
+    for (;;) {
+      auto item = co_await ch->recv();
+      if (!item) co_return;
+      co_await snk->sink(item->value);
     }
   }
 

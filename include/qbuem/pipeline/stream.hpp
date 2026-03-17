@@ -34,6 +34,19 @@
 
 namespace qbuem {
 
+// ---------------------------------------------------------------------------
+// Internal helpers
+// ---------------------------------------------------------------------------
+
+/// Result<T> → T 언래퍼 트레이트.
+/// stream_map 연산자에서 Fn의 반환 타입 Task<Result<U>>로부터 U를 추출할 때 사용.
+template <typename R>
+struct unwrap_result_impl { using type = R; };
+template <typename T>
+struct unwrap_result_impl<Result<T>> { using type = T; };
+template <typename R>
+using unwrap_result_t = typename unwrap_result_impl<R>::type;
+
 /** @brief 스트림 종료 마커. */
 struct StreamEnd {};
 
@@ -127,7 +140,11 @@ auto stream_map(Fn fn) { return StreamMapOp<Fn>{std::move(fn)}; }
 
 template <typename T, typename Fn>
 auto operator|(Stream<T> stream, StreamMapOp<Fn> op) {
-  using U = typename std::invoke_result_t<Fn, T>::value_type::value_type;
+  // Fn(T) → Task<Result<U>> 에서 U를 추출:
+  //   invoke_result_t<Fn, T>         == Task<Result<U>>
+  //   Task<Result<U>>::value_type    == Result<U>   (Task의 coroutine_traits 타입)
+  //   unwrap_result_t<Result<U>>     == U
+  using U = unwrap_result_t<typename std::invoke_result_t<Fn, T>::value_type>;
   auto [out, chan] = make_stream<U>();
 
   // Launch a pump coroutine to transform and forward items.

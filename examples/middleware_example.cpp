@@ -2,6 +2,7 @@
  * @file examples/middleware_example.cpp
  * @brief Middleware 체인 예시 — CORS, RateLimit, RequestID, SSE, TokenAuth
  */
+#include <qbuem_json/qbuem_json.hpp>
 #include <qbuem/qbuem_stack.hpp>
 #include <qbuem/middleware/cors.hpp>
 #include <qbuem/middleware/rate_limit.hpp>
@@ -12,6 +13,12 @@
 
 #include <iostream>
 #include <string>
+
+struct PublicResponse    { std::string message; };
+QBUEM_JSON_FIELDS(PublicResponse, message)
+
+struct ProtectedResponse { std::string user; };
+QBUEM_JSON_FIELDS(ProtectedResponse, user)
 
 using namespace qbuem;
 using namespace qbuem::middleware;
@@ -66,7 +73,9 @@ void setup_app(App& app) {
 
     // GET /public — 인증 없이 접근 가능
     app.get("/public", [](const Request&, Response& res) {
-        res.status(200).body(R"({"message":"public"})");
+        res.status(200)
+           .header("Content-Type", "application/json")
+           .body(qbuem::write(PublicResponse{"public"}));
     });
 
     // GET /sse — Server-Sent Events 스트림
@@ -82,7 +91,9 @@ void setup_app(App& app) {
     // GET /protected — 인증 필요
     app.get("/protected", [](const Request& req, Response& res) {
         auto sub = req.header("X-Auth-Sub");
-        res.status(200).body(std::string(R"({"user":")") + std::string(sub) + R"("})");
+        res.status(200)
+           .header("Content-Type", "application/json")
+           .body(qbuem::write(ProtectedResponse{std::string(sub)}));
     });
 }
 
