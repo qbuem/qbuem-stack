@@ -103,7 +103,7 @@ static void scenario_deduplication() {
         for (auto& ev : events) {
             // Context에 IdempotencyKey 삽입
             Context ctx;
-            ctx = ctx.with(IdempotencyKey{ev.idempotency_key});
+            ctx = ctx.put(IdempotencyKey{ev.idempotency_key});
             ActionEnv env{ctx};
 
             auto result = co_await filter.process(ev, env);
@@ -312,7 +312,7 @@ static void scenario_integrated() {
             auto t0 = std::chrono::steady_clock::now();
 
             Context ctx;
-            ctx = ctx.with(IdempotencyKey{ev.idempotency_key});
+            ctx = ctx.put(IdempotencyKey{ev.idempotency_key});
             ActionEnv env{ctx};
 
             auto result = co_await filter.process(ev, env);
