@@ -55,12 +55,12 @@
 #include <qbuem/net/dns.hpp>
 #include <qbuem/net/tcp_stream.hpp>
 
+#include <charconv>
 #include <chrono>
-#include <mutex>
+#include <deque>
 #include <stop_token>
 #include <string>
 #include <unordered_map>
-#include <vector>
 
 namespace qbuem {
 
@@ -196,6 +196,23 @@ public:
   }
 
   /**
+   * @brief Build a "host:port" pool key without heap allocation for the port.
+   *
+   * Uses std::to_chars() into a stack buffer to avoid the std::to_string()
+   * temporary allocation on every request.
+   */
+  static std::string make_pool_key(std::string_view host, uint16_t port) {
+    char port_buf[6]; // max "65535"
+    auto [ptr, ec] = std::to_chars(port_buf, port_buf + sizeof(port_buf), port);
+    std::string key;
+    key.reserve(host.size() + 1 + static_cast<size_t>(ptr - port_buf));
+    key.append(host);
+    key += ':';
+    key.append(port_buf, ptr);
+    return key;
+  }
+
+  /**
    * @brief Return a connection to the pool after a keep-alive response.
    *
    * Evicts the oldest connection if the pool is at capacity.
@@ -206,7 +223,7 @@ public:
   void release(const std::string &key, TcpStream stream) {
     auto &bucket = pool_[key];
     if (bucket.size() >= max_idle_per_host_) {
-      bucket.erase(bucket.begin()); // evict oldest
+      bucket.pop_front(); // O(1) eviction of oldest via std::deque
     }
     bucket.push_back(std::move(stream));
   }
@@ -232,8 +249,9 @@ public:
   }
 
 private:
-  // Pool: "host:port" → free-list of idle TcpStream sockets
-  std::unordered_map<std::string, std::vector<TcpStream>> pool_;
+  // Pool: "host:port" → free-list of idle TcpStream sockets.
+  // std::deque gives O(1) pop_front() for FIFO eviction of oldest connections.
+  std::unordered_map<std::string, std::deque<TcpStream>> pool_;
 
   size_t    max_idle_per_host_     = 4;
   long long default_timeout_ms_    = 0;
@@ -251,8 +269,8 @@ inline Task<Result<FetchResponse>> ClientRequest::send(std::stop_token st) {
     co_return unexpected(
         std::make_error_code(std::errc::protocol_not_supported));
 
-  // Pool key
-  std::string pool_key = parsed->host + ":" + std::to_string(parsed->port);
+  // Pool key — uses to_chars to avoid to_string() heap allocation.
+  std::string pool_key = FetchClient::make_pool_key(parsed->host, parsed->port);
 
   // Build combined stop_token (user + client timeout)
   std::stop_source timeout_ss;
@@ -288,7 +306,7 @@ inline Task<Result<FetchResponse>> ClientRequest::send(std::stop_token st) {
     auto cur_parsed = ParsedUrl::parse(current_url);
     if (!cur_parsed) { cancel_timer(); co_return unexpected(cur_parsed.error()); }
 
-    std::string cur_key = cur_parsed->host + ":" + std::to_string(cur_parsed->port);
+    std::string cur_key = FetchClient::make_pool_key(cur_parsed->host, cur_parsed->port);
 
     // ── Acquire or create connection ─────────────────────────────────────
     std::optional<TcpStream> stream_opt = client_->acquire(cur_key);

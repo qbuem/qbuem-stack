@@ -71,7 +71,8 @@ public:
    * if (!addr) co_return unexpected(addr.error());
    * @endcode
    */
-  static Task<Result<SocketAddr>> resolve(std::string host, uint16_t port) {
+  [[nodiscard]] static Task<Result<SocketAddr>> resolve(std::string host,
+                                                         uint16_t port) {
     co_return co_await Awaiter{std::move(host), port};
   }
 
@@ -110,13 +111,12 @@ private:
       // Capture reactor pointer before spawning — Reactor::current() is
       // thread-local and only valid on the reactor thread.
       Reactor* reactor = Reactor::current();
+      auto     st      = state;
 
-      std::string  host_copy = host;
-      uint16_t     port_copy = port;
-      auto         st        = state;
-
-      std::thread([host_copy = std::move(host_copy),
-                   port_copy,
+      // Move host into the lambda to avoid an extra string copy.
+      // port is a struct member — capture by value via explicit init-capture.
+      std::thread([host = std::move(host),
+                   port = port,
                    st,
                    handle,
                    reactor]() mutable {
@@ -126,32 +126,32 @@ private:
         hints.ai_socktype = SOCK_STREAM;
 
         addrinfo* res = nullptr;
-        int rc = ::getaddrinfo(host_copy.c_str(), nullptr, &hints, &res);
+        int rc = ::getaddrinfo(host.c_str(), nullptr, &hints, &res);
         if (rc != 0 || res == nullptr) {
           st->result = unexpected(
               std::make_error_code(std::errc::address_not_available));
         } else {
-          // Prefer IPv4; fall back to IPv6
+          // Prefer IPv4; fall back to IPv6.
+          // Use from_sockaddr_in / from_sockaddr_in6 to avoid the
+          // inet_ntop → string → inet_pton round-trip.
           SocketAddr found;
           bool       have_addr = false;
 
           for (addrinfo* ai = res; ai != nullptr; ai = ai->ai_next) {
             if (ai->ai_family == AF_INET) {
               auto* sa4 = reinterpret_cast<const sockaddr_in*>(ai->ai_addr);
-              char buf[INET_ADDRSTRLEN];
-              ::inet_ntop(AF_INET, &sa4->sin_addr, buf, sizeof(buf));
-              auto r = SocketAddr::from_ipv4(buf, port_copy);
-              if (r) { found = *r; have_addr = true; break; }
+              found     = SocketAddr::from_sockaddr_in(*sa4, port);
+              have_addr = true;
+              break;
             }
           }
           if (!have_addr) {
             for (addrinfo* ai = res; ai != nullptr; ai = ai->ai_next) {
               if (ai->ai_family == AF_INET6) {
                 auto* sa6 = reinterpret_cast<const sockaddr_in6*>(ai->ai_addr);
-                char buf[INET6_ADDRSTRLEN];
-                ::inet_ntop(AF_INET6, &sa6->sin6_addr, buf, sizeof(buf));
-                auto r = SocketAddr::from_ipv6(buf, port_copy);
-                if (r) { found = *r; have_addr = true; break; }
+                found     = SocketAddr::from_sockaddr_in6(*sa6, port);
+                have_addr = true;
+                break;
               }
             }
           }

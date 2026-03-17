@@ -181,6 +181,19 @@ public:
    * @returns Header value, or empty string_view if the header is absent.
    */
   std::string_view header(std::string_view key) const {
+    // Keys are stored pre-lowercased by add_header(); just lowercase
+    // the (typically short) lookup key without a heap allocation.
+    char  buf[64];
+    const bool fits = key.size() < sizeof(buf);
+    if (fits) {
+      for (size_t i = 0; i < key.size(); ++i)
+        buf[i] = static_cast<char>(
+            std::tolower(static_cast<unsigned char>(key[i])));
+      std::string_view lower_key(buf, key.size());
+      auto it = headers_.find(std::string(lower_key));
+      return (it != headers_.end()) ? std::string_view(it->second)
+                                     : std::string_view{};
+    }
     std::string lower(key);
     std::transform(lower.begin(), lower.end(), lower.begin(),
                    [](unsigned char c) { return std::tolower(c); });
@@ -265,6 +278,35 @@ inline std::string serialize_request(Method method,
   out += "\r\n";
   if (!body.empty()) out += body;
   return out;
+}
+
+/**
+ * @brief ASCII case-insensitive substring search (header section only).
+ *
+ * Avoids the full-buffer tolower() copy used previously.  Only searches
+ * within [data, data + len) so we don't scan past the header boundary.
+ *
+ * @param haystack  Pointer to the raw header bytes.
+ * @param hlen      Length of the header region to search.
+ * @param needle    Lower-case search string.
+ * @returns         Pointer to the first match, or nullptr if not found.
+ */
+inline const char *icase_find(const char *haystack, size_t hlen,
+                               std::string_view needle) noexcept {
+  if (needle.empty() || needle.size() > hlen) return nullptr;
+  const size_t stop = hlen - needle.size();
+  for (size_t i = 0; i <= stop; ++i) {
+    bool match = true;
+    for (size_t j = 0; j < needle.size(); ++j) {
+      if (std::tolower(static_cast<unsigned char>(haystack[i + j]))
+          != static_cast<unsigned char>(needle[j])) {
+        match = false;
+        break;
+      }
+    }
+    if (match) return haystack + i;
+  }
+  return nullptr;
 }
 
 /** @brief Parse a raw HTTP/1.1 response buffer into a FetchResponse. */
@@ -360,7 +402,8 @@ inline Task<Result<std::string>> read_http_response(TcpStream &stream,
   std::string buf;
   buf.reserve(kChunkSize);
 
-  std::array<std::byte, kChunkSize> tmp{};
+  // Allocated once outside the loop — avoids stack re-init per iteration.
+  std::array<std::byte, kChunkSize> tmp;
 
   size_t header_end      = std::string::npos;
   size_t content_length  = std::string::npos;
@@ -379,37 +422,39 @@ inline Task<Result<std::string>> read_http_response(TcpStream &stream,
     if (buf.size() > kMaxResponseSize)
       co_return unexpected(std::make_error_code(std::errc::message_size));
 
-    // Parse header boundary on first discovery
+    // Parse header boundary on first discovery.
+    // Use icase_find() to avoid creating a full lowercase copy of the
+    // header section on every iteration.
     if (header_end == std::string::npos) {
       auto pos = buf.find("\r\n\r\n");
       if (pos != std::string::npos) {
         header_end = pos + 4;
 
-        // Lower-case search for Transfer-Encoding and Content-Length
-        std::string lower(buf.data(), header_end);
-        std::transform(lower.begin(), lower.end(), lower.begin(),
-                       [](unsigned char c) { return std::tolower(c); });
-
-        if (lower.find("transfer-encoding: chunked") != std::string::npos)
+        if (icase_find(buf.data(), header_end, "transfer-encoding: chunked"))
           chunked = true;
 
         if (!chunked) {
-          auto cl_pos = lower.find("content-length: ");
-          if (cl_pos != std::string::npos) {
-            cl_pos += 16;
-            auto eol = lower.find("\r\n", cl_pos);
-            std::string_view cl_sv(lower.data() + cl_pos,
-                                   (eol == std::string::npos)
-                                       ? lower.size() - cl_pos
-                                       : eol - cl_pos);
-            std::from_chars(cl_sv.data(), cl_sv.data() + cl_sv.size(),
-                            content_length);
+          const char *cl_ptr =
+              icase_find(buf.data(), header_end, "content-length: ");
+          if (cl_ptr) {
+            cl_ptr += 16; // skip "content-length: "
+            const char *eol =
+                static_cast<const char *>(
+                    ::memchr(cl_ptr, '\r', buf.data() + header_end - cl_ptr));
+            size_t cl_len = eol ? static_cast<size_t>(eol - cl_ptr)
+                                : static_cast<size_t>(buf.data() + header_end - cl_ptr);
+            std::from_chars(cl_ptr, cl_ptr + cl_len, content_length);
+            // Pre-allocate based on Content-Length to avoid incremental growth.
+            if (content_length != std::string::npos &&
+                content_length < kMaxResponseSize) {
+              buf.reserve(header_end + content_length);
+            }
           }
         }
       }
     }
 
-    // Early exit when we have enough data
+    // Early exit when we have enough data.
     if (header_end != std::string::npos) {
       if (!chunked && content_length != std::string::npos) {
         if (buf.size() >= header_end + content_length) break;
