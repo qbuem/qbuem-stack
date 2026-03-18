@@ -1,12 +1,12 @@
 /**
  * @file security_v15_test.cpp
- * @brief v1.5.0 보안 컴포넌트 단위 테스트.
+ * @brief v1.5.0 security component unit tests.
  *
- * 커버리지:
- * - SIMDJwtParser: 구조 파싱, 오류 케이스, 클레임 추출, 만료 검사
- * - Hardware Entropy: RDRAND/RDSEED 가용성 쿼리, hw_entropy_fill 기능
- * - crypto.hpp: constant_time_equal (기존), RDRAND 확장
- * - kTLS sendfile: 함수 선언 접근성 (플랫폼 폴백 포함)
+ * Coverage:
+ * - SIMDJwtParser: structural parsing, error cases, claim extraction, expiry check
+ * - Hardware Entropy: RDRAND/RDSEED availability query, hw_entropy_fill functionality
+ * - crypto.hpp: constant_time_equal (existing), RDRAND extension
+ * - kTLS sendfile: function declaration accessibility (including platform fallback)
  */
 
 #include <qbuem/security/simd_jwt.hpp>
@@ -24,7 +24,7 @@
 
 using namespace qbuem::security;
 
-// RFC 7519 예시 토큰 (서명 검증 없음 — 구조 파싱만 테스트)
+// RFC 7519 example token (no signature verification — structural parsing only)
 // header: {"alg":"HS256","typ":"JWT"}
 // payload: {"sub":"1234567890","name":"John Doe","iat":1516239022}
 static constexpr std::string_view kSampleJwt =
@@ -62,10 +62,10 @@ TEST(SIMDJwtParser, SigningInputPointsIntoOriginal) {
     auto view = parser.parse(kSampleJwt);
     ASSERT_TRUE(view.has_value());
     auto si = view->signing_input(kSampleJwt);
-    // header.payload (. 포함)
+    // header.payload (including '.')
     size_t expected_len = view->header.size() + 1 + view->payload.size();
     EXPECT_EQ(si.size(), expected_len);
-    EXPECT_EQ(si.data(), kSampleJwt.data()); // zero-copy: 원본 참조
+    EXPECT_EQ(si.data(), kSampleJwt.data()); // zero-copy: reference to original
 }
 
 TEST(SIMDJwtParser, ParseEmptyReturnsNullopt) {
@@ -85,7 +85,7 @@ TEST(SIMDJwtParser, ParseOneDotReturnsNullopt) {
 
 TEST(SIMDJwtParser, ParseInvalidBase64UrlHeaderReturnsNullopt) {
     SIMDJwtParser parser;
-    // '+' 는 Base64url에서 유효하지 않은 문자
+    // '+' is an invalid character in Base64url
     EXPECT_FALSE(parser.parse("inv+lid.payload.sig").has_value());
 }
 
@@ -128,7 +128,7 @@ TEST(SIMDJwtParser, IsExpiredNoExpClaim) {
     SIMDJwtParser parser;
     auto view = parser.parse(kSampleJwt);
     ASSERT_TRUE(view.has_value());
-    // exp 클레임 없음 → 만료로 간주하지 않음
+    // no exp claim → not considered expired
     EXPECT_FALSE(view->is_expired(9999999999LL));
 }
 
@@ -137,9 +137,9 @@ TEST(SIMDJwtParser, IsExpiredNoExpClaim) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 TEST(HardwareEntropy, HasRdrandReturnsBool) {
-    // 반환값 타입과 호출 가능 여부만 확인 (CPU 종류 무관)
+    // Only verifies return type and callability (regardless of CPU type)
     bool r = qbuem::has_rdrand();
-    (void)r; // 값은 하드웨어에 따라 다름
+    (void)r; // value differs by hardware
     SUCCEED();
 }
 
@@ -150,11 +150,11 @@ TEST(HardwareEntropy, HasRdseedReturnsBool) {
 }
 
 TEST(HardwareEntropy, HwEntropyFillProducesNonZeroBuffer) {
-    // 32바이트 엔트로피를 채우고, 전부 0이 아닌지 확인
+    // Fill 32 bytes of entropy and verify not all zeros
     std::array<uint8_t, 32> buf{};
     EXPECT_NO_THROW(qbuem::hw_entropy_fill(buf.data(), buf.size()));
 
-    // 모두 0일 확률은 극히 낮음 (암호학적 무작위성 기본 검사)
+    // Probability of all zeros is extremely low (basic cryptographic randomness check)
     bool all_zero = true;
     for (auto b : buf) if (b != 0) { all_zero = false; break; }
     EXPECT_FALSE(all_zero);
@@ -163,7 +163,7 @@ TEST(HardwareEntropy, HwEntropyFillProducesNonZeroBuffer) {
 TEST(HardwareEntropy, HwEntropyFill1Byte) {
     uint8_t byte = 0xAA;
     EXPECT_NO_THROW(qbuem::hw_entropy_fill(&byte, 1));
-    // 1바이트 주입 성공 여부만 확인
+    // Only verify that 1-byte injection succeeds
     SUCCEED();
 }
 
@@ -178,7 +178,7 @@ TEST(HardwareEntropy, RdrandConsecutiveDiffer) {
     uint64_t a = 0, b = 0;
     EXPECT_TRUE(qbuem::rdrand64(a));
     EXPECT_TRUE(qbuem::rdrand64(b));
-    // 연속 두 값이 같을 확률은 2^-64 — 실질적으로 0
+    // Probability of two consecutive values being equal is 2^-64 — effectively zero
     EXPECT_NE(a, b);
 }
 
@@ -191,17 +191,17 @@ TEST(HardwareEntropy, HwSeedFillProducesNonZero) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// kTLS sendfile API 접근성
+// kTLS sendfile API accessibility
 // ─────────────────────────────────────────────────────────────────────────────
 
 TEST(KtlsSendfile, FunctionAccessible) {
-    // 실제 fd 없이 함수 존재 여부만 확인 (컴파일 테스트)
-    // 비Linux에서는 errc::not_supported 반환
+    // Only verifies function existence without actual fds (compilation test)
+    // On non-Linux: returns errc::not_supported
     off_t off = 0;
     auto r = qbuem::io::ktls_sendfile(-1, -1, off, 0);
-    // Linux: 잘못된 fd → EBADF
-    // 비Linux: not_supported
-    EXPECT_FALSE(r.has_value()); // 어떤 경우든 에러
+    // Linux: invalid fd → EBADF
+    // non-Linux: not_supported
+    EXPECT_FALSE(r.has_value()); // error in either case
 }
 
 TEST(KtlsSendfile, AllVariantAccessible) {
@@ -210,7 +210,7 @@ TEST(KtlsSendfile, AllVariantAccessible) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// constant_time_equal (기존 — 회귀 테스트)
+// constant_time_equal (existing — regression test)
 // ─────────────────────────────────────────────────────────────────────────────
 
 TEST(ConstantTimeEqual, EqualStrings) {

@@ -1,30 +1,30 @@
 /**
  * @file ipc_pipeline_example.cpp
- * @brief Pipeline ↔ MessageBus ↔ SHMChannel 연계 복합 예시.
+ * @brief Composite example: Pipeline ↔ MessageBus ↔ SHMChannel integration.
  *
- * ## 시나리오: 실시간 주문 처리 시스템 (IPC 파이프라인)
+ * ## Scenario: Real-time Order Processing System (IPC Pipeline)
  *
- * qbuem-stack의 세 가지 메시징 레이어를 모두 연결합니다:
+ * Connects all three messaging layers of qbuem-stack:
  *
- *  [외부 입력 시뮬레이터]
- *       ↓ SHMChannel (프로세스 간 공유 메모리)
+ *  [External Input Simulator]
+ *       ↓ SHMChannel (inter-process shared memory)
  *  [SHMSource → PipelineBuilder::with_source()]
  *       ↓ StaticPipeline (parse → enrich → validate)
  *  [PipelineBuilder::with_sink() → MessageBusSink]
- *       ↓ MessageBus pub/sub (스레드 간 토픽 라우팅)
+ *       ↓ MessageBus pub/sub (intra-process topic routing)
  *  [MessageBusSource → PipelineBuilder::with_source()]
  *       ↓ DynamicPipeline (risk_check → record)
- *  [output channel 직접 소비]
+ *  [output channel direct consumption]
  *
- * ## 커버리지
- * - SHMSource<T>: init() + next() (std::string 소유권 고정)
- * - SHMSink<T>:   init() + sink() (std::string 소유권 고정)
- * - PipelineBuilder::with_source(): SHMSource 연결
- * - PipelineBuilder::with_sink():   MessageBusSink 연결
- * - MessageBusSource<T>: MessageBus 토픽 → Pipeline 소스
- * - MessageBusSink<T>:   Pipeline Tail → MessageBus 토픽 발행
- * - SHMChannel 직접 사용 (프로세스 간 데이터 공급)
- * - StaticPipeline + DynamicPipeline 혼합 아키텍처
+ * ## Coverage
+ * - SHMSource<T>: init() + next() (fixed-size array ownership)
+ * - SHMSink<T>:   init() + sink() (fixed-size array ownership)
+ * - PipelineBuilder::with_source(): SHMSource connection
+ * - PipelineBuilder::with_sink():   MessageBusSink connection
+ * - MessageBusSource<T>: MessageBus topic → Pipeline source
+ * - MessageBusSink<T>:   Pipeline tail → MessageBus topic publish
+ * - SHMChannel direct usage (inter-process data supply)
+ * - Mixed StaticPipeline + DynamicPipeline architecture
  */
 
 #include <qbuem/core/dispatcher.hpp>
@@ -37,9 +37,10 @@
 #include <qbuem/shm/shm_bus.hpp>
 #include <qbuem/shm/shm_channel.hpp>
 
+#include <qbuem/compat/print.hpp>
+
 #include <atomic>
 #include <chrono>
-#include <cstdio>
 #include <string>
 #include <thread>
 #include <vector>
@@ -47,13 +48,14 @@
 using namespace qbuem;
 using namespace qbuem::shm;
 using namespace std::chrono_literals;
+using std::println;
 
-// ─── 도메인 타입 ─────────────────────────────────────────────────────────────
+// ─── Domain Types ─────────────────────────────────────────────────────────────
 
-/// @brief SHMChannel 전용 — trivially_copyable (고정 크기 배열)
+/// @brief SHMChannel-compatible — trivially_copyable (fixed-size array)
 struct RawOrder {
     uint64_t order_id;
-    char     symbol[16];  ///< 고정 크기 (std::string 사용 불가 — SHM 요건)
+    char     symbol[16];  ///< Fixed size (std::string not allowed — SHM requirement)
     double   price;
     int      qty;
 };
@@ -62,7 +64,7 @@ static_assert(std::is_trivially_copyable_v<RawOrder>,
 
 struct ParsedOrder {
     uint64_t    order_id;
-    std::string symbol;   ///< 파이프라인 내부에서는 std::string 사용
+    std::string symbol;   ///< Inside the pipeline, std::string is fine
     double      price;
     int         qty;
     bool        valid;
@@ -75,7 +77,7 @@ struct ValidatedOrder {
     bool        risk_ok;
 };
 
-// ─── 파이프라인 스테이지 ─────────────────────────────────────────────────────
+// ─── Pipeline Stages ─────────────────────────────────────────────────────────
 
 static std::atomic<int> g_parsed{0};
 static std::atomic<int> g_validated{0};
@@ -95,7 +97,7 @@ static Task<Result<ParsedOrder>> stage_parse(RawOrder raw, ActionEnv /*env*/) {
 }
 
 static Task<Result<ParsedOrder>> stage_enrich(ParsedOrder p, ActionEnv /*env*/) {
-    // 심볼 정규화 (실제론 마스터 데이터 조회)
+    // Normalize symbol to uppercase (in production: master data lookup)
     for (auto& c : p.symbol) c = static_cast<char>(toupper(c));
     co_return p;
 }
@@ -104,12 +106,12 @@ static Task<Result<ValidatedOrder>> stage_validate(ParsedOrder p, ActionEnv /*en
     ValidatedOrder v;
     v.base     = p;
     v.notional = p.price * static_cast<double>(p.qty);
-    v.risk_ok  = (v.notional < 10'000'000.0);  // 1천만원 이하만 통과
+    v.risk_ok  = (v.notional < 10'000'000.0);  // only orders below 10M pass
     g_validated.fetch_add(1, std::memory_order_relaxed);
     co_return v;
 }
 
-// DynamicPipeline 스테이지 (ValidatedOrder → ValidatedOrder, 동종 타입)
+// DynamicPipeline stages (ValidatedOrder → ValidatedOrder, homogeneous type)
 static Task<Result<ValidatedOrder>> stage_risk_check(ValidatedOrder v, ActionEnv /*env*/) {
     if (!v.risk_ok)
         co_return unexpected(std::make_error_code(std::errc::value_too_large));
@@ -118,9 +120,8 @@ static Task<Result<ValidatedOrder>> stage_risk_check(ValidatedOrder v, ActionEnv
 }
 
 static Task<Result<ValidatedOrder>> stage_record(ValidatedOrder v, ActionEnv /*env*/) {
-    std::printf("  [주문기록] id=%llu symbol=%s qty=%d price=%.0f notional=%.0f\n",
-                static_cast<unsigned long long>(v.base.order_id),
-                v.base.symbol.c_str(), v.base.qty, v.base.price, v.notional);
+    println("  [record] id={} symbol={} qty={} price={:.0f} notional={:.0f}",
+            v.base.order_id, v.base.symbol, v.base.qty, v.base.price, v.notional);
     g_recorded.fetch_add(1, std::memory_order_relaxed);
     co_return v;
 }
@@ -146,19 +147,18 @@ struct RunGuard {
     }
 };
 
-// ─── 시나리오 1: SHMChannel → SHMSource → StaticPipeline ────────────────────
+// ─── Scenario 1: SHMChannel → SHMSource → StaticPipeline ────────────────────
 
 static void scenario_shm_source_to_pipeline() {
-    std::puts("\n=== 시나리오 1: SHMChannel → SHMSource → StaticPipeline ===");
+    println("\n=== Scenario 1: SHMChannel -> SHMSource -> StaticPipeline ===");
     g_parsed.store(0); g_validated.store(0);
 
     const char* channel_name = "qbuem_orders_test";
 
-    // 1) SHM 채널 생성 (Producer 측)
+    // 1) Create SHM channel (producer side)
     auto shm_chan = SHMChannel<RawOrder>::create(channel_name, 32);
     if (!shm_chan) {
-        std::printf("[SKIP] SHMChannel 생성 실패: %s\n",
-                    shm_chan.error().message().c_str());
+        println("[SKIP] SHMChannel creation failed: {}", shm_chan.error().message());
         return;
     }
 
@@ -174,7 +174,7 @@ static void scenario_shm_source_to_pipeline() {
 
     pipeline.start(guard.dispatcher);
 
-    // 3) SHM 채널에 데이터 쓰기 (다른 프로세스에서 왔다고 가정)
+    // 3) Write orders to SHM channel (simulates data from another process)
     std::vector<RawOrder> orders = {
         {1001, "samsung", 72500.0, 10},
         {1002, "sk_hynix", 93000.0, 5},
@@ -186,41 +186,39 @@ static void scenario_shm_source_to_pipeline() {
         for (auto& ord : orders) {
             (*shm_chan)->try_send(ord);
         }
-        // 파이프라인 처리 완료 대기
+        // Wait for pipeline to finish processing
         std::this_thread::sleep_for(30ms);
     });
 
-    std::printf("[결과] 파싱=%d 검증=%d\n",
-                g_parsed.load(), g_validated.load());
+    println("[result] parsed={} validated={}", g_parsed.load(), g_validated.load());
 
-    // SHM 채널 정리
+    // Cleanup SHM channel
     (*shm_chan)->close();
     SHMChannel<RawOrder>::unlink(channel_name);
 }
 
-// ─── 시나리오 2: StaticPipeline → MessageBusSink → MessageBus 발행 ──────────
+// ─── Scenario 2: StaticPipeline → MessageBusSink → MessageBus publish ────────
 
 static void scenario_pipeline_to_messagebus() {
-    std::puts("\n=== 시나리오 2: StaticPipeline → MessageBusSink → MessageBus ===");
+    println("\n=== Scenario 2: StaticPipeline -> MessageBusSink -> MessageBus ===");
     g_parsed.store(0); g_validated.store(0);
 
     RunGuard guard;
     MessageBus bus;
     bus.start(guard.dispatcher);
 
-    // MessageBus 구독자 (ValidatedOrder 수신)
+    // MessageBus subscriber (receives ValidatedOrder)
     std::atomic<int> received{0};
     auto sub = bus.subscribe("validated_orders",
         [&](MessageBus::Msg msg, Context) -> Task<Result<void>> {
             auto& v = std::any_cast<const ValidatedOrder&>(msg);
             received.fetch_add(1, std::memory_order_relaxed);
-            std::printf("  [구독자] 주문 수신: id=%llu notional=%.0f\n",
-                        static_cast<unsigned long long>(v.base.order_id),
-                        v.notional);
+            println("  [subscriber] order received: id={} notional={:.0f}",
+                    v.base.order_id, v.notional);
             co_return Result<void>{};
         });
 
-    // StaticPipeline 구성: with_sink() → MessageBusSink
+    // StaticPipeline: with_sink() → MessageBusSink
     auto pipeline = PipelineBuilder<RawOrder, RawOrder>{}
         .add<ParsedOrder>(stage_parse)
         .add<ParsedOrder>(stage_enrich)
@@ -230,30 +228,30 @@ static void scenario_pipeline_to_messagebus() {
 
     pipeline.start(guard.dispatcher);
 
-    // 주문 입력
+    // Push orders
     guard.run_and_wait([&]() -> Task<void> {
         co_await pipeline.push(RawOrder{2001, "lg_elec", 105000.0, 20});
         co_await pipeline.push(RawOrder{2002, "posco",   382000.0, 3});
         co_await pipeline.push(RawOrder{2003, "hyundai", 205000.0, 8});
-        // 처리 완료 대기
+        // Wait for processing to complete
         std::this_thread::sleep_for(30ms);
     });
 
-    std::printf("[결과] 파싱=%d 검증=%d 구독자수신=%d\n",
-                g_parsed.load(), g_validated.load(), received.load());
+    println("[result] parsed={} validated={} subscriber_received={}",
+            g_parsed.load(), g_validated.load(), received.load());
 }
 
-// ─── 시나리오 3: MessageBusSource → StaticPipeline ──────────────────────────
+// ─── Scenario 3: MessageBusSource → StaticPipeline ───────────────────────────
 
 static void scenario_messagebus_source_to_pipeline() {
-    std::puts("\n=== 시나리오 3: MessageBusSource → StaticPipeline ===");
+    println("\n=== Scenario 3: MessageBusSource -> StaticPipeline ===");
     g_parsed.store(0); g_validated.store(0);
 
     RunGuard guard;
     MessageBus bus;
     bus.start(guard.dispatcher);
 
-    // StaticPipeline: MessageBusSource가 head
+    // StaticPipeline: MessageBusSource at head
     auto pipeline = PipelineBuilder<ValidatedOrder, ValidatedOrder>{}
         .with_source(MessageBusSource<ValidatedOrder>(bus, "raw_validated"))
         .add<ValidatedOrder>(stage_risk_check)
@@ -262,9 +260,9 @@ static void scenario_messagebus_source_to_pipeline() {
 
     pipeline.start(guard.dispatcher);
 
-    // bus.publish()로 데이터 공급
+    // Supply data via bus.publish()
     guard.run_and_wait([&]() -> Task<void> {
-        std::this_thread::sleep_for(5ms);  // source 초기화 완료 대기
+        std::this_thread::sleep_for(5ms);  // wait for source to initialize
 
         co_await bus.publish("raw_validated",
             ValidatedOrder{{3001, "SAMSUNG", 72500.0, 10, true, ""}, 725000.0, true});
@@ -276,11 +274,11 @@ static void scenario_messagebus_source_to_pipeline() {
         std::this_thread::sleep_for(30ms);
     });
 
-    std::printf("[결과] 리스크체크=%d 기록됨=%d (200주 초과 → 리스크 거부)\n",
-                g_risk_checked.load(), g_recorded.load());
+    println("[result] risk_checked={} recorded={} (qty>200 -> risk rejected)",
+            g_risk_checked.load(), g_recorded.load());
 }
 
-// ─── 시나리오 4: 완전한 통합 파이프라인 ─────────────────────────────────────
+// ─── Scenario 4: Full Integration Pipeline ───────────────────────────────────
 //
 // RawOrder (push) → StaticPipeline (parse+enrich+validate)
 //                 → MessageBusSink("stage1_out")
@@ -288,7 +286,7 @@ static void scenario_messagebus_source_to_pipeline() {
 //                 → MessageBusSource("stage1_out") → DynamicPipeline (risk+record)
 
 static void scenario_full_integration() {
-    std::puts("\n=== 시나리오 4: 전체 통합 (StaticPipeline → MessageBus → DynamicPipeline) ===");
+    println("\n=== Scenario 4: Full Integration (StaticPipeline -> MessageBus -> DynamicPipeline) ===");
     g_parsed.store(0); g_validated.store(0);
     g_risk_checked.store(0); g_recorded.store(0);
 
@@ -296,7 +294,7 @@ static void scenario_full_integration() {
     MessageBus bus;
     bus.start(guard.dispatcher);
 
-    // ── Stage1: StaticPipeline (parse/enrich/validate) + MessageBusSink ──
+    // Stage1: StaticPipeline (parse/enrich/validate) + MessageBusSink
     auto stage1 = PipelineBuilder<RawOrder, RawOrder>{}
         .add<ParsedOrder>(stage_parse)
         .add<ParsedOrder>(stage_enrich)
@@ -305,21 +303,21 @@ static void scenario_full_integration() {
         .build();
     stage1.start(guard.dispatcher);
 
-    // ── Stage2: DynamicPipeline (risk_check + record) ──────────────────
+    // Stage2: DynamicPipeline (risk_check + record)
     DynamicPipeline<ValidatedOrder> stage2;
     stage2.add_stage("risk_check", stage_risk_check);
     stage2.add_stage("record",     stage_record);
     stage2.start(guard.dispatcher);
 
-    // ── 연결: MessageBusSource → stage2 ────────────────────────────────
-    // MessageBus "stage1_output" 구독 → stage2.push()
+    // Bridge: MessageBusSource → stage2
+    // Subscribe to "stage1_output" → forward to stage2.push()
     auto bridge_sub = bus.subscribe("stage1_output",
         [&](MessageBus::Msg msg, Context ctx) -> Task<Result<void>> {
             auto& v = std::any_cast<const ValidatedOrder&>(msg);
             co_return co_await stage2.push(v, ctx);
         });
 
-    // ── 데이터 투입 ────────────────────────────────────────────────────
+    // Feed data
     std::vector<RawOrder> batch = {
         {4001, "samsung",  72500.0,  5},
         {4002, "lg_elec",  105000.0, 10},
@@ -331,29 +329,29 @@ static void scenario_full_integration() {
     guard.run_and_wait([&]() -> Task<void> {
         for (auto& ord : batch)
             co_await stage1.push(ord);
-        // 전체 파이프라인 처리 완료 대기
+        // Wait for full pipeline to finish processing
         std::this_thread::sleep_for(50ms);
     });
 
-    std::printf("[통합결과] 파싱=%d 검증=%d 리스크통과=%d 기록됨=%d\n",
-                g_parsed.load(), g_validated.load(),
-                g_risk_checked.load(), g_recorded.load());
-    std::printf("[예상] 5개 파싱, 5개 검증, 4개 리스크통과(kakao 11M 제외), 4개 기록\n");
+    println("[integration result] parsed={} validated={} risk_passed={} recorded={}",
+            g_parsed.load(), g_validated.load(),
+            g_risk_checked.load(), g_recorded.load());
+    println("[expected] 5 parsed, 5 validated, 4 risk-passed (kakao 11M excluded), 4 recorded");
 }
 
-// ─── 시나리오 5: SHMBus (LOCAL_ONLY) + Pipeline 연계 ────────────────────────
+// ─── Scenario 5: SHMBus (LOCAL_ONLY) + Pipeline Bridge ──────────────────────
 
 static void scenario_shm_bus_bridge() {
-    std::puts("\n=== 시나리오 5: SHMBus (LOCAL_ONLY) → Pipeline 연계 ===");
+    println("\n=== Scenario 5: SHMBus (LOCAL_ONLY) -> Pipeline bridge ===");
     g_parsed.store(0);
 
     RunGuard guard;
 
-    // SHMBus 선언
+    // Declare SHMBus topic
     SHMBus shm_bus;
     shm_bus.declare<RawOrder>("shm.raw_orders", TopicScope::LOCAL_ONLY, 64);
 
-    // SHMBus 구독자 → pipeline.push()로 브릿지
+    // SHMBus subscriber → bridge to pipeline.push()
     auto pipeline = PipelineBuilder<RawOrder, RawOrder>{}
         .add<ParsedOrder>(stage_parse)
         .add<ParsedOrder>(stage_enrich)
@@ -361,14 +359,14 @@ static void scenario_shm_bus_bridge() {
         .build();
     pipeline.start(guard.dispatcher);
 
-    // SHMBus ISubscription 구독
+    // Subscribe to SHMBus topic
     auto sub = shm_bus.subscribe<RawOrder>("shm.raw_orders");
     if (!sub) {
-        std::puts("[SKIP] SHMBus subscribe 실패");
+        println("[SKIP] SHMBus subscribe failed");
         return;
     }
 
-    // 구독 → pipeline 브릿지 코루틴
+    // Bridge coroutine: subscription → pipeline
     guard.dispatcher.spawn([&, s = std::move(sub)]() mutable -> Task<void> {
         for (int i = 0; i < 3; ++i) {
             auto msg = co_await s->recv();
@@ -377,7 +375,7 @@ static void scenario_shm_bus_bridge() {
         }
     }());
 
-    // SHMBus에 데이터 발행
+    // Publish data to SHMBus
     guard.run_and_wait([&]() -> Task<void> {
         shm_bus.try_publish("shm.raw_orders",
                             RawOrder{5001, "coupang", 45000.0, 15});
@@ -388,7 +386,7 @@ static void scenario_shm_bus_bridge() {
         std::this_thread::sleep_for(30ms);
     });
 
-    std::printf("[결과] 파싱=%d\n", g_parsed.load());
+    println("[result] parsed={}", g_parsed.load());
 }
 
 int main() {
@@ -397,6 +395,6 @@ int main() {
     scenario_messagebus_source_to_pipeline();
     scenario_full_integration();
     scenario_shm_bus_bridge();
-    std::puts("\nipc_pipeline_example: ALL OK");
+    println("\nipc_pipeline_example: ALL OK");
     return 0;
 }
