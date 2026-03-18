@@ -689,7 +689,7 @@ public:
     MessageBusSink(MessageBus& bus, std::string topic)
         : bus_(bus), topic_(std::move(topic)) {}
 
-    /** @brief 초기화 (no-op). */
+    /** @brief Initialization (no-op). */
     Result<void> init() noexcept { return Result<void>::ok(); }
 
     /**
