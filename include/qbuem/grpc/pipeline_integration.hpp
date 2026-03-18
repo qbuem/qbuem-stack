@@ -414,15 +414,15 @@ grpc_client_streaming_to_channel(std::size_t capacity = 256)
 }
 
 /**
- * @brief Bidirectional Streaming RPC 핸들러를 `BidiEnvelope` 기반으로 래핑합니다.
+ * @brief Wraps a Bidirectional Streaming RPC handler using `BidiEnvelope`.
  *
- * `handler_fn`을 받아 gRPC Bidirectional Streaming RPC 프레임워크가 기대하는
- * `std::function<Task<void>(std::shared_ptr<AsyncChannel<Req>>, Stream<Res>)>` 형태의
- * 호출 가능 객체로 변환합니다.
+ * Accepts `handler_fn` and converts it into a callable in the form
+ * `std::function<Task<void>(std::shared_ptr<AsyncChannel<Req>>, Stream<Res>)>`
+ * expected by the gRPC Bidirectional Streaming RPC framework.
  *
- * 내부에서 `BidiEnvelope<Req, Res>`를 구성하고 `handler_fn`에 전달합니다.
+ * Constructs a `BidiEnvelope<Req, Res>` internally and passes it to `handler_fn`.
  *
- * ### 사용 예시
+ * ### Usage example
  * @code
  * auto bidi = make_bidi_handler<ChatMessage, ChatMessage>(
  *     [](BidiEnvelope<ChatMessage, ChatMessage> env) -> Task<void> {
@@ -436,15 +436,15 @@ grpc_client_streaming_to_channel(std::size_t capacity = 256)
  *     }
  * );
  *
- * // gRPC 라우터에 등록:
+ * // Register with the gRPC router:
  * router.register_bidi("/chat.ChatService/Chat", bidi);
  * @endcode
  *
- * @tparam Req 클라이언트 → 서버 요청 메시지 타입.
- * @tparam Res 서버 → 클라이언트 응답 메시지 타입.
- * @param handler_fn `BidiEnvelope<Req, Res>`를 인자로 받는 코루틴 핸들러.
- * @returns gRPC 프레임워크에 등록 가능한 bidi 핸들러 callable.
- *          타입: `std::function<Task<void>(std::shared_ptr<AsyncChannel<Req>>, Stream<Res>)>`
+ * @tparam Req Client → server request message type.
+ * @tparam Res Server → client response message type.
+ * @param handler_fn Coroutine handler that accepts a `BidiEnvelope<Req, Res>`.
+ * @returns Bidi handler callable registerable with the gRPC framework.
+ *          Type: `std::function<Task<void>(std::shared_ptr<AsyncChannel<Req>>, Stream<Res>)>`
  */
 template <typename Req, typename Res>
 std::function<Task<void>(std::shared_ptr<::qbuem::AsyncChannel<Req>>, Stream<Res>)>
