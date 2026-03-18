@@ -2,17 +2,17 @@
 
 /**
  * @file qbuem/server/http1_handler.hpp
- * @brief HTTP/1.1 연결 핸들러 — IConnectionHandler<http::Request> 구현
+ * @brief HTTP/1.1 connection handler — IConnectionHandler<http::Request> implementation
  * @defgroup qbuem_http1_handler HTTP/1.1 Handler
  * @ingroup qbuem_server
  *
- * 이 헤더는 HTTP/1.1 프로토콜의 연결 수명 주기를 관리하는 핸들러를 제공합니다.
+ * This header provides a handler that manages the connection lifecycle for the HTTP/1.1 protocol.
  *
- * ### 주요 기능
- * - **keep-alive**: `Connection` 헤더를 확인하여 연결을 재사용합니다.
- * - **100-continue**: `Expect: 100-continue` 헤더 감지 시 바디 수신 전 `100 Continue`를 전송합니다.
- * - **Router 주입**: 생성자에서 `http::Router`를 주입받아 요청을 라우팅합니다.
- * - **WebSocket 업그레이드 감지**: `Upgrade: websocket` 헤더 수신 시 특수 결과를 반환합니다.
+ * ### Key features
+ * - **keep-alive**: Checks the `Connection` header to reuse connections.
+ * - **100-continue**: Sends `100 Continue` before receiving the body when `Expect: 100-continue` is detected.
+ * - **Router injection**: Accepts an `http::Router` in the constructor to route requests.
+ * - **WebSocket upgrade detection**: Returns a special result when the `Upgrade: websocket` header is received.
  *
  * @{
  */
@@ -39,35 +39,35 @@ namespace qbuem {
 // ─── UpgradeRequest ──────────────────────────────────────────────────────────
 
 /**
- * @brief WebSocket 업그레이드 요청 정보를 담는 구조체.
+ * @brief Struct holding WebSocket upgrade request information.
  *
- * `Http1Handler::on_frame()`이 `Upgrade: websocket` 헤더를 감지했을 때
- * 상위 레이어로 전달하는 컨텍스트입니다.
+ * Context passed to the upper layer when `Http1Handler::on_frame()`
+ * detects an `Upgrade: websocket` header.
  */
 struct UpgradeRequest {
-  /** @brief 업그레이드를 요청한 원본 HTTP 요청. */
+  /** @brief Original HTTP request that initiated the upgrade. */
   http::Request original_request;
-  /** @brief 연결된 소켓 파일 디스크립터. */
+  /** @brief Connected socket file descriptor. */
   int fd{-1};
 };
 
 // ─── Http1Handler ────────────────────────────────────────────────────────────
 
 /**
- * @brief HTTP/1.1 프로토콜 연결 핸들러.
+ * @brief HTTP/1.1 protocol connection handler.
  *
- * `IConnectionHandler<http::Request>` 인터페이스를 구현하며,
- * HTTP/1.1 keep-alive, 100-continue, WebSocket 업그레이드를 처리합니다.
+ * Implements the `IConnectionHandler<http::Request>` interface and handles
+ * HTTP/1.1 keep-alive, 100-continue, and WebSocket upgrades.
  *
- * ### 연결 수명 주기
- * 1. `on_connect()` — 소켓 fd와 원격 주소를 저장합니다.
- * 2. `on_frame()` — 파싱된 각 요청마다 Router로 디스패치합니다.
- *    - `Connection: close`가 있으면 `keep_alive_`를 false로 설정합니다.
- *    - `Expect: 100-continue`가 있으면 바디 수신 전 `100 Continue`를 전송합니다.
- *    - `Upgrade: websocket`가 있으면 업그레이드 콜백을 호출합니다.
- * 3. `on_disconnect()` — 자원을 정리합니다.
+ * ### Connection lifecycle
+ * 1. `on_connect()` — Stores the socket fd and remote address.
+ * 2. `on_frame()` — Dispatches each parsed request to the Router.
+ *    - Sets `keep_alive_` to false if `Connection: close` is present.
+ *    - Sends `100 Continue` before receiving the body if `Expect: 100-continue` is present.
+ *    - Invokes the upgrade callback if `Upgrade: websocket` is present.
+ * 3. `on_disconnect()` — Cleans up resources.
  *
- * ### 사용 예시
+ * ### Usage example
  * @code
  * auto router = std::make_shared<http::Router>();
  * router->add_route(Method::Get, "/hello",
@@ -86,19 +86,19 @@ struct UpgradeRequest {
 class Http1Handler : public IConnectionHandler<http::Request> {
 public:
   /**
-   * @brief WebSocket 업그레이드 요청을 처리할 콜백 타입.
+   * @brief Callback type for handling WebSocket upgrade requests.
    *
-   * `Upgrade: websocket` 헤더가 수신되면 이 콜백이 호출됩니다.
-   * 콜백에서 WebSocketHandler로 연결을 넘겨받아 처리하세요.
+   * This callback is invoked when an `Upgrade: websocket` header is received.
+   * In the callback, take ownership of the connection and hand it off to a WebSocketHandler.
    */
   using UpgradeCallback = std::function<Task<void>(UpgradeRequest)>;
 
   /**
-   * @brief Http1Handler를 구성합니다.
+   * @brief Constructs an Http1Handler.
    *
-   * @param router            요청을 라우팅할 Router 인스턴스.
-   * @param upgrade_callback  WebSocket 업그레이드 요청 시 호출될 콜백.
-   *                          nullptr이면 업그레이드를 거부하고 `400 Upgrade Required`를 반환합니다.
+   * @param router            Router instance used to route requests.
+   * @param upgrade_callback  Callback invoked on WebSocket upgrade request.
+   *                          If nullptr, the upgrade is rejected and `400 Upgrade Required` is returned.
    */
   explicit Http1Handler(std::shared_ptr<http::Router> router,
                         UpgradeCallback upgrade_callback = nullptr)
@@ -106,12 +106,12 @@ public:
       , upgrade_callback_(std::move(upgrade_callback)) {}
 
   /**
-   * @brief 새 연결이 수립됐을 때 호출됩니다.
+   * @brief Called when a new connection is established.
    *
-   * 소켓 fd와 원격 주소를 저장하고 keep-alive 상태를 초기화합니다.
+   * Stores the socket fd and remote address, and initializes keep-alive state.
    *
-   * @param fd     수락된 소켓 파일 디스크립터.
-   * @param remote 원격 클라이언트 주소.
+   * @param fd     Accepted socket file descriptor.
+   * @param remote Remote client address.
    */
   Task<void> on_connect(int fd, SocketAddr remote) override {
     fd_        = fd;

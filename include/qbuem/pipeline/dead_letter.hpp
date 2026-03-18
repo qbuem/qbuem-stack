@@ -177,7 +177,7 @@ public:
             }
         }
 
-        // 실패 항목 재삽입 (순서 유지: failed가 앞에 오도록)
+        // Re-insert failed entries (preserve order: failed entries go to the front)
         if (!failed.empty()) {
             std::lock_guard lock(mtx_);
             for (auto it = failed.rbegin(); it != failed.rend(); ++it)
@@ -188,7 +188,7 @@ public:
     }
 
     /**
-     * @brief 현재 큐의 크기를 반환합니다.
+     * @brief Returns the current queue size.
      */
     size_t size() const noexcept {
         std::lock_guard lock(mtx_);
@@ -196,7 +196,7 @@ public:
     }
 
     /**
-     * @brief 큐가 비어 있는지 확인합니다.
+     * @brief Returns true if the queue is empty.
      */
     bool empty() const noexcept {
         std::lock_guard lock(mtx_);
@@ -204,7 +204,7 @@ public:
     }
 
     /**
-     * @brief 큐를 비웁니다 (스레드 안전).
+     * @brief Clears the queue (thread-safe).
      */
     void clear() noexcept {
         std::lock_guard lock(mtx_);
@@ -218,25 +218,25 @@ private:
 };
 
 /**
- * @brief DLQ 인식 액션 래퍼.
+ * @brief DLQ-aware action wrapper.
  *
- * 내부 액션 실패 시 아이템을 DeadLetterQueue로 전송합니다.
- * max_attempts 초과 후에만 DLQ로 전송합니다.
+ * Sends failed items to the DeadLetterQueue when the inner action fails.
+ * Items are sent to the DLQ only after max_attempts is exceeded.
  *
- * @tparam In  입력 타입.
- * @tparam Out 출력 타입.
+ * @tparam In  Input type.
+ * @tparam Out Output type.
  */
 template <typename In, typename Out>
 class DlqAction {
 public:
-    /** @brief 내부 액션 함수 타입. */
+    /** @brief Inner action function type. */
     using InnerFn = std::function<Task<Result<Out>>(In, ActionEnv)>;
 
     /**
-     * @brief DlqAction을 생성합니다.
-     * @param fn           감쌀 내부 액션 함수.
-     * @param dlq          데드 레터 큐 (공유 포인터).
-     * @param max_attempts DLQ로 보내기 전 최대 시도 횟수 (기본 3).
+     * @brief Creates a DlqAction.
+     * @param fn           Inner action function to wrap.
+     * @param dlq          Dead letter queue (shared pointer).
+     * @param max_attempts Maximum number of attempts before sending to DLQ (default 3).
      */
     DlqAction(InnerFn fn,
               std::shared_ptr<DeadLetterQueue<In>> dlq,
@@ -246,12 +246,12 @@ public:
         , max_attempts_(max_attempts) {}
 
     /**
-     * @brief DLQ 보호 하에 액션을 실행합니다.
+     * @brief Executes the action under DLQ protection.
      *
-     * max_attempts 이후에도 실패하면 아이템을 DLQ로 전송합니다.
+     * If still failing after max_attempts, sends the item to the DLQ.
      *
-     * @param item 처리할 아이템.
-     * @param env  실행 환경.
+     * @param item Item to process.
+     * @param env  Execution environment.
      * @returns Task<Result<Out>>
      */
     Task<Result<Out>> operator()(In item, ActionEnv env) {
@@ -271,7 +271,7 @@ public:
             last_result = std::move(result);
         }
 
-        // 최대 시도 횟수 초과 — DLQ로 전송
+        // Maximum attempt count exceeded — send to DLQ
         if (dlq_) {
             dlq_->push(std::move(item), env.ctx, last_result.error(), max_attempts_);
         }

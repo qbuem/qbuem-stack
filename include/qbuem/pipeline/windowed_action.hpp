@@ -401,16 +401,16 @@ private:
   }
 
   // --------------------------------------------------------------------------
-  // 이벤트 시각 추출
+  // Event time extraction
   // --------------------------------------------------------------------------
 
   /**
-   * @brief 컨텍스트에서 이벤트 시각을 추출합니다.
+   * @brief Extract the event time from the context.
    *
-   * EventTime 슬롯이 없으면 현재 system_clock 시각을 반환합니다.
+   * If no EventTime slot is present, returns the current system_clock time.
    *
-   * @param ctx 아이템 컨텍스트.
-   * @returns 이벤트 발생 시각.
+   * @param ctx Item context.
+   * @returns Event occurrence time.
    */
   [[nodiscard]] static system_clock::time_point extract_event_time(const Context& ctx) {
     if (const auto* et = ctx.get_ptr<EventTime>())
@@ -419,14 +419,14 @@ private:
   }
 
   // --------------------------------------------------------------------------
-  // 윈도우 상태 갱신
+  // Window state update
   // --------------------------------------------------------------------------
 
   /**
-   * @brief 아이템을 해당하는 윈도우 상태에 집계합니다.
+   * @brief Accumulate an item into the corresponding window state.
    *
-   * @param item       입력 아이템.
-   * @param event_time 이벤트 발생 시각.
+   * @param item       Input item.
+   * @param event_time Event occurrence time.
    */
   void accumulate(const T& item, system_clock::time_point event_time) {
     std::lock_guard lock(state_mutex_);
@@ -456,17 +456,17 @@ private:
         break;
       }
       case WindowType::Session: {
-        // 세션 윈도우: 키별로 마지막 이벤트 이후 gap 내에 있으면 연장
-        // 세션 윈도우를 키별로 찾고 갱신하거나 새로 생성
+        // Session window: if within gap of the last event for this key, extend the session.
+        // Find the session window for this key and update it, or create a new one.
         bool found = false;
         for (auto& ws : windows_) {
           auto it = ws.accs.find(key);
           if (it != ws.accs.end()) {
-            // 이미 이 키에 대한 세션이 있는 경우
+            // A session already exists for this key
             if (event_time <= ws.last_event + cfg_.gap) {
-              // 세션 연장
+              // Extend the session
               cfg_.acc_fn(it->second, item);
-              // 세션 end를 이벤트+gap으로 확장
+              // Extend session end to event + gap
               if (event_time + cfg_.gap > ws.desc.end)
                 ws.desc.end = event_time + cfg_.gap;
               if (event_time > ws.last_event)
@@ -477,7 +477,7 @@ private:
           }
         }
         if (!found) {
-          // 새 세션 시작
+          // Start a new session
           WindowDesc desc{event_time, event_time + cfg_.gap};
           WindowState ws;
           ws.desc       = desc;
@@ -490,18 +490,18 @@ private:
       }
     }
 
-    // 워터마크를 이벤트 시각으로 진전 (단순 진행 모드: 최신 이벤트 기준)
+    // Advance the watermark to the event time (simple mode: based on the latest event)
     if (event_time > watermark_)
       watermark_ = event_time;
   }
 
   /**
-   * @brief 해당 WindowDesc에 대한 WindowState를 찾거나 생성합니다.
+   * @brief Find or create the WindowState for the given WindowDesc.
    *
-   * @note state_mutex_ 를 보유한 상태에서 호출해야 합니다.
+   * @note Must be called while holding state_mutex_.
    *
-   * @param desc 찾을 윈도우 디스크립터.
-   * @returns 해당 WindowState 참조.
+   * @param desc Window descriptor to look up.
+   * @returns Reference to the corresponding WindowState.
    */
   WindowState& get_or_create_window(const WindowDesc& desc) {
     for (auto& ws : windows_) {
@@ -516,13 +516,13 @@ private:
   }
 
   // --------------------------------------------------------------------------
-  // 완료 윈도우 방출
+  // Completed window emission
   // --------------------------------------------------------------------------
 
   /**
-   * @brief 워터마크가 지나간 윈도우를 수집합니다.
+   * @brief Collect windows whose end time has been passed by the watermark.
    *
-   * @returns 방출할 (Key, Acc, window_start) 튜플 목록.
+   * @returns List of (Key, Acc, window_start) tuples to emit.
    */
   std::vector<std::tuple<Key, Acc, system_clock::time_point>> collect_completed() {
     std::vector<std::tuple<Key, Acc, system_clock::time_point>> results;
@@ -533,13 +533,13 @@ private:
 
     for (auto& ws : windows_) {
       if (ws.desc.end <= wm) {
-        // 윈도우 완료 — 모든 키 방출
+        // Window complete — emit all keys
         for (auto& [k, acc] : ws.accs) {
           results.emplace_back(k, std::move(acc), ws.desc.start);
         }
-        // remaining에 추가하지 않음 (제거)
+        // Do not add to remaining (discard)
       } else if (cfg_.type == WindowType::Session) {
-        // 세션: last_event + gap <= wm 이면 세션 종료
+        // Session: close if last_event + gap <= wm
         if (ws.last_event + cfg_.gap <= wm) {
           for (auto& [k, acc] : ws.accs) {
             results.emplace_back(k, std::move(acc), ws.desc.start);
@@ -557,13 +557,13 @@ private:
   }
 
   // --------------------------------------------------------------------------
-  // 입력 워커 코루틴
+  // Input worker coroutine
   // --------------------------------------------------------------------------
 
   /**
-   * @brief 입력 채널에서 아이템을 수신하고 윈도우 상태에 집계합니다.
+   * @brief Receive items from the input channel and accumulate them into window state.
    *
-   * 채널이 닫힐 때까지 반복합니다. EOS 시 남은 윈도우를 강제 방출합니다.
+   * Loops until the channel is closed. On EOS, forcibly emits all remaining windows.
    */
   Task<void> input_worker() {
     input_worker_running_.store(true, std::memory_order_release);
@@ -576,7 +576,7 @@ private:
       accumulate(citem->value, event_time);
     }
 
-    // EOS: 남은 모든 윈도우 강제 방출
+    // EOS: forcibly emit all remaining windows
     {
       std::lock_guard lock(state_mutex_);
       watermark_ = system_clock::time_point::max();
@@ -595,18 +595,18 @@ private:
   }
 
   // --------------------------------------------------------------------------
-  // 틱커 코루틴
+  // Ticker coroutine
   // --------------------------------------------------------------------------
 
   /**
-   * @brief 주기적으로 완료 윈도우를 검사하고 결과를 방출하는 틱커.
+   * @brief Periodically checks for completed windows and emits results.
    *
-   * `interval` 마다 워터마크를 현재 시각으로 진전시키고,
-   * 완료된 윈도우를 출력 채널로 방출합니다.
+   * Every `interval`, advances the watermark to the current time and
+   * emits any completed windows to the output channel.
    *
-   * 입력 워커가 종료된 후 틱커도 종료됩니다.
+   * The ticker exits after the input worker has terminated.
    *
-   * @param interval 틱 간격.
+   * @param interval Tick interval.
    */
   Task<void> ticker(milliseconds interval) {
     ticker_running_.store(true, std::memory_order_release);
@@ -614,7 +614,7 @@ private:
     auto stop_token = stop_src_->get_token();
 
     while (!stop_token.stop_requested()) {
-      // interval 동안 yield (sleep-based tick)
+      // Yield for the duration of interval (sleep-based tick)
       auto deadline = std::chrono::steady_clock::now() +
                       std::chrono::duration_cast<std::chrono::nanoseconds>(interval);
 
@@ -651,7 +651,7 @@ done:
   }
 
   // --------------------------------------------------------------------------
-  // 데이터 멤버
+  // Data members
   // --------------------------------------------------------------------------
 
   Config                                                cfg_;
@@ -659,14 +659,14 @@ done:
   std::shared_ptr<AsyncChannel<ContextualItem<Out>>>    out_;
   std::unique_ptr<std::stop_source>                     stop_src_;
 
-  std::atomic<bool> input_worker_running_{false}; ///< 입력 워커 실행 중 여부
-  std::atomic<bool> ticker_running_{false};        ///< 틱커 실행 중 여부
+  std::atomic<bool> input_worker_running_{false}; ///< Whether the input worker is running
+  std::atomic<bool> ticker_running_{false};        ///< Whether the ticker is running
 
-  /// @brief 윈도우 상태 및 워터마크 보호 뮤텍스
+  /// @brief Mutex protecting window state and watermark
   std::mutex state_mutex_;
-  /// @brief 활성 윈도우 목록
+  /// @brief List of active windows
   std::vector<WindowState> windows_;
-  /// @brief 현재 워터마크 시각
+  /// @brief Current watermark timestamp
   system_clock::time_point watermark_{system_clock::time_point::min()};
 };
 
