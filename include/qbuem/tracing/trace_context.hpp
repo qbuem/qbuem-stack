@@ -107,23 +107,23 @@ struct TraceId {
 // ─── SpanId ───────────────────────────────────────────────────────────────────
 
 /**
- * @brief 64-bit 스팬 식별자.
+ * @brief 64-bit span identifier.
  *
- * W3C Trace Context 표준에서 추적 트리 내 단일 작업 단위를 식별합니다.
- * 각 스팬은 고유한 SpanId를 가집니다.
+ * Identifies a single unit of work within the trace tree in the W3C Trace Context standard.
+ * Each span has a unique SpanId.
  *
- * ### 유효성
- * 8바이트가 모두 0x00이면 유효하지 않습니다 (W3C 규격).
+ * ### Validity
+ * All 8 bytes being 0x00 indicates an invalid identifier (per W3C spec).
  */
 struct SpanId {
-  /** @brief 64-bit 스팬 ID 원시 바이트. */
+  /** @brief Raw bytes of the 64-bit span ID. */
   uint8_t bytes[8]{};
 
   /**
-   * @brief 암호학적으로 안전한 난수로 새 SpanId를 생성합니다.
+   * @brief Generates a new SpanId using a cryptographically secure random number.
    *
-   * 내부적으로 `qbuem::random_bytes()`를 사용합니다.
-   * @returns 유효한 새 SpanId.
+   * Uses `qbuem::random_bytes()` internally.
+   * @returns A new, valid SpanId.
    */
   static SpanId generate() {
     SpanId id;
@@ -133,10 +133,10 @@ struct SpanId {
   }
 
   /**
-   * @brief 이 SpanId가 유효한지 확인합니다.
+   * @brief Checks whether this SpanId is valid.
    *
-   * W3C 규격에 따라 모든 바이트가 0x00이면 유효하지 않습니다.
-   * @returns 유효하면 true, 모두 0이면 false.
+   * Per the W3C spec, all bytes being 0x00 indicates an invalid identifier.
+   * @returns true if valid, false if all bytes are zero.
    */
   bool is_valid() const noexcept {
     for (uint8_t b : bytes) {
@@ -146,13 +146,13 @@ struct SpanId {
   }
 
   /**
-   * @brief 소문자 16진수 문자열로 변환합니다 (16자).
+   * @brief Converts to a lowercase hex string (16 characters).
    *
-   * 예: `"00f067aa0ba902b7"`
+   * Example: `"00f067aa0ba902b7"`
    *
-   * @param buf  출력 버퍼 포인터.
-   * @param n    버퍼 크기 (최소 17 — 16자 + null terminator).
-   * @returns 기록된 문자 수 (null 제외). 버퍼 부족 시 0.
+   * @param buf  Output buffer pointer.
+   * @param n    Buffer size (minimum 17 — 16 chars + null terminator).
+   * @returns Number of characters written (excluding null). 0 if buffer is too small.
    */
   size_t to_chars(char* buf, size_t n) const {
     if (n < 17) return 0;
