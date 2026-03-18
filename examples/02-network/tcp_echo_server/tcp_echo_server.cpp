@@ -1,6 +1,6 @@
 /**
  * @file examples/tcp_echo_server.cpp
- * @brief TcpListener + TcpStream — 비동기 TCP 에코 서버 예시
+ * @brief TcpListener + TcpStream — asynchronous TCP echo server example.
  */
 #include <qbuem/core/dispatcher.hpp>
 #include <qbuem/core/task.hpp>
@@ -12,17 +12,19 @@
 #include <array>
 #include <chrono>
 #include <cstring>
-#include <iostream>
 #include <thread>
+#include <qbuem/compat/print.hpp>
 
 using namespace qbuem;
 using namespace std::chrono_literals;
+using std::println;
+using std::print;
 
 static std::atomic<size_t> g_connections{0};
 static std::atomic<size_t> g_echo_bytes{0};
 static std::atomic<bool>   g_stop{false};
 
-// ─── 에코 핸들러 코루틴 ──────────────────────────────────────────────────────
+// ─── Echo handler coroutine ───────────────────────────────────────────────────
 
 Task<Result<void>> handle_connection(TcpStream stream) {
     g_connections.fetch_add(1, std::memory_order_relaxed);
@@ -30,11 +32,11 @@ Task<Result<void>> handle_connection(TcpStream stream) {
     std::array<std::byte, 1024> buf{};
 
     while (!g_stop.load()) {
-        // 비동기 읽기 (Reactor 이벤트 루프에서 co_await)
+        // Async read (co_await from the Reactor event loop)
         auto n = co_await stream.read(buf);
-        if (!n || *n == 0) break;  // 연결 종료
+        if (!n || *n == 0) break;  // connection closed
 
-        // 에코: 읽은 데이터를 그대로 전송
+        // Echo: send back the received data
         std::span<const std::byte> view{buf.data(), *n};
         auto sent = co_await stream.write(view);
         if (!sent) break;
@@ -44,57 +46,57 @@ Task<Result<void>> handle_connection(TcpStream stream) {
     co_return {};
 }
 
-// ─── Accept 루프 코루틴 ──────────────────────────────────────────────────────
+// ─── Accept loop coroutine ────────────────────────────────────────────────────
 
 Task<Result<void>> accept_loop(TcpListener& listener, Dispatcher& dispatcher) {
     while (!g_stop.load()) {
         auto stream = co_await listener.accept();
-        if (!stream) break;  // 리스너 종료
+        if (!stream) break;  // listener closed
 
-        std::cout << "[tcp] New connection accepted\n";
+        println("[tcp] New connection accepted");
 
-        // 연결 핸들러를 별도 코루틴으로 spawn
+        // Spawn the connection handler as a separate coroutine
         dispatcher.spawn(handle_connection(std::move(*stream)));
     }
     co_return {};
 }
 
-// ─── main ────────────────────────────────────────────────────────────────────
+// ─── main ─────────────────────────────────────────────────────────────────────
 
 int main() {
-    std::cout << "=== TCP Echo Server (port 18080) ===\n";
+    println("=== TCP Echo Server (port 18080) ===");
 
-    // TcpListener 바인딩
+    // Bind TcpListener
     auto addr = SocketAddr::from_ipv4("127.0.0.1", 18080);
     if (!addr) {
-        std::cerr << "[tcp] Invalid address\n";
+        println(stderr, "[tcp] Invalid address");
         return 1;
     }
 
     auto listener = TcpListener::bind(*addr);
     if (!listener) {
-        std::cerr << "[tcp] bind failed\n";
+        println(stderr, "[tcp] bind failed");
         return 1;
     }
 
-    std::cout << "[tcp] Listening on 127.0.0.1:18080\n";
-    std::cout << "[tcp] (Connect with: nc 127.0.0.1 18080)\n";
-    std::cout << "[tcp] Running for 5 seconds then shutting down...\n";
+    println("[tcp] Listening on 127.0.0.1:18080");
+    println("[tcp] (Connect with: nc 127.0.0.1 18080)");
+    println("[tcp] Running for 5 seconds then shutting down...");
 
     Dispatcher dispatcher(1);
     std::jthread run_th([&] { dispatcher.run(); });
 
-    // Accept 루프 spawn
+    // Spawn accept loop
     dispatcher.spawn(accept_loop(*listener, dispatcher));
 
-    // 5초 후 자동 종료 (예시이므로)
+    // Auto-shutdown after 5 seconds (example only)
     std::this_thread::sleep_for(5s);
 
     g_stop.store(true, std::memory_order_release);
     dispatcher.stop();
     run_th.join();
 
-    std::cout << "[tcp] Stats: connections=" << g_connections.load()
-              << " echo_bytes=" << g_echo_bytes.load() << "\n";
+    println("[tcp] Stats: connections={} echo_bytes={}",
+            g_connections.load(), g_echo_bytes.load());
     return 0;
 }
