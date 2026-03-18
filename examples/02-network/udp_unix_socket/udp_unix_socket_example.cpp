@@ -1,16 +1,16 @@
 /**
  * @file udp_unix_socket_example.cpp
- * @brief UDP 소켓 + Unix 도메인 소켓 비동기 I/O 예제.
+ * @brief UDP socket + Unix domain socket asynchronous I/O example.
  *
- * ## 커버리지
- * - UdpSocket::bind()           — 주소에 바인딩
- * - UdpSocket::send_to()        — 비동기 데이터그램 송신
- * - UdpSocket::recv_from()      — 비동기 데이터그램 수신 + 발신자 주소
- * - UnixSocket::bind()          — AF_UNIX 서버 소켓
- * - UnixSocket::accept()        — 비동기 클라이언트 수락
- * - UnixSocket::connect()       — 비동기 클라이언트 연결
- * - UnixSocket::read() / write()— 비동기 스트림 I/O
- * - SocketAddr::from_ipv4()     — 주소 파싱
+ * ## Coverage
+ * - UdpSocket::bind()           — bind to address
+ * - UdpSocket::send_to()        — async datagram send
+ * - UdpSocket::recv_from()      — async datagram receive + sender address
+ * - UnixSocket::bind()          — AF_UNIX server socket
+ * - UnixSocket::accept()        — async client accept
+ * - UnixSocket::connect()       — async client connect
+ * - UnixSocket::read() / write()— async stream I/O
+ * - SocketAddr::from_ipv4()     — address parsing
  */
 
 #include <qbuem/core/dispatcher.hpp>
@@ -22,45 +22,46 @@
 #include <array>
 #include <atomic>
 #include <cassert>
-#include <cstdio>
 #include <cstring>
 #include <string_view>
 #include <thread>
 #include <unistd.h>
+#include <qbuem/compat/print.hpp>
 
 using namespace qbuem;
 using namespace std::chrono_literals;
+using std::println;
+using std::print;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// §1  UDP 에코 시뮬레이션
+// §1  UDP echo simulation
 // ─────────────────────────────────────────────────────────────────────────────
 
 static std::atomic<bool> g_udp_done{false};
 
 static Task<void> udp_receiver(UdpSocket sock) {
     std::array<std::byte, 256> buf{};
-    std::printf("[UDP] 수신 대기 시작...\n");
+    println("[UDP] Waiting for incoming datagram...");
 
     auto result = co_await sock.recv_from(buf);
     if (!result) {
-        std::printf("[UDP] 수신 실패: %s\n", result.error().message().c_str());
+        println("[UDP] Receive failed: {}", result.error().message());
         co_return;
     }
 
     auto [n, from] = *result;
     std::string_view msg{reinterpret_cast<const char*>(buf.data()), n};
-    std::printf("[UDP] 수신: \"%.*s\" (from port %u)\n",
-                static_cast<int>(msg.size()), msg.data(), from.port());
+    println("[UDP] Received: \"{}\" (from port {})", msg, from.port());
     g_udp_done.store(true, std::memory_order_release);
     co_return;
 }
 
 static Task<void> udp_sender(SocketAddr dest) {
     auto sock_r = UdpSocket::bind(
-        *SocketAddr::from_ipv4("127.0.0.1", 0));  // 임의 포트로 바인딩
+        *SocketAddr::from_ipv4("127.0.0.1", 0));  // bind to ephemeral port
     if (!sock_r) {
-        std::printf("[UDP] 송신 소켓 생성 실패: %s\n",
-                    sock_r.error().message().c_str());
+        println("[UDP] Failed to create sender socket: {}",
+                    sock_r.error().message());
         co_return;
     }
 
@@ -68,14 +69,14 @@ static Task<void> udp_sender(SocketAddr dest) {
     auto data = std::as_bytes(std::span(payload.data(), payload.size()));
     auto result = co_await sock_r->send_to(data, dest);
     if (result)
-        std::printf("[UDP] 송신 완료: %zu 바이트\n", *result);
+        println("[UDP] Sent: {} bytes", *result);
     else
-        std::printf("[UDP] 송신 실패: %s\n", result.error().message().c_str());
+        println("[UDP] Send failed: {}", result.error().message());
     co_return;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// §2  Unix 도메인 소켓 에코 서버
+// §2  Unix domain socket echo server
 // ─────────────────────────────────────────────────────────────────────────────
 
 static constexpr const char* kSockPath = "/tmp/qbuem_unix_example.sock";
@@ -85,26 +86,25 @@ static Task<void> unix_server_handler(UnixSocket client) {
     std::array<std::byte, 128> buf{};
     auto n_r = co_await client.read(buf);
     if (!n_r || *n_r == 0) {
-        std::printf("[UDS] 수신 실패 또는 EOF\n");
+        println("[UDS] Receive failed or EOF");
         co_return;
     }
     size_t n = *n_r;
     std::string_view msg{reinterpret_cast<const char*>(buf.data()), n};
-    std::printf("[UDS] 수신: \"%.*s\"\n", static_cast<int>(n), msg.data());
+    println("[UDS] Received: \"{}\"", msg);
 
-    // 에코 응답
+    // Echo reply
     auto w_r = co_await client.write(std::span(buf.data(), n));
     if (w_r)
-        std::printf("[UDS] 에코 송신: %zu 바이트\n", *w_r);
+        println("[UDS] Echo sent: {} bytes", *w_r);
     co_return;
 }
 
 static Task<void> unix_server(UnixSocket server) {
-    std::printf("[UDS] 서버 대기 중...\n");
+    println("[UDS] Server waiting...");
     auto client_r = co_await server.accept();
     if (!client_r) {
-        std::printf("[UDS] accept 실패: %s\n",
-                    client_r.error().message().c_str());
+        println("[UDS] accept failed: {}", client_r.error().message());
         co_return;
     }
     co_await unix_server_handler(std::move(*client_r));
@@ -115,25 +115,23 @@ static Task<void> unix_server(UnixSocket server) {
 static Task<void> unix_client() {
     auto conn_r = co_await UnixSocket::connect(kSockPath);
     if (!conn_r) {
-        std::printf("[UDS] connect 실패: %s\n",
-                    conn_r.error().message().c_str());
+        println("[UDS] connect failed: {}", conn_r.error().message());
         co_return;
     }
-    std::printf("[UDS] 연결 성공\n");
+    println("[UDS] Connected");
 
     std::string_view payload = "Hello, Unix!";
     auto data = std::as_bytes(std::span(payload.data(), payload.size()));
     auto w_r = co_await conn_r->write(data);
     if (!w_r) co_return;
-    std::printf("[UDS] 송신: \"%s\"\n", std::string(payload).c_str());
+    println("[UDS] Sent: \"{}\"", payload);
 
-    // 에코 수신
+    // Receive echo
     std::array<std::byte, 128> buf{};
     auto n_r = co_await conn_r->read(buf);
     if (n_r && *n_r > 0) {
-        std::printf("[UDS] 에코 수신: \"%.*s\"\n",
-                    static_cast<int>(*n_r),
-                    reinterpret_cast<const char*>(buf.data()));
+        std::string_view echo{reinterpret_cast<const char*>(buf.data()), *n_r};
+        println("[UDS] Echo received: \"{}\"", echo);
     }
     co_return;
 }
@@ -143,21 +141,20 @@ static Task<void> unix_client() {
 // ─────────────────────────────────────────────────────────────────────────────
 
 int main() {
-    std::printf("=== qbuem UDP + Unix Socket 예제 ===\n\n");
+    println("=== qbuem UDP + Unix Socket Example ===\n");
 
-    // ── UDP ─────────────────────────────────────────────────────────────────
+    // ── UDP ──────────────────────────────────────────────────────────────────
     {
-        std::printf("── §1  UDP 에코 ──\n");
+        println("── §1  UDP Echo ──");
         auto bind_addr = SocketAddr::from_ipv4("127.0.0.1", 19876);
         if (!bind_addr) {
-            std::printf("주소 파싱 실패\n");
+            println("Address parse failed");
             return 1;
         }
 
         auto recv_sock = UdpSocket::bind(*bind_addr);
         if (!recv_sock) {
-            std::printf("UDP 바인딩 실패: %s\n",
-                        recv_sock.error().message().c_str());
+            println("UDP bind failed: {}", recv_sock.error().message());
             return 1;
         }
 
@@ -166,7 +163,7 @@ int main() {
 
         disp.spawn(udp_receiver(std::move(*recv_sock)));
 
-        // 짧은 대기 후 송신 (수신 대기가 먼저 시작되도록)
+        // Brief wait before sending so receiver is ready
         std::this_thread::sleep_for(20ms);
         disp.spawn(udp_sender(*bind_addr));
 
@@ -176,18 +173,17 @@ int main() {
 
         disp.stop();
         t.join();
-        std::printf("UDP 완료: %s\n\n", g_udp_done.load() ? "성공" : "타임아웃");
+        println("UDP done: {}\n", g_udp_done.load() ? "success" : "timeout");
     }
 
-    // ── Unix Domain Socket ───────────────────────────────────────────────────
+    // ── Unix Domain Socket ────────────────────────────────────────────────────
     {
-        std::printf("── §2  Unix Domain Socket 에코 ──\n");
-        ::unlink(kSockPath);  // 이전 소켓 파일 정리
+        println("── §2  Unix Domain Socket Echo ──");
+        ::unlink(kSockPath);  // clean up previous socket file
 
         auto server_sock = UnixSocket::bind(kSockPath);
         if (!server_sock) {
-            std::printf("UDS 바인딩 실패: %s\n",
-                        server_sock.error().message().c_str());
+            println("UDS bind failed: {}", server_sock.error().message());
             return 1;
         }
 
@@ -207,10 +203,10 @@ int main() {
         disp.stop();
         t.join();
         ::unlink(kSockPath);
-        std::printf("Unix 소켓 완료: %s\n\n",
-                    g_unix_done.load() ? "성공" : "타임아웃");
+        println("Unix socket done: {}\n",
+                    g_unix_done.load() ? "success" : "timeout");
     }
 
-    std::printf("=== 완료 ===\n");
+    println("=== Done ===");
     return 0;
 }
