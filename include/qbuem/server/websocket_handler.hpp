@@ -2,23 +2,23 @@
 
 /**
  * @file qbuem/server/websocket_handler.hpp
- * @brief RFC 6455 WebSocket 핸들러 — HTTP/1.1 업그레이드 핸드셰이크 및 프레임 처리
+ * @brief RFC 6455 WebSocket handler — HTTP/1.1 upgrade handshake and frame processing
  * @defgroup qbuem_websocket_handler WebSocket Handler
  * @ingroup qbuem_server
  *
- * 이 헤더는 RFC 6455 WebSocket 프로토콜의 핵심 구현을 제공합니다.
+ * This header provides the core implementation of the RFC 6455 WebSocket protocol.
  *
- * ### 주요 기능
- * - **HTTP/1.1 업그레이드 핸드셰이크**: `101 Switching Protocols` 응답 생성.
- * - **`Sec-WebSocket-Accept` 계산**: RFC 6455 §4.2.2의 SHA-1 + Base64 키 유도.
- * - **프레임 인코딩/디코딩**: 가변 길이 페이로드, 마스킹(RFC 6455 §5.3) 지원.
- * - **제어 프레임**: Ping/Pong/Close 자동 처리.
- * - **메시지 핸들러 주입**: 생성자에서 콜백으로 수신 프레임을 애플리케이션으로 전달.
+ * ### Key features
+ * - **HTTP/1.1 upgrade handshake**: Generates `101 Switching Protocols` response.
+ * - **`Sec-WebSocket-Accept` computation**: SHA-1 + Base64 key derivation per RFC 6455 §4.2.2.
+ * - **Frame encoding/decoding**: Variable-length payload, masking support (RFC 6455 §5.3).
+ * - **Control frames**: Automatic Ping/Pong/Close handling.
+ * - **Message handler injection**: Delivers received frames to the application via a constructor callback.
  *
- * ### SHA-1 주의사항
- * WebSocket 핸드셰이크의 `Sec-WebSocket-Accept` 계산에는 SHA-1이 필요합니다.
- * 이 구현은 RFC 3174 기반의 인라인 SHA-1을 포함합니다. 외부 의존성이 없으며
- * TLS 보안 목적이 아닌 핸드셰이크 전용으로만 사용됩니다.
+ * ### SHA-1 note
+ * SHA-1 is required for the `Sec-WebSocket-Accept` computation in the WebSocket handshake.
+ * This implementation includes an inline SHA-1 based on RFC 3174 with no external dependencies,
+ * used exclusively for the handshake and not for TLS security purposes.
  *
  * @{
  */
@@ -45,51 +45,51 @@ namespace qbuem {
 // ─── WsFrame ─────────────────────────────────────────────────────────────────
 
 /**
- * @brief RFC 6455 WebSocket 프레임.
+ * @brief RFC 6455 WebSocket frame.
  *
- * WebSocket 프로토콜의 기본 데이터 단위입니다.
- * `WebSocketHandler`가 디코딩한 프레임을 애플리케이션 콜백으로 전달합니다.
+ * The basic data unit of the WebSocket protocol.
+ * Frames decoded by `WebSocketHandler` are delivered to the application callback.
  *
- * ### 멀티프레임 메시지 (프래그먼테이션)
- * - 첫 번째 프레임: `fin == false`, opcode == Text 또는 Binary.
- * - 중간 프레임: `fin == false`, opcode == Continuation.
- * - 마지막 프레임: `fin == true`, opcode == Continuation.
+ * ### Multi-frame messages (fragmentation)
+ * - First frame: `fin == false`, opcode == Text or Binary.
+ * - Intermediate frames: `fin == false`, opcode == Continuation.
+ * - Last frame: `fin == true`, opcode == Continuation.
  */
 struct WsFrame {
   /**
-   * @brief WebSocket 프레임 opcode (RFC 6455 §5.2).
+   * @brief WebSocket frame opcode (RFC 6455 §5.2).
    */
   enum class Opcode : uint8_t {
-    Continuation = 0x0, ///< 이전 프레임의 연속 (프래그먼테이션)
-    Text         = 0x1, ///< UTF-8 텍스트 데이터
-    Binary       = 0x2, ///< 임의 바이너리 데이터
-    Close        = 0x8, ///< 연결 종료 요청
-    Ping         = 0x9, ///< Ping (연결 유지 확인)
-    Pong         = 0xA, ///< Ping에 대한 응답
+    Continuation = 0x0, ///< Continuation of a previous frame (fragmentation)
+    Text         = 0x1, ///< UTF-8 text data
+    Binary       = 0x2, ///< Arbitrary binary data
+    Close        = 0x8, ///< Connection close request
+    Ping         = 0x9, ///< Ping (keepalive check)
+    Pong         = 0xA, ///< Response to a Ping
   };
 
-  /** @brief 프레임 타입을 나타내는 opcode. */
+  /** @brief Opcode indicating the frame type. */
   Opcode opcode{Opcode::Text};
 
-  /** @brief 최종 프레임 여부. false이면 멀티프레임 메시지의 일부. */
+  /** @brief Whether this is the final frame. false means it is part of a multi-frame message. */
   bool fin{true};
 
-  /** @brief 페이로드 마스킹 여부. 클라이언트 → 서버 방향은 반드시 true여야 합니다. */
+  /** @brief Whether the payload is masked. Must be true for client → server direction. */
   bool masked{false};
 
-  /** @brief 프레임 페이로드 데이터. 마스킹이 적용된 경우 이미 언마스킹된 상태입니다. */
+  /** @brief Frame payload data. Already unmasked if masking was applied. */
   std::vector<uint8_t> payload;
 };
 
 // ─── WebSocketHandler ─────────────────────────────────────────────────────────
 
 /**
- * @brief RFC 6455 WebSocket 서버 핸들러.
+ * @brief RFC 6455 WebSocket server handler.
  *
- * HTTP/1.1 Upgrade 핸드셰이크부터 이진/텍스트 프레임 송수신까지
- * WebSocket 프로토콜의 서버 측 처리를 담당합니다.
+ * Handles server-side WebSocket protocol processing from the HTTP/1.1 Upgrade
+ * handshake through binary/text frame send and receive.
  *
- * ### 사용 예시
+ * ### Usage example
  * @code
  * auto ws_handler = std::make_shared<WebSocketHandler>(
  *     [](WsFrame frame) -> Task<void> {
@@ -101,7 +101,7 @@ struct WsFrame {
  *     }
  * );
  *
- * // Http1Handler의 업그레이드 콜백으로 연결
+ * // Connect as the upgrade callback of Http1Handler
  * auto http_handler = std::make_unique<Http1Handler>(router,
  *     [ws_handler](UpgradeRequest req) -> Task<void> {
  *         auto result = co_await ws_handler->upgrade(req.fd, req.original_request);
@@ -113,39 +113,39 @@ struct WsFrame {
 class WebSocketHandler {
 public:
   /**
-   * @brief 수신 WebSocket 프레임을 처리하는 콜백 타입.
+   * @brief Callback type for handling received WebSocket frames.
    *
-   * `run()` 루프가 완전한 프레임을 수신할 때마다 호출됩니다.
-   * 제어 프레임(Ping, Close)은 자동으로 처리되며 콜백으로 전달되지 않습니다.
+   * Called by the `run()` loop each time a complete frame is received.
+   * Control frames (Ping, Close) are handled automatically and not passed to the callback.
    */
   using MessageHandler = std::function<Task<void>(WsFrame)>;
 
   /**
-   * @brief WebSocketHandler를 구성합니다.
+   * @brief Constructs a WebSocketHandler.
    *
-   * @param on_message 수신 프레임마다 호출될 콜백.
+   * @param on_message Callback invoked for each received frame.
    */
   explicit WebSocketHandler(MessageHandler on_message)
       : on_message_(std::move(on_message)) {}
 
-  // ── 업그레이드 핸드셰이크 ───────────────────────────────────────────────
+  // ── Upgrade handshake ───────────────────────────────────────────────────
 
   /**
-   * @brief HTTP/1.1 WebSocket 업그레이드 핸드셰이크를 수행합니다.
+   * @brief Performs the HTTP/1.1 WebSocket upgrade handshake.
    *
-   * RFC 6455 §4.2.2 절차:
-   * 1. `Sec-WebSocket-Key` 헤더 검증.
-   * 2. `Sec-WebSocket-Accept` 키 계산 (SHA-1 + Base64).
-   * 3. `101 Switching Protocols` 응답 전송.
+   * RFC 6455 §4.2.2 procedure:
+   * 1. Validate `Sec-WebSocket-Key` header.
+   * 2. Compute `Sec-WebSocket-Accept` key (SHA-1 + Base64).
+   * 3. Send `101 Switching Protocols` response.
    *
-   * @param fd  연결된 소켓 파일 디스크립터.
-   * @param req 업그레이드를 요청한 원본 HTTP 요청.
-   * @returns 성공 시 `Result<void>::ok()`, 유효하지 않은 요청이면 에러 코드.
+   * @param fd  Connected socket file descriptor.
+   * @param req Original HTTP request that initiated the upgrade.
+   * @returns `Result<void>::ok()` on success, or an error code for an invalid request.
    */
   Task<Result<void>> upgrade(int fd, const Request& req) {
     std::string_view ws_key = req.header("Sec-WebSocket-Key");
     if (ws_key.empty()) {
-      // 400 Bad Request: Sec-WebSocket-Key 누락
+      // 400 Bad Request: Sec-WebSocket-Key missing
       static constexpr std::string_view k400 =
           "HTTP/1.1 400 Bad Request\r\n"
           "Connection: close\r\n"
@@ -173,46 +173,46 @@ public:
     co_return Result<void>::ok();
   }
 
-  // ── 프레임 송수신 루프 ──────────────────────────────────────────────────
+  // ── Frame send/receive loop ─────────────────────────────────────────────
 
   /**
-   * @brief WebSocket 프레임 수신/디스패치 루프를 실행합니다.
+   * @brief Runs the WebSocket frame receive/dispatch loop.
    *
-   * `upgrade()` 성공 후 호출합니다. 연결이 종료될 때까지 다음을 반복합니다:
-   * - 소켓에서 프레임 읽기.
-   * - Ping → Pong 자동 응답.
-   * - Close → Close 에코 후 루프 종료.
-   * - Text/Binary/Continuation → `on_message_` 콜백 호출.
+   * Call after a successful `upgrade()`. Repeats the following until the connection closes:
+   * - Read frames from the socket.
+   * - Ping → automatic Pong response.
+   * - Close → echo Close and exit loop.
+   * - Text/Binary/Continuation → invoke `on_message_` callback.
    *
-   * @param fd 연결된 소켓 파일 디스크립터.
+   * @param fd Connected socket file descriptor.
    */
   Task<void> run(int fd) {
     std::vector<uint8_t> buf;
     buf.reserve(4096);
 
     for (;;) {
-      // 소켓에서 데이터 수신 (단순화: 최대 64KB 청크)
+      // Receive data from socket (simplified: up to 64KB chunks)
       uint8_t tmp[65536];
       ssize_t n = ::read(fd, tmp, sizeof(tmp));
-      if (n <= 0) break; // EOF 또는 에러
+      if (n <= 0) break; // EOF or error
 
       buf.insert(buf.end(), tmp, tmp + n);
 
-      // 버퍼에서 완전한 프레임 추출
+      // Extract complete frames from buffer
       size_t consumed = 0;
       for (;;) {
         auto span = std::span<const uint8_t>(buf.data() + consumed,
                                              buf.size() - consumed);
         size_t frame_consumed = 0;
         auto result = decode_frame(span, frame_consumed);
-        if (!result.has_value()) break; // 프레임 미완성
+        if (!result.has_value()) break; // Frame incomplete
 
         WsFrame frame = std::move(result.value());
         consumed += frame_consumed;
 
-        // 제어 프레임 자동 처리
+        // Automatically handle control frames
         if (frame.opcode == WsFrame::Opcode::Ping) {
-          // Pong 응답 전송
+          // Send Pong response
           auto pong_bytes = encode_frame(
               WsFrame{WsFrame::Opcode::Pong, true, false, {}}, false);
           write_all(fd, std::string_view(
@@ -222,7 +222,7 @@ public:
         }
 
         if (frame.opcode == WsFrame::Opcode::Close) {
-          // Close 에코 후 루프 종료
+          // Echo Close and exit loop
           auto close_bytes = encode_frame(
               WsFrame{WsFrame::Opcode::Close, true, false,
                       frame.payload}, false);
@@ -233,13 +233,13 @@ public:
           co_return;
         }
 
-        // 데이터 프레임 → 애플리케이션 콜백
+        // Data frame → application callback
         if (on_message_) {
           co_await on_message_(std::move(frame));
         }
       }
 
-      // 소비된 바이트 제거
+      // Remove consumed bytes
       if (consumed > 0) {
         buf.erase(buf.begin(),
                   buf.begin() + static_cast<std::ptrdiff_t>(consumed));
@@ -248,14 +248,14 @@ public:
     co_return;
   }
 
-  // ── 프레임 전송 헬퍼 ────────────────────────────────────────────────────
+  // ── Frame send helpers ───────────────────────────────────────────────────
 
   /**
-   * @brief UTF-8 텍스트 프레임을 전송합니다.
+   * @brief Sends a UTF-8 text frame.
    *
-   * @param fd   대상 소켓 파일 디스크립터.
-   * @param text 전송할 UTF-8 텍스트.
-   * @returns 성공 시 `Result<void>::ok()`, 전송 실패 시 에러 코드.
+   * @param fd   Target socket file descriptor.
+   * @param text UTF-8 text to send.
+   * @returns `Result<void>::ok()` on success, or an error code on send failure.
    */
   Task<Result<void>> send_text(int fd, std::string_view text) {
     WsFrame frame;
@@ -276,11 +276,11 @@ public:
   }
 
   /**
-   * @brief 바이너리 프레임을 전송합니다.
+   * @brief Sends a binary frame.
    *
-   * @param fd   대상 소켓 파일 디스크립터.
-   * @param data 전송할 원시 바이트.
-   * @returns 성공 시 `Result<void>::ok()`, 전송 실패 시 에러 코드.
+   * @param fd   Target socket file descriptor.
+   * @param data Raw bytes to send.
+   * @returns `Result<void>::ok()` on success, or an error code on send failure.
    */
   Task<Result<void>> send_binary(int fd, std::span<const uint8_t> data) {
     WsFrame frame;
@@ -299,18 +299,18 @@ public:
   }
 
   /**
-   * @brief Close 프레임을 전송하고 연결 종료를 요청합니다.
+   * @brief Sends a Close frame and requests connection closure.
    *
-   * @param fd   대상 소켓 파일 디스크립터.
-   * @param code RFC 6455 §7.4.1 정의 상태 코드. 기본값 1000 = 정상 종료.
-   * @returns 성공 시 `Result<void>::ok()`, 전송 실패 시 에러 코드.
+   * @param fd   Target socket file descriptor.
+   * @param code Status code defined in RFC 6455 §7.4.1. Default 1000 = normal closure.
+   * @returns `Result<void>::ok()` on success, or an error code on send failure.
    */
   Task<Result<void>> send_close(int fd, uint16_t code = 1000) {
     WsFrame frame;
     frame.opcode = WsFrame::Opcode::Close;
     frame.fin    = true;
     frame.masked = false;
-    // Close 프레임 페이로드: 2바이트 빅엔디언 상태 코드
+    // Close frame payload: 2-byte big-endian status code
     frame.payload.push_back(static_cast<uint8_t>(code >> 8));
     frame.payload.push_back(static_cast<uint8_t>(code & 0xFF));
 
@@ -324,10 +324,10 @@ public:
   }
 
   /**
-   * @brief Ping 프레임을 전송합니다.
+   * @brief Sends a Ping frame.
    *
-   * @param fd 대상 소켓 파일 디스크립터.
-   * @returns 성공 시 `Result<void>::ok()`, 전송 실패 시 에러 코드.
+   * @param fd Target socket file descriptor.
+   * @returns `Result<void>::ok()` on success, or an error code on send failure.
    */
   Task<Result<void>> send_ping(int fd) {
     WsFrame frame;
@@ -344,30 +344,30 @@ public:
     co_return Result<void>::ok();
   }
 
-  // ── 정적 유틸리티 (테스트 및 예제용으로 공개) ───────────────────────────
+  // ── Static utilities (public for testing and examples) ──────────────────
 
   /**
-   * @brief WsFrame을 RFC 6455 §5.2 형식의 바이트 시퀀스로 인코딩합니다.
+   * @brief Encodes a WsFrame as a byte sequence in RFC 6455 §5.2 format.
    *
-   * 서버 → 클라이언트 방향은 마스킹 없음(mask == false).
-   * 클라이언트 → 서버 방향이 필요한 경우 mask == true를 사용합니다.
+   * Server → client direction uses no masking (mask == false).
+   * Use mask == true when client → server direction is required.
    *
-   * @param frame 인코딩할 프레임.
-   * @param mask  페이로드 마스킹 여부.
-   * @returns 인코딩된 WebSocket 프레임 바이트.
+   * @param frame Frame to encode.
+   * @param mask  Whether to mask the payload.
+   * @returns Encoded WebSocket frame bytes.
    */
   static std::vector<uint8_t> encode_frame(const WsFrame& frame,
                                             bool mask = false) {
     std::vector<uint8_t> out;
     out.reserve(10 + frame.payload.size());
 
-    // 바이트 0: FIN(1비트) + RSV(3비트) + Opcode(4비트)
+    // Byte 0: FIN(1 bit) + RSV(3 bits) + Opcode(4 bits)
     uint8_t b0 = static_cast<uint8_t>(
         (frame.fin ? 0x80u : 0x00u) |
         (static_cast<uint8_t>(frame.opcode) & 0x0Fu));
     out.push_back(b0);
 
-    // 바이트 1: MASK(1비트) + Payload Len(7비트)
+    // Byte 1: MASK(1 bit) + Payload Len(7 bits)
     uint64_t payload_len = frame.payload.size();
     uint8_t mask_bit = mask ? 0x80u : 0x00u;
 
@@ -385,7 +385,7 @@ public:
     }
 
     if (mask) {
-      // 마스킹 키 (테스트용 고정값; 실제 사용 시 난수로 교체)
+      // Masking key (fixed value for testing; replace with random value in production)
       std::array<uint8_t, 4> masking_key = {0x37, 0xfa, 0x21, 0x3d};
       out.insert(out.end(), masking_key.begin(), masking_key.end());
       for (size_t i = 0; i < frame.payload.size(); ++i) {
@@ -399,20 +399,20 @@ public:
   }
 
   /**
-   * @brief 바이트 스팬에서 WebSocket 프레임을 디코딩합니다.
+   * @brief Decodes a WebSocket frame from a byte span.
    *
-   * RFC 6455 §5.2에 따라 파싱합니다.
-   * 데이터가 부족하면 `consumed`를 0으로 설정하고 `has_value() == false`인 결과를 반환합니다.
+   * Parses according to RFC 6455 §5.2.
+   * Sets `consumed` to 0 and returns a result with `has_value() == false` if data is insufficient.
    *
-   * @param data     디코딩할 바이트 범위.
-   * @param consumed 성공 시 소비한 바이트 수.
-   * @returns 디코딩된 프레임. 데이터 부족 시 has_value() == false.
+   * @param data     Byte range to decode.
+   * @param consumed Number of bytes consumed on success.
+   * @returns Decoded frame. has_value() == false if data is insufficient.
    */
   static Result<WsFrame> decode_frame(std::span<const uint8_t> data,
                                        size_t& consumed) {
     consumed = 0;
 
-    // 최소 2바이트 (헤더)
+    // Minimum 2 bytes (header)
     if (data.size() < 2) {
       return unexpected(
           std::make_error_code(std::errc::resource_unavailable_try_again));
@@ -449,7 +449,7 @@ public:
       }
     }
 
-    // 마스킹 키 읽기 (클라이언트 → 서버는 항상 마스킹됨)
+    // Read masking key (client → server is always masked)
     std::array<uint8_t, 4> masking_key{};
     if (frame.masked) {
       if (data.size() < pos + 4) {
@@ -462,7 +462,7 @@ public:
       masking_key[3] = data[pos++];
     }
 
-    // 페이로드 읽기
+    // Read payload
     if (data.size() < pos + payload_len) {
       return unexpected(
           std::make_error_code(std::errc::resource_unavailable_try_again));
@@ -481,19 +481,19 @@ public:
     return frame;
   }
 
-  // ── SHA-1 + Base64 (Sec-WebSocket-Accept 계산) ──────────────────────────
+  // ── SHA-1 + Base64 (Sec-WebSocket-Accept computation) ───────────────────
 
   /**
-   * @brief RFC 6455 §4.2.2에 따라 `Sec-WebSocket-Accept` 헤더 값을 계산합니다.
+   * @brief Computes the `Sec-WebSocket-Accept` header value per RFC 6455 §4.2.2.
    *
-   * `key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"` 에 SHA-1을 적용하고
-   * Base64로 인코딩합니다.
+   * Applies SHA-1 to `key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"`
+   * and encodes the result in Base64.
    *
-   * SHA-1 구현은 RFC 3174를 따르며 외부 의존성이 없습니다.
-   * 이 함수는 보안 암호화 목적이 아닌 WebSocket 핸드셰이크 전용입니다.
+   * The SHA-1 implementation follows RFC 3174 with no external dependencies.
+   * This function is for WebSocket handshake purposes only, not for security cryptography.
    *
-   * @param key `Sec-WebSocket-Key` 헤더 값.
-   * @returns Base64 인코딩된 `Sec-WebSocket-Accept` 값.
+   * @param key `Sec-WebSocket-Key` header value.
+   * @returns Base64-encoded `Sec-WebSocket-Accept` value.
    */
   static std::string compute_accept_key(std::string_view key) {
     static constexpr std::string_view kMagic =
@@ -502,7 +502,7 @@ public:
     std::string input(key);
     input.append(kMagic);
 
-    // ── 인라인 SHA-1 (RFC 3174) ──────────────────────────────────────────
+    // ── Inline SHA-1 (RFC 3174) ──────────────────────────────────────────
     auto rotl32 = [](uint32_t v, uint32_t n) -> uint32_t {
       return (v << n) | (v >> (32u - n));
     };
@@ -510,7 +510,7 @@ public:
     std::array<uint32_t, 5> h = {
         0x67452301u, 0xEFCDAB89u, 0x98BADCFEu, 0x10325476u, 0xC3D2E1F0u};
 
-    // メッセージ パディング
+    // Message padding
     std::vector<uint8_t> msg(input.begin(), input.end());
     uint64_t bit_len = static_cast<uint64_t>(msg.size()) * 8u;
     msg.push_back(0x80u);
@@ -519,7 +519,7 @@ public:
       msg.push_back(static_cast<uint8_t>((bit_len >> (i * 8)) & 0xFFu));
     }
 
-    // ブロック処理
+    // Block processing
     for (size_t offset = 0; offset < msg.size(); offset += 64) {
       std::array<uint32_t, 80> w{};
       for (int i = 0; i < 16; ++i) {
@@ -559,7 +559,7 @@ public:
       h[0] += a; h[1] += b; h[2] += c; h[3] += d; h[4] += e;
     }
 
-    // SHA-1 다이제스트 (20바이트)
+    // SHA-1 digest (20 bytes)
     std::array<uint8_t, 20> digest{};
     for (int i = 0; i < 5; ++i) {
       size_t si = static_cast<size_t>(i);
@@ -569,7 +569,7 @@ public:
       digest[si * 4 + 3] = static_cast<uint8_t>(h[si]);
     }
 
-    // ── Base64 인코딩 ────────────────────────────────────────────────────
+    // ── Base64 encoding ──────────────────────────────────────────────────
     static constexpr std::string_view kBase64Chars =
         "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
@@ -590,14 +590,14 @@ public:
     return encoded;
   }
 
-  // ── 소켓 I/O 헬퍼 ───────────────────────────────────────────────────────
+  // ── Socket I/O helpers ───────────────────────────────────────────────────
 
   /**
-   * @brief 소켓에 데이터를 모두 전송할 때까지 반복 write합니다.
+   * @brief Repeatedly writes to a socket until all data is sent.
    *
-   * @param fd   대상 소켓 파일 디스크립터.
-   * @param data 전송할 데이터.
-   * @returns 성공 시 true, 에러 시 false.
+   * @param fd   Target socket file descriptor.
+   * @param data Data to send.
+   * @returns true on success, false on error.
    */
 private:
   static bool write_all(int fd, std::string_view data) noexcept {
@@ -612,7 +612,7 @@ private:
     return true;
   }
 
-  /** @brief 애플리케이션이 제공하는 수신 프레임 핸들러. */
+  /** @brief Received frame handler provided by the application. */
   MessageHandler on_message_;
 };
 

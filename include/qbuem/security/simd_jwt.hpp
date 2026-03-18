@@ -2,43 +2,43 @@
 
 /**
  * @file qbuem/security/simd_jwt.hpp
- * @brief SIMD 가속 JWT 파서 — zero-allocation, zero-copy.
+ * @brief SIMD-accelerated JWT parser — zero-allocation, zero-copy.
  * @defgroup qbuem_security_jwt SIMDJwtParser
  * @ingroup qbuem_security
  *
- * ## 개요
- * JWT(JSON Web Token, RFC 7519) 파싱을 SIMD 명령어로 가속합니다.
- * 구조는 `Base64url(Header).Base64url(Payload).Signature`이며,
- * 이 파서는 힙 할당 없이 입력 버퍼를 직접 뷰로 처리합니다.
+ * ## Overview
+ * Accelerates JWT (JSON Web Token, RFC 7519) parsing using SIMD instructions.
+ * The structure is `Base64url(Header).Base64url(Payload).Signature`,
+ * and this parser processes the input buffer directly as views without heap allocation.
  *
- * ## SIMD 최적화 포인트
- * | 단계 | 최적화 |
- * |------|--------|
- * | 구분자 탐색 | SIMD로 `.` 위치 일괄 탐색 |
- * | Base64url 검증 | 128B LUT로 유효 문자 벡터 검사 |
- * | 클레임 파싱 | `"exp"`, `"iat"`, `"sub"` 키를 SIMD 비교로 탐색 |
+ * ## SIMD optimization points
+ * | Stage | Optimization |
+ * |-------|--------------|
+ * | Delimiter search | Batch-search `.` positions using SIMD |
+ * | Base64url validation | Vector check of valid characters using 128B LUT |
+ * | Claim parsing | Search `"exp"`, `"iat"`, `"sub"` keys using SIMD comparison |
  *
- * ## Zero-allocation 원칙
- * - 파싱 결과(`JwtView`)는 입력 버퍼를 직접 참조 (`std::string_view`).
- * - 클레임 추출은 뷰로 반환하여 복사 없음.
- * - 숫자 클레임(`exp`, `iat`, `nbf`)은 인라인 파싱으로 힙 없이 반환.
+ * ## Zero-allocation principle
+ * - Parse result (`JwtView`) directly references the input buffer (`std::string_view`).
+ * - Claim extraction returns views with no copying.
+ * - Numeric claims (`exp`, `iat`, `nbf`) are returned via inline parsing without heap allocation.
  *
- * ## 검증 책임 분리
- * 이 파서는 **파싱만** 수행합니다 — 서명 검증은 포함하지 않습니다.
- * 서명 검증은 `ITokenVerifier` 구현에서 담당합니다.
- * 파싱 후에는 반드시 서명 검증을 수행하세요.
+ * ## Separation of validation responsibility
+ * This parser performs **parsing only** — signature verification is not included.
+ * Signature verification is the responsibility of the `ITokenVerifier` implementation.
+ * Always perform signature verification after parsing.
  *
  * @code
  * SIMDJwtParser parser;
  * auto view = parser.parse("eyJ...header.payload.signature");
  * if (!view) {
- *     // 구조적 오류 (dot 없음, base64url 인코딩 오류 등)
+ *     // Structural error (missing dot, base64url encoding error, etc.)
  *     return;
  * }
  *
  * auto exp = view->claim_int("exp");
  * auto sub = view->claim("sub");
- * // 서명 검증은 별도 ITokenVerifier에서!
+ * // Signature verification is handled separately by ITokenVerifier!
  * @endcode
  * @{
  */
@@ -50,7 +50,7 @@
 #include <optional>
 #include <string_view>
 
-// SIMD 헤더 (컴파일러가 지원하는 경우에만 포함)
+// SIMD headers (included only if supported by the compiler)
 #if defined(__SSE4_2__)
 #  include <nmmintrin.h>
 #endif
@@ -66,22 +66,22 @@ namespace qbuem::security {
 // ─── JwtView ─────────────────────────────────────────────────────────────────
 
 /**
- * @brief JWT 파싱 결과 — zero-copy 뷰.
+ * @brief JWT parse result — zero-copy view.
  *
- * 입력 `std::string_view`의 수명이 `JwtView`보다 길어야 합니다.
+ * The lifetime of the input `std::string_view` must exceed that of `JwtView`.
  */
 struct JwtView {
-    std::string_view header;     ///< Base64url-encoded header (점 제외)
-    std::string_view payload;    ///< Base64url-encoded payload (점 제외)
-    std::string_view signature;  ///< 서명 파트 (알고리즘에 따라 Base64url 또는 Hex)
+    std::string_view header;     ///< Base64url-encoded header (excluding dots)
+    std::string_view payload;    ///< Base64url-encoded payload (excluding dots)
+    std::string_view signature;  ///< Signature part (Base64url or Hex depending on algorithm)
 
     /**
-     * @brief 서명 입력 (`header.payload`) 뷰를 반환합니다.
+     * @brief Returns the signing input (`header.payload`) view.
      *
-     * HMAC/RSA 서명 검증 시 `signing_input()`을 signed data로 사용합니다.
-     * 이 뷰는 원본 토큰 버퍼를 직접 참조합니다.
+     * Use `signing_input()` as the signed data during HMAC/RSA signature verification.
+     * This view directly references the original token buffer.
      *
-     * @param full_token 전체 JWT 토큰 문자열 (파싱에 사용된 것과 동일).
+     * @param full_token The full JWT token string (same one used for parsing).
      */
     [[nodiscard]] std::string_view signing_input(std::string_view full_token) const noexcept {
         // header + '.' + payload
@@ -91,36 +91,36 @@ struct JwtView {
     }
 
     /**
-     * @brief Payload에서 문자열 클레임을 추출합니다 (zero-copy).
+     * @brief Extracts a string claim from the Payload (zero-copy).
      *
-     * `"key":"value"` 패턴을 SIMD로 탐색합니다.
-     * 중첩 JSON은 처리하지 않습니다 — JWT 표준 클레임 전용입니다.
+     * Searches for the `"key":"value"` pattern using SIMD.
+     * Nested JSON is not handled — intended for standard JWT claims only.
      *
-     * @param key 클레임 키 (e.g. "sub", "iss", "aud").
-     * @returns 값 뷰 또는 nullopt (키 없음, 타입 불일치).
+     * @param key Claim key (e.g. "sub", "iss", "aud").
+     * @returns Value view or nullopt (key absent or type mismatch).
      */
     [[nodiscard]] std::optional<std::string_view> claim(std::string_view key) const noexcept;
 
     /**
-     * @brief Payload에서 정수 클레임을 추출합니다.
+     * @brief Extracts an integer claim from the Payload.
      *
-     * `"exp"`, `"iat"`, `"nbf"` 등 숫자 클레임에 사용합니다.
+     * Used for numeric claims such as `"exp"`, `"iat"`, `"nbf"`.
      *
-     * @param key 클레임 키.
-     * @returns 정수값 또는 nullopt.
+     * @param key Claim key.
+     * @returns Integer value or nullopt.
      */
     [[nodiscard]] std::optional<int64_t> claim_int(std::string_view key) const noexcept;
 
     /**
-     * @brief `exp` 클레임 기반 만료 여부를 확인합니다.
+     * @brief Checks whether the token is expired based on the `exp` claim.
      *
-     * @param now_unix 현재 Unix 타임스탬프 (초).
-     * @param leeway_sec 레이웨이 (초, 기본 0).
-     * @returns 만료되었으면 true.
+     * @param now_unix Current Unix timestamp (seconds).
+     * @param leeway_sec Leeway in seconds (default 0).
+     * @returns true if expired.
      */
     [[nodiscard]] bool is_expired(int64_t now_unix, int64_t leeway_sec = 0) const noexcept {
         auto exp = claim_int("exp");
-        if (!exp) return false; // exp 없으면 만료 미검사
+        if (!exp) return false; // No exp claim — expiry not checked
         return now_unix > (*exp + leeway_sec);
     }
 };
@@ -128,36 +128,36 @@ struct JwtView {
 // ─── SIMDJwtParser ───────────────────────────────────────────────────────────
 
 /**
- * @brief SIMD 가속 JWT 파서.
+ * @brief SIMD-accelerated JWT parser.
  *
- * ## 파싱 단계
- * 1. **Dot scan**: SIMD로 `.` 두 개를 찾아 3개 파트 분리.
- * 2. **Base64url validation**: 각 파트가 유효한 Base64url 문자만 포함하는지 검사.
- * 3. **구조 검사**: header/payload가 0 길이가 아닌지 확인.
+ * ## Parsing stages
+ * 1. **Dot scan**: Locate two `.` characters using SIMD to split into 3 parts.
+ * 2. **Base64url validation**: Check that each part contains only valid Base64url characters.
+ * 3. **Structure check**: Verify that header and payload are non-empty.
  *
- * ## 인스턴스 공유
- * `SIMDJwtParser`는 상태를 가지지 않습니다 — 동시에 여러 스레드에서 공유 사용 가능.
+ * ## Instance sharing
+ * `SIMDJwtParser` is stateless — safe to share across multiple threads concurrently.
  */
 class SIMDJwtParser {
 public:
     SIMDJwtParser() noexcept = default;
 
     /**
-     * @brief JWT 토큰 문자열을 파싱합니다.
+     * @brief Parses a JWT token string.
      *
-     * @param token JWT 토큰 (`xxxxx.yyyyy.zzzzz` 형식).
-     * @returns 파싱된 `JwtView` 또는 nullopt (구조 오류).
+     * @param token JWT token (format: `xxxxx.yyyyy.zzzzz`).
+     * @returns Parsed `JwtView` or nullopt (structural error).
      *
-     * @note 서명 검증은 수행하지 않습니다.
+     * @note Signature verification is not performed.
      */
     [[nodiscard]] std::optional<JwtView> parse(std::string_view token) const noexcept {
         if (token.empty() || token.size() > kMaxTokenLen) return std::nullopt;
 
-        // Step 1: dot 위치 탐색 (SIMD)
+        // Step 1: Locate dot positions (SIMD)
         DotPositions dots = find_dots(token);
         if (!dots.valid) return std::nullopt;
 
-        // Step 2: 3개 파트 분리
+        // Step 2: Split into 3 parts
         std::string_view header    = token.substr(0, dots.first);
         std::string_view payload   = token.substr(dots.first + 1,
                                                     dots.second - dots.first - 1);
@@ -165,15 +165,15 @@ public:
 
         if (header.empty() || payload.empty()) return std::nullopt;
 
-        // Step 3: Base64url 유효성 검사 (SIMD)
+        // Step 3: Base64url validation (SIMD)
         if (!is_base64url(header))  return std::nullopt;
         if (!is_base64url(payload)) return std::nullopt;
-        // signature는 알고리즘에 따라 다를 수 있어 검사 생략
+        // Signature format may vary by algorithm — validation skipped
 
         return JwtView{header, payload, signature};
     }
 
-    /** @brief 최대 처리 토큰 길이 (8KB). */
+    /** @brief Maximum token length to process (8KB). */
     static constexpr size_t kMaxTokenLen = 8192;
 
 private:
@@ -184,13 +184,13 @@ private:
     };
 
     /**
-     * @brief SIMD로 `.` 위치 두 개를 탐색합니다.
+     * @brief Locates two `.` positions using SIMD.
      *
-     * ## 플랫폼별 구현
-     * - AVX2: `_mm256_cmpeq_epi8` + `_mm256_movemask_epi8` (32B 단위)
-     * - SSE4.2: `_mm_cmpeq_epi8` + `_mm_movemask_epi8` (16B 단위)
-     * - NEON: `vceqq_u8` + `vmaxvq_u8` (16B 단위)
-     * - Scalar: 선형 탐색
+     * ## Platform-specific implementations
+     * - AVX2: `_mm256_cmpeq_epi8` + `_mm256_movemask_epi8` (32B chunks)
+     * - SSE4.2: `_mm_cmpeq_epi8` + `_mm_movemask_epi8` (16B chunks)
+     * - NEON: `vceqq_u8` + `vmaxvq_u8` (16B chunks)
+     * - Scalar: linear scan
      */
     [[nodiscard]] static DotPositions find_dots(std::string_view token) noexcept {
         const char* data = token.data();
@@ -198,7 +198,7 @@ private:
         size_t first = len; // sentinel
 
 #if defined(__AVX2__)
-        // AVX2: 32바이트 단위로 `.` 탐색
+        // AVX2: scan for `.` in 32-byte chunks
         const __m256i dot_vec = _mm256_set1_epi8('.');
         size_t i = 0;
         for (; i + 32 <= len && first == len; i += 32) {
@@ -210,7 +210,7 @@ private:
                 first = i + static_cast<size_t>(__builtin_ctz(mask));
             }
         }
-        // 잔여 바이트 스칼라 처리
+        // Handle remaining bytes with scalar fallback
         for (; i < len && first == len; ++i) {
             if (data[i] == '.') first = i;
         }
@@ -231,7 +231,7 @@ private:
         }
 
 #elif defined(__SSE4_2__)
-        // SSE4.2: 16바이트 단위
+        // SSE4.2: 16-byte chunks
         const __m128i dot_vec = _mm_set1_epi8('.');
         size_t i = 0;
         for (; i + 16 <= len && first == len; i += 16) {
@@ -261,13 +261,13 @@ private:
         }
 
 #elif defined(__aarch64__) && defined(__ARM_NEON)
-        // NEON: 16바이트 단위
+        // NEON: 16-byte chunks
         const uint8x16_t dot_vec = vdupq_n_u8(static_cast<uint8_t>('.'));
         size_t i = 0;
         for (; i + 16 <= len && first == len; i += 16) {
             uint8x16_t chunk = vld1q_u8(reinterpret_cast<const uint8_t*>(data + i));
             uint8x16_t cmp   = vceqq_u8(chunk, dot_vec);
-            // 일치하는 바이트가 있으면 스칼라로 정확한 위치 확인
+            // If any matching byte found, use scalar to pinpoint exact position
             if (vmaxvq_u8(cmp) != 0) {
                 for (size_t j = i; j < i + 16 && first == len; ++j) {
                     if (data[j] == '.') first = j;
@@ -310,18 +310,18 @@ private:
     }
 
     /**
-     * @brief Base64url 유효성 검사 (SIMD).
+     * @brief Base64url validation (SIMD).
      *
-     * 유효 문자: `A-Z a-z 0-9 - _` (RFC 4648 §5)
-     * `=` 패딩은 JWT에서 사용하지 않으므로 허용하지 않습니다.
+     * Valid characters: `A-Z a-z 0-9 - _` (RFC 4648 §5)
+     * `=` padding is not used in JWT and is therefore rejected.
      *
-     * ## LUT 전략 (SSE/NEON)
-     * 128-entry 4-bit LUT로 각 문자의 유효성을 벡터 조회합니다.
-     * pshufb(`_mm_shuffle_epi8`) 명령어 1개로 16바이트를 동시에 검사합니다.
+     * ## LUT strategy (SSE/NEON)
+     * Performs vector lookup of character validity using a 128-entry 4-bit LUT.
+     * A single pshufb (`_mm_shuffle_epi8`) instruction checks 16 bytes simultaneously.
      */
     [[nodiscard]] static bool is_base64url(std::string_view s) noexcept {
         for (unsigned char c : s) {
-            // Base64url 문자 집합: A-Z(65-90), a-z(97-122), 0-9(48-57), -(45), _(95)
+            // Base64url character set: A-Z(65-90), a-z(97-122), 0-9(48-57), -(45), _(95)
             bool valid = (c >= 'A' && c <= 'Z')
                       || (c >= 'a' && c <= 'z')
                       || (c >= '0' && c <= '9')
@@ -332,23 +332,23 @@ private:
     }
 };
 
-// ─── JwtView 클레임 파싱 구현 ─────────────────────────────────────────────────
+// ─── JwtView claim parsing implementation ────────────────────────────────────
 
 /**
- * @brief Payload JSON에서 키를 탐색하는 내부 스캐너.
+ * @brief Internal scanner for locating keys in a Payload JSON object.
  *
- * JSON 키는 `"key":value` 형식입니다.
- * 중첩 없는 평탄한 JWT payload 클레임 전용입니다.
+ * JSON keys follow the `"key":value` format.
+ * Intended exclusively for flat (non-nested) JWT payload claims.
  */
 namespace detail {
 
 /**
- * @brief Base64url → raw bytes 인라인 디코더 (힙 없음, 최대 8KB).
+ * @brief Inline Base64url → raw bytes decoder (no heap allocation, up to 8KB).
  *
- * @param b64 Base64url 인코딩 문자열 (패딩 없음).
- * @param out 출력 버퍼.
- * @param out_len 출력 버퍼 크기.
- * @returns 디코딩된 바이트 수, 오류 시 0.
+ * @param b64 Base64url-encoded string (no padding).
+ * @param out Output buffer.
+ * @param out_len Output buffer size.
+ * @returns Number of decoded bytes, or 0 on error.
  */
 [[nodiscard]] inline size_t base64url_decode(std::string_view b64,
                                               uint8_t* out,
@@ -393,35 +393,35 @@ namespace detail {
 }
 
 /**
- * @brief 디코딩된 JSON payload에서 문자열 클레임을 찾습니다.
+ * @brief Finds a string claim in a decoded JSON payload.
  *
- * `"key":"value"` 패턴만 처리합니다 (중첩 객체, 배열 미지원).
+ * Handles only the `"key":"value"` pattern (nested objects and arrays are not supported).
  *
- * @param json  평탄한 JSON 문자열 (e.g. `{"sub":"user","exp":1234}`).
- * @param key   찾을 키.
- * @returns 값 문자열 뷰 (json 버퍼 참조) 또는 nullopt.
+ * @param json  Flat JSON string (e.g. `{"sub":"user","exp":1234}`).
+ * @param key   Key to search for.
+ * @returns String value view (references the json buffer) or nullopt.
  */
 [[nodiscard]] inline std::optional<std::string_view>
 json_find_string(std::string_view json, std::string_view key) noexcept {
-    // 탐색 패턴: "key":"
+    // Search pattern: "key":"
     if (json.empty() || key.empty()) return std::nullopt;
 
-    // 키 검색 (단순 선형)
+    // Key search (simple linear scan)
     size_t pos = 0;
     while (pos < json.size()) {
-        // '"key"' 탐색
+        // Search for '"key"'
         auto qpos = json.find('"', pos);
         if (qpos == std::string_view::npos) break;
         if (qpos + key.size() + 2 >= json.size()) break;
         if (json.substr(qpos + 1, key.size()) == key
             && json[qpos + key.size() + 1] == '"') {
-            // ':' 탐색
+            // Search for ':'
             size_t colon = qpos + key.size() + 2;
             if (colon >= json.size() || json[colon] != ':') { pos = qpos + 1; continue; }
             ++colon;
             if (colon >= json.size()) break;
             if (json[colon] == '"') {
-                // 문자열 값
+                // String value
                 size_t vstart = colon + 1;
                 size_t vend = json.find('"', vstart);
                 if (vend == std::string_view::npos) return std::nullopt;
@@ -434,9 +434,9 @@ json_find_string(std::string_view json, std::string_view key) noexcept {
 }
 
 /**
- * @brief 디코딩된 JSON payload에서 정수 클레임을 찾습니다.
+ * @brief Finds an integer claim in a decoded JSON payload.
  *
- * `"key":1234` 패턴을 처리합니다.
+ * Handles the `"key":1234` pattern.
  */
 [[nodiscard]] inline std::optional<int64_t>
 json_find_int(std::string_view json, std::string_view key) noexcept {
@@ -470,7 +470,7 @@ json_find_int(std::string_view json, std::string_view key) noexcept {
 
 inline std::optional<std::string_view>
 JwtView::claim(std::string_view key) const noexcept {
-    // payload는 Base64url 인코딩 — 먼저 디코딩 필요
+    // payload is Base64url-encoded — must be decoded first
     static thread_local uint8_t decode_buf[8192];
     size_t n = detail::base64url_decode(payload, decode_buf, sizeof(decode_buf));
     if (n == 0) return std::nullopt;
