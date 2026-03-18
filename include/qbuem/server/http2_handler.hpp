@@ -822,32 +822,32 @@ public:
         co_return Result<void>::ok();
     }
 
-    // ─── 직렬화 유틸리티 (정적) ──────────────────────────────────────────────
+    // ─── Serialization utilities (static) ────────────────────────────────────
 
     /**
-     * @brief HTTP/2 프레임을 9바이트 헤더 + 페이로드 바이트열로 직렬화합니다.
+     * @brief Serializes an HTTP/2 frame as a 9-byte header + payload byte sequence.
      *
-     * RFC 7540 섹션 4.1의 프레임 포맷을 따릅니다.
+     * Follows the frame format of RFC 7540 section 4.1.
      *
-     * @param frame 직렬화할 프레임.
-     * @returns 직렬화된 바이트열 (9바이트 헤더 + 페이로드).
+     * @param frame Frame to serialize.
+     * @returns Serialized byte sequence (9-byte header + payload).
      */
     static std::vector<uint8_t> serialize_frame(const Http2Frame& frame) {
         std::vector<uint8_t> out;
         out.reserve(9 + frame.payload.size());
 
-        // Length (24비트, 빅 엔디안)
+        // Length (24-bit, big-endian)
         out.push_back(static_cast<uint8_t>((frame.length >> 16) & 0xFF));
         out.push_back(static_cast<uint8_t>((frame.length >>  8) & 0xFF));
         out.push_back(static_cast<uint8_t>( frame.length        & 0xFF));
 
-        // Type (8비트)
+        // Type (8-bit)
         out.push_back(static_cast<uint8_t>(frame.type));
 
-        // Flags (8비트)
+        // Flags (8-bit)
         out.push_back(frame.flags);
 
-        // Stream Identifier (31비트, MSB 예약 = 0, 빅 엔디안)
+        // Stream Identifier (31-bit, MSB reserved = 0, big-endian)
         const uint32_t sid = frame.stream_id & 0x7FFFFFFF;
         out.push_back(static_cast<uint8_t>((sid >> 24) & 0xFF));
         out.push_back(static_cast<uint8_t>((sid >> 16) & 0xFF));
@@ -861,20 +861,20 @@ public:
     }
 
 private:
-    // ─── 내부 프레임 처리 메서드 ─────────────────────────────────────────────
+    // ─── Internal frame processing methods ───────────────────────────────────
 
     /**
-     * @brief SETTINGS 프레임을 처리합니다 (RFC 7540 섹션 6.5).
+     * @brief Processes a SETTINGS frame (RFC 7540 section 6.5).
      *
-     * ACK 플래그가 없는 SETTINGS를 수신하면 ACK로 응답합니다.
-     * ACK SETTINGS는 무시합니다.
+     * Responds with ACK when a SETTINGS without the ACK flag is received.
+     * Ignores ACK SETTINGS.
      *
-     * @param frame 수신된 SETTINGS 프레임.
-     * @returns 처리 결과.
+     * @param frame Received SETTINGS frame.
+     * @returns Processing result.
      */
     Task<Result<void>> handle_settings(const Http2Frame& frame) {
         if (frame.stream_id != 0) {
-            // SETTINGS는 반드시 stream_id == 0이어야 함 (PROTOCOL_ERROR)
+            // SETTINGS must have stream_id == 0 (PROTOCOL_ERROR)
             co_await send_goaway(last_stream_id_, 0x1 /* PROTOCOL_ERROR */,
                                  "SETTINGS with non-zero stream ID");
             co_return Result<void>::err(
@@ -882,31 +882,31 @@ private:
         }
 
         if (frame.flags & HTTP2_FLAG_ACK) {
-            // ACK SETTINGS 수신 — 무시
+            // ACK SETTINGS received — ignore
             co_return Result<void>::ok();
         }
 
-        // 피어 SETTINGS 파라미터 처리 (현재 무시, 최소 구현)
-        // ACK 응답 전송
+        // Process peer SETTINGS parameters (currently ignored, minimal implementation)
+        // Send ACK response
         co_await send_settings(true);
         co_return Result<void>::ok();
     }
 
     /**
-     * @brief PING 프레임을 처리합니다 (RFC 7540 섹션 6.7).
+     * @brief Processes a PING frame (RFC 7540 section 6.7).
      *
-     * ACK 플래그가 없는 PING을 수신하면 동일한 opaque_data로 ACK 응답합니다.
+     * Responds with the same opaque_data as ACK when a PING without the ACK flag is received.
      *
-     * @param frame 수신된 PING 프레임.
-     * @returns 처리 결과.
+     * @param frame Received PING frame.
+     * @returns Processing result.
      */
     Task<Result<void>> handle_ping(const Http2Frame& frame) {
         if (frame.flags & HTTP2_FLAG_ACK) {
-            // ACK PING 수신 — 무시 (RTT 측정 등은 미구현)
+            // ACK PING received — ignore (RTT measurement etc. not implemented)
             co_return Result<void>::ok();
         }
 
-        // 수신된 opaque_data 그대로 반환
+        // Echo back the received opaque_data
         uint64_t opaque = 0;
         if (frame.payload.size() >= 8) {
             for (int i = 0; i < 8; ++i) {
@@ -918,49 +918,49 @@ private:
     }
 
     /**
-     * @brief GOAWAY 프레임을 처리합니다 (RFC 7540 섹션 6.8).
+     * @brief Processes a GOAWAY frame (RFC 7540 section 6.8).
      *
-     * 피어가 연결 종료를 요청한 경우로, 연결을 우아하게 종료합니다.
+     * The peer has requested connection closure; gracefully terminates the connection.
      *
-     * @param frame 수신된 GOAWAY 프레임.
-     * @returns 처리 결과.
+     * @param frame Received GOAWAY frame.
+     * @returns Processing result.
      */
     Task<Result<void>> handle_goaway(const Http2Frame& /*frame*/) {
-        // 피어 GOAWAY 수신: 진행 중인 스트림 정리 후 연결 종료
-        // 최소 구현: 에러 코드 반환으로 상위 레이어에 알림
+        // Peer GOAWAY received: clean up in-progress streams and close connection
+        // Minimal implementation: notify upper layer by returning an error code
         co_return Result<void>::err(
             std::make_error_code(std::errc::connection_aborted));
     }
 
     /**
-     * @brief HEADERS 프레임을 처리합니다 (RFC 7540 섹션 6.2).
+     * @brief Processes a HEADERS frame (RFC 7540 section 6.2).
      *
-     * 새 스트림을 개시하거나 기존 스트림의 트레일러 헤더를 처리합니다.
-     * END_HEADERS 플래그가 설정된 경우 HPACK 디코딩을 완료합니다.
-     * END_STREAM 플래그가 설정된 경우 요청 핸들러를 호출합니다.
+     * Initiates a new stream or processes trailer headers on an existing stream.
+     * Completes HPACK decoding when the END_HEADERS flag is set.
+     * Invokes the request handler when the END_STREAM flag is set.
      *
-     * @param frame 수신된 HEADERS 프레임.
-     * @returns 처리 결과.
+     * @param frame Received HEADERS frame.
+     * @returns Processing result.
      */
     Task<Result<void>> handle_headers(const Http2Frame& frame) {
         const uint32_t sid = frame.stream_id;
         if (sid == 0) {
-            // HEADERS는 반드시 stream_id != 0이어야 함
+            // HEADERS must have stream_id != 0
             co_await send_goaway(last_stream_id_, 0x1 /* PROTOCOL_ERROR */,
                                  "HEADERS with stream_id == 0");
             co_return Result<void>::err(
                 std::make_error_code(std::errc::protocol_error));
         }
 
-        // 스트림 생성 또는 조회
+        // Create or look up stream
         auto& stream = get_or_create_stream(sid);
 
-        // PRIORITY 플래그: 페이로드 앞 5바이트 건너뜀
+        // PRIORITY flag: skip 5 bytes at start of payload
         size_t header_block_offset = 0;
         if (frame.flags & HTTP2_FLAG_PRIORITY) {
             header_block_offset = 5;
         }
-        // PADDED 플래그: 첫 바이트가 패딩 길이
+        // PADDED flag: first byte is the padding length
         uint8_t pad_length = 0;
         if (frame.flags & HTTP2_FLAG_PADDED) {
             if (frame.payload.empty()) {
@@ -971,7 +971,7 @@ private:
             header_block_offset += 1;
         }
 
-        // 헤더 블록 프래그먼트 추출
+        // Extract header block fragment
         if (header_block_offset > frame.payload.size()) {
             co_return Result<void>::err(
                 std::make_error_code(std::errc::protocol_error));
@@ -988,15 +988,15 @@ private:
         };
 
         if (frame.flags & HTTP2_FLAG_END_HEADERS) {
-            // 헤더 블록 완료 — HPACK 디코딩
+            // Header block complete — HPACK decode
             auto decoded = hpack_decoder_.decode(header_block);
             for (auto& [k, v] : decoded) {
                 stream->request_headers[k] = std::move(v);
             }
             stream->state = Http2Stream::State::OPEN;
         } else {
-            // CONTINUATION 프레임 대기 — 헤더 블록 버퍼에 저장
-            // (최소 구현: CONTINUATION 프레임에서 계속 처리)
+            // Awaiting CONTINUATION frame — store in header block buffer
+            // (minimal implementation: continued processing in CONTINUATION frame)
             continuation_buffer_[sid].insert(
                 continuation_buffer_[sid].end(),
                 header_block.begin(),
@@ -1005,7 +1005,7 @@ private:
 
         if (frame.flags & HTTP2_FLAG_END_STREAM) {
             stream->state = Http2Stream::State::HALF_CLOSED_REMOTE;
-            // 핸들러 호출
+            // Invoke handler
             if (handler_) {
                 auto t = handler_(stream->request_headers,
                                   stream->request_body,
@@ -1019,31 +1019,31 @@ private:
     }
 
     /**
-     * @brief CONTINUATION 프레임을 처리합니다 (RFC 7540 섹션 6.10).
+     * @brief Processes a CONTINUATION frame (RFC 7540 section 6.10).
      *
-     * 이전 HEADERS 또는 PUSH_PROMISE 프레임에서 시작된 헤더 블록의
-     * 연속 데이터를 수신합니다.
+     * Receives continuation data of a header block started by a previous
+     * HEADERS or PUSH_PROMISE frame.
      *
-     * @param frame 수신된 CONTINUATION 프레임.
-     * @returns 처리 결과.
+     * @param frame Received CONTINUATION frame.
+     * @returns Processing result.
      */
     Task<Result<void>> handle_continuation(const Http2Frame& frame) {
         const uint32_t sid = frame.stream_id;
         auto it = continuation_buffer_.find(sid);
         if (it == continuation_buffer_.end()) {
-            // 예상치 못한 CONTINUATION — 프로토콜 에러
+            // Unexpected CONTINUATION — protocol error
             co_await send_goaway(last_stream_id_, 0x1 /* PROTOCOL_ERROR */,
                                  "Unexpected CONTINUATION frame");
             co_return Result<void>::err(
                 std::make_error_code(std::errc::protocol_error));
         }
 
-        // 헤더 블록 버퍼에 추가
+        // Append to header block buffer
         auto& buf = it->second;
         buf.insert(buf.end(), frame.payload.begin(), frame.payload.end());
 
         if (frame.flags & HTTP2_FLAG_END_HEADERS) {
-            // 헤더 블록 완료 — HPACK 디코딩
+            // Header block complete — HPACK decode
             auto stream_it = streams_.find(sid);
             if (stream_it != streams_.end()) {
                 auto decoded = hpack_decoder_.decode(
@@ -1060,18 +1060,18 @@ private:
     }
 
     /**
-     * @brief DATA 프레임을 처리합니다 (RFC 7540 섹션 6.1).
+     * @brief Processes a DATA frame (RFC 7540 section 6.1).
      *
-     * 스트림 바디를 수집합니다.
-     * END_STREAM 플래그가 설정된 경우 요청 핸들러를 호출합니다.
+     * Collects stream body data.
+     * Invokes the request handler when the END_STREAM flag is set.
      *
-     * @param frame 수신된 DATA 프레임.
-     * @returns 처리 결과.
+     * @param frame Received DATA frame.
+     * @returns Processing result.
      */
     Task<Result<void>> handle_data(const Http2Frame& frame) {
         const uint32_t sid = frame.stream_id;
         if (sid == 0) {
-            // DATA는 반드시 stream_id != 0이어야 함
+            // DATA must have stream_id != 0
             co_await send_goaway(last_stream_id_, 0x1 /* PROTOCOL_ERROR */,
                                  "DATA with stream_id == 0");
             co_return Result<void>::err(
@@ -1080,14 +1080,14 @@ private:
 
         auto it = streams_.find(sid);
         if (it == streams_.end()) {
-            // 알 수 없는 스트림 — RST_STREAM으로 응답
+            // Unknown stream — respond with RST_STREAM
             co_await send_rst_stream(sid, 0x1 /* PROTOCOL_ERROR */);
             co_return Result<void>::ok();
         }
 
         auto& stream = it->second;
 
-        // PADDED 플래그 처리
+        // Process PADDED flag
         size_t data_offset = 0;
         size_t data_end    = frame.payload.size();
         if (frame.flags & HTTP2_FLAG_PADDED) {
@@ -1104,7 +1104,7 @@ private:
             data_end -= pad;
         }
 
-        // 바디 데이터 수집
+        // Collect body data
         stream->request_body.insert(
             stream->request_body.end(),
             frame.payload.begin() + static_cast<ptrdiff_t>(data_offset),
@@ -1112,7 +1112,7 @@ private:
 
         if (frame.flags & HTTP2_FLAG_END_STREAM) {
             stream->state = Http2Stream::State::HALF_CLOSED_REMOTE;
-            // 핸들러 호출
+            // Invoke handler
             if (handler_) {
                 auto t = handler_(stream->request_headers,
                                   stream->request_body,
@@ -1125,12 +1125,12 @@ private:
     }
 
     /**
-     * @brief RST_STREAM 프레임을 처리합니다 (RFC 7540 섹션 6.4).
+     * @brief Processes an RST_STREAM frame (RFC 7540 section 6.4).
      *
-     * 피어가 스트림을 강제 종료한 경우 스트림 상태를 CLOSED로 변경합니다.
+     * Changes the stream state to CLOSED when the peer forcibly closes a stream.
      *
-     * @param frame 수신된 RST_STREAM 프레임.
-     * @returns 처리 결과.
+     * @param frame Received RST_STREAM frame.
+     * @returns Processing result.
      */
     Task<Result<void>> handle_rst_stream(const Http2Frame& frame) {
         const uint32_t sid = frame.stream_id;
@@ -1141,10 +1141,10 @@ private:
     }
 
     /**
-     * @brief RST_STREAM 프레임을 전송합니다.
+     * @brief Sends an RST_STREAM frame.
      *
-     * @param stream_id  종료할 스트림 식별자.
-     * @param error_code 종료 원인 에러 코드 (RFC 7540 섹션 7).
+     * @param stream_id  Stream identifier to close.
+     * @param error_code Error code indicating the reason for closure (RFC 7540 section 7).
      */
     Task<void> send_rst_stream(uint32_t stream_id, uint32_t error_code) {
         Http2Frame frame;
@@ -1157,13 +1157,13 @@ private:
         co_return;
     }
 
-    // ─── 스트림 관리 유틸리티 ────────────────────────────────────────────────
+    // ─── Stream management utilities ──────────────────────────────────────────
 
     /**
-     * @brief 스트림 ID로 스트림을 조회하거나 새로 생성합니다.
+     * @brief Looks up a stream by ID or creates a new one.
      *
-     * @param sid 스트림 식별자.
-     * @returns 기존 또는 새로 생성된 스트림의 shared_ptr 참조.
+     * @param sid Stream identifier.
+     * @returns shared_ptr reference to the existing or newly created stream.
      */
     std::shared_ptr<Http2Stream>& get_or_create_stream(uint32_t sid) {
         auto it = streams_.find(sid);
@@ -1178,12 +1178,12 @@ private:
         return it->second;
     }
 
-    // ─── 직렬화 헬퍼 (정적) ──────────────────────────────────────────────────
+    // ─── Serialization helpers (static) ──────────────────────────────────────
 
     /**
-     * @brief uint16_t를 빅 엔디안으로 벡터에 추가합니다.
-     * @param v   대상 벡터.
-     * @param val 추가할 16비트 정수값.
+     * @brief Appends a uint16_t to a vector in big-endian order.
+     * @param v   Target vector.
+     * @param val 16-bit integer value to append.
      */
     static void append_uint16(std::vector<uint8_t>& v, uint16_t val) {
         v.push_back(static_cast<uint8_t>((val >> 8) & 0xFF));
@@ -1191,9 +1191,9 @@ private:
     }
 
     /**
-     * @brief uint32_t를 빅 엔디안으로 벡터에 추가합니다.
-     * @param v   대상 벡터.
-     * @param val 추가할 32비트 정수값.
+     * @brief Appends a uint32_t to a vector in big-endian order.
+     * @param v   Target vector.
+     * @param val 32-bit integer value to append.
      */
     static void append_uint32(std::vector<uint8_t>& v, uint32_t val) {
         v.push_back(static_cast<uint8_t>((val >> 24) & 0xFF));
@@ -1202,43 +1202,43 @@ private:
         v.push_back(static_cast<uint8_t>( val        & 0xFF));
     }
 
-    // ─── 멤버 변수 ───────────────────────────────────────────────────────────
+    // ─── Member variables ─────────────────────────────────────────────────────
 
-    /** @brief 완성된 HTTP/2 요청을 처리하는 애플리케이션 핸들러. */
+    /** @brief Application handler that processes completed HTTP/2 requests. */
     RequestHandler handler_;
 
-    /** @brief 스트림 ID → 스트림 객체 맵. */
+    /** @brief Stream ID → stream object map. */
     std::unordered_map<uint32_t, std::shared_ptr<Http2Stream>> streams_;
 
-    /** @brief HPACK 헤더 블록 디코더 인스턴스. */
+    /** @brief HPACK header block decoder instance. */
     HpackDecoder hpack_decoder_;
 
-    /** @brief HPACK 헤더 블록 인코더 인스턴스. */
+    /** @brief HPACK header block encoder instance. */
     HpackEncoder hpack_encoder_;
 
-    /** @brief 소켓에 쓸 대기 프레임 큐. `drain_pending_frames()`로 수거합니다. */
+    /** @brief Queue of frames pending write to socket. Collected via `drain_pending_frames()`. */
     std::vector<Http2Frame> pending_frames_;
 
-    /** @brief 서버가 처리한 마지막 클라이언트 스트림 ID (GOAWAY에 사용). */
+    /** @brief Last client stream ID processed by the server (used in GOAWAY). */
     uint32_t last_stream_id_{0};
 
     /**
-     * @brief CONTINUATION 프레임 수신 중인 스트림의 헤더 블록 버퍼.
+     * @brief Header block buffer for streams awaiting CONTINUATION frames.
      *
-     * 스트림 ID → 아직 완성되지 않은 헤더 블록 바이트열.
-     * END_HEADERS 플래그 수신 시 HPACK 디코딩 후 삭제됩니다.
+     * Stream ID → incomplete header block byte sequence.
+     * Deleted after HPACK decoding upon receiving the END_HEADERS flag.
      */
     std::unordered_map<uint32_t, std::vector<uint8_t>> continuation_buffer_;
 
-    // ─── SETTINGS 기본값 상수 ────────────────────────────────────────────────
+    // ─── SETTINGS default value constants ────────────────────────────────────
 
-    /** @brief 기본 HPACK 헤더 테이블 크기 (RFC 7541 섹션 6.5.2). */
+    /** @brief Default HPACK header table size (RFC 7541 section 6.5.2). */
     static constexpr uint32_t DEFAULT_HEADER_TABLE_SIZE  = 4096;
 
-    /** @brief 기본 최대 프레임 크기 (RFC 7540 섹션 6.5.2). */
+    /** @brief Default maximum frame size (RFC 7540 section 6.5.2). */
     static constexpr uint32_t DEFAULT_MAX_FRAME_SIZE     = 16384;
 
-    /** @brief 기본 초기 흐름 제어 윈도우 크기 (RFC 7540 섹션 6.5.2). */
+    /** @brief Default initial flow control window size (RFC 7540 section 6.5.2). */
     static constexpr uint32_t DEFAULT_INITIAL_WINDOW_SIZE = 65535;
 };
 

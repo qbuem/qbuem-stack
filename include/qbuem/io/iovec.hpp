@@ -2,16 +2,16 @@
 
 /**
  * @file qbuem/io/iovec.hpp
- * @brief 스택 할당 scatter-gather I/O 벡터 배열.
+ * @brief Stack-allocated scatter-gather I/O vector array.
  * @ingroup qbuem_io_buffers
  *
- * `IOVec<N>`은 최대 N개의 `iovec`을 스택에 보관하는 컨테이너입니다.
- * 힙 할당 없이 `writev(2)` / `readv(2)` 에 전달할 벡터 배열을 구성합니다.
+ * `IOVec<N>` is a container that holds up to N `iovec` entries on the stack.
+ * Builds a vector array to pass to `writev(2)` / `readv(2)` without heap allocation.
  *
- * ### 설계 원칙
- * - N은 컴파일 타임 상수 — 스택에 고정 크기 배열 할당
- * - zero-alloc: 힙 할당 전혀 없음
- * - `push()` 오버로드를 통해 BufferView와 raw 포인터 모두 지원
+ * ### Design principles
+ * - N is a compile-time constant — fixed-size array allocated on the stack
+ * - zero-alloc: no heap allocation at all
+ * - Supports both BufferView and raw pointers via `push()` overloads
  * @{
  */
 
@@ -25,13 +25,13 @@
 namespace qbuem {
 
 /**
- * @brief 스택 할당 scatter-gather iovec 배열.
+ * @brief Stack-allocated scatter-gather iovec array.
  *
- * 최대 N개의 `iovec` 엔트리를 보관합니다.
- * `writev(2)` / `readv(2)` syscall에 직접 전달할 수 있도록
- * `as_span()` 메서드로 span을 얻습니다.
+ * Holds up to N `iovec` entries.
+ * Use the `as_span()` method to obtain a span suitable for passing directly
+ * to `writev(2)` / `readv(2)` syscalls.
  *
- * ### 사용 예시
+ * ### Usage example
  * @code
  * IOVec<4> vec;
  * vec.push(header.data(), header.size());
@@ -39,24 +39,24 @@ namespace qbuem {
  * ::writev(fd, vec.as_span().data(), static_cast<int>(vec.as_span().size()));
  * @endcode
  *
- * @tparam N iovec 최대 엔트리 수. 컴파일 타임 상수.
+ * @tparam N Maximum number of iovec entries. Compile-time constant.
  */
 template <size_t N>
 struct IOVec {
-  /** @brief iovec 엔트리 배열. */
+  /** @brief Array of iovec entries. */
   iovec vecs[N];
 
-  /** @brief 현재 유효한 엔트리 수. */
+  /** @brief Number of currently valid entries. */
   size_t count = 0;
 
-  // ─── 추가 ────────────────────────────────────────────────────────────────
+  // ─── Append ──────────────────────────────────────────────────────────────
 
   /**
-   * @brief raw 포인터와 길이로 iovec 엔트리를 추가합니다.
+   * @brief Appends an iovec entry from a raw pointer and length.
    *
-   * @param data 버퍼 포인터.
-   * @param len  버퍼 바이트 수.
-   * @pre `count < N` — 초과 시 assert로 중단.
+   * @param data Buffer pointer.
+   * @param len  Buffer size in bytes.
+   * @pre `count < N` — aborts via assert if exceeded.
    */
   void push(const void *data, size_t len) noexcept {
     assert(count < N && "IOVec capacity exceeded");
@@ -66,49 +66,49 @@ struct IOVec {
   }
 
   /**
-   * @brief `BufferView`로 iovec 엔트리를 추가합니다.
+   * @brief Appends an iovec entry from a `BufferView`.
    *
-   * @param buf 읽기 전용 바이트 뷰.
-   * @pre `count < N` — 초과 시 assert로 중단.
+   * @param buf Read-only byte view.
+   * @pre `count < N` — aborts via assert if exceeded.
    */
   void push(BufferView buf) noexcept {
     push(buf.data(), buf.size());
   }
 
   /**
-   * @brief `MutableBufferView`로 iovec 엔트리를 추가합니다.
+   * @brief Appends an iovec entry from a `MutableBufferView`.
    *
-   * @param buf 쓰기 가능 바이트 뷰.
-   * @pre `count < N` — 초과 시 assert로 중단.
+   * @param buf Writable byte view.
+   * @pre `count < N` — aborts via assert if exceeded.
    */
   void push(MutableBufferView buf) noexcept {
     push(buf.data(), buf.size());
   }
 
-  // ─── 접근자 ──────────────────────────────────────────────────────────────
+  // ─── Accessors ───────────────────────────────────────────────────────────
 
   /**
-   * @brief 유효한 iovec 엔트리들의 `std::span`을 반환합니다.
+   * @brief Returns a `std::span` of the valid iovec entries.
    *
-   * @returns `iovec[0..count)` 범위의 mutable span.
+   * @returns Mutable span over `iovec[0..count)`.
    */
   [[nodiscard]] std::span<iovec> as_span() noexcept {
     return {vecs, count};
   }
 
   /**
-   * @brief 유효한 iovec 엔트리들의 const `std::span`을 반환합니다.
+   * @brief Returns a const `std::span` of the valid iovec entries.
    *
-   * @returns `iovec[0..count)` 범위의 const span.
+   * @returns Const span over `iovec[0..count)`.
    */
   [[nodiscard]] std::span<const iovec> as_const_span() const noexcept {
     return {vecs, count};
   }
 
   /**
-   * @brief 모든 엔트리의 총 바이트 수를 계산합니다.
+   * @brief Computes the total byte count across all entries.
    *
-   * @returns 모든 `iov_len`의 합계.
+   * @returns Sum of all `iov_len` values.
    */
   [[nodiscard]] size_t total_bytes() const noexcept {
     size_t total = 0;
@@ -118,19 +118,19 @@ struct IOVec {
   }
 
   /**
-   * @brief 모든 엔트리를 제거하고 count를 0으로 초기화합니다.
+   * @brief Removes all entries and resets count to 0.
    */
   void clear() noexcept { count = 0; }
 
   /**
-   * @brief 배열이 비어 있는지 확인합니다.
-   * @returns `count == 0`이면 true.
+   * @brief Checks whether the array is empty.
+   * @returns true if `count == 0`.
    */
   [[nodiscard]] bool empty() const noexcept { return count == 0; }
 
   /**
-   * @brief 배열이 가득 찼는지 확인합니다.
-   * @returns `count == N`이면 true.
+   * @brief Checks whether the array is full.
+   * @returns true if `count == N`.
    */
   [[nodiscard]] bool full() const noexcept { return count == N; }
 };

@@ -2,21 +2,21 @@
 
 /**
  * @file qbuem/tracing/sampler.hpp
- * @brief Pluggable Sampler 인터페이스 및 기본 구현체
+ * @brief Pluggable Sampler interface and built-in implementations.
  * @defgroup qbuem_sampler Sampler
  * @ingroup qbuem_tracing
  *
- * ## 설계
- * `Sampler` 인터페이스는 각 스팬 시작 시점에 샘플링 결정을 내립니다.
+ * ## Design
+ * The `Sampler` interface makes a sampling decision at the start of each span.
  *
- * ## 제공 구현체
- * - `AlwaysSampler`        — 항상 샘플링 (개발/디버그)
- * - `NeverSampler`         — 항상 드롭 (zero-overhead 트레이싱 비활성화)
- * - `ProbabilitySampler`   — 0.0~1.0 확률 기반 샘플링
- * - `RateLimitingSampler`  — token bucket 기반 초당 최대 샘플 수 제한
- * - `ParentBasedSampler`   — 부모 스팬의 sampled 플래그 따름
+ * ## Provided implementations
+ * - `AlwaysSampler`        — always samples (development/debug)
+ * - `NeverSampler`         — always drops (disables tracing with zero overhead)
+ * - `ProbabilitySampler`   — probability-based sampling in the range [0.0, 1.0]
+ * - `RateLimitingSampler`  — token-bucket-based maximum samples per second
+ * - `ParentBasedSampler`   — follows the sampled flag of the parent span
  *
- * ## 사용 예시
+ * ## Usage example
  * ```cpp
  * auto sampler = std::make_shared<qbuem::tracing::ProbabilitySampler>(0.1);
  * qbuem::tracing::PipelineTracer::global().set_sampler(sampler);
@@ -40,47 +40,47 @@ namespace qbuem::tracing {
 // ---------------------------------------------------------------------------
 
 /**
- * @brief 샘플링 결정 열거형.
+ * @brief Sampling decision enumeration.
  */
 enum class SamplingDecision {
-  DROP,             ///< 스팬을 샘플링하지 않음
-  RECORD_AND_SAMPLE ///< 스팬을 기록하고 샘플링
+  DROP,             ///< Do not sample this span.
+  RECORD_AND_SAMPLE ///< Record and sample this span.
 };
 
 // ---------------------------------------------------------------------------
-// SamplingContext — 샘플링 결정에 필요한 정보
+// SamplingContext — information required to make a sampling decision
 // ---------------------------------------------------------------------------
 
 /**
- * @brief 샘플링 시점에 Sampler에게 제공되는 컨텍스트.
+ * @brief Context provided to the Sampler at sampling time.
  */
 struct SamplingContext {
-  std::string_view pipeline_name;  ///< 파이프라인 이름
-  std::string_view action_name;    ///< 액션 이름
-  std::string_view span_name;      ///< 스팬 이름
-  const TraceContext *parent;      ///< 부모 TraceContext (루트면 nullptr)
+  std::string_view pipeline_name;  ///< Pipeline name
+  std::string_view action_name;    ///< Action name
+  std::string_view span_name;      ///< Span name
+  const TraceContext *parent;      ///< Parent TraceContext (nullptr for root)
 };
 
 // ---------------------------------------------------------------------------
-// Sampler — 순수 가상 인터페이스
+// Sampler — pure virtual interface
 // ---------------------------------------------------------------------------
 
 /**
- * @brief 스팬 샘플링 결정 인터페이스.
+ * @brief Span sampling decision interface.
  */
 class Sampler {
 public:
   virtual ~Sampler() = default;
 
   /**
-   * @brief 주어진 컨텍스트에 대해 샘플링 여부를 결정합니다.
-   * @param ctx 샘플링 컨텍스트.
-   * @returns RECORD_AND_SAMPLE 또는 DROP.
+   * @brief Decides whether to sample the given context.
+   * @param ctx Sampling context.
+   * @returns RECORD_AND_SAMPLE or DROP.
    */
   [[nodiscard]] virtual SamplingDecision should_sample(
       const SamplingContext &ctx) noexcept = 0;
 
-  /// @brief 이 Sampler의 설명 문자열.
+  /// @brief Description string for this Sampler.
   [[nodiscard]] virtual std::string_view description() const noexcept = 0;
 };
 
@@ -89,7 +89,7 @@ public:
 // ---------------------------------------------------------------------------
 
 /**
- * @brief 항상 샘플링합니다. 개발/디버그 환경에 적합.
+ * @brief Always samples. Suitable for development/debug environments.
  */
 class AlwaysSampler final : public Sampler {
 public:
@@ -108,7 +108,7 @@ public:
 // ---------------------------------------------------------------------------
 
 /**
- * @brief 절대 샘플링하지 않습니다. 트레이싱 비활성화 시 zero-overhead.
+ * @brief Never samples. Zero-overhead when tracing is disabled.
  */
 class NeverSampler final : public Sampler {
 public:
@@ -127,15 +127,15 @@ public:
 // ---------------------------------------------------------------------------
 
 /**
- * @brief 0.0~1.0 확률 기반 샘플러.
+ * @brief Probability-based sampler in the range [0.0, 1.0].
  *
- * `rate = 0.1` → 10% 샘플링, `rate = 1.0` → 100% 샘플링.
- * 스레드별 RNG를 사용하여 lock-free 동작.
+ * `rate = 0.1` → 10% sampling, `rate = 1.0` → 100% sampling.
+ * Uses per-thread RNG for lock-free operation.
  */
 class ProbabilitySampler final : public Sampler {
 public:
   /**
-   * @param rate 샘플링 확률 [0.0, 1.0]. 범위 초과 시 clamping.
+   * @param rate Sampling probability [0.0, 1.0]. Values outside the range are clamped.
    */
   explicit ProbabilitySampler(double rate) noexcept
       : rate_(std::clamp(rate, 0.0, 1.0)) {}
@@ -165,15 +165,15 @@ private:
 // ---------------------------------------------------------------------------
 
 /**
- * @brief Token bucket 기반 초당 최대 샘플 수 제한 샘플러.
+ * @brief Token-bucket-based sampler that limits the maximum number of samples per second.
  *
- * `max_per_second = 100` → 초당 최대 100개 스팬만 샘플링.
- * 버스트 허용량은 `max_per_second`와 동일합니다.
+ * `max_per_second = 100` → samples at most 100 spans per second.
+ * Burst allowance equals `max_per_second`.
  */
 class RateLimitingSampler final : public Sampler {
 public:
   /**
-   * @param max_per_second 초당 최대 샘플 수. 0이면 NeverSampler와 동일.
+   * @param max_per_second Maximum samples per second. 0 behaves like NeverSampler.
    */
   explicit RateLimitingSampler(double max_per_second)
       : rate_(max_per_second),
@@ -188,7 +188,7 @@ public:
     auto now = clock::now();
     double elapsed = std::chrono::duration<double>(now - last_refill_).count();
 
-    // 토큰 보충
+    // Refill tokens
     tokens_ = std::min(rate_, tokens_ + elapsed * rate_);
     last_refill_ = now;
 
@@ -217,17 +217,17 @@ private:
 // ---------------------------------------------------------------------------
 
 /**
- * @brief 부모 스팬의 sampled 플래그를 따르는 샘플러.
+ * @brief Sampler that follows the sampled flag of the parent span.
  *
- * - 부모가 있고 sampled=1 → RECORD_AND_SAMPLE
- * - 부모가 있고 sampled=0 → DROP
- * - 부모 없음 (루트) → `root_sampler`에 위임
+ * - Parent present with sampled=1 → RECORD_AND_SAMPLE
+ * - Parent present with sampled=0 → DROP
+ * - No parent (root) → delegates to `root_sampler`
  */
 class ParentBasedSampler final : public Sampler {
 public:
   /**
-   * @param root_sampler 루트 스팬(부모 없음)에 적용할 샘플러.
-   *                     nullptr이면 AlwaysSampler 사용.
+   * @param root_sampler Sampler to apply to root spans (no parent).
+   *                     If nullptr, uses AlwaysSampler.
    */
   explicit ParentBasedSampler(std::shared_ptr<Sampler> root_sampler = nullptr)
       : root_(root_sampler

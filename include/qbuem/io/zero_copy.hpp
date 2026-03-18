@@ -2,20 +2,21 @@
 
 /**
  * @file qbuem/io/zero_copy.hpp
- * @brief 제로 카피 파일-소켓 전송 유틸리티.
+ * @brief Zero-copy file-to-socket transfer utilities.
  * @ingroup qbuem_io_buffers
  *
- * `sendfile(2)` 및 `splice(2)` syscall의 코루틴 래퍼를 제공합니다.
- * 커널 내에서 데이터를 이동하여 유저스페이스 복사 없이 고속 전송이 가능합니다.
+ * Provides coroutine wrappers for `sendfile(2)` and `splice(2)` syscalls.
+ * Data is moved within the kernel, enabling high-speed transfer without
+ * a userspace copy.
  *
- * ### 플랫폼별 구현
+ * ### Platform-specific implementation
  * - Linux:  `sendfile(2)` — `<sys/sendfile.h>`, `splice(2)` — `<fcntl.h>`
- * - macOS:  `sendfile(2)` — 다른 시그니처 (`<sys/types.h>`, `<sys/socket.h>`)
+ * - macOS:  `sendfile(2)` — different signature (`<sys/types.h>`, `<sys/socket.h>`)
  *
- * ### 설계 원칙
- * - 코루틴 Task로 래핑하여 비동기 인터페이스 제공
- * - Reactor 이벤트를 활용하여 out_fd가 쓰기 가능해질 때까지 대기
- * - 에러는 예외 없이 `Result<size_t>`로 반환
+ * ### Design principles
+ * - Wrapped as coroutine Tasks to provide an async interface
+ * - Suspends via Reactor events until out_fd becomes writable
+ * - Errors are returned as `Result<size_t>` without exceptions
  * @{
  */
 
@@ -45,21 +46,22 @@ namespace qbuem::zero_copy {
 // ─── sendfile ────────────────────────────────────────────────────────────────
 
 /**
- * @brief `sendfile(2)` 기반 파일→소켓 제로 카피 전송.
+ * @brief Zero-copy file-to-socket transfer via `sendfile(2)`.
  *
- * 커널 내에서 파일 데이터를 소켓으로 직접 전송합니다.
- * 유저스페이스 버퍼 복사가 없어 대용량 파일 서빙에 적합합니다.
+ * Sends file data directly to a socket within the kernel.
+ * No userspace buffer copy occurs, making it suitable for serving large files.
  *
- * `out_fd`(소켓)가 쓰기 가능해질 때까지 Reactor 이벤트를 대기합니다.
+ * Suspends the coroutine via a Reactor event until `out_fd` (the socket)
+ * becomes writable.
  *
- * @param out_fd  데이터를 쓸 소켓 파일 디스크립터 (SOCK_STREAM).
- * @param in_fd   읽을 파일 디스크립터 (일반 파일).
- * @param offset  `in_fd`의 읽기 시작 오프셋 (바이트).
- * @param count   전송할 최대 바이트 수.
- * @returns 실제 전송한 바이트 수. 에러 시 error_code.
+ * @param out_fd  Socket file descriptor to write data to (SOCK_STREAM).
+ * @param in_fd   File descriptor to read from (regular file).
+ * @param offset  Read start offset within `in_fd` (bytes).
+ * @param count   Maximum number of bytes to transfer.
+ * @returns Actual number of bytes transferred. error_code on failure.
  *
- * @note Linux에서만 `sendfile(2)`이 파일→소켓 방향으로 동작합니다.
- *       macOS에서는 `sendfile(2)` 시그니처가 다르므로 별도 처리됩니다.
+ * @note On Linux, `sendfile(2)` operates in the file-to-socket direction.
+ *       On macOS, `sendfile(2)` has a different signature and is handled separately.
  */
 inline Task<Result<size_t>> sendfile(int out_fd, int in_fd,
                                      off_t offset, size_t count) {
@@ -108,7 +110,7 @@ inline Task<Result<size_t>> sendfile(int out_fd, int in_fd,
         err_    = errno;
       }
 #else
-      // 지원하지 않는 플랫폼
+      // Unsupported platform
       result_ = -1;
       err_    = ENOSYS;
 #endif
@@ -130,19 +132,19 @@ inline Task<Result<size_t>> sendfile(int out_fd, int in_fd,
 // ─── splice ──────────────────────────────────────────────────────────────────
 
 /**
- * @brief `splice(2)` 기반 파이프를 통한 fd→fd 제로 카피 전송.
+ * @brief Zero-copy fd-to-fd transfer via a pipe using `splice(2)`.
  *
- * 두 파일 디스크립터 사이에 커널 파이프를 통해 데이터를 이동합니다.
- * 유저스페이스 버퍼 복사가 없으며 소켓→소켓 전송도 지원합니다.
+ * Moves data between two file descriptors through a kernel pipe.
+ * No userspace buffer copy occurs; socket-to-socket transfers are also supported.
  *
- * `in_fd`가 읽기 가능해질 때까지 Reactor 이벤트를 대기합니다.
+ * Suspends the coroutine via a Reactor event until `in_fd` becomes readable.
  *
- * @param in_fd  읽을 파일 디스크립터.
- * @param out_fd 쓸 파일 디스크립터.
- * @param count  전송할 최대 바이트 수.
- * @returns 실제 전송한 바이트 수. 에러 시 error_code.
+ * @param in_fd  File descriptor to read from.
+ * @param out_fd File descriptor to write to.
+ * @param count  Maximum number of bytes to transfer.
+ * @returns Actual number of bytes transferred. error_code on failure.
  *
- * @note Linux 전용입니다. 비Linux 플랫폼에서는 `ENOSYS`를 반환합니다.
+ * @note Linux only. Returns `ENOSYS` on non-Linux platforms.
  */
 inline Task<Result<size_t>> splice(int in_fd, int out_fd, size_t count) {
 #if !defined(__linux__)
@@ -177,7 +179,7 @@ inline Task<Result<size_t>> splice(int in_fd, int out_fd, size_t count) {
     }
 
     void do_splice() noexcept {
-      // 임시 파이프 생성
+      // Create a temporary pipe
       if (::pipe2(pipe_fds_, O_NONBLOCK | O_CLOEXEC) != 0) {
         result_ = -1;
         err_    = errno;
@@ -223,35 +225,25 @@ inline Task<Result<size_t>> splice(int in_fd, int out_fd, size_t count) {
 // ─── send_zerocopy ───────────────────────────────────────────────────────────
 
 /**
- * @brief `MSG_ZEROCOPY` 플래그를 이용한 제로 카피 소켓 송신.
- *        Zero-copy socket send using the `MSG_ZEROCOPY` flag (Linux 4.14+).
+ * @brief Zero-copy socket send using the `MSG_ZEROCOPY` flag (Linux 4.14+).
  *
- * 커널이 유저스페이스 버퍼를 직접 참조하여 복사 없이 네트워크로 전송합니다.
  * The kernel references the userspace buffer directly, avoiding a data copy
  * into the socket send buffer.
  *
- * 소켓에 `SO_ZEROCOPY` 옵션이 설정되어 있어야 합니다.
  * The socket must have `SO_ZEROCOPY` set (via `setsockopt`) before calling.
  *
- * 전송이 완료되면 커널이 errqueue로 완료 알림을 보냅니다.
  * After the data is consumed by the network stack, the kernel posts a
  * completion notification to the socket's error queue.  Call
  * `wait_zerocopy()` to drain it.
  *
- * `sockfd`가 쓰기 가능해질 때까지 Reactor 이벤트를 대기합니다.
  * Suspends the coroutine until `sockfd` becomes writable via the Reactor.
  *
- * @param sockfd 데이터를 전송할 소켓 파일 디스크립터.
- *               Socket file descriptor to send data on.
- * @param buf    전송할 데이터 버퍼의 시작 주소.
- *               Pointer to the data buffer to transmit.
- * @param len    전송할 바이트 수.
- *               Number of bytes to transmit.
- * @returns 실제 전송한 바이트 수. 에러 시 error_code.
- *          Number of bytes sent on success, or an error_code on failure.
+ * @param sockfd Socket file descriptor to send data on.
+ * @param buf    Pointer to the data buffer to transmit.
+ * @param len    Number of bytes to transmit.
+ * @returns Number of bytes sent on success, or an error_code on failure.
  *
- * @note Linux 4.14 이상 전용입니다. 비Linux 플랫폼에서는 `ENOSYS`를 반환합니다.
- *       Linux 4.14+ only.  Returns `ENOSYS` on non-Linux platforms.
+ * @note Linux 4.14+ only.  Returns `ENOSYS` on non-Linux platforms.
  */
 inline Task<Result<size_t>> send_zerocopy(int sockfd,
                                            const void *buf, size_t len) {
@@ -307,33 +299,24 @@ inline Task<Result<size_t>> send_zerocopy(int sockfd,
 // ─── wait_zerocopy ───────────────────────────────────────────────────────────
 
 /**
- * @brief `MSG_ZEROCOPY` 완료 알림을 errqueue에서 대기 및 소비.
- *        Wait for a `MSG_ZEROCOPY` completion notification from the errqueue.
+ * @brief Wait for a `MSG_ZEROCOPY` completion notification from the errqueue.
  *
- * `send_zerocopy()` 호출 후 커널이 errqueue에 완료 알림을 게시합니다.
  * After a `send_zerocopy()` call the kernel posts a `sock_extended_err`
  * notification to the socket's error queue once the data has been consumed
  * by the network subsystem.
  *
- * 이 함수는 `MSG_ERRQUEUE` 플래그와 함께 `recvmsg(2)`를 사용하여
- * 알림을 수신하고, `sock_extended_err`의 `ee_errno`/`ee_origin` 필드를
- * 검사하여 실패 여부를 판별합니다.
  * This function uses `recvmsg(2)` with `MSG_ERRQUEUE` to drain the
  * notification and inspects the `sock_extended_err` fields `ee_errno` and
  * `ee_origin` to detect transmission failures.
  *
- * `sockfd`에 읽을 수 있는 errqueue 항목이 생길 때까지 Reactor 이벤트를 대기합니다.
  * Suspends the coroutine until the Reactor reports the socket as readable
  * (errqueue data is reported as readable by epoll).
  *
- * @param sockfd 완료 알림을 기다릴 소켓 파일 디스크립터.
- *               Socket file descriptor whose errqueue should be drained.
- * @returns 성공 시 void. 커널이 전송 실패를 보고한 경우 error_code.
- *          `void` on success, or an error_code if the kernel reported a
+ * @param sockfd Socket file descriptor whose errqueue should be drained.
+ * @returns `void` on success, or an error_code if the kernel reported a
  *          transmission error or if `recvmsg` itself failed.
  *
- * @note Linux 전용입니다. 비Linux 플랫폼에서는 `ENOSYS`를 반환합니다.
- *       Linux only.  Returns `ENOSYS` on non-Linux platforms.
+ * @note Linux only.  Returns `ENOSYS` on non-Linux platforms.
  */
 inline Task<Result<void>> wait_zerocopy(int sockfd) {
 #if !defined(__linux__)
