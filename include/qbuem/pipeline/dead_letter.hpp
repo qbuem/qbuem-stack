@@ -2,14 +2,13 @@
 
 /**
  * @file qbuem/pipeline/dead_letter.hpp
- * @brief 데드 레터 큐 — DeadLetter, DeadLetterQueue, DlqAction
+ * @brief Dead letter queue — DeadLetter, DeadLetterQueue, DlqAction
  * @defgroup qbuem_dead_letter DeadLetterQueue
  * @ingroup qbuem_pipeline
  *
- * 처리 실패한 아이템을 수집하여 나중에 재처리하거나 감사(audit)할 수 있는
- * 데드 레터 큐(Dead Letter Queue) 구현입니다.
+ * Dead Letter Queue implementation that collects failed items for later reprocessing or auditing.
  *
- * ## 사용 예시
+ * ## Usage example
  * @code
  * auto dlq = std::make_shared<DeadLetterQueue<int>>();
  * DlqAction<int, int> action(my_fn, dlq, 3);
@@ -32,55 +31,55 @@
 namespace qbuem {
 
 /**
- * @brief 데드 레터 엔트리 — 실패한 아이템 + 에러 + 컨텍스트 + 시도 횟수.
+ * @brief Dead letter entry — failed item + error + context + attempt count.
  *
- * @tparam T 아이템 타입.
+ * @tparam T Item type.
  */
 template <typename T>
 struct DeadLetter {
-    T item;                                                               ///< 실패한 아이템
-    Context ctx;                                                          ///< 아이템 컨텍스트
-    std::error_code error;                                                ///< 실패 에러 코드
-    size_t attempt_count = 1;                                             ///< 총 시도 횟수
+    T item;                                                               ///< Failed item
+    Context ctx;                                                          ///< Item context
+    std::error_code error;                                                ///< Failure error code
+    size_t attempt_count = 1;                                             ///< Total number of attempts
     std::chrono::system_clock::time_point failed_at =
-        std::chrono::system_clock::now();                                 ///< 실패 시각
+        std::chrono::system_clock::now();                                 ///< Time of failure
 };
 
 /**
- * @brief 데드 레터 큐 — 실패한 아이템을 수집하고 재처리를 지원합니다.
+ * @brief Dead letter queue — collects failed items and supports reprocessing.
  *
- * 스레드 안전합니다. max_size 초과 시 가장 오래된 항목을 드롭합니다.
+ * Thread-safe. Drops the oldest entry when max_size is exceeded.
  *
- * @tparam T 아이템 타입.
+ * @tparam T Item type.
  */
 template <typename T>
 class DeadLetterQueue {
 public:
     /**
-     * @brief 데드 레터 큐 설정.
+     * @brief Dead letter queue configuration.
      */
     struct Config {
-        size_t max_size   = 10000; ///< 최대 항목 수 (초과 시 가장 오래된 항목 드롭)
-        bool   persist_log = false; ///< true이면 각 항목을 AsyncLogger에 기록
+        size_t max_size   = 10000; ///< Maximum number of entries (oldest entry dropped when exceeded)
+        bool   persist_log = false; ///< If true, each entry is written to AsyncLogger
     };
 
     /**
-     * @brief 지정한 설정으로 DeadLetterQueue를 생성합니다.
-     * @param cfg 설정 (기본값 사용 가능).
+     * @brief Creates a DeadLetterQueue with the specified configuration.
+     * @param cfg Configuration (defaults are usable as-is).
      */
     explicit DeadLetterQueue(Config cfg = {})
         : cfg_(std::move(cfg)) {}
 
     /**
-     * @brief 데드 레터를 추가합니다 (스레드 안전).
+     * @brief Adds a dead letter entry (thread-safe).
      *
-     * max_size 초과 시 가장 오래된 항목을 드롭합니다.
+     * Drops the oldest entry when max_size is exceeded.
      *
-     * @param letter 추가할 데드 레터.
+     * @param letter Dead letter entry to add.
      */
     void push(DeadLetter<T> letter) {
         std::lock_guard lock(mtx_);
-        // max_size 초과 시 가장 오래된 항목(front) 드롭
+        // Drop the oldest entry (front) when max_size is exceeded
         if (cfg_.max_size > 0 && queue_.size() >= cfg_.max_size) {
             queue_.pop_front();
         }
@@ -88,12 +87,12 @@ public:
     }
 
     /**
-     * @brief 아이템과 에러 정보로 데드 레터를 추가합니다 (스레드 안전).
+     * @brief Adds a dead letter entry from an item and error information (thread-safe).
      *
-     * @param item     실패한 아이템.
-     * @param ctx      아이템 컨텍스트.
-     * @param err      실패 에러 코드.
-     * @param attempts 총 시도 횟수 (기본 1).
+     * @param item     Failed item.
+     * @param ctx      Item context.
+     * @param err      Failure error code.
+     * @param attempts Total number of attempts (default 1).
      */
     void push(T item, Context ctx, std::error_code err, size_t attempts = 1) {
         push(DeadLetter<T>{
@@ -106,9 +105,9 @@ public:
     }
 
     /**
-     * @brief 모든 데드 레터를 꺼냅니다 (이동). 큐를 비웁니다.
+     * @brief Removes and returns all dead letters (by move). Empties the queue.
      *
-     * @returns 모든 데드 레터의 벡터.
+     * @returns Vector of all dead letters.
      */
     std::vector<DeadLetter<T>> drain() {
         std::lock_guard lock(mtx_);
@@ -121,10 +120,10 @@ public:
     }
 
     /**
-     * @brief 데드 레터를 소비하지 않고 조회합니다.
+     * @brief Inspects dead letters without consuming them.
      *
-     * @param max_n 최대 조회 개수 (기본 100).
-     * @returns 데드 레터 포인터 벡터 (const).
+     * @param max_n Maximum number of entries to inspect (default 100).
+     * @returns Vector of const pointers to dead letters.
      */
     std::vector<const DeadLetter<T>*> peek(size_t max_n = 100) const {
         std::lock_guard lock(mtx_);
@@ -138,20 +137,20 @@ public:
     }
 
     /**
-     * @brief 데드 레터를 재처리합니다.
+     * @brief Reprocesses dead letters.
      *
-     * fn을 각 항목에 적용하며, 성공 시 큐에서 제거합니다.
-     * 실패한 항목은 큐에 유지됩니다.
+     * Applies fn to each entry and removes successfully processed ones from the queue.
+     * Failed entries remain in the queue.
      *
-     * @param fn    재처리 함수.
-     * @param max_n 최대 재처리 개수 (기본 SIZE_MAX = 전체).
-     * @returns 성공적으로 재처리된 항목 수.
+     * @param fn    Reprocessing function.
+     * @param max_n Maximum number of entries to reprocess (default SIZE_MAX = all).
+     * @returns Number of successfully reprocessed entries.
      */
     Task<size_t> reprocess(
         std::function<Task<Result<void>>(T, Context)> fn,
         size_t max_n = SIZE_MAX)
     {
-        // 현재 항목들을 스냅샷으로 꺼낸 뒤 처리
+        // Take a snapshot of current entries, then process
         std::vector<DeadLetter<T>> snapshot;
         {
             std::lock_guard lock(mtx_);
@@ -171,14 +170,14 @@ public:
             if (result.has_value()) {
                 ++success_count;
             } else {
-                // 실패한 항목은 재삽입
+                // Re-insert failed entries
                 letter.error = result.error();
                 ++letter.attempt_count;
                 failed.push_back(std::move(letter));
             }
         }
 
-        // 실패 항목 재삽입 (순서 유지: failed가 앞에 오도록)
+        // Re-insert failed entries (preserve order: failed entries go to the front)
         if (!failed.empty()) {
             std::lock_guard lock(mtx_);
             for (auto it = failed.rbegin(); it != failed.rend(); ++it)
@@ -189,7 +188,7 @@ public:
     }
 
     /**
-     * @brief 현재 큐의 크기를 반환합니다.
+     * @brief Returns the current queue size.
      */
     size_t size() const noexcept {
         std::lock_guard lock(mtx_);
@@ -197,7 +196,7 @@ public:
     }
 
     /**
-     * @brief 큐가 비어 있는지 확인합니다.
+     * @brief Returns true if the queue is empty.
      */
     bool empty() const noexcept {
         std::lock_guard lock(mtx_);
@@ -205,7 +204,7 @@ public:
     }
 
     /**
-     * @brief 큐를 비웁니다 (스레드 안전).
+     * @brief Clears the queue (thread-safe).
      */
     void clear() noexcept {
         std::lock_guard lock(mtx_);
@@ -219,25 +218,25 @@ private:
 };
 
 /**
- * @brief DLQ 인식 액션 래퍼.
+ * @brief DLQ-aware action wrapper.
  *
- * 내부 액션 실패 시 아이템을 DeadLetterQueue로 전송합니다.
- * max_attempts 초과 후에만 DLQ로 전송합니다.
+ * Sends failed items to the DeadLetterQueue when the inner action fails.
+ * Items are sent to the DLQ only after max_attempts is exceeded.
  *
- * @tparam In  입력 타입.
- * @tparam Out 출력 타입.
+ * @tparam In  Input type.
+ * @tparam Out Output type.
  */
 template <typename In, typename Out>
 class DlqAction {
 public:
-    /** @brief 내부 액션 함수 타입. */
+    /** @brief Inner action function type. */
     using InnerFn = std::function<Task<Result<Out>>(In, ActionEnv)>;
 
     /**
-     * @brief DlqAction을 생성합니다.
-     * @param fn           감쌀 내부 액션 함수.
-     * @param dlq          데드 레터 큐 (공유 포인터).
-     * @param max_attempts DLQ로 보내기 전 최대 시도 횟수 (기본 3).
+     * @brief Creates a DlqAction.
+     * @param fn           Inner action function to wrap.
+     * @param dlq          Dead letter queue (shared pointer).
+     * @param max_attempts Maximum number of attempts before sending to DLQ (default 3).
      */
     DlqAction(InnerFn fn,
               std::shared_ptr<DeadLetterQueue<In>> dlq,
@@ -247,12 +246,12 @@ public:
         , max_attempts_(max_attempts) {}
 
     /**
-     * @brief DLQ 보호 하에 액션을 실행합니다.
+     * @brief Executes the action under DLQ protection.
      *
-     * max_attempts 이후에도 실패하면 아이템을 DLQ로 전송합니다.
+     * If still failing after max_attempts, sends the item to the DLQ.
      *
-     * @param item 처리할 아이템.
-     * @param env  실행 환경.
+     * @param item Item to process.
+     * @param env  Execution environment.
      * @returns Task<Result<Out>>
      */
     Task<Result<Out>> operator()(In item, ActionEnv env) {
@@ -272,7 +271,7 @@ public:
             last_result = std::move(result);
         }
 
-        // 최대 시도 횟수 초과 — DLQ로 전송
+        // Maximum attempt count exceeded — send to DLQ
         if (dlq_) {
             dlq_->push(std::move(item), env.ctx, last_result.error(), max_attempts_);
         }

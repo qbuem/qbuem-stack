@@ -2,13 +2,13 @@
 
 /**
  * @file qbuem/core/dispatcher.hpp
- * @brief 멀티코어 이벤트 루프 관리자 — 코어당 하나의 Reactor를 소유
+ * @brief Multi-core event loop manager — owns one Reactor per core
  * @defgroup qbuem_dispatcher Dispatcher
  * @ingroup qbuem_core
  *
- * Dispatcher는 std::thread::hardware_concurrency()개의 Reactor를 생성하여
- * 각 코어에서 독립적으로 이벤트를 처리. 수신 fd를 등록하면 라운드-로빈으로
- * 워커 Reactor에 분배.
+ * Dispatcher creates std::thread::hardware_concurrency() Reactors and
+ * processes events independently on each core. Registered fds are
+ * distributed to worker Reactors in round-robin fashion.
  * @{
  */
 
@@ -26,154 +26,160 @@
 namespace qbuem {
 
 /**
- * @brief 다중 Reactor 워커 스레드를 관리하는 조율자(orchestrator).
+ * @brief Orchestrator managing multiple Reactor worker threads.
  *
- * Dispatcher는 qbuem-stack에서 동시성의 진입점입니다.
- * 애플리케이션은 보통 하나의 Dispatcher만 생성하며, 이것이 모든 I/O 처리를 담당합니다.
+ * Dispatcher is the entry point for concurrency in qbuem-stack.
+ * Applications typically create a single Dispatcher, which handles all I/O.
  *
- * ### 핵심 책임
- * 1. **스레드 풀 관리**: `thread_count`개의 워커 스레드를 생성하고 관리합니다.
- * 2. **Reactor 할당**: 각 워커 스레드에 독립적인 Reactor를 할당합니다.
- * 3. **리스너 등록**: 수신 fd를 특정 워커 Reactor에 등록합니다.
- * 4. **로드 분산**: fd 해시 기반으로 워커를 선택합니다.
+ * ### Core Responsibilities
+ * 1. **Thread pool management**: Creates and manages `thread_count` worker threads.
+ * 2. **Reactor assignment**: Assigns an independent Reactor to each worker thread.
+ * 3. **Listener registration**: Registers incoming fds with specific worker Reactors.
+ * 4. **Load distribution**: Selects workers based on fd hash.
  *
- * ### 사용 예시
+ * ### Usage Example
  * @code
- * qbuem::Dispatcher dispatcher; // CPU 코어 수만큼 워커 생성
+ * qbuem::Dispatcher dispatcher; // creates workers equal to CPU core count
  *
- * // 리스닝 소켓을 등록 — 적절한 워커 Reactor에 할당됩니다
+ * // Register a listening socket — assigned to the appropriate worker Reactor
  * dispatcher.register_listener(listen_fd, [](int fd) {
- *     // 새 연결 수락 처리
+ *     // handle new connection accept
  * });
  *
- * dispatcher.run(); // 블로킹: 모든 워커 스레드가 종료될 때까지 대기
+ * dispatcher.run(); // blocking: waits until all worker threads terminate
  * @endcode
  *
- * @note Dispatcher는 스레드 안전합니다. `stop()`은 다른 스레드에서 호출할 수 있습니다.
- * @note Dispatcher 자체는 복사 및 이동이 불가능합니다.
+ * @note Dispatcher is thread-safe. `stop()` can be called from another thread.
+ * @note Dispatcher itself is neither copyable nor movable.
  */
 class Dispatcher {
 public:
   /**
-   * @brief 지정한 워커 스레드 수로 Dispatcher를 생성합니다.
+   * @brief Construct a Dispatcher with the specified number of worker threads.
    *
-   * 생성 시 Reactor 인스턴스들을 만들지만, 워커 스레드는 `run()`을 호출해야
-   * 시작됩니다. 이를 통해 생성과 시작을 분리하여 초기 설정(리스너 등록 등)이
-   * 이벤트 루프 시작 전에 이루어질 수 있습니다.
+   * Reactor instances are created at construction, but worker threads do not
+   * start until `run()` is called. This separates creation from startup so
+   * initial configuration (listener registration, etc.) can occur before the
+   * event loop begins.
    *
-   * @param thread_count 워커 스레드 수. 기본값은 하드웨어 동시 실행 스레드 수
-   *                     (`std::thread::hardware_concurrency()`).
-   *                     0을 전달하면 적어도 1개의 스레드를 생성합니다.
+   * @param thread_count Number of worker threads. Defaults to the hardware
+   *                     concurrency count (`std::thread::hardware_concurrency()`).
+   *                     Passing 0 creates at least 1 thread.
    */
   explicit Dispatcher(
       size_t thread_count = std::thread::hardware_concurrency());
 
   /**
-   * @brief 모든 워커 스레드를 시작하고 완료될 때까지 블로킹합니다.
+   * @brief Start all worker threads and block until they complete.
    *
-   * 각 워커 스레드는 자신의 Reactor에서 이벤트 루프를 실행합니다.
-   * `stop()`이 호출되거나 모든 워커 스레드가 종료될 때까지 블로킹됩니다.
+   * Each worker thread runs the event loop on its own Reactor.
+   * Blocks until `stop()` is called or all worker threads terminate.
    *
-   * @note 이 함수는 보통 `main()` 또는 서버 엔트리 포인트의 마지막에 호출됩니다.
+   * @note This function is typically called at the end of `main()` or the
+   *       server entry point.
    */
   void run();
 
   /**
-   * @brief 모든 워커 스레드와 Reactor를 정지시킵니다.
+   * @brief Stop all worker threads and Reactors.
    *
-   * 각 Reactor의 `stop()`을 호출하여 이벤트 루프를 종료합니다.
-   * 이 함수는 스레드 안전하며 다른 스레드에서도 호출할 수 있습니다.
+   * Calls `stop()` on each Reactor to terminate its event loop.
+   * This function is thread-safe and can be called from another thread.
    *
-   * @note `stop()` 호출 후 `run()`은 워커 스레드들이 종료되면 반환됩니다.
+   * @note After `stop()` is called, `run()` returns once all worker threads finish.
    */
   void stop();
 
   /**
-   * @brief 수신 fd를 워커 Reactor에 등록합니다.
+   * @brief Register an incoming fd with a worker Reactor.
    *
-   * fd를 적절한 워커 Reactor에 할당하고, 해당 Reactor에 읽기 이벤트 콜백을
-   * 등록합니다. 콜백은 fd에서 새 데이터나 연결이 생길 때마다 호출됩니다.
+   * Assigns the fd to the appropriate worker Reactor and registers a read
+   * event callback on that Reactor. The callback is invoked whenever new
+   * data or a connection is available on the fd.
    *
-   * 동일한 fd는 항상 같은 워커 Reactor에 할당됩니다 (fd % thread_count 기반).
-   * 이를 통해 연결의 수명 동안 동일한 스레드에서 처리가 이루어집니다.
+   * The same fd is always assigned to the same worker Reactor (based on
+   * fd % thread_count), ensuring processing occurs on the same thread
+   * throughout the connection's lifetime.
    *
-   * @param fd       감시할 파일 디스크립터 (보통 리스닝 소켓).
-   * @param callback fd에서 이벤트 발생 시 호출될 콜백.
-   * @returns 성공 시 `Result<void>::ok()`, 실패 시 에러 코드.
+   * @param fd       File descriptor to watch (usually a listening socket).
+   * @param callback Callback to invoke when an event occurs on fd.
+   * @returns `Result<void>::ok()` on success, or an error code on failure.
    *
-   * @note `run()` 호출 전에 등록해야 이벤트 루프 시작 시점부터 감시됩니다.
+   * @note Register before calling `run()` to have the fd watched from the
+   *       moment the event loop starts.
    */
   Result<void> register_listener(int fd, std::function<void(int)> callback);
 
   /**
-   * @brief fd에 할당된 워커 Reactor를 반환합니다.
+   * @brief Return the worker Reactor assigned to the given fd.
    *
-   * `register_listener()`와 동일한 할당 알고리즘을 사용합니다.
-   * 특정 연결에서 직접 Reactor 접근이 필요할 때 사용합니다.
+   * Uses the same assignment algorithm as `register_listener()`.
+   * Used when direct Reactor access is needed for a specific connection.
    *
-   * @param fd 워커를 조회할 파일 디스크립터.
-   * @returns 해당 fd에 할당된 Reactor 포인터. 워커가 없으면 nullptr.
+   * @param fd File descriptor to query the worker for.
+   * @returns Pointer to the Reactor assigned to this fd. nullptr if no workers exist.
    */
   Reactor *get_worker_reactor(int fd);
 
   /**
-   * @brief 워커 스레드 수(=Reactor 수)를 반환합니다.
+   * @brief Return the number of worker threads (= number of Reactors).
    *
-   * SO_REUSEPORT 멀티 소켓 accept 패턴에서 리액터별 리스닝 소켓을 생성할 때
-   * 필요한 수를 알기 위해 사용합니다.
+   * Used in SO_REUSEPORT multi-socket accept patterns to determine how many
+   * per-reactor listening sockets to create.
    */
   size_t thread_count() const noexcept { return reactors_.size(); }
 
   /**
-   * @brief 특정 인덱스의 워커 Reactor에 수신 fd를 등록합니다.
+   * @brief Register an incoming fd with a specific worker Reactor by index.
    *
-   * SO_REUSEPORT 멀티 소켓 모드에서 각 리액터 스레드가 전용 리스닝 소켓을
-   * 소유하도록 할 때 사용합니다. reactor_idx 가 범위를 벗어나면 에러를 반환합니다.
+   * Used in SO_REUSEPORT multi-socket mode so each reactor thread owns a
+   * dedicated listening socket. Returns an error if reactor_idx is out of range.
    *
-   * @param fd          감시할 파일 디스크립터 (리스닝 소켓).
-   * @param reactor_idx 등록할 워커 인덱스 (0 ~ thread_count()-1).
-   * @param callback    이벤트 발생 시 호출될 콜백.
-   * @returns 성공 시 `Result<void>::ok()`, 실패 시 에러 코드.
+   * @param fd          File descriptor to watch (listening socket).
+   * @param reactor_idx Worker index to register with (0 ~ thread_count()-1).
+   * @param callback    Callback to invoke when an event occurs.
+   * @returns `Result<void>::ok()` on success, or an error code on failure.
    */
   Result<void> register_listener_at(int fd, size_t reactor_idx,
                                     std::function<void(int)> callback);
 
   /**
-   * @brief 라운드-로빈으로 워커 Reactor를 선택해 콜백을 큐에 넣습니다.
+   * @brief Select a worker Reactor in round-robin order and enqueue a callback.
    *
-   * 여러 스레드에서 안전하게 호출할 수 있습니다. 선택된 Reactor의
-   * `post()` 구현이 해당 워커 스레드를 깨우고 콜백을 실행합니다.
+   * Safe to call from multiple threads. The selected Reactor's `post()`
+   * implementation wakes the worker thread and executes the callback.
    *
-   * @param fn 워커 스레드에서 실행할 콜백.
+   * @param fn Callback to run on the worker thread.
    */
   void post(std::function<void()> fn);
 
   /**
-   * @brief 특정 인덱스의 워커 Reactor에 콜백을 큐에 넣습니다.
+   * @brief Enqueue a callback on a specific worker Reactor by index.
    *
-   * @param reactor_idx 0 ~ thread_count()-1 범위의 워커 인덱스.
-   * @param fn          워커 스레드에서 실행할 콜백.
+   * @param reactor_idx Worker index in the range 0 ~ thread_count()-1.
+   * @param fn          Callback to run on the worker thread.
    */
   void post_to(size_t reactor_idx, std::function<void()> fn);
 
   /**
-   * @brief 코루틴 Task를 라운드-로빈 워커에서 fire-and-forget으로 실행합니다.
+   * @brief Run a coroutine Task as fire-and-forget on a round-robin worker.
    *
-   * `task.detach()`를 호출한 뒤 코루틴 핸들을 `post()`를 통해 워커 스레드에
-   * 넘깁니다. 코루틴이 완료되면 프레임이 자기 파괴됩니다.
+   * Calls `task.detach()` then passes the coroutine handle to a worker thread
+   * via `post()`. The frame self-destructs when the coroutine completes.
    *
-   * @warning 코루틴 내에서 다른 Reactor 스레드를 깨우려면 직접 `handle.resume()`
-   *          을 호출하지 말고, 반드시 대상 Reactor의 `post()`를 사용해야 합니다.
+   * @warning To wake another Reactor thread from within a coroutine, do NOT
+   *          call `handle.resume()` directly. Always delegate via the target
+   *          Reactor's `post()`.
    *
-   * @param task fire-and-forget으로 실행할 Task<void>. 소유권이 이전됩니다.
+   * @param task Task<void> to run as fire-and-forget. Ownership is transferred.
    */
   void spawn(Task<void> task);
 
   /**
-   * @brief Task<Result<void>> 오버로드 — 결과를 무시하고 fire-and-forget 실행.
+   * @brief Task<Result<void>> overload — ignores the result and runs fire-and-forget.
    *
-   * Task<Result<void>>를 Task<void>로 변환하여 spawn합니다.
-   * 코루틴 내부 에러는 무시됩니다 (로깅이 필요하면 직접 처리).
+   * Converts Task<Result<void>> to Task<void> and spawns it.
+   * Errors inside the coroutine are silently discarded (handle them explicitly if logging is needed).
    */
   void spawn(Task<Result<void>> task) {
     spawn([](Task<Result<void>> t) -> Task<void> {
@@ -182,25 +188,25 @@ public:
   }
 
   /**
-   * @brief 코루틴 Task를 특정 워커에서 fire-and-forget으로 실행합니다.
+   * @brief Run a coroutine Task as fire-and-forget on a specific worker.
    *
-   * @param reactor_idx 0 ~ thread_count()-1 범위의 워커 인덱스.
-   * @param task        fire-and-forget으로 실행할 Task<void>.
+   * @param reactor_idx Worker index in the range 0 ~ thread_count()-1.
+   * @param task        Task<void> to run as fire-and-forget.
    */
   void spawn_on(size_t reactor_idx, Task<void> task);
 
 private:
-  /** @brief 실행 상태 플래그. `run()`과 `stop()` 사이의 동기화에 사용됩니다. */
+  /** @brief Running state flag. Used for synchronization between `run()` and `stop()`. */
   std::atomic<bool> running_{false};
 
-  /** @brief `post()` 라운드-로빈 카운터. */
+  /** @brief Round-robin counter for `post()`. */
   std::atomic<size_t> next_post_idx_{0};
 
   /**
-   * @brief 워커 Reactor 인스턴스들의 목록.
+   * @brief List of worker Reactor instances.
    *
-   * 인덱스 i의 Reactor는 인덱스 i의 워커 스레드가 소유합니다.
-   * 수명은 Dispatcher와 동일합니다.
+   * The Reactor at index i is owned by the worker thread at index i.
+   * Lifetime is tied to the Dispatcher.
    */
   std::vector<std::unique_ptr<Reactor>> reactors_;
 };

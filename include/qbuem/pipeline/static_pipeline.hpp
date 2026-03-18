@@ -2,13 +2,13 @@
 
 /**
  * @file qbuem/pipeline/static_pipeline.hpp
- * @brief 정적 파이프라인 — StaticPipeline<In, Out>
+ * @brief Static pipeline — StaticPipeline<In, Out>
  * @defgroup qbuem_static_pipeline StaticPipeline
  * @ingroup qbuem_pipeline
  *
- * StaticPipeline은 컴파일 타임에 타입 체인이 결정되는 파이프라인입니다.
+ * StaticPipeline is a pipeline whose type chain is determined at compile time.
  *
- * ## 빌드 방식
+ * ## Build pattern
  * ```cpp
  * auto pipeline = PipelineBuilder<RawEvent>{}
  *     .add<ParsedEvent>(parse_action)
@@ -20,12 +20,12 @@
  * co_await pipeline.push(raw_event);
  * ```
  *
- * ## 파이프라인 상태 머신
+ * ## Pipeline state machine
  * Created → Built → Starting → Running → Draining → Stopped
  *
- * ## 타입 안전성
- * 각 `add<Out>(action)`에서 `In` = 이전 단계의 `Out`.
- * 불일치 시 컴파일 에러 발생.
+ * ## Type safety
+ * For each `add<Out>(action)`, `In` = the `Out` of the previous stage.
+ * A mismatch results in a compile error.
  * @{
  */
 
@@ -46,9 +46,9 @@ template <typename OrigIn, typename CurIn>
 class PipelineBuilder;
 
 /**
- * @brief 파이프라인 입력 타입 소거 인터페이스 (fan-out용).
+ * @brief Type-erased pipeline input interface (for fan-out).
  *
- * @tparam T 입력 타입.
+ * @tparam T Input type.
  */
 template <typename T>
 class IPipelineInput {
@@ -59,10 +59,10 @@ public:
 };
 
 /**
- * @brief 정적 파이프라인 — 컴파일 타임 타입 체인.
+ * @brief Static pipeline — compile-time type chain.
  *
- * @tparam In  파이프라인 입력 타입.
- * @tparam Out 파이프라인 출력 타입 (마지막 Action의 출력).
+ * @tparam In  Pipeline input type.
+ * @tparam Out Pipeline output type (output of the last Action).
  */
 template <typename In, typename Out>
 class StaticPipeline : public IPipelineInput<In> {
@@ -107,9 +107,9 @@ public:
   // -------------------------------------------------------------------------
 
   /**
-   * @brief 파이프라인을 시작합니다.
+   * @brief Start the pipeline.
    *
-   * @param dispatcher 워커를 실행할 Dispatcher.
+   * @param dispatcher Dispatcher that will run the workers.
    */
   void start(Dispatcher &dispatcher) {
     State expected = State::Created;
@@ -121,7 +121,7 @@ public:
   }
 
   /**
-   * @brief 입력을 닫고 모든 워커가 처리를 마칠 때까지 기다립니다.
+   * @brief Close the input and wait for all workers to finish processing.
    */
   Task<void> drain() {
     State expected = State::Running;
@@ -134,11 +134,11 @@ public:
   }
 
   /**
-   * @brief 파이프라인을 즉시 정지합니다 (drain 없음).
+   * @brief Stop the pipeline immediately (without draining).
    *
-   * stoppers 호출에 더해 head/tail 채널을 직접 닫아
-   * source_pump, pump_channels, sink_pump 등 모든 펌프 코루틴이
-   * 같은 리액터 poll 사이클에서 종료 신호를 받도록 보장합니다.
+   * In addition to calling the stoppers, directly closes the head/tail channels
+   * so that all pump coroutines (source_pump, pump_channels, sink_pump) receive
+   * their termination signal within the same reactor poll cycle.
    */
   void stop() {
     state_.store(State::Stopped);
@@ -156,11 +156,11 @@ public:
   }
 
   // -------------------------------------------------------------------------
-  // 입력
+  // Input
   // -------------------------------------------------------------------------
 
   /**
-   * @brief 아이템을 파이프라인에 넣습니다 (backpressure).
+   * @brief Push an item into the pipeline (with backpressure).
    */
   Task<Result<void>> push(In item, Context ctx = {}) override {
     co_return co_await internal_.head_channel->send(
@@ -168,7 +168,7 @@ public:
   }
 
   /**
-   * @brief 논블로킹 push.
+   * @brief Non-blocking push.
    */
   bool try_push(In item, Context ctx = {}) override {
     return internal_.head_channel->try_send(
@@ -176,18 +176,18 @@ public:
   }
 
   // -------------------------------------------------------------------------
-  // 출력 채널
+  // Output channel
   // -------------------------------------------------------------------------
 
   /**
-   * @brief 출력 채널을 반환합니다 (소비자 연결용).
+   * @brief Return the output channel (for connecting a downstream consumer).
    */
   [[nodiscard]] std::shared_ptr<AsyncChannel<ContextualItem<Out>>> output() const {
     return internal_.tail_channel;
   }
 
   /**
-   * @brief 현재 파이프라인 상태를 반환합니다.
+   * @brief Return the current pipeline state.
    */
   [[nodiscard]] State state() const noexcept { return state_.load(); }
 
@@ -197,17 +197,17 @@ private:
 };
 
 // ---------------------------------------------------------------------------
-// PipelineBuilder — 컴파일 타임 타입 체인 구성
+// PipelineBuilder — compile-time type chain construction
 // ---------------------------------------------------------------------------
 
 /**
- * @brief 정적 파이프라인 빌더.
+ * @brief Static pipeline builder.
  *
- * `add<Out>(action)` 호출마다 새 `PipelineBuilder<OrigIn, Out>` 타입 반환.
- * 타입 불일치는 컴파일 에러.
+ * Each `add<Out>(action)` call returns a new `PipelineBuilder<OrigIn, Out>` type.
+ * Type mismatches result in compile errors.
  *
- * @tparam OrigIn 파이프라인 원본 입력 타입.
- * @tparam CurOut 현재 단계의 출력 타입 (= 다음 단계 입력).
+ * @tparam OrigIn Original input type of the pipeline.
+ * @tparam CurOut Output type of the current stage (= input of the next stage).
  */
 template <typename OrigIn, typename CurOut = OrigIn>
 class PipelineBuilder {
@@ -230,36 +230,36 @@ public:
         stoppers_(std::move(stoppers)) {}
 
   // -------------------------------------------------------------------------
-  // Source / Sink 연결
+  // Source / Sink wiring
   // -------------------------------------------------------------------------
 
   /**
-   * @brief 외부 소스(SHMSource, MessageBusSource 등)를 Pipeline Head에 연결합니다.
+   * @brief Attach an external source (SHMSource, MessageBusSource, etc.) to the pipeline head.
    *
-   * with_source()를 add() 호출 전에 사용합니다. 소스가 attach되면
-   * Pipeline의 push()도 여전히 동작하지만 소스 펌프와 채널을 공유합니다.
-   * 소스만 사용하고 싶다면 push()를 호출하지 마세요.
+   * Call with_source() before any add() calls. Once a source is attached,
+   * the pipeline's push() still works but shares the channel with the source pump.
+   * If you only want to use the source, do not call push().
    *
-   * @tparam SourceT  `init() -> Result<void>` 와
-   *                  `next() -> Task<std::optional<const CurOut*>>`를 갖는 타입.
-   * @param  src      소스 인스턴스 (이동됨).
-   * @param  cap      소스 → 파이프라인 내부 채널 용량 (기본 256).
-   * @returns 현재 빌더 (체이닝 가능).
+   * @tparam SourceT  Type that has `init() -> Result<void>` and
+   *                  `next() -> Task<std::optional<const CurOut*>>`.
+   * @param  src      Source instance (moved in).
+   * @param  cap      Capacity of the source → pipeline internal channel (default 256).
+   * @returns Current builder (chainable).
    */
   template <typename SourceT>
   PipelineBuilder<OrigIn, CurOut> with_source(SourceT src, size_t cap = 256) {
     auto src_ptr = std::make_shared<SourceT>(std::move(src));
 
-    // Source 전용 채널: 소스 펌프 → 이 채널 → 첫 번째 add() 액션
+    // Source-dedicated channel: source pump → this channel → first add() action
     auto src_ch =
         std::make_shared<AsyncChannel<ContextualItem<CurOut>>>(cap);
 
-    head_ = src_ch;  // pipeline.push() 진입점 (소스와 공유)
-    tail_ = src_ch;  // 첫 번째 add()가 이 채널을 입력으로 wiring
+    head_ = src_ch;  // pipeline.push() entry point (shared with source)
+    tail_ = src_ch;  // first add() wires this channel as its input
 
     starters_.push_back([src_ptr, src_ch](Dispatcher& d) mutable {
       auto init_res = src_ptr->init();
-      if (!init_res) return;  // init 실패 시 무음 처리
+      if (!init_res) return;  // silent failure if init fails
 
       // Use a free-function-style coroutine (source_pump) instead of a lambda
       // coroutine to avoid GCC HALO stack-use-after-return:
@@ -284,20 +284,20 @@ public:
   }
 
   /**
-   * @brief 외부 싱크(SHMSink, MessageBusSink 등)를 Pipeline Tail에 연결합니다.
+   * @brief Attach an external sink (SHMSink, MessageBusSink, etc.) to the pipeline tail.
    *
-   * with_sink()는 add() 체인 뒤, build() 전에 호출합니다.
-   * 싱크가 attach되면 Pipeline의 output() 채널도 여전히 접근 가능합니다.
+   * Call with_sink() after the add() chain and before build().
+   * Once a sink is attached, the pipeline's output() channel is still accessible.
    *
-   * @tparam SinkT  `init() -> Result<void>` 와
-   *                `sink(const CurOut&) -> Task<Result<void>>`를 갖는 타입.
-   * @param  snk    싱크 인스턴스 (이동됨).
-   * @returns 현재 빌더 (체이닝 가능).
+   * @tparam SinkT  Type that has `init() -> Result<void>` and
+   *                `sink(const CurOut&) -> Task<Result<void>>`.
+   * @param  snk    Sink instance (moved in).
+   * @returns Current builder (chainable).
    */
   template <typename SinkT>
   PipelineBuilder<OrigIn, CurOut> with_sink(SinkT snk) {
     auto snk_ptr  = std::make_shared<SinkT>(std::move(snk));
-    auto drain_ch = tail_;  // 현재 tail (마지막 액션 출력 채널)
+    auto drain_ch = tail_;  // current tail (last action's output channel)
 
     starters_.push_back([snk_ptr, drain_ch](Dispatcher& d) mutable {
       auto init_res = snk_ptr->init();
@@ -316,13 +316,13 @@ public:
   }
 
   /**
-   * @brief 새 처리 단계를 추가합니다.
+   * @brief Add a new processing stage.
    *
-   * @tparam NextOut 이 단계의 출력 타입.
-   * @tparam FnT     `ActionFn<FnT, CurOut, NextOut>` concept을 만족하는 타입.
-   * @param  fn      처리 함수.
-   * @param  cfg     Action 설정.
-   * @returns `PipelineBuilder<OrigIn, NextOut>` — 다음 단계 빌더.
+   * @tparam NextOut Output type of this stage.
+   * @tparam FnT     Type satisfying the `ActionFn<FnT, CurOut, NextOut>` concept.
+   * @param  fn      Processing function.
+   * @param  cfg     Action configuration.
+   * @returns `PipelineBuilder<OrigIn, NextOut>` — builder for the next stage.
    */
   template <typename NextOut, typename FnT>
     requires ActionFn<FnT, CurOut, NextOut>
@@ -373,7 +373,7 @@ public:
   }
 
   /**
-   * @brief 파이프라인을 완성합니다.
+   * @brief Finalize and build the pipeline.
    *
    * @returns `StaticPipeline<OrigIn, CurOut>`.
    */
@@ -457,7 +457,7 @@ private:
 // ---------------------------------------------------------------------------
 
 /**
- * @brief 첫 Action 추가 시 OrigIn을 자동 추론하는 헬퍼.
+ * @brief Helper that automatically deduces OrigIn when the first Action is added.
  *
  * @code
  * auto pipeline = pipeline_builder<RawEvent>()

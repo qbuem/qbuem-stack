@@ -2,7 +2,7 @@
 
 **Zero Latency · Zero Allocation · Zero Dependency**
 
-> **Current Version: v2.1.0** — All features implemented. Pipeline ↔ MessageBus ↔ SHM fully integrated.
+> **Current Version: v2.2.0** — Monadic HTTP Fetch Client (curl-free). Pipeline ↔ MessageBus ↔ SHM fully integrated.
 >
 > High-performance C++ infrastructure for Web Application Servers (WAS), Inter-Process Communication (IPC), and Data Processing.
 
@@ -154,9 +154,9 @@ hello_world → async_timer → tcp_echo_server → arena → pipeline/fanout
 
 ## Roadmap Highlights
 
-- **v2.1.0 (Current)**: Pipeline ↔ MessageBus ↔ SHM full integration, `SHMChannel::unlink()`, IPC integration tests.
-- **v2.2.0 (Next)**: HTTP/3 native (quiche bundled), QUIC transport support.
-- **v2.3.0**: AF_XDP production examples, eBPF CO-RE enhancements.
+- **v2.2.0 (Current)**: Monadic HTTP fetch client (curl-free), async DNS, timeout, redirect, connection pool, kTLS HTTPS.
+- **v2.3.0 (Next)**: HTTP/3 native (quiche bundled), QUIC transport support.
+- **v2.4.0**: AF_XDP production examples, eBPF CO-RE enhancements.
 
 ---
 

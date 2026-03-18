@@ -2,17 +2,17 @@
 
 /**
  * @file qbuem/pipeline/pipeline_factory.hpp
- * @brief Config-driven 파이프라인 팩토리 — PipelineFactory
+ * @brief Config-driven pipeline factory — PipelineFactory
  * @defgroup qbuem_pipeline_factory PipelineFactory
  * @ingroup qbuem_pipeline
  *
- * JSON 설정으로 DynamicPipeline / PipelineGraph 를 생성합니다.
- * 플러그인 등록(register_plugin)을 통해 이름 → 액션 함수를 매핑하고,
- * from_json() / graph_from_json()으로 런타임에 파이프라인을 조립합니다.
+ * Creates DynamicPipeline / PipelineGraph from JSON configuration.
+ * Maps names to action functions via register_plugin(),
+ * and assembles pipelines at runtime with from_json() / graph_from_json().
  *
- * ## JSON 스키마
+ * ## JSON schema
  *
- * ### DynamicPipeline (선형)
+ * ### DynamicPipeline (linear)
  * ```json
  * {
  *   "type": "linear",
@@ -23,7 +23,7 @@
  * }
  * ```
  *
- * ### PipelineGraph (DAG)
+ * ### PipelineGraph (DAG, graph)
  * ```json
  * {
  *   "type": "graph",
@@ -38,7 +38,7 @@
  * }
  * ```
  *
- * ## 사용 예시
+ * ## Usage example
  * ```cpp
  * PipelineFactory<int> factory;
  * factory.register_plugin("multiplier", [](const nlohmann::json& cfg) {
@@ -77,7 +77,7 @@
      // Forward declaration for the iterator.
      class Json;
 
-     /// qbuem_json Value 기반 배열 이터레이터.
+     /// Array iterator based on qbuem_json Value.
      class JsonIterator {
      public:
        JsonIterator() = default;
@@ -96,36 +96,36 @@
      };
 
      /**
-      * @brief qbuem_json Value 래퍼 — nlohmann::json 호환 인터페이스 제공.
+      * @brief qbuem_json Value wrapper — provides an nlohmann::json-compatible interface.
       *
-      * Document 수명은 shared_ptr 으로 공유하므로 sub-value 반환이 안전합니다.
+      * Document lifetime is shared via shared_ptr, so returning sub-values is safe.
       */
      class Json {
      public:
-       // ── 생성 ──────────────────────────────────────────────────────────────
+       // ── Construction ──────────────────────────────────────────────────────
 
-       /// 빈 JSON 오브젝트 `{}` 로 기본 생성.
+       /// Default-constructs as an empty JSON object `{}`.
        Json() : doc_(std::make_shared<qbuem::Document>()),
                 val_(qbuem::parse(*doc_, "{}")) {}
 
-       /// JSON 문자열로부터 파싱.
+       /// Parses from a JSON string.
        explicit Json(std::string_view s)
            : doc_(std::make_shared<qbuem::Document>()),
              val_(qbuem::parse(*doc_, s)) {}
 
-       /// 부모 Document 를 공유하는 sub-value 생성 (내부 전용).
+       /// Constructs a sub-value sharing the parent Document (internal use only).
        Json(std::shared_ptr<qbuem::Document> d, qbuem::Value v)
            : doc_(std::move(d)), val_(std::move(v)) {}
 
-       // ── 키 존재 확인 ─────────────────────────────────────────────────────
+       // ── Key existence check ───────────────────────────────────────────────
 
        bool contains(std::string_view key) const {
            return val_.contains(std::string(key));
        }
 
-       // ── 값 접근 ──────────────────────────────────────────────────────────
+       // ── Value access ─────────────────────────────────────────────────────
 
-       /// 키에 해당하는 값을 반환. 없으면 def 반환.
+       /// Returns the value for the given key, or def if not found.
        template <typename T>
        T value(std::string_view key, T def) const {
            if (!contains(key)) return def;
@@ -133,13 +133,13 @@
            catch (...) { return def; }
        }
 
-       /// 이 Value 자체를 T 로 변환 (리프 값에 사용).
+       /// Converts this Value itself to T (used for leaf values).
        template <typename T>
        T get() const {
            return val_.template as<T>();
        }
 
-       // ── 서브-값 접근 ─────────────────────────────────────────────────────
+       // ── Sub-value access ─────────────────────────────────────────────────
 
        Json operator[](std::string_view key) const {
            return Json(doc_, val_[std::string(key)]);
@@ -149,22 +149,22 @@
            return Json(doc_, val_[idx]);
        }
 
-       // ── 타입 / 크기 ──────────────────────────────────────────────────────
+       // ── Type / size ──────────────────────────────────────────────────────
 
        bool        is_array() const { return val_.is_array(); }
        std::size_t size()     const { return val_.size(); }
 
-       // ── 배열 이터레이션 ───────────────────────────────────────────────────
+       // ── Array iteration ──────────────────────────────────────────────────
 
        JsonIterator begin() const { return {doc_, val_, 0};          }
        JsonIterator end()   const { return {doc_, val_, val_.size()}; }
 
-     // private: 내부 헬퍼가 접근할 수 있도록 공개 유지.
+     // private: kept public so internal helpers can access it.
        std::shared_ptr<qbuem::Document> doc_;
        qbuem::Value                     val_;
      };
 
-     // JsonIterator::operator* — Json 정의 후 구현.
+     // JsonIterator::operator* — implemented after Json is defined.
      inline Json JsonIterator::operator*() const {
          return Json(doc_, arr_[idx_]);
      }
@@ -182,20 +182,20 @@
 namespace qbuem {
 
 /**
- * @brief Config-driven 파이프라인 팩토리.
+ * @brief Config-driven pipeline factory.
  *
- * @tparam T 파이프라인 메시지 타입 (DynamicPipeline<T> / PipelineGraph<T>).
+ * @tparam T Pipeline message type (DynamicPipeline<T> / PipelineGraph<T>).
  */
 template <typename T>
 class PipelineFactory {
 public:
-  /// @brief 플러그인 팩토리 함수 타입.
-  /// JSON 설정을 받아 액션 함수를 반환합니다.
+  /// @brief Plugin factory function type.
+  /// Accepts a JSON config and returns an action function.
   using PluginFactory =
       std::function<typename DynamicPipeline<T>::StageFn(const detail::Json &)>;
 
   // -------------------------------------------------------------------------
-  // 플러그인 등록
+  // Plugin registration
   // -------------------------------------------------------------------------
 
   /**
@@ -225,13 +225,13 @@ public:
   }
 
   // -------------------------------------------------------------------------
-  // 선형 파이프라인 생성
+  // Linear pipeline construction
   // -------------------------------------------------------------------------
 
   /**
-   * @brief JSON 문자열에서 DynamicPipeline<T>을 생성합니다.
+   * @brief Constructs a DynamicPipeline<T> from a JSON string.
    *
-   * 스키마:
+   * Schema:
    * ```json
    * {
    *   "type": "linear",
@@ -241,9 +241,9 @@ public:
    * }
    * ```
    *
-   * @param json_str JSON 설정 문자열.
-   * @returns 구성된 DynamicPipeline (시작 전 상태).
-   * @throws std::runtime_error 파싱 실패, 알 수 없는 플러그인, 스키마 오류.
+   * @param json_str JSON configuration string.
+   * @returns Configured DynamicPipeline (not yet started).
+   * @throws std::runtime_error on parse failure, unknown plugin, or schema error.
    */
   [[nodiscard]] std::unique_ptr<DynamicPipeline<T>> from_json(std::string_view json_str) {
     auto doc = parse_json(json_str);
@@ -251,9 +251,9 @@ public:
   }
 
   /**
-   * @brief JSON 문자열에서 PipelineGraph<T>을 생성합니다.
+   * @brief Constructs a PipelineGraph<T> from a JSON string.
    *
-   * 스키마:
+   * Schema:
    * ```json
    * {
    *   "type": "graph",
@@ -264,9 +264,9 @@ public:
    * }
    * ```
    *
-   * @param json_str JSON 설정 문자열.
-   * @returns 구성된 PipelineGraph (시작 전 상태).
-   * @throws std::runtime_error 파싱 실패, 알 수 없는 플러그인, 스키마 오류.
+   * @param json_str JSON configuration string.
+   * @returns Configured PipelineGraph (not yet started).
+   * @throws std::runtime_error on parse failure, unknown plugin, or schema error.
    */
   [[nodiscard]] std::unique_ptr<PipelineGraph<T>> graph_from_json(std::string_view json_str) {
     auto doc = parse_json(json_str);

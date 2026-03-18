@@ -2,23 +2,23 @@
 
 /**
  * @file qbuem/server/http2_handler.hpp
- * @brief HTTP/2 연결 핸들러 — 프레임 처리, HPACK, 스트림 상태 관리
+ * @brief HTTP/2 connection handler — frame processing, HPACK, stream state management
  * @defgroup qbuem_http2_handler HTTP/2 Handler
  * @ingroup qbuem_server
  *
- * 이 헤더는 HTTP/2 프로토콜의 핵심 연결 관리를 헤더-온리로 구현합니다.
+ * This header implements the core connection management of the HTTP/2 protocol as a header-only library.
  *
- * ### 주요 기능
- * - **HTTP/2 프레임 파싱/직렬화**: DATA, HEADERS, SETTINGS, PING, GOAWAY 등
- * - **HPACK 디코더/인코더**: 정적 테이블(Static Table) 기반 헤더 압축 (RFC 7541)
- * - **스트림 상태 머신**: IDLE → OPEN → HALF_CLOSED → CLOSED 전이 관리
- * - **연결 프리페이스**: TLS 핸드셰이크 후 "h2" ALPN 협상 시 사용
- * - **코루틴 기반 비동기 처리**: C++20 Task<> 및 co_return 사용
+ * ### Key Features
+ * - **HTTP/2 frame parsing/serialization**: DATA, HEADERS, SETTINGS, PING, GOAWAY, etc.
+ * - **HPACK decoder/encoder**: Header compression based on Static Table (RFC 7541)
+ * - **Stream state machine**: IDLE → OPEN → HALF_CLOSED → CLOSED transition management
+ * - **Connection preface**: Used after TLS handshake when "h2" ALPN negotiation succeeds
+ * - **Coroutine-based async processing**: Uses C++20 Task<> and co_return
  *
- * ### 제한 사항 (최소 구현)
- * - HPACK 동적 테이블 미지원 (정적 테이블 62개 항목 + 리터럴 인코딩만 지원)
- * - PRIORITY, PUSH_PROMISE 프레임은 수신 시 무시
- * - 흐름 제어 (Flow Control) 미구현
+ * ### Limitations (minimal implementation)
+ * - HPACK dynamic table not supported (only static table 62 entries + literal encoding)
+ * - PRIORITY and PUSH_PROMISE frames are silently ignored on receipt
+ * - Flow Control not implemented
  *
  * @{
  */
@@ -44,29 +44,29 @@ namespace qbuem {
 // ─── Http2FrameType ───────────────────────────────────────────────────────────
 
 /**
- * @brief HTTP/2 프레임 타입 열거형 (RFC 7540 섹션 6).
+ * @brief HTTP/2 frame type enumeration (RFC 7540 section 6).
  *
- * 각 값은 HTTP/2 프레임 헤더의 `Type` 필드(1바이트)에 해당합니다.
+ * Each value corresponds to the `Type` field (1 byte) of an HTTP/2 frame header.
  */
 enum class Http2FrameType : uint8_t {
-    DATA          = 0x0, ///< 스트림 데이터 전달 프레임
-    HEADERS       = 0x1, ///< 헤더 블록 + 스트림 우선순위 프레임
-    PRIORITY      = 0x2, ///< 스트림 우선순위 지정 프레임
-    RST_STREAM    = 0x3, ///< 스트림 강제 종료 프레임
-    SETTINGS      = 0x4, ///< 연결 설정 파라미터 교환 프레임
-    PUSH_PROMISE  = 0x5, ///< 서버 푸시 예고 프레임
-    PING          = 0x6, ///< 연결 생존 확인 및 RTT 측정 프레임
-    GOAWAY        = 0x7, ///< 연결 종료 통보 프레임
-    WINDOW_UPDATE = 0x8, ///< 흐름 제어 윈도우 크기 갱신 프레임
-    CONTINUATION  = 0x9, ///< HEADERS/PUSH_PROMISE 연속 블록 프레임
+    DATA          = 0x0, ///< Stream data delivery frame
+    HEADERS       = 0x1, ///< Header block + stream priority frame
+    PRIORITY      = 0x2, ///< Stream priority assignment frame
+    RST_STREAM    = 0x3, ///< Stream forced termination frame
+    SETTINGS      = 0x4, ///< Connection settings parameter exchange frame
+    PUSH_PROMISE  = 0x5, ///< Server push announcement frame
+    PING          = 0x6, ///< Connection liveness check and RTT measurement frame
+    GOAWAY        = 0x7, ///< Connection termination notification frame
+    WINDOW_UPDATE = 0x8, ///< Flow control window size update frame
+    CONTINUATION  = 0x9, ///< HEADERS/PUSH_PROMISE continuation block frame
 };
 
 // ─── Http2Frame ───────────────────────────────────────────────────────────────
 
 /**
- * @brief HTTP/2 단일 프레임을 표현하는 구조체.
+ * @brief Structure representing a single HTTP/2 frame.
  *
- * RFC 7540 섹션 4.1에 정의된 프레임 포맷을 반영합니다.
+ * Reflects the frame format defined in RFC 7540 section 4.1.
  *
  * ```
  * +-----------------------------------------------+
@@ -80,56 +80,56 @@ enum class Http2FrameType : uint8_t {
  * +---------------------------------------------------------------+
  * ```
  *
- * @note `length` 필드는 24비트이지만 uint32_t로 저장합니다 (상위 8비트 무시).
- * @note `stream_id`는 31비트 (MSB는 예약 비트, 항상 0).
+ * @note The `length` field is 24-bit but stored as uint32_t (upper 8 bits ignored).
+ * @note `stream_id` is 31-bit (MSB is reserved bit, always 0).
  */
 struct Http2Frame {
-    uint32_t              length{0};    ///< 페이로드 바이트 수 (24비트 유효값)
-    Http2FrameType        type{Http2FrameType::DATA}; ///< 프레임 타입
-    uint8_t               flags{0};     ///< 타입별 플래그 비트필드
-    uint32_t              stream_id{0}; ///< 스트림 식별자 (31비트, MSB 예약)
-    std::vector<uint8_t>  payload;      ///< 프레임 페이로드 바이트열
+    uint32_t              length{0};    ///< Payload byte count (24-bit valid value)
+    Http2FrameType        type{Http2FrameType::DATA}; ///< Frame type
+    uint8_t               flags{0};     ///< Type-specific flag bitfield
+    uint32_t              stream_id{0}; ///< Stream identifier (31-bit, MSB reserved)
+    std::vector<uint8_t>  payload;      ///< Frame payload bytes
 };
 
-// ─── HPACK 정적 테이블 플래그 상수 ─────────────────────────────────────────
+// ─── HPACK static table flag constants ──────────────────────────────────────
 
-/// @brief HEADERS 프레임의 END_STREAM 플래그 (비트 0)
+/// @brief END_STREAM flag for HEADERS frames (bit 0)
 static constexpr uint8_t HTTP2_FLAG_END_STREAM  = 0x1;
-/// @brief HEADERS/CONTINUATION 프레임의 END_HEADERS 플래그 (비트 2)
+/// @brief END_HEADERS flag for HEADERS/CONTINUATION frames (bit 2)
 static constexpr uint8_t HTTP2_FLAG_END_HEADERS = 0x4;
-/// @brief SETTINGS 프레임의 ACK 플래그 (비트 0)
+/// @brief ACK flag for SETTINGS frames (bit 0)
 static constexpr uint8_t HTTP2_FLAG_ACK         = 0x1;
-/// @brief DATA 프레임의 PADDED 플래그 (비트 3)
+/// @brief PADDED flag for DATA frames (bit 3)
 static constexpr uint8_t HTTP2_FLAG_PADDED      = 0x8;
-/// @brief HEADERS 프레임의 PRIORITY 플래그 (비트 5)
+/// @brief PRIORITY flag for HEADERS frames (bit 5)
 static constexpr uint8_t HTTP2_FLAG_PRIORITY    = 0x20;
 
 // ─── HpackDecoder ─────────────────────────────────────────────────────────────
 
 /**
- * @brief HPACK 헤더 블록 디코더 (RFC 7541).
+ * @brief HPACK header block decoder (RFC 7541).
  *
- * 정적 테이블(Static Table, 인덱스 1~61)만 지원하는 최소 구현입니다.
- * 동적 테이블(Dynamic Table)은 지원하지 않습니다.
+ * Minimal implementation supporting only the Static Table (indices 1~61).
+ * Dynamic Table is not supported.
  *
- * ### 지원하는 표현 형식
- * - **인덱스 헤더 필드** (RFC 7541 섹션 6.1): 비트 패턴 `1xxxxxxx`
- * - **리터럴 헤더 필드 — 인덱싱 없음** (RFC 7541 섹션 6.2.2):
- *   - 이름이 인덱스로 참조되는 경우: 비트 패턴 `0000xxxx` (상위 4비트 0)
- *   - 이름이 리터럴 문자열인 경우: 인덱스 == 0
- * - **리터럴 헤더 필드 — 증분 인덱싱** (RFC 7541 섹션 6.2.1):
- *   비트 패턴 `01xxxxxx` (부분 지원, 동적 테이블 갱신은 무시)
+ * ### Supported representation formats
+ * - **Indexed Header Field** (RFC 7541 section 6.1): bit pattern `1xxxxxxx`
+ * - **Literal Header Field — Without Indexing** (RFC 7541 section 6.2.2):
+ *   - Name referenced by index: bit pattern `0000xxxx` (upper 4 bits 0)
+ *   - Name as literal string: index == 0
+ * - **Literal Header Field — Incremental Indexing** (RFC 7541 section 6.2.1):
+ *   bit pattern `01xxxxxx` (partially supported; dynamic table updates are ignored)
  *
- * @warning Huffman 인코딩 미지원. 리터럴 문자열은 원시 바이트로만 처리합니다.
+ * @warning Huffman encoding is not supported. Literal strings are processed as raw bytes only.
  */
 class HpackDecoder {
 public:
     /**
-     * @brief 헤더 블록 프래그먼트를 디코딩하여 헤더 맵을 반환합니다.
+     * @brief Decodes a header block fragment and returns a header map.
      *
-     * @param data HPACK으로 인코딩된 헤더 블록 프래그먼트.
-     * @returns 디코딩된 헤더 이름-값 쌍의 맵.
-     *          동일한 이름의 헤더가 여러 개면 마지막 값만 보존됩니다.
+     * @param data HPACK-encoded header block fragment.
+     * @returns Map of decoded header name-value pairs.
+     *          If multiple headers share the same name, only the last value is preserved.
      */
     std::unordered_map<std::string, std::string> decode(std::span<const uint8_t> data) {
         std::unordered_map<std::string, std::string> headers;
@@ -140,19 +140,19 @@ public:
             uint8_t first = data[pos];
 
             if (first & 0x80) {
-                // ── 인덱스 헤더 필드 표현 (RFC 7541 섹션 6.1) ──────────────
-                // 비트 패턴: 1xxxxxxx
-                // 정수 인코딩: 7비트 접두사
+                // ── Indexed Header Field representation (RFC 7541 section 6.1) ─
+                // Bit pattern: 1xxxxxxx
+                // Integer encoding: 7-bit prefix
                 uint32_t index = decode_integer(data, pos, 7);
                 if (index > 0 && index < 62) {
                     const auto& [name, value] = STATIC_TABLE[index];
                     headers[std::string(name)] = std::string(value);
                 }
-                // index == 0은 에러, 62 이상은 동적 테이블(미지원) → 무시
+                // index == 0 is an error; index >= 62 is dynamic table (unsupported) → ignore
             } else if ((first & 0xC0) == 0x40) {
-                // ── 리터럴 헤더 필드 — 증분 인덱싱 (RFC 7541 섹션 6.2.1) ──
-                // 비트 패턴: 01xxxxxx
-                // 6비트 접두사로 이름 인덱스 디코딩
+                // ── Literal Header Field — Incremental Indexing (RFC 7541 section 6.2.1) ─
+                // Bit pattern: 01xxxxxx
+                // Decode name index with 6-bit prefix
                 uint32_t name_index = decode_integer(data, pos, 6);
                 std::string name;
                 if (name_index > 0 && name_index < 62) {
@@ -162,11 +162,11 @@ public:
                 }
                 std::string value = decode_string(data, pos);
                 headers[std::move(name)] = std::move(value);
-                // 동적 테이블 갱신은 무시 (최소 구현)
+                // Dynamic table update is ignored (minimal implementation)
             } else if ((first & 0xF0) == 0x00) {
-                // ── 리터럴 헤더 필드 — 인덱싱 없음 (RFC 7541 섹션 6.2.2) ──
-                // 비트 패턴: 0000xxxx
-                // 4비트 접두사로 이름 인덱스 디코딩
+                // ── Literal Header Field — Without Indexing (RFC 7541 section 6.2.2) ─
+                // Bit pattern: 0000xxxx
+                // Decode name index with 4-bit prefix
                 uint32_t name_index = decode_integer(data, pos, 4);
                 std::string name;
                 if (name_index > 0 && name_index < 62) {
@@ -177,9 +177,9 @@ public:
                 std::string value = decode_string(data, pos);
                 headers[std::move(name)] = std::move(value);
             } else if ((first & 0xF0) == 0x10) {
-                // ── 리터럴 헤더 필드 — 절대 인덱싱 없음 (RFC 7541 섹션 6.2.3) ──
-                // 비트 패턴: 0001xxxx
-                // 4비트 접두사로 이름 인덱스 디코딩
+                // ── Literal Header Field — Never Indexed (RFC 7541 section 6.2.3) ─
+                // Bit pattern: 0001xxxx
+                // Decode name index with 4-bit prefix
                 uint32_t name_index = decode_integer(data, pos, 4);
                 std::string name;
                 if (name_index > 0 && name_index < 62) {
@@ -190,11 +190,11 @@ public:
                 std::string value = decode_string(data, pos);
                 headers[std::move(name)] = std::move(value);
             } else if ((first & 0xE0) == 0x20) {
-                // ── 동적 테이블 크기 갱신 (RFC 7541 섹션 6.3) ──────────────
-                // 비트 패턴: 001xxxxx — 무시
+                // ── Dynamic Table Size Update (RFC 7541 section 6.3) ──────────
+                // Bit pattern: 001xxxxx — ignore
                 decode_integer(data, pos, 5);
             } else {
-                // 알 수 없는 표현 — 1바이트 건너뜀
+                // Unknown representation — skip 1 byte
                 ++pos;
             }
         }
@@ -204,12 +204,12 @@ public:
 
 private:
     /**
-     * @brief HPACK 정수 인코딩 디코딩 (RFC 7541 섹션 5.1).
+     * @brief Decodes an HPACK integer encoding (RFC 7541 section 5.1).
      *
-     * @param data  원본 바이트 스팬.
-     * @param pos   현재 읽기 위치 (in-out). 디코딩 후 다음 위치로 이동합니다.
-     * @param prefix_bits 정수 접두사 비트 수 (1~8).
-     * @returns 디코딩된 정수값.
+     * @param data  Source byte span.
+     * @param pos   Current read position (in-out). Advances to the next position after decoding.
+     * @param prefix_bits Number of prefix bits for the integer (1~8).
+     * @returns Decoded integer value.
      */
     static uint32_t decode_integer(std::span<const uint8_t> data,
                                    size_t& pos,

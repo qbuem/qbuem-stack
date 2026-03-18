@@ -2,38 +2,39 @@
 
 /**
  * @file qbuem/shm/shm_bus.hpp
- * @brief SHMBus — 인트라/인터 프로세스 통합 메시지 버스.
+ * @brief SHMBus — unified intra/inter-process message bus.
  * @defgroup qbuem_shm_bus SHMBus
  * @ingroup qbuem_shm
  *
- * ## 개요
- * `SHMBus`는 `AsyncChannel<T>` (스레드 간)과 `SHMChannel<T>` (프로세스 간)을
- * 동일한 API로 추상화하는 통합 메시지 버스입니다.
+ * ## Overview
+ * `SHMBus` is a unified message bus that abstracts `AsyncChannel<T>`
+ * (between threads) and `SHMChannel<T>` (between processes) behind a
+ * common API.
  *
- * ## 토픽 범위 (TopicScope)
- * | Scope | 백엔드 | 레이턴시 | 설명 |
- * |-------|--------|---------|------|
- * | `LOCAL_ONLY`   | `AsyncChannel<T>` | ~50ns | 동일 프로세스 내 |
- * | `SYSTEM_WIDE`  | `SHMChannel<T>`   | ~150ns | 크로스-프로세스 |
+ * ## Topic Scope (TopicScope)
+ * | Scope | Backend | Latency | Description |
+ * |-------|---------|---------|-------------|
+ * | `LOCAL_ONLY`   | `AsyncChannel<T>` | ~50ns | Within the same process |
+ * | `SYSTEM_WIDE`  | `SHMChannel<T>`   | ~150ns | Cross-process |
  *
- * ## 사용 예시
+ * ## Usage Example
  * @code
- * // 토픽 등록 (한 번만)
+ * // Declare topic (once)
  * SHMBus bus;
  * bus.declare<OrderEvent>("trading.orders", TopicScope::SYSTEM_WIDE, 4096);
  *
- * // 발행
+ * // Publish
  * co_await bus.publish("trading.orders", order);
  *
- * // 구독
+ * // Subscribe
  * auto sub = bus.subscribe<OrderEvent>("trading.orders");
  * while (auto msg = co_await sub->recv()) {
  *     process(*msg);
  * }
  * @endcode
  *
- * ## Pipeline 통합
- * `SHMSource`와 `SHMSink`를 통해 Pipeline Stage로 사용 가능합니다:
+ * ## Pipeline Integration
+ * Can be used as Pipeline Stages via `SHMSource` and `SHMSink`:
  * @code
  * auto pipeline = PipelineBuilder<OrderEvent>()
  *     .source<SHMSource<OrderEvent>>("trading.raw_orders")
@@ -60,18 +61,18 @@ namespace qbuem::shm {
 
 // ─── TopicScope ───────────────────────────────────────────────────────────────
 
-/** @brief 토픽의 가시성 범위를 나타냅니다. */
+/** @brief Visibility scope of a topic. */
 enum class TopicScope : uint8_t {
-    LOCAL_ONLY  = 0, ///< 동일 프로세스 내 (AsyncChannel 백엔드)
-    SYSTEM_WIDE = 1, ///< 크로스-프로세스 (SHMChannel 백엔드)
+    LOCAL_ONLY  = 0, ///< Within the same process (AsyncChannel backend)
+    SYSTEM_WIDE = 1, ///< Cross-process (SHMChannel backend)
 };
 
 // ─── ISubscription<T> ────────────────────────────────────────────────────────
 
 /**
- * @brief 타입-지정 구독 핸들.
+ * @brief Type-safe subscription handle.
  *
- * 구독은 RAII로 관리됩니다 — 소멸 시 자동으로 등록 해제.
+ * Subscriptions are managed via RAII — automatically deregistered on destruction.
  */
 template <typename T>
 class ISubscription {
@@ -79,41 +80,42 @@ public:
     virtual ~ISubscription() = default;
 
     /**
-     * @brief 다음 메시지를 수신합니다.
-     * @returns 메시지 포인터 또는 nullopt (채널 닫힘).
+     * @brief Receives the next message.
+     * @returns Message pointer or nullopt (channel closed).
      */
     virtual Task<std::optional<const T*>> recv() = 0;
 
     /**
-     * @brief 논블로킹 수신 시도.
+     * @brief Non-blocking receive attempt.
      */
     virtual std::optional<const T*> try_recv() = 0;
 
-    /** @brief 구독 토픽 이름. */
+    /** @brief Subscribed topic name. */
     [[nodiscard]] virtual std::string_view topic() const noexcept = 0;
 
-    /** @brief 구독 범위. */
+    /** @brief Subscription scope. */
     [[nodiscard]] virtual TopicScope scope() const noexcept = 0;
 };
 
 // ─── TopicDescriptor ─────────────────────────────────────────────────────────
 
 /**
- * @brief 토픽 메타데이터 (SHMBus 내부 저장용).
+ * @brief Topic metadata (stored internally by SHMBus).
  *
- * 최대 이름 길이 63자로 제한하여 힙 할당 없이 스택 저장합니다.
+ * Name length is capped at 63 characters to allow stack storage without
+ * heap allocation.
  */
 struct TopicDescriptor {
     static constexpr size_t kMaxNameLen = 63;
 
     char       name[kMaxNameLen + 1]{};
     TopicScope scope{TopicScope::LOCAL_ONLY};
-    uint64_t   type_id{0};          ///< 타입 식별자 (sizeof(T) XOR typeid 기반)
-    size_t     capacity{0};         ///< 링 버퍼 용량
-    void*      channel_ptr{nullptr};///< AsyncChannel<T>* 또는 SHMChannel<T>* (type-erased)
-    std::function<void(void*)> channel_deleter; ///< type-safe 소멸자
+    uint64_t   type_id{0};          ///< Type identifier (sizeof(T) XOR typeid-based)
+    size_t     capacity{0};         ///< Ring buffer capacity
+    void*      channel_ptr{nullptr};///< AsyncChannel<T>* or SHMChannel<T>* (type-erased)
+    std::function<void(void*)> channel_deleter; ///< Type-safe destructor
 
-    /** @brief 이름을 설정합니다 (최대 63자). */
+    /** @brief Sets the name (up to 63 characters). */
     void set_name(std::string_view n) noexcept {
         size_t len = n.size() < kMaxNameLen ? n.size() : kMaxNameLen;
         std::memcpy(name, n.data(), len);
@@ -126,14 +128,14 @@ struct TopicDescriptor {
 // ─── SHMBus ───────────────────────────────────────────────────────────────────
 
 /**
- * @brief 통합 메시지 버스.
+ * @brief Unified message bus.
  *
- * ## 내부 구조
- * - 토픽 레지스트리: 고정 배열 + 선형 탐색 (최대 `kMaxTopics` 토픽).
- * - 각 토픽은 `AsyncChannel<T>` 또는 `SHMChannel<T>`를 뒤에서 구동.
- * - 구독자는 토픽당 fan-out 방식으로 메시지를 수신.
+ * ## Internal Structure
+ * - Topic registry: fixed-size array + linear scan (up to `kMaxTopics` topics).
+ * - Each topic is backed by either `AsyncChannel<T>` or `SHMChannel<T>`.
+ * - Subscribers receive messages via per-topic fan-out.
  *
- * @note 프로세스 당 하나의 `SHMBus` 인스턴스를 사용하길 권장합니다.
+ * @note It is recommended to use one `SHMBus` instance per process.
  */
 class SHMBus {
 public:
@@ -155,19 +157,19 @@ public:
     SHMBus(const SHMBus&) = delete;
     SHMBus& operator=(const SHMBus&) = delete;
 
-    // ── 토픽 선언 ──────────────────────────────────────────────────────────
+    // ── Topic Declaration ──────────────────────────────────────────────────
 
     /**
-     * @brief 타입 `T`의 토픽을 버스에 등록합니다.
+     * @brief Registers a topic of type `T` on the bus.
      *
-     * - `LOCAL_ONLY`: `AsyncChannel<T>` 생성.
-     * - `SYSTEM_WIDE`: `SHMChannel<T>` 생성 (memfd 세그먼트).
+     * - `LOCAL_ONLY`: creates an `AsyncChannel<T>`.
+     * - `SYSTEM_WIDE`: creates an `SHMChannel<T>` (memfd segment).
      *
-     * @tparam T     메시지 타입.
-     * @param name   토픽 이름 (e.g. "trading.orders").
+     * @tparam T     Message type.
+     * @param name   Topic name (e.g. "trading.orders").
      * @param scope  LOCAL_ONLY | SYSTEM_WIDE.
-     * @param cap    링 버퍼 용량.
-     * @returns 성공이면 true, 이미 등록되었거나 한도 초과이면 false.
+     * @param cap    Ring buffer capacity.
+     * @returns true on success, false if already registered or limit exceeded.
      */
     template <typename T>
     bool declare(std::string_view name, TopicScope scope, size_t cap = 1024) {
@@ -176,7 +178,7 @@ public:
         size_t idx = topic_count_.load(std::memory_order_relaxed);
         if (idx >= kMaxTopics) return false;
 
-        // 중복 검사
+        // Duplicate check
         if (find_topic(name) != nullptr) return false;
 
         auto& desc = topics_[idx];
@@ -191,7 +193,7 @@ public:
                 delete static_cast<AsyncChannel<T>*>(p);
             };
         } else {
-            // SYSTEM_WIDE: SHMChannel 생성 (생산자 측)
+            // SYSTEM_WIDE: create SHMChannel (producer side)
             auto res = SHMChannel<T>::create(name, cap);
             if (!res) return false;
             desc.channel_ptr    = res->release();
@@ -204,15 +206,15 @@ public:
         return true;
     }
 
-    // ── 발행 ────────────────────────────────────────────────────────────────
+    // ── Publish ─────────────────────────────────────────────────────────────
 
     /**
-     * @brief 토픽에 메시지를 발행합니다.
+     * @brief Publishes a message to a topic.
      *
-     * @tparam T     메시지 타입.
-     * @param name   토픽 이름.
-     * @param msg    전송할 메시지.
-     * @returns 성공 또는 에러 (토픽 미등록, 타입 불일치, 채널 에러).
+     * @tparam T     Message type.
+     * @param name   Topic name.
+     * @param msg    Message to send.
+     * @returns Success or error (topic not registered, type mismatch, channel error).
      */
     template <typename T>
     Task<Result<void>> publish(std::string_view name, const T& msg) {
@@ -230,7 +232,7 @@ public:
     }
 
     /**
-     * @brief 논블로킹 발행 시도.
+     * @brief Non-blocking publish attempt.
      */
     template <typename T>
     bool try_publish(std::string_view name, const T& msg) {
@@ -246,14 +248,14 @@ public:
         }
     }
 
-    // ── 구독 ────────────────────────────────────────────────────────────────
+    // ── Subscribe ───────────────────────────────────────────────────────────
 
     /**
-     * @brief 토픽을 구독합니다.
+     * @brief Subscribes to a topic.
      *
-     * @tparam T   메시지 타입.
-     * @param name 토픽 이름.
-     * @returns 구독 핸들 또는 nullptr (토픽 미등록/타입 불일치).
+     * @tparam T   Message type.
+     * @param name Topic name.
+     * @returns Subscription handle or nullptr (topic not registered / type mismatch).
      */
     template <typename T>
     std::unique_ptr<ISubscription<T>> subscribe(std::string_view name) {
@@ -269,20 +271,20 @@ public:
         }
     }
 
-    // ── 유틸리티 ────────────────────────────────────────────────────────────
+    // ── Utilities ───────────────────────────────────────────────────────────
 
-    /** @brief 등록된 토픽 수를 반환합니다. */
+    /** @brief Returns the number of registered topics. */
     [[nodiscard]] size_t topic_count() const noexcept {
         return topic_count_.load(std::memory_order_relaxed);
     }
 
-    /** @brief 토픽이 등록되어 있는지 확인합니다. */
+    /** @brief Returns whether a topic is registered. */
     [[nodiscard]] bool has_topic(std::string_view name) const noexcept {
         return find_topic(name) != nullptr;
     }
 
 private:
-    // ── 내부 구독 구현 ──────────────────────────────────────────────────────
+    // ── Internal subscription implementations ─────────────────────────────
 
     template <typename T>
     struct LocalSub final : ISubscription<T> {
@@ -325,7 +327,7 @@ private:
         [[nodiscard]] TopicScope scope() const noexcept override { return TopicScope::SYSTEM_WIDE; }
     };
 
-    // ── 토픽 레지스트리 ────────────────────────────────────────────────────
+    // ── Topic registry ─────────────────────────────────────────────────────
 
     TopicDescriptor*       find_topic(std::string_view name) noexcept {
         size_t n = topic_count_.load(std::memory_order_acquire);
@@ -343,7 +345,7 @@ private:
         return nullptr;
     }
 
-    /** @brief 타입 ID 생성 (sizeof + alignof 기반, 충돌 위험 낮음). */
+    /** @brief Generates a type ID (sizeof + alignof based, low collision risk). */
     template <typename T>
     static constexpr uint64_t make_type_id() noexcept {
         return (uint64_t(sizeof(T)) << 32) | uint64_t(alignof(T));
@@ -353,15 +355,15 @@ private:
     std::atomic<size_t>  topic_count_{0};
 };
 
-// ─── Pipeline 통합: SHMSource / SHMSink ──────────────────────────────────────
+// ─── Pipeline Integration: SHMSource / SHMSink ───────────────────────────────
 
 /**
- * @brief SHM 채널에서 메시지를 읽는 Pipeline Source 액션.
+ * @brief Pipeline Source action that reads messages from an SHM channel.
  *
- * @tparam T 메시지 타입.
+ * @tparam T Message type.
  *
  * @code
- * // Pipeline Head에서 SHM 채널 소비
+ * // Consume from an SHM channel at the Pipeline head
  * auto pipeline = PipelineBuilder<MyMsg>()
  *     .source<SHMSource<MyMsg>>("system.ingress")
  *     .add<ProcessAction>()
@@ -372,11 +374,11 @@ template <typename T>
 class SHMSource {
 public:
     explicit SHMSource(std::string_view channel_name)
-        : name_(channel_name) {}  ///< 문자열을 복사하여 댕글링 방지
+        : name_(channel_name) {}  ///< Copy the string to prevent dangling
 
     /**
-     * @brief 채널을 초기화하고 엽니다.
-     * @returns 성공 또는 에러.
+     * @brief Initializes and opens the channel.
+     * @returns Success or error.
      */
     Result<void> init() noexcept {
         auto res = SHMChannel<T>::open(name_);
@@ -386,22 +388,22 @@ public:
     }
 
     /**
-     * @brief 다음 메시지를 비동기적으로 읽습니다.
-     * @returns 메시지 포인터 (zero-copy) 또는 nullopt.
+     * @brief Asynchronously reads the next message.
+     * @returns Message pointer (zero-copy) or nullopt.
      */
     Task<std::optional<const T*>> next() {
         return channel_->recv();
     }
 
 private:
-    std::string                   name_;   ///< 소유권 있는 문자열 (string_view 댕글링 방지)
+    std::string                   name_;   ///< Owning string (prevents string_view dangling)
     typename SHMChannel<T>::Ptr   channel_;
 };
 
 /**
- * @brief SHM 채널로 메시지를 쓰는 Pipeline Sink 액션.
+ * @brief Pipeline Sink action that writes messages to an SHM channel.
  *
- * @tparam T 메시지 타입.
+ * @tparam T Message type.
  *
  * @code
  * auto pipeline = PipelineBuilder<ProcessedMsg>()
@@ -414,11 +416,11 @@ template <typename T>
 class SHMSink {
 public:
     explicit SHMSink(std::string_view channel_name, size_t capacity = 1024)
-        : name_(channel_name), capacity_(capacity) {}  ///< 문자열을 복사하여 댕글링 방지
+        : name_(channel_name), capacity_(capacity) {}  ///< Copy the string to prevent dangling
 
     /**
-     * @brief 채널을 초기화하고 생성합니다.
-     * @returns 성공 또는 에러.
+     * @brief Initializes and creates the channel.
+     * @returns Success or error.
      */
     Result<void> init() noexcept {
         auto res = SHMChannel<T>::create(name_, capacity_);
@@ -428,16 +430,16 @@ public:
     }
 
     /**
-     * @brief 메시지를 SHM 채널로 전송합니다.
-     * 슬롯이 가득 차면 co_await 백프레셔.
-     * @param msg 전송할 메시지.
+     * @brief Sends a message to the SHM channel.
+     * Applies co_await backpressure when slots are full.
+     * @param msg Message to send.
      */
     Task<Result<void>> sink(const T& msg) {
         return channel_->send(msg);
     }
 
 private:
-    std::string                   name_;      ///< 소유권 있는 문자열 (string_view 댕글링 방지)
+    std::string                   name_;      ///< Owning string (prevents string_view dangling)
     size_t                        capacity_;
     typename SHMChannel<T>::Ptr   channel_;
 };

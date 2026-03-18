@@ -2,13 +2,14 @@
 
 /**
  * @file qbuem/http/request.hpp
- * @brief HTTP 요청 값 타입 — 메서드, 경로, 헤더, 바디 접근자
+ * @brief HTTP request value type — method, path, header, and body accessors.
  * @defgroup qbuem_http_request HTTP Request
  * @ingroup qbuem_http
  *
- * Request는 불변(immutable) 값 타입. body()로 원시 바이트를 반환하며
- * JSON 파싱은 애플리케이션 책임. query(), cookie(), form(), param() 편의 접근자 제공.
- * path()는 '?' 이전만 반환.
+ * Request is an immutable value type. body() returns raw bytes;
+ * JSON parsing is the application's responsibility.
+ * Convenience accessors: query(), cookie(), form(), param().
+ * path() returns only the part before '?'.
  * @{
  */
 

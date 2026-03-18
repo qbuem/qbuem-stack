@@ -2,18 +2,18 @@
 
 /**
  * @file qbuem/pipeline/message_bus.hpp
- * @brief 토픽 기반 발행/구독 메시지 버스 — MessageBus, SubpipelineAction
+ * @brief Topic-based publish/subscribe message bus — MessageBus, SubpipelineAction
  * @defgroup qbuem_message_bus MessageBus
  * @ingroup qbuem_pipeline
  *
- * MessageBus는 토픽 기반 pub/sub 패턴과 스트리밍을 지원합니다.
- * 4가지 패턴을 지원합니다:
- * - Unary (1→1): 단일 발행자 → 단일 구독자 (round-robin)
- * - ServerStream (1→N): 단일 발행, 스트림 채널 수신
- * - ClientStream (N→1): 채널 누적 후 단일 결과
- * - Bidi: 양방향 스트리밍
+ * MessageBus supports topic-based pub/sub patterns and streaming.
+ * Four patterns are supported:
+ * - Unary (1→1): single publisher → single subscriber (round-robin)
+ * - ServerStream (1→N): single publish, stream channel receive
+ * - ClientStream (N→1): accumulate from channel then produce single result
+ * - Bidi: bidirectional streaming
  *
- * ## 사용 예시
+ * ## Usage example
  * ```cpp
  * MessageBus bus;
  * bus.start(dispatcher);
@@ -47,8 +47,8 @@
 
 namespace qbuem {
 
-/// @brief std::string_view 투명 해시 — publish/subscribe 토픽 조회 시
-///        `std::string(topic)` 임시 객체 생성을 방지합니다.
+/// @brief Transparent hash for std::string_view — prevents temporary
+///        `std::string(topic)` construction during publish/subscribe topic lookup.
 struct StringHash {
     using is_transparent = void;
     std::size_t operator()(std::string_view sv) const noexcept {
@@ -57,38 +57,38 @@ struct StringHash {
 };
 
 /**
- * @brief 토픽 기반 발행/구독 메시지 버스.
+ * @brief Topic-based publish/subscribe message bus.
  *
- * 메시지는 std::any로 타입 소거되어 전달됩니다.
- * 구독 핸들(Subscription)의 소멸자가 구독을 자동으로 취소합니다.
+ * Messages are type-erased via std::any for delivery.
+ * The subscription handle (Subscription) destructor automatically cancels the subscription.
  */
 class MessageBus {
 public:
-    /// @brief 타입 소거된 메시지 타입.
+    /// @brief Type-erased message type.
     using Msg = std::any;
 
-    /// @brief 메시지 핸들러 타입.
+    /// @brief Message handler type.
     using Handler = std::function<Task<Result<void>>(Msg, Context)>;
 
     // -------------------------------------------------------------------------
-    // Subscription 핸들
+    // Subscription handle
     // -------------------------------------------------------------------------
 
     /**
-     * @brief 구독 핸들 — 소멸 시 자동으로 구독 취소.
+     * @brief Subscription handle — automatically cancels subscription on destruction.
      *
-     * RAII 방식으로 구독 수명을 관리합니다.
-     * 이동 가능하지만 복사 불가능합니다.
+     * Manages subscription lifetime in RAII fashion.
+     * Movable but not copyable.
      */
     class Subscription {
     public:
         Subscription() = default;
 
         /**
-         * @brief 구독 핸들을 생성합니다.
-         * @param topic 구독 토픽.
-         * @param id    구독 ID.
-         * @param bus   소유 MessageBus 포인터.
+         * @brief Constructs a subscription handle.
+         * @param topic Subscription topic.
+         * @param id    Subscription ID.
+         * @param bus   Owning MessageBus pointer.
          */
         Subscription(std::string topic, size_t id, MessageBus* bus)
             : topic_(std::move(topic))
@@ -125,7 +125,7 @@ public:
             return *this;
         }
 
-        /// @brief 구독을 명시적으로 취소합니다.
+        /// @brief Explicitly cancels the subscription.
         void cancel() {
             if (active_ && bus_) {
                 bus_->unsubscribe(topic_, id_);
@@ -134,7 +134,7 @@ public:
             }
         }
 
-        /// @brief 구독이 활성화되어 있는지 확인합니다.
+        /// @brief Returns whether the subscription is active.
         [[nodiscard]] bool is_active() const noexcept { return active_; }
 
     private:
@@ -145,7 +145,7 @@ public:
     };
 
     // -------------------------------------------------------------------------
-    // 생성자 / 소멸자
+    // Constructor / Destructor
     // -------------------------------------------------------------------------
 
     MessageBus() = default;
@@ -155,18 +155,18 @@ public:
     MessageBus& operator=(const MessageBus&) = delete;
 
     // -------------------------------------------------------------------------
-    // 구독
+    // Subscribe
     // -------------------------------------------------------------------------
 
     /**
-     * @brief Unary 패턴 구독 — 메시지가 핸들러로 직접 전달됩니다.
+     * @brief Unary pattern subscription — message is delivered directly to the handler.
      *
-     * 같은 토픽에 여러 구독자가 있으면 fan-out (모두 수신).
+     * If multiple subscribers exist on the same topic, fan-out (all receive).
      *
-     * @param topic    구독할 토픽.
-     * @param handler  메시지 처리 함수.
-     * @param chan_cap 내부 채널 용량.
-     * @returns 구독 핸들 (소멸 시 자동 취소).
+     * @param topic    Topic to subscribe to.
+     * @param handler  Message handler function.
+     * @param chan_cap Internal channel capacity.
+     * @returns Subscription handle (automatically cancelled on destruction).
      */
     Subscription subscribe(std::string topic, Handler handler,
                            size_t /*chan_cap*/ = 64) {
@@ -187,13 +187,13 @@ public:
     }
 
     /**
-     * @brief 메시지를 토픽의 모든 구독자에게 발행합니다 (fan-out, backpressure).
+     * @brief Publishes a message to all subscribers of a topic (fan-out, backpressure).
      *
-     * @tparam T 메시지 타입.
-     * @param topic 발행할 토픽.
-     * @param msg   발행할 메시지.
-     * @param ctx   메시지 컨텍스트.
-     * @returns Result<void>::ok() 또는 에러.
+     * @tparam T Message type.
+     * @param topic Topic to publish to.
+     * @param msg   Message to publish.
+     * @param ctx   Message context.
+     * @returns Result<void>::ok() or an error.
      */
     template <typename T>
     Task<Result<void>> publish(std::string_view topic, T msg, Context ctx = {}) {
@@ -215,7 +215,7 @@ public:
         std::vector<std::function<bool(const Msg&)>> direct_senders;
         {
             std::shared_lock lock(state->mtx);
-            // sub 수 만큼 미리 예약 — publish 마다 재할당 방지
+            // Pre-reserve to the number of subs — prevents reallocation on each publish
             handlers.reserve(state->subs.size());
             direct_senders.reserve(state->subs.size());
             for (auto& sub : state->subs) {
@@ -238,13 +238,13 @@ public:
     }
 
     /**
-     * @brief 논블로킹 발행 (채널이 가득 차면 드롭).
+     * @brief Non-blocking publish (drops if channel is full).
      *
-     * @tparam T 메시지 타입.
-     * @param topic 발행할 토픽.
-     * @param msg   발행할 메시지.
-     * @param ctx   메시지 컨텍스트.
-     * @returns 모든 구독자에게 성공적으로 전송 시 true.
+     * @tparam T Message type.
+     * @param topic Topic to publish to.
+     * @param msg   Message to publish.
+     * @param ctx   Message context.
+     * @returns true if successfully sent to all subscribers.
      */
     template <typename T>
     bool try_publish(std::string_view topic, T msg, Context /*ctx*/ = {}) {
@@ -275,15 +275,15 @@ public:
     }
 
     /**
-     * @brief ServerStream 구독 — 채널을 통해 스트림을 수신합니다.
+     * @brief ServerStream subscription — receives a stream via a channel.
      *
-     * 반환된 채널은 토픽에 발행된 메시지를 스트리밍합니다.
-     * 토픽이 닫히면 채널도 닫힙니다.
+     * The returned channel streams messages published to the topic.
+     * When the topic is closed, the channel is also closed.
      *
-     * @tparam T 메시지 타입.
-     * @param topic 구독할 토픽.
-     * @param cap   채널 용량.
-     * @returns 메시지 스트림 채널.
+     * @tparam T Message type.
+     * @param topic Topic to subscribe to.
+     * @param cap   Channel capacity.
+     * @returns Message stream channel.
      */
     template <typename T>
     std::shared_ptr<AsyncChannel<T>> subscribe_stream(std::string topic,
@@ -315,14 +315,14 @@ public:
     }
 
     /**
-     * @brief ClientStream 구독 — 채널에서 누적 후 단일 결과를 생성합니다.
+     * @brief ClientStream subscription — accumulates from a channel and produces a single result.
      *
-     * @tparam In  입력 메시지 타입.
-     * @tparam Out 출력 결과 타입.
-     * @param topic  구독할 토픽.
-     * @param fn     누적 함수: AsyncChannel<In> -> Task<Result<Out>>.
-     * @param cap    내부 채널 용량.
-     * @returns 구독 핸들.
+     * @tparam In  Input message type.
+     * @tparam Out Output result type.
+     * @param topic  Topic to subscribe to.
+     * @param fn     Accumulation function: AsyncChannel<In> -> Task<Result<Out>>.
+     * @param cap    Internal channel capacity.
+     * @returns Subscription handle.
      */
     template <typename In, typename Out>
     Subscription subscribe_accumulate(
@@ -353,9 +353,9 @@ public:
     }
 
     /**
-     * @brief 토픽을 닫습니다 — 모든 구독자에게 EOS 전파.
+     * @brief Closes a topic — propagates EOS to all subscribers.
      *
-     * @param topic 닫을 토픽 이름.
+     * @param topic Name of the topic to close.
      */
     void close_topic(std::string_view topic) {
         std::shared_ptr<TopicState> state;
@@ -375,11 +375,11 @@ public:
     }
 
     // -------------------------------------------------------------------------
-    // 통계
+    // Statistics
     // -------------------------------------------------------------------------
 
     /**
-     * @brief 특정 토픽의 구독자 수를 반환합니다.
+     * @brief Returns the number of subscribers for a given topic.
      */
     [[nodiscard]] size_t subscriber_count(std::string_view topic) const {
         std::shared_lock outer(topics_mtx_);
@@ -391,7 +391,7 @@ public:
     }
 
     /**
-     * @brief 현재 존재하는 모든 토픽 이름을 반환합니다.
+     * @brief Returns the names of all currently existing topics.
      */
     [[nodiscard]] std::vector<std::string> topics() const {
         std::shared_lock lock(topics_mtx_);
@@ -403,20 +403,20 @@ public:
     }
 
     // -------------------------------------------------------------------------
-    // 라이프사이클
+    // Lifecycle
     // -------------------------------------------------------------------------
 
     /**
-     * @brief MessageBus를 시작합니다.
+     * @brief Starts the MessageBus.
      *
-     * @param dispatcher 내부 워커를 실행할 Dispatcher.
+     * @param dispatcher Dispatcher used to run internal workers.
      */
     void start(Dispatcher& dispatcher) {
         dispatcher_ = &dispatcher;
     }
 
     /**
-     * @brief 모든 토픽을 닫고 드레인합니다.
+     * @brief Closes and drains all topics.
      */
     Task<void> drain() {
         std::vector<std::string> topic_names;
@@ -432,7 +432,7 @@ public:
 
 private:
     // -------------------------------------------------------------------------
-    // 내부 구조체
+    // Internal structs
     // -------------------------------------------------------------------------
 
     struct Sub {
@@ -453,11 +453,11 @@ private:
     };
 
     // -------------------------------------------------------------------------
-    // 내부 헬퍼
+    // Internal helpers
     // -------------------------------------------------------------------------
 
     /**
-     * @brief 토픽 상태를 반환합니다. 없으면 생성합니다.
+     * @brief Returns the topic state, creating it if it does not exist.
      */
     std::shared_ptr<TopicState> get_or_create_topic(const std::string& topic) {
         {
@@ -482,7 +482,7 @@ private:
     }
 
     /**
-     * @brief 특정 토픽에서 ID에 해당하는 구독을 제거합니다.
+     * @brief Removes the subscription with the given ID from the specified topic.
      */
     void unsubscribe(std::string_view topic, size_t id) {
         std::shared_ptr<TopicState> state;
@@ -502,7 +502,7 @@ private:
     }
 
     // -------------------------------------------------------------------------
-    // 데이터 멤버
+    // Data members
     // -------------------------------------------------------------------------
     mutable std::shared_mutex                                                   topics_mtx_;
     std::unordered_map<std::string, std::shared_ptr<TopicState>,
@@ -515,44 +515,44 @@ private:
 // =============================================================================
 
 /**
- * @brief StaticPipeline<In,Out>을 단일 Action<In,Out>으로 래핑합니다.
+ * @brief Wraps a StaticPipeline<In,Out> as a single Action<In,Out>.
  *
- * DynamicPipeline 스테이지로 StaticPipeline을 내장할 때 사용합니다.
+ * Used to embed a StaticPipeline as a stage inside a DynamicPipeline.
  *
- * @tparam In  입력 타입.
- * @tparam Out 출력 타입.
+ * @tparam In  Input type.
+ * @tparam Out Output type.
  */
 template <typename In, typename Out>
 class SubpipelineAction {
 public:
     /**
-     * @brief StaticPipeline으로 SubpipelineAction을 생성합니다.
+     * @brief Constructs a SubpipelineAction from a StaticPipeline.
      *
-     * @param pipeline 이미 스테이지가 추가된 StaticPipeline.
+     * @param pipeline A StaticPipeline with stages already added.
      */
     explicit SubpipelineAction(StaticPipeline<In, Out> pipeline)
         : pipeline_(std::move(pipeline))
     {}
 
     /**
-     * @brief 아이템을 내부 파이프라인에 전송합니다 (backpressure).
+     * @brief Sends an item to the internal pipeline (with backpressure).
      */
     Task<Result<void>> push(In item, Context ctx = {}) {
         return pipeline_.push(std::move(item), std::move(ctx));
     }
 
     /**
-     * @brief 논블로킹 push.
+     * @brief Non-blocking push.
      */
     bool try_push(In item, Context ctx = {}) {
         return pipeline_.try_push(std::move(item), std::move(ctx));
     }
 
     /**
-     * @brief 내부 파이프라인을 시작합니다.
+     * @brief Starts the internal pipeline.
      *
-     * @param dispatcher 워커를 실행할 Dispatcher.
-     * @param out        출력 채널 (nullptr이면 파이프라인의 내부 출력 사용).
+     * @param dispatcher Dispatcher used to run workers.
+     * @param out        Output channel (if nullptr, the pipeline uses its own internal output).
      */
     void start(Dispatcher& dispatcher,
                std::shared_ptr<AsyncChannel<ContextualItem<Out>>> out = nullptr) {
@@ -561,21 +561,21 @@ public:
     }
 
     /**
-     * @brief 드레인: 입력을 닫고 모든 처리가 완료될 때까지 대기.
+     * @brief Drain: closes input and waits until all processing is complete.
      */
     Task<void> drain() {
         return pipeline_.drain();
     }
 
     /**
-     * @brief 즉시 정지합니다.
+     * @brief Stops immediately.
      */
     void stop() {
         pipeline_.stop();
     }
 
     /**
-     * @brief 내부 파이프라인의 출력 채널을 반환합니다.
+     * @brief Returns the output channel of the internal pipeline.
      */
     [[nodiscard]] std::shared_ptr<AsyncChannel<ContextualItem<Out>>> output() const {
         return pipeline_.output();
@@ -586,16 +586,16 @@ private:
 };
 
 // =============================================================================
-// MessageBusSource<T> — MessageBus 구독 → Pipeline Source 브릿지
+// MessageBusSource<T> — MessageBus subscription → Pipeline Source bridge
 // =============================================================================
 
 /**
- * @brief MessageBus 토픽 구독을 Pipeline Source로 연결하는 어댑터.
+ * @brief Adapter that connects a MessageBus topic subscription as a Pipeline Source.
  *
- * `PipelineBuilder::with_source()`와 함께 사용하여 MessageBus 토픽에서
- * 발행된 메시지를 파이프라인의 입력으로 직접 흘릴 수 있습니다.
+ * Used with `PipelineBuilder::with_source()` to feed messages published to a
+ * MessageBus topic directly into a pipeline's input.
  *
- * ### 사용 예시
+ * ### Usage example
  * ```cpp
  * auto pipeline = PipelineBuilder<OrderEvent, OrderEvent>{}
  *     .with_source(MessageBusSource<OrderEvent>(bus, "orders"))
@@ -604,24 +604,24 @@ private:
  * pipeline.start(dispatcher);
  * ```
  *
- * @tparam T 메시지 타입.
+ * @tparam T Message type.
  */
 template <typename T>
 class MessageBusSource {
 public:
     /**
-     * @brief MessageBusSource를 생성합니다.
+     * @brief Constructs a MessageBusSource.
      *
-     * @param bus   연결할 MessageBus 인스턴스 (수명이 Source보다 길어야 함).
-     * @param topic 구독할 토픽 이름.
-     * @param cap   내부 스트림 채널 용량 (기본 256).
+     * @param bus   MessageBus instance to connect to (must outlive this Source).
+     * @param topic Topic name to subscribe to.
+     * @param cap   Internal stream channel capacity (default 256).
      */
     MessageBusSource(MessageBus& bus, std::string topic, size_t cap = 256)
         : bus_(bus), topic_(std::move(topic)), cap_(cap) {}
 
     /**
-     * @brief subscribe_stream<T>()를 호출해 스트림 채널을 초기화합니다.
-     * @returns 항상 `Result<void>::ok()`.
+     * @brief Calls subscribe_stream<T>() to initialize the stream channel.
+     * @returns Always `Result<void>::ok()`.
      */
     Result<void> init() noexcept {
         stream_ch_ = bus_.subscribe_stream<T>(topic_, cap_);
@@ -629,10 +629,10 @@ public:
     }
 
     /**
-     * @brief 스트림 채널에서 다음 메시지를 읽습니다.
+     * @brief Reads the next message from the stream channel.
      *
-     * @returns 메시지 포인터 또는 nullopt (채널 닫힘).
-     *          반환된 포인터는 다음 next() 호출 전까지만 유효합니다.
+     * @returns A message pointer, or nullopt if the channel is closed.
+     *          The returned pointer is only valid until the next call to next().
      */
     Task<std::optional<const T*>> next() {
         auto val = co_await stream_ch_->recv();
@@ -642,7 +642,7 @@ public:
     }
 
     /**
-     * @brief 스트림 채널을 닫아 파이프라인 펌프를 종료합니다.
+     * @brief Closes the stream channel to terminate the pipeline pump.
      */
     void close() {
         if (stream_ch_) stream_ch_->close();
@@ -653,20 +653,20 @@ private:
     std::string                      topic_;
     size_t                           cap_;
     std::shared_ptr<AsyncChannel<T>> stream_ch_;
-    T                                buf_{};  ///< recv된 값 보관 버퍼 (포인터 반환용)
+    T                                buf_{};  ///< Buffer holding the received value (for pointer return)
 };
 
 // =============================================================================
-// MessageBusSink<T> — Pipeline Tail → MessageBus 발행 브릿지
+// MessageBusSink<T> — Pipeline tail → MessageBus publish bridge
 // =============================================================================
 
 /**
- * @brief Pipeline 출력을 MessageBus 토픽으로 발행하는 싱크 어댑터.
+ * @brief Sink adapter that publishes pipeline output to a MessageBus topic.
  *
- * `PipelineBuilder::with_sink()`와 함께 사용하여 파이프라인의 마지막 단계
- * 출력을 MessageBus 토픽으로 자동 발행할 수 있습니다.
+ * Used with `PipelineBuilder::with_sink()` to automatically publish the last
+ * stage's output to a MessageBus topic.
  *
- * ### 사용 예시
+ * ### Usage example
  * ```cpp
  * auto pipeline = PipelineBuilder<RawEvent, ProcessedEvent>{}
  *     .add<ProcessedEvent>(process_fn)
@@ -675,16 +675,16 @@ private:
  * pipeline.start(dispatcher);
  * ```
  *
- * @tparam T 메시지 타입.
+ * @tparam T Message type.
  */
 template <typename T>
 class MessageBusSink {
 public:
     /**
-     * @brief MessageBusSink를 생성합니다.
+     * @brief Constructs a MessageBusSink.
      *
-     * @param bus   발행할 MessageBus 인스턴스 (수명이 Sink보다 길어야 함).
-     * @param topic 발행할 토픽 이름.
+     * @param bus   MessageBus instance to publish to (must outlive this Sink).
+     * @param topic Topic name to publish to.
      */
     MessageBusSink(MessageBus& bus, std::string topic)
         : bus_(bus), topic_(std::move(topic)) {}
@@ -693,10 +693,10 @@ public:
     Result<void> init() noexcept { return Result<void>::ok(); }
 
     /**
-     * @brief 파이프라인에서 받은 메시지를 MessageBus 토픽으로 발행합니다.
+     * @brief Publishes a message received from the pipeline to the MessageBus topic.
      *
-     * @param msg 발행할 메시지.
-     * @returns 발행 성공 여부.
+     * @param msg Message to publish.
+     * @returns Whether the publish succeeded.
      */
     Task<Result<void>> sink(const T& msg) {
         return bus_.publish(topic_, msg);

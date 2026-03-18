@@ -2,17 +2,17 @@
 
 /**
  * @file qbuem/pipeline/observability.hpp
- * @brief 파이프라인 관찰 가능성 — ActionMetrics, PipelineMetrics, PipelineObserver
+ * @brief Pipeline observability — ActionMetrics, PipelineMetrics, PipelineObserver
  * @defgroup qbuem_observability Pipeline Observability
  * @ingroup qbuem_pipeline
  *
- * 이 헤더는 파이프라인의 메트릭 수집 및 이벤트 훅 인프라를 제공합니다:
+ * This header provides metric collection and event hook infrastructure for pipelines:
  *
- * - `ActionMetrics`    : 캐시 라인 정렬 원자 카운터 + 레이턴시 히스토그램
- * - `PipelineMetrics`  : 파이프라인 전체 집계 메트릭
- * - `PipelineObserver` : 이벤트 훅 인터페이스
- * - `LoggingObserver`  : 표준 출력 로깅 구현
- * - `NoopObserver`     : 제로 오버헤드 비활성 구현
+ * - `ActionMetrics`    : Cache-line-aligned atomic counters + latency histogram
+ * - `PipelineMetrics`  : Aggregate metrics for an entire pipeline
+ * - `PipelineObserver` : Event hook interface
+ * - `LoggingObserver`  : Standard output logging implementation
+ * - `NoopObserver`     : Zero-overhead inactive implementation
  *
  * @{
  */
@@ -37,30 +37,30 @@ namespace qbuem {
 // ─── HistogramMetrics ─────────────────────────────────────────────────────────
 
 /**
- * @brief 사용자 정의 버킷 경계를 지원하는 레이턴시 히스토그램.
+ * @brief Latency histogram with user-defined bucket boundaries.
  *
- * `ActionMetrics`의 고정 4-버킷 히스토그램 대신 사용할 수 있으며
- * Prometheus-style cumulative histogram과 호환되는 구조입니다.
+ * Can be used instead of the fixed 4-bucket histogram in `ActionMetrics`,
+ * and is compatible with the Prometheus-style cumulative histogram structure.
  *
- * ### 사용 예시
+ * ### Usage example
  * @code
- * // p50/p90/p99/p999에 최적화된 5-버킷 히스토그램
- * HistogramMetrics hist({500, 1000, 5000, 10000, 50000}); // µs 단위
+ * // 5-bucket histogram optimized for p50/p90/p99/p999
+ * HistogramMetrics hist({500, 1000, 5000, 10000, 50000}); // in µs
  * hist.observe(latency_us);
- * auto counts = hist.bucket_counts(); // 각 버킷의 누적 카운트
+ * auto counts = hist.bucket_counts(); // cumulative count per bucket
  * @endcode
  *
- * @note 스레드 안전: `observe()`는 `std::atomic` relaxed 연산으로 구현됩니다.
+ * @note Thread-safe: `observe()` is implemented with `std::atomic` relaxed operations.
  */
 class HistogramMetrics {
 public:
   /**
-   * @brief 사용자 정의 상한 경계(µs)로 히스토그램을 생성합니다.
+   * @brief Constructs a histogram with user-defined upper boundaries (in µs).
    *
-   * @param upper_bounds µs 단위 버킷 상한값 목록 (오름차순 정렬).
-   *                     마지막 버킷은 최대값 이상의 모든 관측값을 포함합니다.
+   * @param upper_bounds List of bucket upper bounds in µs (sorted in ascending order).
+   *                     The last bucket captures all observations >= the maximum value.
    *
-   * 예) `{1000, 10000, 100000}` → 버킷: [0,1ms), [1ms,10ms), [10ms,100ms), [100ms,∞)
+   * Example: `{1000, 10000, 100000}` → buckets: [0,1ms), [1ms,10ms), [10ms,100ms), [100ms,∞)
    */
   explicit HistogramMetrics(std::initializer_list<uint64_t> upper_bounds)
       : bounds_(upper_bounds), buckets_(upper_bounds.size() + 1) {
@@ -73,9 +73,9 @@ public:
   }
 
   /**
-   * @brief 관측값을 히스토그램에 기록합니다.
+   * @brief Records an observation into the histogram.
    *
-   * @param us 레이턴시 (마이크로초).
+   * @param us Latency in microseconds.
    */
   void observe(uint64_t us) noexcept {
     // Binary search for the first bucket whose upper bound >= us.
@@ -85,9 +85,9 @@ public:
   }
 
   /**
-   * @brief 각 버킷의 카운트를 스냅샷으로 반환합니다.
+   * @brief Returns a snapshot of each bucket's count.
    *
-   * @returns 버킷 카운트 벡터. 크기 = `upper_bounds.size() + 1`.
+   * @returns Vector of bucket counts. Size = `upper_bounds.size() + 1`.
    */
   [[nodiscard]] std::vector<uint64_t> bucket_counts() const noexcept {
     std::vector<uint64_t> counts(buckets_.size());
@@ -97,13 +97,14 @@ public:
   }
 
   /**
-   * @brief 버킷 카운트를 사용자 배열에 직접 기록합니다 (힙 할당 없음).
+   * @brief Writes bucket counts directly into a caller-provided array (no heap allocation).
    *
-   * 스냅샷 생성 등 hot path에서 vector 할당 없이 버킷 값을 읽을 때 사용합니다.
+   * Use this to read bucket values on a hot path (e.g., snapshot generation) without
+   * vector allocation.
    *
-   * @param out 쓸 배열 포인터. 크기 >= bucket_count() 필요.
-   * @param n   배열 크기 (초과분은 무시됨).
-   * @returns 실제 기록된 버킷 수.
+   * @param out Pointer to the output array. Must have size >= bucket_count().
+   * @param n   Array size (excess entries are ignored).
+   * @returns The number of buckets actually written.
    */
   size_t fill_bucket_counts(uint64_t* out, size_t n) const noexcept {
     size_t cnt = std::min(n, buckets_.size());
@@ -112,54 +113,54 @@ public:
     return cnt;
   }
 
-  /** @brief 버킷 수 = upper_bounds.size() + 1. */
+  /** @brief Number of buckets = upper_bounds.size() + 1. */
   [[nodiscard]] size_t bucket_count() const noexcept { return buckets_.size(); }
 
-  /** @brief 버킷 상한 경계 목록을 반환합니다. */
+  /** @brief Returns the list of bucket upper boundaries. */
   [[nodiscard]] const std::vector<uint64_t> &upper_bounds() const noexcept {
     return bounds_;
   }
 
-  /** @brief 모든 카운터를 0으로 초기화합니다. */
+  /** @brief Resets all counters to zero. */
   void reset() noexcept {
     for (auto &b : buckets_) b.val.store(0, std::memory_order_relaxed);
   }
 
 private:
-  /// @brief 캐시라인 정렬 버킷 — 인접 버킷 간 false sharing 방지.
+  /// @brief Cache-line-aligned bucket — prevents false sharing between adjacent buckets.
   struct alignas(64) Bucket {
     std::atomic<uint64_t> val{0};
   };
 
-  std::vector<uint64_t> bounds_;  ///< 버킷 상한 경계 (µs)
-  std::vector<Bucket>   buckets_; ///< 버킷별 카운터 (64 바이트 패딩)
+  std::vector<uint64_t> bounds_;  ///< Bucket upper boundaries (µs)
+  std::vector<Bucket>   buckets_; ///< Per-bucket counters (64-byte padding)
 };
 
 // ─── ActionMetrics ────────────────────────────────────────────────────────────
 
 /**
- * @brief 단일 액션의 성능 메트릭 (캐시 라인 정렬).
+ * @brief Performance metrics for a single action (cache-line aligned).
  *
- * `alignas(64)` 로 폴스 셰어링(false sharing)을 방지합니다.
+ * `alignas(64)` prevents false sharing.
  *
- * ### 레이턴시 버킷
- * - 버킷 0: < 1ms
- * - 버킷 1: 1ms ~ < 10ms
- * - 버킷 2: 10ms ~ < 100ms
- * - 버킷 3: >= 100ms
+ * ### Latency buckets
+ * - Bucket 0: < 1ms
+ * - Bucket 1: 1ms ~ < 10ms
+ * - Bucket 2: 10ms ~ < 100ms
+ * - Bucket 3: >= 100ms
  */
 struct alignas(64) ActionMetrics {
-  /** @brief 처리 완료된 아이템 수. */
+  /** @brief Number of items successfully processed. */
   std::atomic<uint64_t> items_processed{0};
-  /** @brief 처리 중 발생한 에러 수. */
+  /** @brief Number of errors encountered during processing. */
   std::atomic<uint64_t> errors{0};
-  /** @brief 재시도 횟수. */
+  /** @brief Number of retries performed. */
   std::atomic<uint64_t> retried{0};
-  /** @brief 데드 레터 큐(DLQ)로 이동된 아이템 수. */
+  /** @brief Number of items moved to the dead-letter queue (DLQ). */
   std::atomic<uint64_t> dlq_count{0};
 
   /**
-   * @brief 레이턴시 히스토그램 버킷 (4단계).
+   * @brief Latency histogram buckets (4 levels).
    *
    * - [0]: < 1,000 µs  (< 1ms)
    * - [1]: < 10,000 µs (< 10ms)
@@ -169,17 +170,17 @@ struct alignas(64) ActionMetrics {
   std::atomic<uint64_t> lat_buckets[4] = {};
 
   /**
-   * @brief 사용자 정의 버킷 히스토그램 (선택 사항).
+   * @brief Optional user-defined bucket histogram.
    *
-   * 기본 4-버킷 히스토그램 대신 또는 함께 사용할 수 있습니다.
-   * `nullptr`이면 사용 안 함.
+   * Can be used instead of or in addition to the default 4-bucket histogram.
+   * Not used when `nullptr`.
    */
   std::shared_ptr<HistogramMetrics> histogram;
 
   /**
-   * @brief 레이턴시를 고정 버킷과 사용자 정의 히스토그램 모두에 기록합니다.
+   * @brief Records latency into both the fixed buckets and the user-defined histogram.
    *
-   * @param us 측정된 레이턴시 (마이크로초).
+   * @param us Measured latency in microseconds.
    */
   void record_latency_us(uint64_t us) noexcept {
     // Fixed 4-bucket histogram (backward compatible).
@@ -196,7 +197,7 @@ struct alignas(64) ActionMetrics {
   }
 
   /**
-   * @brief 모든 카운터를 0으로 초기화합니다.
+   * @brief Resets all counters to zero.
    */
   void reset() noexcept {
     items_processed.store(0, std::memory_order_relaxed);
@@ -212,18 +213,18 @@ struct alignas(64) ActionMetrics {
 // ─── PipelineMetrics ──────────────────────────────────────────────────────────
 
 /**
- * @brief 파이프라인 전체 집계 메트릭.
+ * @brief Aggregate metrics for an entire pipeline.
  *
- * 각 액션의 `ActionMetrics`를 이름과 함께 보관합니다.
+ * Holds the `ActionMetrics` for each action along with its name.
  */
 struct PipelineMetrics {
-  /** @brief 파이프라인 이름. */
+  /** @brief Pipeline name. */
   std::string name;
-  /** @brief 액션별 메트릭 목록 (액션 이름, 메트릭 참조). */
+  /** @brief Per-action metric list (action name, metric reference). */
   std::vector<std::pair<std::string, ActionMetrics>> actions;
 
   /**
-   * @brief 모든 액션의 처리 아이템 수 합계를 반환합니다.
+   * @brief Returns the total number of processed items across all actions.
    */
   [[nodiscard]] uint64_t total_processed() const noexcept {
     uint64_t total = 0;
@@ -233,7 +234,7 @@ struct PipelineMetrics {
   }
 
   /**
-   * @brief 모든 액션의 에러 수 합계를 반환합니다.
+   * @brief Returns the total error count across all actions.
    */
   [[nodiscard]] uint64_t total_errors() const noexcept {
     uint64_t total = 0;
@@ -243,9 +244,9 @@ struct PipelineMetrics {
   }
 
   /**
-   * @brief 에러율을 반환합니다 (처리된 아이템이 없으면 0.0).
+   * @brief Returns the error rate (0.0 if no items have been processed).
    *
-   * @returns `total_errors() / total_processed()`. 처리 아이템 0이면 0.0.
+   * @returns `total_errors() / total_processed()`. Returns 0.0 when processed count is 0.
    */
   [[nodiscard]] double error_rate() const noexcept {
     uint64_t processed = total_processed();
@@ -258,90 +259,90 @@ struct PipelineMetrics {
 // ─── PipelineObserver ─────────────────────────────────────────────────────────
 
 /**
- * @brief 파이프라인 이벤트 훅 인터페이스.
+ * @brief Pipeline event hook interface.
  *
- * 모든 메서드는 기본 구현(아무것도 하지 않음)을 제공하므로
- * 관심 있는 이벤트만 오버라이드하면 됩니다.
+ * All methods provide a default no-op implementation, so only the events
+ * of interest need to be overridden.
  *
- * ### 스레드 안전성
- * 훅은 여러 워커 스레드에서 동시에 호출될 수 있습니다.
- * 구현체는 내부 상태를 적절히 보호해야 합니다.
+ * ### Thread safety
+ * Hooks may be called concurrently from multiple worker threads.
+ * Implementations must protect internal state appropriately.
  */
 class PipelineObserver {
 public:
   virtual ~PipelineObserver() = default;
 
   /**
-   * @brief 아이템 처리 시작 시 호출됩니다.
+   * @brief Called when item processing begins.
    *
-   * @param action_name 처리 중인 액션 이름.
-   * @param item_id     아이템 고유 식별자.
+   * @param action_name Name of the action being processed.
+   * @param item_id     Unique identifier of the item.
    */
   virtual void on_item_start(std::string_view /*action_name*/,
                               uint64_t /*item_id*/) {}
 
   /**
-   * @brief 아이템 처리 완료 시 호출됩니다.
+   * @brief Called when item processing completes.
    *
-   * @param action_name 처리 완료된 액션 이름.
-   * @param item_id     아이템 고유 식별자.
-   * @param latency_us  처리 소요 시간 (마이크로초).
+   * @param action_name Name of the completed action.
+   * @param item_id     Unique identifier of the item.
+   * @param latency_us  Processing time in microseconds.
    */
   virtual void on_item_done(std::string_view /*action_name*/,
                              uint64_t /*item_id*/,
                              uint64_t /*latency_us*/) {}
 
   /**
-   * @brief 처리 중 에러 발생 시 호출됩니다.
+   * @brief Called when an error occurs during processing.
    *
-   * @param action_name 에러가 발생한 액션 이름.
-   * @param ec          에러 코드.
+   * @param action_name Name of the action where the error occurred.
+   * @param ec          Error code.
    */
   virtual void on_error(std::string_view /*action_name*/,
                          std::error_code /*ec*/) {}
 
   /**
-   * @brief 워커 스케일 이벤트 발생 시 호출됩니다.
+   * @brief Called when a worker scale event occurs.
    *
-   * @param action_name  스케일이 변경된 액션 이름.
-   * @param old_workers  변경 전 워커 수.
-   * @param new_workers  변경 후 워커 수.
+   * @param action_name  Name of the action whose scale changed.
+   * @param old_workers  Worker count before the change.
+   * @param new_workers  Worker count after the change.
    */
   virtual void on_scale_event(std::string_view /*action_name*/,
                                size_t /*old_workers*/,
                                size_t /*new_workers*/) {}
 
   /**
-   * @brief 파이프라인 상태 전환 시 호출됩니다.
+   * @brief Called when the pipeline transitions between states.
    *
-   * @param pipeline_name 파이프라인 이름.
-   * @param old_state     이전 상태 이름.
-   * @param new_state     새 상태 이름.
+   * @param pipeline_name Name of the pipeline.
+   * @param old_state     Previous state name.
+   * @param new_state     New state name.
    */
   virtual void on_state_change(std::string_view /*pipeline_name*/,
                                 std::string_view /*old_state*/,
                                 std::string_view /*new_state*/) {}
 
   /**
-   * @brief 아이템이 DLQ로 이동될 때 호출됩니다.
+   * @brief Called when an item is moved to the DLQ.
    *
-   * @param action_name DLQ를 트리거한 액션 이름.
-   * @param ec          실패 원인 에러 코드.
+   * @param action_name Name of the action that triggered the DLQ transfer.
+   * @param ec          Error code describing the failure cause.
    */
   virtual void on_dlq_item(std::string_view /*action_name*/,
                             std::error_code /*ec*/) {}
 
   /**
-   * @brief 서킷 브레이커가 열릴 때 호출됩니다.
+   * @brief Called when the circuit breaker opens.
    *
-   * @param action_name 서킷이 열린 액션 이름.
+   * @param action_name Name of the action whose circuit opened.
    */
   virtual void on_circuit_open(std::string_view /*action_name*/) {}
 
   /**
-   * @brief 서킷 브레이커가 닫힐 때 호출됩니다.
+   * @brief Called when the circuit breaker closes.
    *
-   * @param action_name 서킷이 닫힌 액션 이름.
+   * @param action_name Name of the action whose circuit closed.
    */
   virtual void on_circuit_close(std::string_view /*action_name*/) {}
 };
@@ -349,19 +350,19 @@ public:
 // ─── LoggingObserver ──────────────────────────────────────────────────────────
 
 /**
- * @brief 표준 출력에 이벤트를 로깅하는 기본 구현.
+ * @brief Default implementation that logs events to standard output.
  *
- * 프로덕션보다는 개발 및 디버깅 목적으로 사용합니다.
- * 출력 형식: `[qbuem] <이벤트>: <내용>` (스레드 안전, `fprintf` 기반).
+ * Intended for development and debugging rather than production use.
+ * Output format: `[qbuem] <event>: <content>` (thread-safe, `fprintf`-based).
  */
 class LoggingObserver : public PipelineObserver {
 public:
   /**
-   * @brief 아이템 처리 완료를 로깅합니다.
+   * @brief Logs item processing completion.
    *
-   * @param action_name 완료된 액션 이름.
-   * @param item_id     아이템 ID.
-   * @param latency_us  레이턴시 (µs).
+   * @param action_name Name of the completed action.
+   * @param item_id     Item ID.
+   * @param latency_us  Latency in µs.
    */
   void on_item_done(std::string_view action_name,
                     uint64_t item_id,
@@ -374,10 +375,10 @@ public:
   }
 
   /**
-   * @brief 처리 에러를 로깅합니다.
+   * @brief Logs a processing error.
    *
-   * @param action_name 에러 발생 액션 이름.
-   * @param ec          에러 코드.
+   * @param action_name Name of the action where the error occurred.
+   * @param ec          Error code.
    */
   void on_error(std::string_view action_name,
                 std::error_code ec) override {
@@ -388,11 +389,11 @@ public:
   }
 
   /**
-   * @brief 스케일 이벤트를 로깅합니다.
+   * @brief Logs a scale event.
    *
-   * @param action_name 스케일이 변경된 액션 이름.
-   * @param old_workers 이전 워커 수.
-   * @param new_workers 새 워커 수.
+   * @param action_name Name of the action whose scale changed.
+   * @param old_workers Previous worker count.
+   * @param new_workers New worker count.
    */
   void on_scale_event(std::string_view action_name,
                       size_t old_workers,
@@ -404,11 +405,11 @@ public:
   }
 
   /**
-   * @brief 파이프라인 상태 전환을 로깅합니다.
+   * @brief Logs a pipeline state transition.
    *
-   * @param pipeline_name 파이프라인 이름.
-   * @param old_state     이전 상태.
-   * @param new_state     새 상태.
+   * @param pipeline_name Pipeline name.
+   * @param old_state     Previous state.
+   * @param new_state     New state.
    */
   void on_state_change(std::string_view pipeline_name,
                        std::string_view old_state,
@@ -421,9 +422,9 @@ public:
   }
 
   /**
-   * @brief 서킷 브레이커 오픈을 로깅합니다.
+   * @brief Logs a circuit breaker open event.
    *
-   * @param action_name 서킷이 열린 액션 이름.
+   * @param action_name Name of the action whose circuit opened.
    */
   void on_circuit_open(std::string_view action_name) override {
     std::fprintf(stderr,
@@ -432,9 +433,9 @@ public:
   }
 
   /**
-   * @brief 서킷 브레이커 클로즈를 로깅합니다.
+   * @brief Logs a circuit breaker close event.
    *
-   * @param action_name 서킷이 닫힌 액션 이름.
+   * @param action_name Name of the action whose circuit closed.
    */
   void on_circuit_close(std::string_view action_name) override {
     std::fprintf(stderr,
@@ -446,11 +447,11 @@ public:
 // ─── NoopObserver ─────────────────────────────────────────────────────────────
 
 /**
- * @brief 관찰 가능성이 비활성화됐을 때 사용하는 제로 오버헤드 구현.
+ * @brief Zero-overhead implementation used when observability is disabled.
  *
- * 모든 메서드가 빈 가상 함수이므로 컴파일러가 완전히 인라인/제거할 수 있습니다.
- * `PipelineObserver*`를 nullptr로 두는 것 대신 이 클래스를 사용하면
- * 널 포인터 검사 없이 안전하게 호출할 수 있습니다.
+ * All methods are empty virtual functions, so the compiler can fully inline/eliminate them.
+ * Using this class instead of leaving `PipelineObserver*` as nullptr allows safe
+ * calls without null-pointer checks.
  */
 class NoopObserver : public PipelineObserver {};
 

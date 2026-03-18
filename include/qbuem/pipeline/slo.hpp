@@ -2,17 +2,17 @@
 
 /**
  * @file qbuem/pipeline/slo.hpp
- * @brief SLO(서비스 레벨 목표) 추적 및 에러 버짓 관리
+ * @brief SLO (Service Level Objective) tracking and error budget management
  * @defgroup qbuem_slo SLO Tracking
  * @ingroup qbuem_pipeline
  *
- * 이 헤더는 파이프라인 액션의 레이턴시 및 에러율 SLO를 추적합니다:
+ * This header tracks latency and error-rate SLOs for pipeline actions:
  *
- * - `SloConfig`           : SLO 정책 설정 (p99/p999 목표, 에러 버짓, 위반 콜백)
- * - `LatencyHistogram`    : 롤링 윈도우 레이턴시 히스토그램 (kWindow=1024 샘플)
- * - `ErrorBudgetTracker`  : 레이턴시 + 에러율 SLO 추적기
- * - `SloObserver`         : `PipelineObserver` 확장 — SLO 위반 이벤트 훅
- * - `LoggingSloObserver`  : 표준 에러 출력 기본 구현
+ * - `SloConfig`           : SLO policy settings (p99/p999 targets, error budget, violation callback)
+ * - `LatencyHistogram`    : Rolling-window latency histogram (kWindow=1024 samples)
+ * - `ErrorBudgetTracker`  : Latency + error-rate SLO tracker
+ * - `SloObserver`         : `PipelineObserver` extension — SLO violation event hook
+ * - `LoggingSloObserver`  : Default implementation that logs to standard error
  *
  * @{
  */
@@ -39,38 +39,38 @@ using std::chrono::microseconds;
 // ─── SloConfig ────────────────────────────────────────────────────────────────
 
 /**
- * @brief SLO 목표 설정 구조체.
+ * @brief SLO target configuration.
  *
- * 레이턴시 퍼센타일 목표, 허용 에러 비율, 그리고 위반 발생 시
- * 호출될 콜백 함수를 담습니다.
+ * Holds latency percentile targets, the permitted error ratio, and a
+ * callback function invoked when a violation is detected.
  *
- * ### 기본값
- * - p99 목표: 10ms (10,000µs)
- * - p999 목표: 50ms (50,000µs)
- * - 에러 버짓: 0.1% (0.001)
+ * ### Defaults
+ * - p99 target:  10 ms (10,000 µs)
+ * - p999 target: 50 ms (50,000 µs)
+ * - error budget: 0.1% (0.001)
  */
 struct SloConfig {
-  /** @brief p99 레이턴시 목표 (기본: 10ms). */
+  /** @brief p99 latency target (default: 10 ms). */
   microseconds p99_target{10'000};
 
-  /** @brief p99.9 레이턴시 목표 (기본: 50ms). */
+  /** @brief p99.9 latency target (default: 50 ms). */
   microseconds p999_target{50'000};
 
   /**
-   * @brief 허용 에러 비율 (0.0 ~ 1.0).
+   * @brief Permitted error ratio (0.0 – 1.0).
    *
-   * 롤링 윈도우(1000개 아이템) 기준 에러율이 이 값을 초과하면
-   * 에러 버짓이 소진된 것으로 판단합니다. 기본값은 0.1%(0.001)입니다.
+   * When the error rate over the rolling window (1000 items) exceeds this
+   * value the error budget is considered exhausted. Default is 0.1% (0.001).
    */
   double error_budget{0.001};
 
   /**
-   * @brief SLO 위반 시 호출되는 콜백.
+   * @brief Callback invoked on an SLO violation.
    *
-   * @param action_name 위반이 감지된 액션 이름.
+   * @param action_name Name of the action where the violation was detected.
    *
-   * 콜백 내에서 메트릭 수집, 알림 전송, 서킷 브레이커 트리거 등을
-   * 수행할 수 있습니다.
+   * The callback may perform metric collection, alert dispatch,
+   * circuit-breaker triggering, etc.
    */
   std::function<void(std::string_view action_name)> on_violation;
 };
@@ -78,34 +78,34 @@ struct SloConfig {
 // ─── LatencyHistogram ─────────────────────────────────────────────────────────
 
 /**
- * @brief 롤링 윈도우 레이턴시 히스토그램.
+ * @brief Rolling-window latency histogram.
  *
- * 최대 `kWindow`(1024)개의 최신 레이턴시 샘플을 링 버퍼에 보관하며
- * p99 및 p99.9 백분위수를 계산합니다.
+ * Retains up to `kWindow` (1024) recent latency samples in a ring buffer
+ * and computes p99 and p99.9 percentiles.
  *
- * ### 4구간 빠른 분류
- * - 버킷 0: < 1ms  (< 1,000µs)
- * - 버킷 1: < 10ms (< 10,000µs)
- * - 버킷 2: < 100ms (< 100,000µs)
- * - 버킷 3: >= 100ms (>= 100,000µs)
+ * ### Four-bucket fast classification
+ * - Bucket 0: < 1 ms  (< 1,000 µs)
+ * - Bucket 1: < 10 ms (< 10,000 µs)
+ * - Bucket 2: < 100 ms (< 100,000 µs)
+ * - Bucket 3: >= 100 ms (>= 100,000 µs)
  *
- * ### 스레드 안전성
- * `head_`와 `count_`는 원자 연산으로 보호됩니다.
- * 단일 생산자 환경에서 가장 정확하게 동작하며, 다중 생산자 환경에서는
- * 통계적으로 무해한 경미한 샘플 유실이 발생할 수 있습니다.
+ * ### Thread safety
+ * `head_` and `count_` are protected by atomic operations.
+ * Most accurate in a single-producer environment; in multi-producer
+ * environments minor statistically harmless sample loss may occur.
  */
 class LatencyHistogram {
 public:
-  /** @brief 롤링 윈도우 크기 (보관할 최대 샘플 수). */
+  /** @brief Rolling window size (maximum number of retained samples). */
   static constexpr size_t kWindow = 1024;
 
   /**
-   * @brief 레이턴시 샘플 하나를 기록합니다 (O(1)).
+   * @brief Record a single latency sample (O(1)).
    *
-   * 링 버퍼에 순환 기록하며, 버퍼가 가득 차면 가장 오래된 샘플을 덮어씁니다.
-   * 4구간 버킷 카운터도 동시에 갱신합니다.
+   * Writes to the ring buffer in a circular fashion, overwriting the oldest
+   * sample when the buffer is full. Also updates the four-bucket counters.
    *
-   * @param latency 측정된 레이턴시.
+   * @param latency Measured latency.
    */
   void record(microseconds latency) noexcept {
     size_t idx = head_.fetch_add(1, std::memory_order_relaxed) % kWindow;
@@ -119,7 +119,7 @@ public:
     if (c < kWindow)
       count_.fetch_add(1, std::memory_order_relaxed);
 
-    // 4구간 빠른 분류 카운터 갱신
+    // Update four-bucket fast classification counters
     uint64_t us = static_cast<uint64_t>(latency.count());
     if      (us <   1'000u) bucket_[0].fetch_add(1, std::memory_order_relaxed);
     else if (us <  10'000u) bucket_[1].fetch_add(1, std::memory_order_relaxed);
@@ -128,29 +128,29 @@ public:
   }
 
   /**
-   * @brief p99 레이턴시를 반환합니다.
+   * @brief Return the p99 latency.
    *
-   * 현재 보관된 샘플을 정렬하여 99번째 백분위수를 반환합니다.
-   * 샘플이 없으면 0을 반환합니다.
+   * Sorts the currently retained samples and returns the 99th percentile.
+   * Returns 0 if no samples are available.
    *
-   * @returns p99 레이턴시.
+   * @returns p99 latency.
    */
   [[nodiscard]] microseconds p99() const { return percentile(990); }
 
   /**
-   * @brief p99.9 레이턴시를 반환합니다.
+   * @brief Return the p99.9 latency.
    *
-   * 현재 보관된 샘플을 정렬하여 99.9번째 백분위수를 반환합니다.
-   * 샘플이 없으면 0을 반환합니다.
+   * Sorts the currently retained samples and returns the 99.9th percentile.
+   * Returns 0 if no samples are available.
    *
-   * @returns p99.9 레이턴시.
+   * @returns p99.9 latency.
    */
   [[nodiscard]] microseconds p999() const { return percentile(999); }
 
   /**
-   * @brief 4구간 버킷 카운터를 반환합니다.
+   * @brief Return the four-bucket counters.
    *
-   * @returns {<1ms, <10ms, <100ms, >=100ms} 순서의 카운터 배열.
+   * @returns Array of counters in order {<1ms, <10ms, <100ms, >=100ms}.
    */
   [[nodiscard]] std::array<uint64_t, 4> bucket_counts() const noexcept {
     return {bucket_[0].load(std::memory_order_relaxed),
@@ -160,9 +160,9 @@ public:
   }
 
   /**
-   * @brief 히스토그램을 초기화합니다.
+   * @brief Reset the histogram.
    *
-   * 모든 샘플과 카운터를 0으로 재설정합니다.
+   * Clears all samples and counters to zero.
    */
   void reset() noexcept {
     head_.store(0, std::memory_order_relaxed);
@@ -174,16 +174,16 @@ public:
 
 private:
   /**
-   * @brief 주어진 퍼밀(per-mille) 백분위수를 계산합니다.
+   * @brief Compute the given per-mille percentile.
    *
-   * @param pmille 0 ~ 1000 범위의 퍼밀 값 (990 = p99, 999 = p99.9).
-   * @returns 해당 백분위수의 레이턴시. 샘플이 없으면 0.
+   * @param pmille Per-mille value in the range 0–1000 (990 = p99, 999 = p99.9).
+   * @returns Latency at the requested percentile. Returns 0 if no samples.
    */
   [[nodiscard]] microseconds percentile(int pmille) const {
     size_t n = count_.load(std::memory_order_relaxed);
     if (n == 0) return microseconds{0};
 
-    // 현재 유효 샘플을 정렬 버퍼에 복사
+    // Copy valid samples into a sort buffer
     std::array<uint32_t, kWindow> buf{};
     size_t head = head_.load(std::memory_order_relaxed) % kWindow;
     for (size_t i = 0; i < n; ++i)
@@ -207,41 +207,41 @@ private:
 // ─── ErrorBudgetTracker ───────────────────────────────────────────────────────
 
 /**
- * @brief 레이턴시 및 에러율 SLO 추적기.
+ * @brief Latency and error-rate SLO tracker.
  *
- * 각 아이템 처리 결과(성공 + 레이턴시 / 에러)를 기록하고,
- * `SloConfig`에 설정된 목표와 비교해 위반 여부를 판단합니다.
+ * Records each item processing result (success + latency / error) and
+ * compares it against the targets in `SloConfig` to determine violations.
  *
- * ### 에러율 계산
- * 롤링 1000개 아이템 윈도우 기반으로 에러율을 근사합니다.
- * 전체 누적 카운터(`total_`, `errors_`)를 사용해 계산합니다.
+ * ### Error rate calculation
+ * Approximates the error rate based on a rolling 1000-item window.
+ * Uses cumulative counters (`total_`, `errors_`) for the calculation.
  *
- * ### 스레드 안전성
- * 원자 카운터(`total_`, `errors_`)는 스레드 안전합니다.
- * `LatencyHistogram`은 다중 생산자 환경에서 경미한 부정확성이 있을 수 있습니다.
+ * ### Thread safety
+ * Atomic counters (`total_`, `errors_`) are thread-safe.
+ * `LatencyHistogram` may have minor inaccuracies under multiple producers.
  */
 class ErrorBudgetTracker {
 public:
-  /** @brief 에러율 계산에 사용하는 롤링 윈도우 크기. */
+  /** @brief Rolling window size used for error rate calculation. */
   static constexpr size_t kRollingWindow = 1000;
 
   /**
-   * @brief ErrorBudgetTracker를 생성합니다.
+   * @brief Construct an ErrorBudgetTracker.
    *
-   * @param cfg         SLO 정책 설정.
-   * @param action_name 이 추적기가 담당하는 액션 이름.
+   * @param cfg         SLO policy settings.
+   * @param action_name Name of the action this tracker monitors.
    */
   ErrorBudgetTracker(SloConfig cfg, std::string_view action_name)
       : cfg_(std::move(cfg)), action_name_(action_name) {}
 
-  // ─── 기록 ────────────────────────────────────────────────────────────────
+  // ─── Recording ───────────────────────────────────────────────────────────
 
   /**
-   * @brief 성공한 아이템 처리를 기록합니다.
+   * @brief Record a successful item processing event.
    *
-   * 레이턴시를 히스토그램에 기록하고 총 카운터를 증가시킵니다.
+   * Adds the latency to the histogram and increments the total counter.
    *
-   * @param latency 처리 소요 레이턴시.
+   * @param latency Processing latency.
    */
   void record_success(microseconds latency) noexcept {
     histogram_.record(latency);
@@ -249,26 +249,26 @@ public:
   }
 
   /**
-   * @brief 에러를 기록합니다.
+   * @brief Record an error.
    *
-   * 총 카운터와 에러 카운터를 증가시킵니다.
+   * Increments both the total counter and the error counter.
    */
   void record_error() noexcept {
     total_.fetch_add(1, std::memory_order_relaxed);
     errors_.fetch_add(1, std::memory_order_relaxed);
   }
 
-  // ─── SLO 검사 ────────────────────────────────────────────────────────────
+  // ─── SLO check ───────────────────────────────────────────────────────────
 
   /**
-   * @brief SLO 위반 여부를 검사하고 위반 시 `SloConfig::on_violation`을 호출합니다.
+   * @brief Check for SLO violations and invoke `SloConfig::on_violation` if any.
    *
-   * 다음 조건 중 하나라도 충족되면 위반으로 판단합니다:
-   * 1. p99 레이턴시 > `SloConfig::p99_target`
-   * 2. p99.9 레이턴시 > `SloConfig::p999_target`
-   * 3. 에러율 > `SloConfig::error_budget`
+   * A violation is reported when any of the following conditions hold:
+   * 1. p99 latency > `SloConfig::p99_target`
+   * 2. p99.9 latency > `SloConfig::p999_target`
+   * 3. error rate > `SloConfig::error_budget`
    *
-   * `on_violation`이 설정되지 않은 경우 아무것도 하지 않습니다.
+   * Does nothing if `on_violation` is not set.
    */
   void check_slo() {
     if (!cfg_.on_violation) return;
@@ -282,26 +282,26 @@ public:
     if (violated) cfg_.on_violation(action_name_);
   }
 
-  // ─── 조회 ────────────────────────────────────────────────────────────────
+  // ─── Queries ─────────────────────────────────────────────────────────────
 
   /**
-   * @brief 에러 버짓이 소진되었는지 확인합니다.
+   * @brief Check whether the error budget is exhausted.
    *
-   * 현재 에러율이 `SloConfig::error_budget`을 초과하면 true를 반환합니다.
+   * Returns true when the current error rate exceeds `SloConfig::error_budget`.
    *
-   * @returns 에러 버짓 소진 여부.
+   * @returns true if the error budget is exhausted.
    */
   [[nodiscard]] bool budget_exhausted() const noexcept {
     return error_rate() > cfg_.error_budget;
   }
 
   /**
-   * @brief 롤링 윈도우 기준 에러율을 반환합니다.
+   * @brief Return the rolling-window error rate.
    *
-   * 전체 누적 카운터에서 롤링 1000개 샘플 내 에러 비율을 근사합니다.
-   * 총 처리 수가 0이면 0.0을 반환합니다.
+   * Approximates the error rate within the rolling 1000-sample window from
+   * cumulative counters. Returns 0.0 when the total count is zero.
    *
-   * @returns 0.0 ~ 1.0 범위의 에러율.
+   * @returns Error rate in the range 0.0 – 1.0.
    */
   [[nodiscard]] double error_rate() const noexcept {
     uint64_t total  = total_.load(std::memory_order_relaxed);
@@ -312,31 +312,31 @@ public:
   }
 
   /**
-   * @brief 내부 레이턴시 히스토그램에 대한 const 참조를 반환합니다.
-   * @returns 레이턴시 히스토그램 const 참조.
+   * @brief Return a const reference to the internal latency histogram.
+   * @returns Const reference to the latency histogram.
    */
   [[nodiscard]] const LatencyHistogram& histogram() const noexcept {
     return histogram_;
   }
 
   /**
-   * @brief 총 처리 아이템 수를 반환합니다 (성공 + 에러).
-   * @returns 누적 처리 수.
+   * @brief Return the total number of processed items (successes + errors).
+   * @returns Cumulative processed count.
    */
   [[nodiscard]] uint64_t total_count() const noexcept {
     return total_.load(std::memory_order_relaxed);
   }
 
   /**
-   * @brief 총 에러 수를 반환합니다.
-   * @returns 누적 에러 수.
+   * @brief Return the total number of errors.
+   * @returns Cumulative error count.
    */
   [[nodiscard]] uint64_t error_count() const noexcept {
     return errors_.load(std::memory_order_relaxed);
   }
 
   /**
-   * @brief 모든 카운터와 히스토그램을 초기화합니다.
+   * @brief Reset all counters and the histogram.
    */
   void reset() noexcept {
     total_.store(0, std::memory_order_relaxed);
@@ -349,36 +349,36 @@ private:
   std::string           action_name_;
   LatencyHistogram      histogram_;
 
-  /** @brief 총 처리 아이템 수 (성공 + 에러). */
+  /** @brief Total processed item count (successes + errors). */
   std::atomic<uint64_t> total_{0};
 
-  /** @brief 총 에러 수. */
+  /** @brief Total error count. */
   std::atomic<uint64_t> errors_{0};
 };
 
 // ─── SloObserver ──────────────────────────────────────────────────────────────
 
 /**
- * @brief SLO 위반 이벤트를 지원하는 `PipelineObserver` 확장.
+ * @brief `PipelineObserver` extension that supports SLO violation events.
  *
- * `PipelineObserver`를 상속하여 기존 파이프라인 이벤트 훅을 모두 상속하면서,
- * SLO 위반 시 호출되는 `on_slo_violation()` 훅을 추가합니다.
+ * Inherits from `PipelineObserver` to retain all existing pipeline event
+ * hooks, and adds an `on_slo_violation()` hook called on SLO violations.
  *
- * 구현체는 `on_slo_violation()`을 오버라이드하여
- * 알림 전송, 메트릭 기록, 서킷 브레이커 트리거 등을 수행할 수 있습니다.
+ * Implementations override `on_slo_violation()` to send alerts, record
+ * metrics, trigger circuit breakers, etc.
  *
- * ### 스레드 안전성
- * `on_slo_violation()`은 여러 워커 스레드에서 동시에 호출될 수 있습니다.
- * 구현체는 내부 상태를 적절히 보호해야 합니다.
+ * ### Thread safety
+ * `on_slo_violation()` may be called concurrently from multiple worker
+ * threads. Implementations must protect their internal state appropriately.
  *
- * ### 사용 예시
+ * ### Usage example
  * ```cpp
  * class MyObserver : public SloObserver {
  * public:
  *   void on_slo_violation(std::string_view action_name,
  *                          std::string_view metric_name,
  *                          double measured, double target) override {
- *     std::fprintf(stderr, "[SLO 위반] %s: %s %.2f > %.2f\n",
+ *     std::fprintf(stderr, "[SLO violation] %s: %s %.2f > %.2f\n",
  *       std::string(action_name).c_str(),
  *       std::string(metric_name).c_str(),
  *       measured, target);
@@ -391,15 +391,15 @@ public:
   virtual ~SloObserver() = default;
 
   /**
-   * @brief SLO 위반 발생 시 호출됩니다.
+   * @brief Called when an SLO violation is detected.
    *
-   * @param action_name 위반이 감지된 액션 이름.
-   * @param metric_name 위반된 지표 이름.
-   *                    예: `"p99_latency"`, `"p999_latency"`, `"error_rate"`.
-   * @param measured    측정된 값.
-   *                    레이턴시 지표의 경우 마이크로초(µs),
-   *                    에러율 지표의 경우 0.0 ~ 1.0 비율.
-   * @param target      목표 임계값 (`measured`와 동일한 단위).
+   * @param action_name Name of the action where the violation was detected.
+   * @param metric_name Name of the violated metric.
+   *                    Examples: `"p99_latency"`, `"p999_latency"`, `"error_rate"`.
+   * @param measured    Measured value.
+   *                    Microseconds (µs) for latency metrics,
+   *                    ratio 0.0–1.0 for error rate metrics.
+   * @param target      Target threshold (same unit as `measured`).
    */
   virtual void on_slo_violation(std::string_view /*action_name*/,
                                   std::string_view /*metric_name*/,
@@ -410,20 +410,20 @@ public:
 // ─── LoggingSloObserver ───────────────────────────────────────────────────────
 
 /**
- * @brief SLO 위반을 표준 에러에 로깅하는 기본 구현.
+ * @brief Default implementation that logs SLO violations to standard error.
  *
- * 개발 및 디버깅 목적으로 사용합니다.
- * 출력 형식: `[qbuem/slo] violation: action=<이름> metric=<지표> measured=<값> target=<목표>`
+ * Intended for development and debugging.
+ * Output format: `[qbuem/slo] violation: action=<name> metric=<metric> measured=<value> target=<target>`
  */
 class LoggingSloObserver : public SloObserver {
 public:
   /**
-   * @brief SLO 위반을 표준 에러(`stderr`)에 출력합니다.
+   * @brief Print the SLO violation to standard error (`stderr`).
    *
-   * @param action_name 위반이 감지된 액션 이름.
-   * @param metric_name 위반된 지표 이름.
-   * @param measured    측정된 값.
-   * @param target      목표 임계값.
+   * @param action_name Name of the action where the violation was detected.
+   * @param metric_name Name of the violated metric.
+   * @param measured    Measured value.
+   * @param target      Target threshold.
    */
   void on_slo_violation(std::string_view action_name,
                          std::string_view metric_name,

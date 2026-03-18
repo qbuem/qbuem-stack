@@ -2,11 +2,11 @@
 
 /**
  * @file qbuem/pipeline/pipeline.hpp
- * @brief 파이프라인 레이어 통합 헤더
+ * @brief Pipeline layer umbrella header
  * @defgroup qbuem_pipeline Pipeline
  * @ingroup qbuem
  *
- * 모든 파이프라인 컴포넌트를 포함합니다.
+ * Includes all pipeline components.
  * @{
  */
 

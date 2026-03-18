@@ -2,17 +2,17 @@
 
 /**
  * @file qbuem/io/uring_ops.hpp
- * @brief io_uring 고급 비동기 I/O 연산 — ACCEPT_MULTISHOT, RECV_MULTISHOT,
+ * @brief io_uring advanced async I/O operations — ACCEPT_MULTISHOT, RECV_MULTISHOT,
  *        Fixed Files, Linked SQEs, SOCKET+CONNECT
  * @defgroup qbuem_uring_ops io_uring Advanced Operations
  * @ingroup qbuem_io
  *
- * `IOUringReactor`의 기본 POLL_ADD 방식을 넘어서는 고성능 io_uring 연산을
- * 직접 제어할 때 사용합니다.
+ * Use this header to directly control high-performance io_uring operations
+ * beyond the basic POLL_ADD approach used by `IOUringReactor`.
  *
- * ## 연산별 Linux 버전 요구사항
- * | 연산 | 최소 커널 |
- * |------|-----------|
+ * ## Linux kernel version requirements per operation
+ * | Operation | Minimum Kernel |
+ * |-----------|----------------|
  * | IORING_OP_ACCEPT_MULTISHOT | 5.19+ |
  * | IORING_OP_RECV_MULTISHOT   | 5.19+ |
  * | io_uring Fixed Files        | 5.1+  |
@@ -20,19 +20,19 @@
  * | IORING_OP_SOCKET + CONNECT  | 5.19+ |
  * | IORING_OP_FUTEX_WAIT/WAKE   | 6.7+  |
  *
- * ## 사용 예시
+ * ## Usage Example
  * ```cpp
- * // Fixed Files 등록
+ * // Register Fixed Files
  * std::vector<int> fds = {server_fd, client_fd};
  * auto r = qbuem::io::uring_register_files(ring, fds);
  *
- * // ACCEPT_MULTISHOT (1 SQE로 다중 연결 수락)
+ * // ACCEPT_MULTISHOT (accept multiple connections with 1 SQE)
  * qbuem::io::uring_accept_multishot(ring, server_fd, on_accept);
  * ```
  *
- * @note 이 헤더는 liburing (`io_uring_sqe`, `io_uring_cqe`)과 함께
- *       사용하도록 설계되었습니다. `QBUEM_HAS_IOURING`이 정의된 경우에만
- *       실제 구현이 제공되며, 그 외에는 `errc::not_supported` fallback.
+ * @note This header is designed for use alongside liburing (`io_uring_sqe`, `io_uring_cqe`).
+ *       A real implementation is provided only when `QBUEM_HAS_IOURING` is defined;
+ *       otherwise an `errc::not_supported` fallback is used.
  *
  * @{
  */
@@ -56,14 +56,14 @@ namespace qbuem::io {
 // ---------------------------------------------------------------------------
 
 /**
- * @brief io_uring Fixed Files 등록.
+ * @brief Register io_uring Fixed Files.
  *
- * 등록된 fd는 SQE에서 `IOSQE_FIXED_FILE` 플래그와 함께 파일 인덱스로
- * 참조할 수 있어 매 SQE마다 fd 조회 오버헤드를 제거합니다.
+ * Registered fds can be referenced by file index with the `IOSQE_FIXED_FILE`
+ * flag in SQEs, eliminating the per-SQE fd lookup overhead.
  *
- * @param ring      대상 io_uring 인스턴스.
- * @param fds       등록할 fd 목록. -1은 슬롯 예약으로 사용.
- * @returns 성공 시 `Result<void>`.
+ * @param ring      Target io_uring instance.
+ * @param fds       List of fds to register. -1 reserves a slot.
+ * @returns `Result<void>` on success.
  */
 [[nodiscard]] inline Result<void> uring_register_files(
     [[maybe_unused]] void* ring,
@@ -83,7 +83,7 @@ namespace qbuem::io {
 }
 
 /**
- * @brief 등록된 Fixed Files를 해제합니다.
+ * @brief Unregister previously registered Fixed Files.
  */
 [[nodiscard]] inline Result<void> uring_unregister_files(
     [[maybe_unused]] void* ring) noexcept {
@@ -99,13 +99,13 @@ namespace qbuem::io {
 }
 
 /**
- * @brief Fixed Files 슬롯을 갱신합니다 (fd 교체).
+ * @brief Update Fixed Files slots (replace fds).
  *
- * 기존 등록을 해제하지 않고 개별 슬롯의 fd를 교체합니다.
+ * Replaces individual slot fds without unregistering the existing registration.
  *
- * @param ring       대상 io_uring.
- * @param offset     갱신 시작 슬롯 인덱스.
- * @param fds        새 fd 목록.
+ * @param ring       Target io_uring.
+ * @param offset     Starting slot index for the update.
+ * @param fds        New list of fds.
  */
 [[nodiscard]] inline Result<void> uring_update_files(
     [[maybe_unused]] void* ring,
@@ -130,15 +130,15 @@ namespace qbuem::io {
 // ---------------------------------------------------------------------------
 
 /**
- * @brief ACCEPT_MULTISHOT SQE 제출 — SQE 1회로 다중 연결 수락.
+ * @brief Submit an ACCEPT_MULTISHOT SQE — accept multiple connections with a single SQE.
  *
- * 기존 `IORING_OP_ACCEPT`는 연결 1개당 SQE 1개가 필요하지만,
- * MULTISHOT은 SQE 1개로 CQE를 계속 발생시켜 다중 연결을 수락합니다.
+ * Unlike `IORING_OP_ACCEPT` which requires one SQE per connection,
+ * MULTISHOT continuously generates CQEs from a single SQE to accept multiple connections.
  *
- * @param ring         대상 io_uring.
- * @param listen_fd    리슨 중인 서버 소켓 fd.
- * @param user_data    CQE user_data 태그 (콜백 디스패치용).
- * @returns 성공 시 `Result<void>`.
+ * @param ring         Target io_uring.
+ * @param listen_fd    Listening server socket fd.
+ * @param user_data    CQE user_data tag (for callback dispatch).
+ * @returns `Result<void>` on success.
  */
 [[nodiscard]] inline Result<void> uring_accept_multishot(
     [[maybe_unused]] void* ring,
@@ -162,15 +162,15 @@ namespace qbuem::io {
 // ---------------------------------------------------------------------------
 
 /**
- * @brief RECV_MULTISHOT SQE 제출 — SQE 1회로 다중 패킷 수신.
+ * @brief Submit a RECV_MULTISHOT SQE — receive multiple packets with a single SQE.
  *
- * io_uring Buffer Ring과 함께 사용하여 완전한 zero-copy recv를 구성합니다.
+ * Used together with an io_uring Buffer Ring to compose a fully zero-copy recv.
  *
- * @param ring        대상 io_uring.
- * @param fd          수신할 소켓 fd.
- * @param bgid        Buffer Group ID (io_uring_register_buf_ring 참조).
- * @param user_data   CQE user_data 태그.
- * @returns 성공 시 `Result<void>`.
+ * @param ring        Target io_uring.
+ * @param fd          Socket fd to receive on.
+ * @param bgid        Buffer Group ID (see io_uring_register_buf_ring).
+ * @param user_data   CQE user_data tag.
+ * @returns `Result<void>` on success.
  */
 [[nodiscard]] inline Result<void> uring_recv_multishot(
     [[maybe_unused]] void* ring,
@@ -197,12 +197,12 @@ namespace qbuem::io {
 // ---------------------------------------------------------------------------
 
 /**
- * @brief SQE에 IOSQE_IO_LINK 플래그를 설정합니다.
+ * @brief Set the IOSQE_IO_LINK flag on an SQE.
  *
- * 현재 SQE가 완료된 후 다음 SQE가 실행됩니다 (소프트 링크).
- * 현재 SQE가 실패하면 체인이 중단됩니다.
+ * The next SQE executes after the current one completes (soft link).
+ * If the current SQE fails, the chain is cancelled.
  *
- * @param sqe 링크를 설정할 SQE 포인터 (void* — liburing 의존성 최소화).
+ * @param sqe Pointer to the SQE to link (void* — minimizes liburing dependency).
  */
 inline void uring_link_sqe([[maybe_unused]] void* sqe) noexcept {
 #if defined(QBUEM_HAS_IOURING)
@@ -212,9 +212,9 @@ inline void uring_link_sqe([[maybe_unused]] void* sqe) noexcept {
 }
 
 /**
- * @brief SQE에 IOSQE_IO_HARDLINK 플래그를 설정합니다.
+ * @brief Set the IOSQE_IO_HARDLINK flag on an SQE.
  *
- * 현재 SQE가 실패해도 다음 SQE가 실행됩니다 (하드 링크).
+ * The next SQE executes even if the current SQE fails (hard link).
  */
 inline void uring_hardlink_sqe([[maybe_unused]] void* sqe) noexcept {
 #if defined(QBUEM_HAS_IOURING)
@@ -228,16 +228,16 @@ inline void uring_hardlink_sqe([[maybe_unused]] void* sqe) noexcept {
 // ---------------------------------------------------------------------------
 
 /**
- * @brief IORING_OP_SOCKET — io_uring으로 소켓을 비동기 생성합니다.
+ * @brief IORING_OP_SOCKET — create a socket asynchronously via io_uring.
  *
- * `socket(2)` 시스템 콜을 io_uring을 통해 제출합니다.
+ * Submits the `socket(2)` syscall through io_uring.
  *
- * @param ring      대상 io_uring.
- * @param domain    소켓 도메인 (AF_INET, AF_INET6, ...).
- * @param type      소켓 타입 (SOCK_STREAM, SOCK_DGRAM, ...).
- * @param protocol  프로토콜 번호.
- * @param user_data CQE user_data 태그.
- * @returns 성공 시 `Result<void>`.
+ * @param ring      Target io_uring.
+ * @param domain    Socket domain (AF_INET, AF_INET6, ...).
+ * @param type      Socket type (SOCK_STREAM, SOCK_DGRAM, ...).
+ * @param protocol  Protocol number.
+ * @param user_data CQE user_data tag.
+ * @returns `Result<void>` on success.
  */
 [[nodiscard]] inline Result<void> uring_socket(
     [[maybe_unused]] void* ring,
@@ -263,16 +263,16 @@ inline void uring_hardlink_sqe([[maybe_unused]] void* sqe) noexcept {
 // ---------------------------------------------------------------------------
 
 /**
- * @brief IORING_OP_FUTEX_WAIT — io_uring으로 futex 대기.
+ * @brief IORING_OP_FUTEX_WAIT — wait on a futex via io_uring.
  *
- * `eventfd` 기반 wakeup을 대체합니다.
- * futex 주소의 값이 `val`과 다를 때까지 대기합니다.
+ * Replaces eventfd-based wakeups.
+ * Waits until the value at the futex address differs from `val`.
  *
- * @param ring      대상 io_uring.
- * @param uaddr     감시할 futex 주소 (uint32_t*).
- * @param val       기대 값.
- * @param user_data CQE user_data 태그.
- * @returns 성공 시 `Result<void>`.
+ * @param ring      Target io_uring.
+ * @param uaddr     Futex address to watch (uint32_t*).
+ * @param val       Expected value.
+ * @param user_data CQE user_data tag.
+ * @returns `Result<void>` on success.
  */
 [[nodiscard]] inline Result<void> uring_futex_wait(
     [[maybe_unused]] void* ring,
@@ -294,15 +294,15 @@ inline void uring_hardlink_sqe([[maybe_unused]] void* sqe) noexcept {
 }
 
 /**
- * @brief IORING_OP_FUTEX_WAKE — io_uring으로 futex 깨우기.
+ * @brief IORING_OP_FUTEX_WAKE — wake waiters on a futex via io_uring.
  *
- * 지정한 futex 주소에서 대기 중인 최대 `nr_waiters` 개의 스레드를 깨웁니다.
+ * Wakes up to `nr_waiters` threads waiting at the specified futex address.
  *
- * @param ring        대상 io_uring.
- * @param uaddr       futex 주소.
- * @param nr_waiters  깨울 스레드 수.
- * @param user_data   CQE user_data 태그.
- * @returns 성공 시 `Result<void>`.
+ * @param ring        Target io_uring.
+ * @param uaddr       Futex address.
+ * @param nr_waiters  Number of threads to wake.
+ * @param user_data   CQE user_data tag.
+ * @returns `Result<void>` on success.
  */
 [[nodiscard]] inline Result<void> uring_futex_wake(
     [[maybe_unused]] void* ring,
@@ -330,15 +330,15 @@ inline void uring_hardlink_sqe([[maybe_unused]] void* sqe) noexcept {
 /**
  * @brief IORING_OP_SENDMSG_ZC — io_uring zero-copy sendmsg.
  *
- * `MSG_ZEROCOPY`의 io_uring 버전. 사용자 버퍼를 복사 없이 전송합니다.
- * 완료 시 CQE가 2회 발생: 하나는 전송 완료, 하나는 버퍼 반환 알림.
+ * The io_uring equivalent of `MSG_ZEROCOPY`. Transmits the user buffer without copying.
+ * Two CQEs are generated on completion: one for transmit done, one for buffer return notification.
  *
- * @param ring       대상 io_uring.
- * @param fd         전송할 소켓 fd.
- * @param msg        msghdr 구조체 포인터.
- * @param flags      sendmsg 플래그.
- * @param user_data  CQE user_data 태그.
- * @returns 성공 시 `Result<void>`.
+ * @param ring       Target io_uring.
+ * @param fd         Socket fd to send on.
+ * @param msg        Pointer to an msghdr struct.
+ * @param flags      sendmsg flags.
+ * @param user_data  CQE user_data tag.
+ * @returns `Result<void>` on success.
  */
 [[nodiscard]] inline Result<void> uring_sendmsg_zc(
     [[maybe_unused]] void* ring,

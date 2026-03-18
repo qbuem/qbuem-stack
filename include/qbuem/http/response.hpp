@@ -2,13 +2,13 @@
 
 /**
  * @file qbuem/http/response.hpp
- * @brief HTTP 응답 빌더 — 상태 코드, 헤더, 바디 체인 API
+ * @brief HTTP response builder — status code, header, and body chain API.
  * @defgroup qbuem_http_response HTTP Response
  * @ingroup qbuem_http
  *
- * Response는 빌더 패턴. status(), header(), body() 메서드를 체이닝.
- * chunk()/end_chunks()로 chunked transfer, sendfile_path()로 zero-copy 파일 전송,
- * set_cookie()로 쿠키 설정.
+ * Response uses the builder pattern; chain status(), header(), and body().
+ * chunk()/end_chunks() for chunked transfer, sendfile_path() for zero-copy
+ * file serving, set_cookie() for cookie configuration.
  * @{
  */
 

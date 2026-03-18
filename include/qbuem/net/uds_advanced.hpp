@@ -2,35 +2,35 @@
 
 /**
  * @file qbuem/net/uds_advanced.hpp
- * @brief Unix Domain Socket 고급 기능 — FD passing (SCM_RIGHTS), SCM_CREDENTIALS.
+ * @brief Unix Domain Socket advanced features — FD passing (SCM_RIGHTS), SCM_CREDENTIALS.
  * @defgroup qbuem_uds_advanced UDS Advanced
  * @ingroup qbuem_net
  *
- * ## 개요
- * `SCM_RIGHTS`를 활용한 프로세스 간 파일 디스크립터 전달(FD passing)과
- * `SCM_CREDENTIALS`를 통한 peer 프로세스 자격증명 검증을 구현합니다.
+ * ## Overview
+ * Implements inter-process file descriptor passing (FD passing) using `SCM_RIGHTS`
+ * and peer process credential verification via `SCM_CREDENTIALS`.
  *
- * ## 핵심 기능
- * | 기능 | 시스템 콜 | 용도 |
- * |------|-----------|------|
- * | FD passing | `sendmsg(SCM_RIGHTS)` | 소켓/파일/memfd를 타 프로세스에 전달 |
- * | 자격증명 | `sendmsg(SCM_CREDENTIALS)` | peer UID/GID/PID 검증 |
- * | Vectored I/O | `sendmsg(iovec[])` | FD + 데이터를 단일 syscall로 전송 |
+ * ## Key Features
+ * | Feature | Syscall | Purpose |
+ * |---------|---------|---------|
+ * | FD passing | `sendmsg(SCM_RIGHTS)` | Transfer socket/file/memfd to another process |
+ * | Credentials | `sendmsg(SCM_CREDENTIALS)` | Verify peer UID/GID/PID |
+ * | Vectored I/O | `sendmsg(iovec[])` | Send FD + data in a single syscall |
  *
- * ## FD Passing 활용 시나리오
- * - SHM 세그먼트(memfd)를 서비스 매니저가 워커에게 전달
- * - TLS 세션 핸들오버 (accept → worker 프로세스)
- * - 소켓 마이그레이션 (hot-swap 없이 연결 인계)
+ * ## FD Passing Use Cases
+ * - Service manager passes SHM segments (memfd) to worker processes
+ * - TLS session handover (accept -> worker process)
+ * - Socket migration (connection takeover without hot-swap)
  *
  * @code
- * // 송신 측 (FD 전달)
+ * // Sender side (FD passing)
  * int shm_fd = memfd_create("data", MFD_ALLOW_SEALING);
  * auto r = uds::send_fds(sock, {shm_fd}, std::span<const uint8_t>{});
  *
- * // 수신 측 (FD 수신)
+ * // Receiver side (FD receiving)
  * std::array<int, 8> recv_fds;
  * auto r = uds::recv_fds(sock, recv_fds, buf);
- * int received_shm_fd = recv_fds[0]; // dup()된 새로운 fd
+ * int received_shm_fd = recv_fds[0]; // newly dup()'d fd
  * @endcode
  * @{
  */
@@ -52,45 +52,45 @@
 
 namespace qbuem::uds {
 
-// ─── 상수 ─────────────────────────────────────────────────────────────────────
+// ─── Constants ────────────────────────────────────────────────────────────────
 
-/** @brief 단일 `sendmsg`로 전달 가능한 최대 FD 수. */
+/** @brief Maximum number of FDs transferable in a single `sendmsg`. */
 inline constexpr size_t kMaxFdsPerMsg = 253; // SCM_MAX_FD (Linux)
 
 // ─── PeerCredentials ─────────────────────────────────────────────────────────
 
 /**
- * @brief UDS peer 프로세스 자격증명.
+ * @brief Credentials of the UDS peer process.
  *
- * `SO_PEERCRED` (Linux) 또는 `LOCAL_PEERCRED` (macOS)로 조회합니다.
+ * Queried via `SO_PEERCRED` (Linux) or `LOCAL_PEERCRED` (macOS).
  */
 struct PeerCredentials {
-    pid_t pid{-1};  ///< peer 프로세스 ID
-    uid_t uid{~0u}; ///< peer 유효 사용자 ID
-    gid_t gid{~0u}; ///< peer 유효 그룹 ID
+    pid_t pid{-1};  ///< Peer process ID
+    uid_t uid{~0u}; ///< Peer effective user ID
+    gid_t gid{~0u}; ///< Peer effective group ID
 
-    /** @brief root 프로세스 여부. */
+    /** @brief Returns true if the peer process is running as root. */
     [[nodiscard]] bool is_root() const noexcept { return uid == 0; }
-    /** @brief 특정 UID 인지 확인합니다. */
+    /** @brief Returns true if the peer UID matches the expected value. */
     [[nodiscard]] bool is_uid(uid_t expected) const noexcept { return uid == expected; }
 };
 
 // ─── FD Passing ──────────────────────────────────────────────────────────────
 
 /**
- * @brief UDS 소켓을 통해 FD 배열을 전달합니다 (SCM_RIGHTS).
+ * @brief Send an array of FDs over a UDS socket (SCM_RIGHTS).
  *
- * 보조 데이터(ancillary data)로 FD를 전달하며,
- * 동시에 최대 `iov_size` 바이트의 일반 데이터도 전송합니다.
- * 데이터 없이 FD만 전송하려면 `data`를 빈 span으로 전달하세요.
+ * Sends FDs as ancillary data and simultaneously transmits up to
+ * `iov_size` bytes of regular data. To send FDs only (no data),
+ * pass an empty span for `data`.
  *
- * @param sockfd   보내는 UDS 소켓 fd (SOCK_STREAM 또는 SOCK_DGRAM).
- * @param fds      전달할 FD 배열 (최대 `kMaxFdsPerMsg`개).
- * @param data     함께 전송할 일반 데이터 (없으면 빈 span).
- * @returns 성공 시 전송된 데이터 바이트 수 (FD는 별도 계산 없음).
+ * @param sockfd   Sending UDS socket fd (SOCK_STREAM or SOCK_DGRAM).
+ * @param fds      Array of FDs to transfer (at most `kMaxFdsPerMsg`).
+ * @param data     Regular data to send alongside the FDs (empty span if none).
+ * @returns Number of data bytes sent on success (FD count is not included).
  *
- * @note 수신 측에서 각 FD는 독립적으로 `dup()`됩니다.
- *       수신 후 반드시 `close()`해야 합니다.
+ * @note Each received FD is independently `dup()`'d on the receiver side.
+ *       The receiver must `close()` the FDs after use.
  */
 [[nodiscard]] inline Result<ssize_t> send_fds(
     int                       sockfd,
@@ -100,12 +100,12 @@ struct PeerCredentials {
     if (fds.empty() || fds.size() > kMaxFdsPerMsg)
         return unexpected(std::make_error_code(std::errc::invalid_argument));
 
-    // 보조 데이터 버퍼 계산
+    // Compute ancillary data buffer size
     const size_t cmsg_space = CMSG_SPACE(fds.size() * sizeof(int));
-    // 스택 할당 (최대 kMaxFdsPerMsg FDs → 최대 ~4KB)
+    // Stack-allocated buffer (max kMaxFdsPerMsg FDs -> up to ~4KB)
     alignas(struct cmsghdr) uint8_t cmsg_buf[CMSG_SPACE(kMaxFdsPerMsg * sizeof(int))]{};
 
-    // iovec: 빈 페이로드여도 sendmsg는 1바이트 이상 필요 (Linux SOCK_STREAM 예외)
+    // iovec: sendmsg on Linux SOCK_STREAM requires at least 1 byte even for FD-only sends
     uint8_t dummy_byte = 0;
     struct iovec iov{};
     if (!data.empty()) {
@@ -122,7 +122,7 @@ struct PeerCredentials {
     msg.msg_control = cmsg_buf;
     msg.msg_controllen = static_cast<socklen_t>(cmsg_space);
 
-    // CMSG 헤더 설정
+    // Set CMSG header
     struct cmsghdr* cmsg = CMSG_FIRSTHDR(&msg);
     cmsg->cmsg_level = SOL_SOCKET;
     cmsg->cmsg_type  = SCM_RIGHTS;
@@ -140,16 +140,16 @@ struct PeerCredentials {
 }
 
 /**
- * @brief UDS 소켓에서 FD 배열을 수신합니다 (SCM_RIGHTS).
+ * @brief Receive an array of FDs over a UDS socket (SCM_RIGHTS).
  *
- * @param sockfd     수신 UDS 소켓 fd.
- * @param fds_out    수신된 FD를 저장할 배열 (최대 `kMaxFdsPerMsg`개).
- * @param data_buf   함께 수신된 데이터를 저장할 버퍼.
- * @returns {수신된_fd_수, 데이터_바이트_수} 쌍. 실패 시 에러.
+ * @param sockfd     Receiving UDS socket fd.
+ * @param fds_out    Array to store received FDs (at most `kMaxFdsPerMsg`).
+ * @param data_buf   Buffer to store regular data received alongside FDs.
+ * @returns A {fd_count, data_bytes} pair on success, or an error on failure.
  */
 struct RecvFdsResult {
-    size_t  fd_count{0};    ///< 수신된 FD 수
-    ssize_t data_bytes{0};  ///< 수신된 데이터 바이트 수
+    size_t  fd_count{0};    ///< Number of FDs received
+    ssize_t data_bytes{0};  ///< Number of data bytes received
 };
 
 [[nodiscard]] inline Result<RecvFdsResult> recv_fds(
@@ -182,7 +182,7 @@ struct RecvFdsResult {
     RecvFdsResult result;
     result.data_bytes = data_buf.empty() ? 0 : n;
 
-    // 보조 데이터에서 FD 추출
+    // Extract FDs from ancillary data
     for (struct cmsghdr* cmsg = CMSG_FIRSTHDR(&msg);
          cmsg != nullptr;
          cmsg = CMSG_NXTHDR(&msg, cmsg)) {
@@ -192,7 +192,7 @@ struct RecvFdsResult {
             size_t to_copy = (count < fds_out.size()) ? count : fds_out.size();
             std::memcpy(fds_out.data(), CMSG_DATA(cmsg), to_copy * sizeof(int));
             result.fd_count = to_copy;
-            // 넘친 FD는 즉시 닫기 (누수 방지)
+            // Close any excess FDs to prevent leaks
             const int* raw_fds = reinterpret_cast<const int*>(CMSG_DATA(cmsg));
             for (size_t i = to_copy; i < count; ++i) ::close(raw_fds[i]);
             break;
@@ -209,13 +209,13 @@ struct RecvFdsResult {
 // ─── Peer Credentials ────────────────────────────────────────────────────────
 
 /**
- * @brief UDS 소켓의 peer 프로세스 자격증명을 조회합니다.
+ * @brief Query the peer process credentials of a UDS socket.
  *
- * - Linux: `getsockopt(SO_PEERCRED)` → `struct ucred`
- * - macOS: `getsockopt(LOCAL_PEERCRED)` → `struct xucred`
+ * - Linux: `getsockopt(SO_PEERCRED)` -> `struct ucred`
+ * - macOS: `getsockopt(LOCAL_PEERCRED)` -> `struct xucred`
  *
- * @param sockfd  연결된 UDS SOCK_STREAM 소켓.
- * @returns peer 자격증명 또는 에러.
+ * @param sockfd  Connected UDS SOCK_STREAM socket.
+ * @returns Peer credentials or an error.
  */
 [[nodiscard]] inline Result<PeerCredentials> get_peer_credentials(int sockfd) noexcept {
 #if defined(__linux__)
@@ -229,7 +229,7 @@ struct RecvFdsResult {
     socklen_t len = sizeof(cred);
     if (::getsockopt(sockfd, SOL_LOCAL, LOCAL_PEERCRED, &cred, &len) < 0)
         return unexpected(std::error_code{errno, std::system_category()});
-    // macOS xucred에는 PID 없음 → getpid() 대신 별도 SCM_CREDS 사용 필요
+    // macOS xucred does not include PID; use SCM_CREDS separately if needed
     return PeerCredentials{-1, cred.cr_uid, cred.cr_gid};
 #else
     (void)sockfd;
@@ -237,18 +237,19 @@ struct RecvFdsResult {
 #endif
 }
 
-// ─── UDS 소켓 생성 헬퍼 ──────────────────────────────────────────────────────
+// ─── UDS Socket Creation Helpers ─────────────────────────────────────────────
 
 /**
- * @brief 추상 네임스페이스 UDS 소켓 쌍을 생성합니다.
+ * @brief Bind a UDS socket to an abstract namespace address.
  *
- * 추상 네임스페이스(Linux 전용)는 파일시스템에 파일을 생성하지 않습니다.
- * 이름은 `\0` 접두사로 시작하며, 프로세스 종료 시 자동 삭제됩니다.
+ * Abstract namespace (Linux only) does not create a file on the filesystem.
+ * The name begins with a `\0` prefix and is automatically removed when
+ * the process exits.
  *
- * @param name     소켓 이름 (e.g. "qbuem.control"). `\0` 접두사 자동 추가.
- * @param type     소켓 타입 (`SOCK_STREAM` 또는 `SOCK_DGRAM`).
- * @param listener 리스닝 소켓 fd (서버 측).
- * @returns 성공 시 `Result<void>`, 실패 시 에러.
+ * @param name     Socket name (e.g. "qbuem.control"). `\0` prefix is added automatically.
+ * @param type     Socket type (`SOCK_STREAM` or `SOCK_DGRAM`).
+ * @param listener Listening socket fd (server side).
+ * @returns `Result<void>` on success, or an error on failure.
  */
 [[nodiscard]] inline Result<void> bind_abstract(
     std::string_view name, int type, int& listener) noexcept {
@@ -259,7 +260,7 @@ struct RecvFdsResult {
 
     struct sockaddr_un addr{};
     addr.sun_family = AF_UNIX;
-    // 추상 네임스페이스: sun_path[0] = '\0', 이후 이름
+    // Abstract namespace: sun_path[0] = '\0', followed by the name
     size_t len = name.size() < sizeof(addr.sun_path) - 1
                      ? name.size() : sizeof(addr.sun_path) - 1;
     addr.sun_path[0] = '\0';
@@ -283,11 +284,11 @@ struct RecvFdsResult {
 }
 
 /**
- * @brief 추상 네임스페이스 UDS에 연결합니다.
+ * @brief Connect to an abstract namespace UDS address.
  *
- * @param name 소켓 이름 (`\0` 접두사 자동 추가).
- * @param type 소켓 타입.
- * @returns 연결된 소켓 fd 또는 에러.
+ * @param name Socket name (`\0` prefix is added automatically).
+ * @param type Socket type.
+ * @returns Connected socket fd or an error.
  */
 [[nodiscard]] inline Result<int> connect_abstract(
     std::string_view name, int type) noexcept {

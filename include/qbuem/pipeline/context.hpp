@@ -2,28 +2,28 @@
 
 /**
  * @file qbuem/pipeline/context.hpp
- * @brief 파이프라인 아이템 컨텍스트 — 불변 persistent linked-list
+ * @brief Pipeline item context — immutable persistent linked-list
  * @defgroup qbuem_pipeline_context Context
  * @ingroup qbuem_pipeline
  *
- * Context는 파이프라인 아이템의 메타데이터를 전달하는 불변 타입입니다.
- * 코루틴 프레임에 저장되어 co_await 경계에서도 안전하게 유지됩니다.
+ * Context is an immutable type that carries metadata for pipeline items.
+ * It is stored in coroutine frames and remains valid across co_await boundaries.
  *
- * ## 핵심 특성
- * - **불변(Immutable)**: `put()`은 새 Context를 반환, 원본 불변
- * - **O(1) 복사**: shared_ptr head 복사만 발생
- * - **O(1) put()**: 새 노드를 head에 추가 (linked-list prepend)
- * - **타입 인덱싱**: `std::type_index` 기반 슬롯 조회
- * - **코루틴 안전**: thread_local과 달리 프레임에 저장되므로 스레드 전환 후에도 유효
+ * ## Key properties
+ * - **Immutable**: `put()` returns a new Context; the original is unchanged
+ * - **O(1) copy**: only the shared_ptr head is copied
+ * - **O(1) put()**: prepends a new node at the head (linked-list prepend)
+ * - **Type-indexed**: slot lookup is based on `std::type_index`
+ * - **Coroutine-safe**: stored in the frame rather than thread_local, so valid after thread switches
  *
- * ## 사용 예시
+ * ## Usage example
  * @code
  * Context ctx;
  * ctx = ctx.put(TraceCtx{...});
  * ctx = ctx.put(RequestId{"abc-123"});
  *
  * auto trace = ctx.get<TraceCtx>();  // std::optional<TraceCtx>
- * auto rid   = ctx.get_ptr<RequestId>(); // const RequestId* (복사 없음)
+ * auto rid   = ctx.get_ptr<RequestId>(); // const RequestId* (no copy)
  * @endcode
  * @{
  */
@@ -39,45 +39,45 @@
 namespace qbuem {
 
 // ---------------------------------------------------------------------------
-// 내장 Context 슬롯 타입 선언 (pipeline/trace_context.hpp 에서 정의)
+// Built-in Context slot type declarations (defined in pipeline/trace_context.hpp)
 // ---------------------------------------------------------------------------
 struct TraceCtx;      ///< W3C TraceContext (trace_id, span_id, flags)
-struct RequestId;     ///< HTTP 요청 고유 ID
-struct AuthSubject;   ///< 인증된 사용자 ID
-struct AuthRoles;     ///< 인증된 사용자 역할 목록
-struct Deadline;      ///< 요청 처리 마감 시각
-struct ActiveSpan;    ///< 현재 활성 추적 Span
-struct EventTime;     ///< 이벤트 원본 발생 시각 (windowing용)
-struct SagaId;        ///< Saga 분산 트랜잭션 ID
-struct IdempotencyKey; ///< 멱등성 키
+struct RequestId;     ///< Unique HTTP request ID
+struct AuthSubject;   ///< Authenticated user identifier
+struct AuthRoles;     ///< Authenticated user role list
+struct Deadline;      ///< Request processing deadline timestamp
+struct ActiveSpan;    ///< Currently active tracing Span
+struct EventTime;     ///< Original event occurrence timestamp (for windowing)
+struct SagaId;        ///< Saga distributed transaction ID
+struct IdempotencyKey; ///< Idempotency key
 
 /**
- * @brief 파이프라인 아이템 메타데이터 컨테이너 (불변 persistent linked-list).
+ * @brief Pipeline item metadata container (immutable persistent linked-list).
  *
- * ### 수명 규칙
- * Context는 값 타입입니다. `put()`으로 파생된 Context는 원본과 노드를 공유합니다.
- * fan-out 시 여러 Action이 동일 Context를 소유해도 안전합니다.
+ * ### Ownership rules
+ * Context is a value type. A Context derived via `put()` shares nodes with the original.
+ * It is safe for multiple Actions to own the same Context during fan-out.
  *
- * ### 저장 패턴
+ * ### Storage pattern
  * ```
  * [head] → TraceCtx → RequestId → AuthSubject → nullptr
  * ```
- * `get<T>()` 호출 시 linked-list를 선형 탐색합니다.
- * 슬롯이 적을수록 탐색이 빠릅니다 (보통 5개 미만).
+ * Calling `get<T>()` performs a linear scan of the linked list.
+ * Fewer slots means faster lookup (typically fewer than 5).
  */
 class Context {
 public:
   Context() noexcept = default;
 
   /**
-   * @brief 새 슬롯을 추가한 Context를 반환합니다.
+   * @brief Returns a new Context with an additional slot.
    *
-   * 동일 타입 슬롯이 이미 있으면 head에 새로운 값으로 가려집니다.
-   * (shadowing — 원본 노드는 유지됨)
+   * If a slot of the same type already exists, it is shadowed at the head by the new value.
+   * (shadowing — the original node is preserved)
    *
-   * @tparam T 저장할 값의 타입.
-   * @param  value 복사 또는 이동할 값.
-   * @returns 새 슬롯이 추가된 Context.
+   * @tparam T Type of the value to store.
+   * @param  value Value to copy or move in.
+   * @returns Context with the new slot added.
    */
   template <typename T>
   [[nodiscard]] Context put(T value) const {
@@ -91,10 +91,10 @@ public:
   }
 
   /**
-   * @brief 슬롯 값을 복사해서 반환합니다.
+   * @brief Returns a copy of the slot value.
    *
-   * @tparam T 조회할 타입.
-   * @returns 값이 있으면 `std::optional<T>`, 없으면 `std::nullopt`.
+   * @tparam T Type to look up.
+   * @returns `std::optional<T>` if a value exists, `std::nullopt` otherwise.
    */
   template <typename T>
   [[nodiscard]] std::optional<T> get() const noexcept {
@@ -105,10 +105,10 @@ public:
   }
 
   /**
-   * @brief 슬롯 값의 포인터를 반환합니다 (복사 없음).
+   * @brief Returns a pointer to the slot value (no copy).
    *
-   * @tparam T 조회할 타입.
-   * @returns 슬롯이 있으면 `const T*`, 없으면 `nullptr`.
+   * @tparam T Type to look up.
+   * @returns `const T*` if the slot exists, `nullptr` otherwise.
    */
   template <typename T>
   [[nodiscard]] const T *get_ptr() const noexcept {
@@ -137,7 +137,7 @@ public:
   }
 
   /**
-   * @brief Context가 비어 있는지 확인합니다.
+   * @brief Returns true if the Context is empty.
    */
   [[nodiscard]] bool empty() const noexcept { return !head_; }
 
@@ -160,52 +160,52 @@ private:
 };
 
 // ---------------------------------------------------------------------------
-// 내장 슬롯 정의
+// Built-in slot definitions
 // ---------------------------------------------------------------------------
 
-/** @brief W3C Trace Context (W3C traceparent 표준). */
+/** @brief W3C Trace Context (W3C traceparent standard). */
 struct TraceCtx {
   uint8_t trace_id[16]{};  ///< 128-bit trace identifier
   uint8_t span_id[8]{};    ///< 64-bit span identifier
   uint8_t flags = 0;       ///< trace-flags (bit 0 = sampled)
 };
 
-/** @brief HTTP 요청 고유 ID (UUID v4 형식 권장). */
+/** @brief Unique HTTP request ID (UUID v4 format recommended). */
 struct RequestId {
   std::string value;
 };
 
-/** @brief 인증된 사용자 식별자. */
+/** @brief Authenticated user identifier. */
 struct AuthSubject {
   std::string value;
 };
 
-/** @brief 인증된 사용자 역할 목록. */
+/** @brief Authenticated user role list. */
 struct AuthRoles {
   std::vector<std::string> values;
 };
 
-/** @brief 처리 데드라인. 초과 시 stop_token을 통해 취소 신호 전달. */
+/** @brief Processing deadline. A cancellation signal is sent via stop_token when exceeded. */
 struct Deadline {
   std::chrono::steady_clock::time_point at;
 };
 
-/** @brief 활성 추적 Span ID (child span 생성용). */
+/** @brief Active tracing Span ID (used for creating child spans). */
 struct ActiveSpan {
   uint8_t span_id[8]{};
 };
 
-/** @brief 이벤트 원본 발생 시각 (windowing, watermark에 사용). */
+/** @brief Original event occurrence timestamp (used for windowing and watermarking). */
 struct EventTime {
   std::chrono::system_clock::time_point at;
 };
 
-/** @brief Saga 분산 트랜잭션 식별자. */
+/** @brief Saga distributed transaction identifier. */
 struct SagaId {
   std::string value;
 };
 
-/** @brief 멱등성 키 — 중복 처리 방지용. */
+/** @brief Idempotency key — used to prevent duplicate processing. */
 struct IdempotencyKey {
   std::string value;
 };

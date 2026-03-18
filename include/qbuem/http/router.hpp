@@ -19,22 +19,22 @@ using Handler = std::function<void(const Request &, Response &)>;
 using AsyncHandler = std::function<Task<void>(const Request &, Response &)>;
 using HandlerVariant = std::variant<std::monostate, Handler, AsyncHandler>;
 
-/** @brief 동기 미들웨어 — false 반환 시 체인 중단. */
+/** @brief Synchronous middleware — returning false stops the chain. */
 using Middleware = std::function<bool(const Request &, Response &)>;
 
 /**
- * @brief next() 기반 비동기 미들웨어.
+ * @brief next()-based asynchronous middleware.
  *
- * `next()`를 co_await 하면 체인의 나머지(다음 미들웨어 또는 라우트 핸들러)가
- * 실행됩니다.  next()를 호출하지 않으면 체인이 중단됩니다.
+ * co_await next() executes the rest of the chain (next middleware or route
+ * handler).  Not calling next() stops the chain.
  *
- * 예시:
+ * Example:
  * @code
  * app.use_async([](const qbuem::Request& req, qbuem::Response& res,
  *                  qbuem::NextFn next) -> qbuem::Task<bool> {
- *   // 전처리
+ *   // pre-processing
  *   co_await next();
- *   // 후처리 (응답이 채워진 후)
+ *   // post-processing (after response has been populated)
  *   co_return true;
  * });
  * @endcode
@@ -42,7 +42,7 @@ using Middleware = std::function<bool(const Request &, Response &)>;
 using NextFn = std::function<Task<void>()>;
 using AsyncMiddleware = std::function<Task<bool>(const Request &, Response &, NextFn)>;
 
-/** @brief 동기 / 비동기 미들웨어를 하나의 타입으로 저장하는 Variant. */
+/** @brief Variant that stores either a synchronous or asynchronous middleware. */
 using AnyMiddleware = std::variant<Middleware, AsyncMiddleware>;
 
 /**
@@ -137,10 +137,10 @@ class Router {
 public:
   void add_route(Method method, std::string_view path, HandlerVariant handler);
 
-  /** @brief 동기 미들웨어를 체인에 추가합니다. */
+  /** @brief Add a synchronous middleware to the chain. */
   void use(Middleware mw);
 
-  /** @brief next() 기반 비동기 미들웨어를 체인에 추가합니다. */
+  /** @brief Add a next()-based asynchronous middleware to the chain. */
   void use_async(AsyncMiddleware mw);
 
   HandlerVariant
@@ -167,7 +167,7 @@ public:
 
   const std::vector<AnyMiddleware> &middlewares() const { return middlewares_; }
 
-  /** @brief 비동기 미들웨어가 하나라도 등록되어 있으면 true. */
+  /** @brief Returns true if at least one async middleware is registered. */
   bool has_async_middlewares() const { return has_async_mw_; }
 
 private:

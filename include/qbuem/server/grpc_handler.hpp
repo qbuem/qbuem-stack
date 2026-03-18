@@ -2,22 +2,22 @@
 
 /**
  * @file qbuem/server/grpc_handler.hpp
- * @brief gRPC over HTTP/2 핸들러 — 프로토버프 비종속 Length-Prefixed 메시지 처리
+ * @brief gRPC over HTTP/2 handler — protobuf-independent Length-Prefixed message processing
  * @defgroup qbuem_grpc_handler gRPC Handler
  * @ingroup qbuem_server
  *
- * 이 헤더는 gRPC 프로토콜(gRPC over HTTP/2)의 서버 측 처리를 제공합니다.
- * 직렬화/역직렬화는 호출자가 제공하는 코덱에 위임하므로 특정 IDL 또는
- * 직렬화 라이브러리에 종속되지 않습니다.
+ * This header provides server-side processing of the gRPC protocol (gRPC over HTTP/2).
+ * Serialization/deserialization is delegated to a caller-supplied codec, so there is
+ * no dependency on any specific IDL or serialization library.
  *
- * ### 지원하는 스트리밍 패턴 (RFC 정의)
- * - **Unary RPC**: 단일 요청 → 단일 응답.
- * - **Server Streaming RPC**: 단일 요청 → 응답 스트림.
- * - **Client Streaming RPC**: 요청 스트림 → 단일 응답.
- * - **Bidirectional Streaming RPC**: 요청 스트림 ↔ 응답 스트림.
+ * ### Supported streaming patterns (RFC-defined)
+ * - **Unary RPC**: single request → single response.
+ * - **Server Streaming RPC**: single request → response stream.
+ * - **Client Streaming RPC**: request stream → single response.
+ * - **Bidirectional Streaming RPC**: request stream ↔ response stream.
  *
- * ### 프레임 형식
- * gRPC Length-Prefixed Message (5바이트 헤더):
+ * ### Frame format
+ * gRPC Length-Prefixed Message (5-byte header):
  * ```
  * +---------+------------------+
  * | 1 byte  |  4 bytes (BE)    |
@@ -27,7 +27,7 @@
  * +----------------------------+
  * ```
  *
- * ### 사용 예시 (Unary RPC)
+ * ### Usage example (Unary RPC)
  * @code
  * GrpcHandler<MyRequest, MyResponse> handler({
  *     .service_name = "mypackage.MyService",
@@ -68,54 +68,54 @@ namespace qbuem {
 // ─── GrpcMessage ─────────────────────────────────────────────────────────────
 
 /**
- * @brief gRPC Length-Prefixed Message 봉투 구조체.
+ * @brief gRPC Length-Prefixed Message envelope struct.
  *
- * 직렬화된 페이로드를 감싸는 gRPC 메시지 봉투입니다.
- * 실제 직렬화(protobuf, flatbuffers 등)는 호출자 책임입니다.
- * `payload`는 단순한 원시 바이트 벡터이므로 어떤 직렬화 라이브러리도 사용 가능합니다.
+ * A gRPC message envelope wrapping a serialized payload.
+ * Actual serialization (protobuf, flatbuffers, etc.) is the caller's responsibility.
+ * `payload` is a plain raw byte vector, so any serialization library may be used.
  */
 struct GrpcMessage {
-  /** @brief 페이로드 압축 여부 (gRPC Compressed-Flag, 0x00 = 비압축, 0x01 = 압축). */
+  /** @brief Whether the payload is compressed (gRPC Compressed-Flag, 0x00 = uncompressed, 0x01 = compressed). */
   bool compressed{false};
 
-  /** @brief 직렬화된 페이로드 바이트. 애플리케이션이 protobuf 등으로 직렬화한 내용. */
+  /** @brief Serialized payload bytes — content serialized by the application using protobuf etc. */
   std::vector<uint8_t> payload;
 };
 
 // ─── GrpcStatus ──────────────────────────────────────────────────────────────
 
 /**
- * @brief gRPC 상태 코드 (google.rpc.Code 매핑).
+ * @brief gRPC status codes (google.rpc.Code mapping).
  *
- * 성공/실패 여부를 gRPC 트레일러 `grpc-status` 헤더로 전달하는 데 사용됩니다.
- * 각 값은 google.rpc.Code 숫자 값과 동일합니다.
+ * Used to convey success/failure via the gRPC trailer `grpc-status` header.
+ * Each value equals the corresponding google.rpc.Code numeric value.
  *
- * 참조: https://grpc.github.io/grpc/core/md_doc_statuscodes.html
+ * Reference: https://grpc.github.io/grpc/core/md_doc_statuscodes.html
  */
 enum class GrpcStatus : uint32_t {
-  OK                  =  0, ///< 성공
-  CANCELLED           =  1, ///< 호출자에 의해 취소됨
-  UNKNOWN             =  2, ///< 알 수 없는 에러
-  INVALID_ARGUMENT    =  3, ///< 유효하지 않은 인자
-  NOT_FOUND           =  5, ///< 요청한 리소스를 찾을 수 없음
-  ALREADY_EXISTS      =  6, ///< 생성하려는 리소스가 이미 존재함
-  PERMISSION_DENIED   =  7, ///< 권한 없음
-  RESOURCE_EXHAUSTED  =  8, ///< 자원 부족 (할당량 초과 등)
-  FAILED_PRECONDITION =  9, ///< 사전 조건 위반
-  ABORTED             = 10, ///< 작업이 중단됨 (트랜잭션 충돌 등)
-  INTERNAL            = 13, ///< 내부 서버 에러
-  UNAVAILABLE         = 14, ///< 서비스 일시 불가 (재시도 가능)
+  OK                  =  0, ///< Success
+  CANCELLED           =  1, ///< Cancelled by the caller
+  UNKNOWN             =  2, ///< Unknown error
+  INVALID_ARGUMENT    =  3, ///< Invalid argument
+  NOT_FOUND           =  5, ///< Requested resource not found
+  ALREADY_EXISTS      =  6, ///< Resource being created already exists
+  PERMISSION_DENIED   =  7, ///< Permission denied
+  RESOURCE_EXHAUSTED  =  8, ///< Resource exhausted (quota exceeded, etc.)
+  FAILED_PRECONDITION =  9, ///< Precondition violated
+  ABORTED             = 10, ///< Operation aborted (transaction conflict, etc.)
+  INTERNAL            = 13, ///< Internal server error
+  UNAVAILABLE         = 14, ///< Service temporarily unavailable (retryable)
 };
 
-// ─── Stream / AsyncChannel 전방 선언 ─────────────────────────────────────────
+// ─── Stream / AsyncChannel forward declarations ───────────────────────────────
 
 /**
- * @brief 서버 → 클라이언트 방향 응답 스트림 인터페이스.
+ * @brief Server → client response stream interface.
  *
- * Server Streaming 및 Bidirectional Streaming RPC에서 응답을 전송할 때 사용합니다.
- * `send()`를 반복 호출하여 여러 응답 메시지를 스트리밍합니다.
+ * Used to send responses in Server Streaming and Bidirectional Streaming RPCs.
+ * Call `send()` repeatedly to stream multiple response messages.
  *
- * @tparam Res 응답 메시지 타입.
+ * @tparam Res Response message type.
  */
 template <typename Res>
 class Stream {
@@ -123,28 +123,28 @@ public:
   virtual ~Stream() = default;
 
   /**
-   * @brief 단일 응답 메시지를 스트림에 씁니다.
+   * @brief Writes a single response message to the stream.
    *
-   * @param response 전송할 응답 메시지.
-   * @returns 성공 시 `Result<void>::ok()`, 스트림 에러 시 에러 코드.
+   * @param response Response message to send.
+   * @returns `Result<void>::ok()` on success, or an error code on stream error.
    */
   virtual Task<Result<void>> send(Res response) = 0;
 
   /**
-   * @brief 스트림이 아직 열려 있는지 확인합니다.
+   * @brief Checks whether the stream is still open.
    *
-   * @returns 클라이언트 연결이 활성 상태면 true.
+   * @returns true if the client connection is active.
    */
   [[nodiscard]] virtual bool is_open() const noexcept = 0;
 };
 
 /**
- * @brief 클라이언트 → 서버 방향 비동기 요청 채널.
+ * @brief Client → server asynchronous request channel.
  *
- * Client Streaming 및 Bidirectional Streaming RPC에서 클라이언트 메시지를 수신합니다.
- * `recv()`를 반복 호출하여 스트림을 소비합니다.
+ * Used to receive client messages in Client Streaming and Bidirectional Streaming RPCs.
+ * Call `recv()` repeatedly to consume the stream.
  *
- * @tparam Req 요청 메시지 타입.
+ * @tparam Req Request message type.
  */
 template <typename Req>
 class AsyncChannel {
@@ -152,11 +152,11 @@ public:
   virtual ~AsyncChannel() = default;
 
   /**
-   * @brief 다음 요청 메시지를 수신합니다.
+   * @brief Receives the next request message.
    *
-   * 스트림이 종료(클라이언트가 half-close)되면 `has_value() == false`인 결과를 반환합니다.
+   * Returns a result with `has_value() == false` when the stream ends (client half-close).
    *
-   * @returns 다음 메시지. 스트림 종료 시 `std::nullopt`. 에러 시 에러 코드.
+   * @returns Next message, `std::nullopt` on stream end, or an error code on error.
    */
   virtual Task<Result<std::optional<Req>>> recv() = 0;
 };
@@ -164,104 +164,104 @@ public:
 // ─── GrpcHandler<Req, Res> ───────────────────────────────────────────────────
 
 /**
- * @brief gRPC 메서드 핸들러 (프로토버프 비종속).
+ * @brief gRPC method handler (protobuf-independent).
  *
- * 4가지 gRPC 스트리밍 패턴을 지원하며 직렬화/역직렬화를 외부로 위임합니다.
- * 단일 인스턴스에서 하나의 gRPC 메서드(서비스.메서드)를 처리합니다.
+ * Supports all 4 gRPC streaming patterns and delegates serialization/deserialization externally.
+ * A single instance handles one gRPC method (service.method).
  *
- * ### 등록 패턴 선택
- * - Unary: `set_unary()` 사용.
- * - Server Streaming: `set_server_stream()` 사용.
- * - Client Streaming: `set_client_stream()` 사용.
- * - Bidirectional Streaming: `set_bidi()` 사용.
+ * ### Choosing a registration pattern
+ * - Unary: use `set_unary()`.
+ * - Server Streaming: use `set_server_stream()`.
+ * - Client Streaming: use `set_client_stream()`.
+ * - Bidirectional Streaming: use `set_bidi()`.
  *
- * 동시에 여러 패턴을 등록할 수 있지만, 실제 호출은 클라이언트 요청 유형에 따라
- * 하나만 디스패치됩니다.
+ * Multiple patterns may be registered simultaneously, but only one is dispatched
+ * per call based on the client request type.
  *
- * @tparam Req 요청 메시지 타입. 직렬화/역직렬화는 `DeserializeFn`이 담당합니다.
- * @tparam Res 응답 메시지 타입. 직렬화/역직렬화는 `SerializeFn`이 담당합니다.
+ * @tparam Req Request message type. Serialization/deserialization is handled by `DeserializeFn`.
+ * @tparam Res Response message type. Serialization/deserialization is handled by `SerializeFn`.
  */
 template <typename Req, typename Res>
 class GrpcHandler {
 public:
-  // ── 스트리밍 패턴별 함수 타입 ────────────────────────────────────────────
+  // ── Function types per streaming pattern ─────────────────────────────────
 
   /**
-   * @brief Unary RPC 핸들러 타입.
+   * @brief Unary RPC handler type.
    *
-   * 단일 요청을 받아 단일 응답을 반환합니다.
-   * `Result::err()`로 gRPC 에러를 반환할 수 있습니다.
+   * Receives a single request and returns a single response.
+   * gRPC errors may be returned via `Result::err()`.
    */
   using UnaryFn = std::function<Task<Result<Res>>(Req)>;
 
   /**
-   * @brief Server Streaming RPC 핸들러 타입.
+   * @brief Server Streaming RPC handler type.
    *
-   * 단일 요청을 받아 `Stream<Res>&`를 통해 여러 응답을 전송합니다.
-   * 함수가 반환되면 서버 측 스트림이 닫힙니다.
+   * Receives a single request and sends multiple responses via `Stream<Res>&`.
+   * The server-side stream is closed when the function returns.
    */
   using ServerStreamFn = std::function<Task<void>(Req, Stream<Res>&)>;
 
   /**
-   * @brief Client Streaming RPC 핸들러 타입.
+   * @brief Client Streaming RPC handler type.
    *
-   * `AsyncChannel<Req>&`에서 여러 요청을 읽어 단일 응답을 반환합니다.
+   * Reads multiple requests from `AsyncChannel<Req>&` and returns a single response.
    */
   using ClientStreamFn = std::function<Task<Result<Res>>(AsyncChannel<Req>&)>;
 
   /**
-   * @brief Bidirectional Streaming RPC 핸들러 타입.
+   * @brief Bidirectional Streaming RPC handler type.
    *
-   * `AsyncChannel<Req>&`에서 요청을 읽으면서 `Stream<Res>&`로 응답을 전송합니다.
+   * Reads requests from `AsyncChannel<Req>&` while sending responses via `Stream<Res>&`.
    */
   using BidiFn = std::function<Task<void>(AsyncChannel<Req>&, Stream<Res>&)>;
 
   /**
-   * @brief 응답 직렬화 함수 타입.
+   * @brief Response serialization function type.
    *
-   * `Res` 객체를 원시 바이트 벡터로 변환합니다.
-   * protobuf의 경우: `[](const Res& r){ return r.SerializeAsString(); }`
+   * Converts a `Res` object to a raw byte vector.
+   * For protobuf: `[](const Res& r){ return r.SerializeAsString(); }`
    */
   using SerializeFn = std::function<std::vector<uint8_t>(const Res&)>;
 
   /**
-   * @brief 요청 역직렬화 함수 타입.
+   * @brief Request deserialization function type.
    *
-   * 원시 바이트를 `Req` 객체로 변환합니다.
-   * protobuf의 경우: `[](std::span<const uint8_t> b){ Req r; r.ParseFromArray(b.data(), b.size()); return r; }`
+   * Converts raw bytes to a `Req` object.
+   * For protobuf: `[](std::span<const uint8_t> b){ Req r; r.ParseFromArray(b.data(), b.size()); return r; }`
    */
   using DeserializeFn = std::function<Req(std::span<const uint8_t>)>;
 
-  // ── 설정 구조체 ──────────────────────────────────────────────────────────
+  // ── Configuration struct ──────────────────────────────────────────────────
 
   /**
-   * @brief GrpcHandler 설정 구조체.
+   * @brief GrpcHandler configuration struct.
    */
   struct Config {
-    /** @brief gRPC 서비스 이름 (패키지 포함, 예: "mypackage.MyService"). */
+    /** @brief gRPC service name (including package, e.g. "mypackage.MyService"). */
     std::string service_name;
-    /** @brief gRPC 메서드 이름 (예: "SayHello"). */
+    /** @brief gRPC method name (e.g. "SayHello"). */
     std::string method_name;
-    /** @brief 최대 수신 메시지 크기 (bytes). 초과 시 RESOURCE_EXHAUSTED 반환. */
-    uint32_t max_recv_message_size{4 * 1024 * 1024}; // 기본값 4MB
-    /** @brief 최대 전송 메시지 크기 (bytes). */
-    uint32_t max_send_message_size{4 * 1024 * 1024}; // 기본값 4MB
+    /** @brief Maximum receive message size (bytes). Returns RESOURCE_EXHAUSTED if exceeded. */
+    uint32_t max_recv_message_size{4 * 1024 * 1024}; // default 4MB
+    /** @brief Maximum send message size (bytes). */
+    uint32_t max_send_message_size{4 * 1024 * 1024}; // default 4MB
   };
 
   /**
-   * @brief GrpcHandler를 구성합니다.
+   * @brief Constructs a GrpcHandler.
    *
-   * @param cfg 핸들러 설정.
+   * @param cfg Handler configuration.
    */
   explicit GrpcHandler(Config cfg) : cfg_(std::move(cfg)) {}
 
-  // ── 핸들러 등록 (메서드 체이닝) ─────────────────────────────────────────
+  // ── Handler registration (method chaining) ───────────────────────────────
 
   /**
-   * @brief Unary RPC 핸들러를 등록합니다.
+   * @brief Registers a Unary RPC handler.
    *
-   * @param fn Unary 핸들러 함수.
-   * @returns 메서드 체이닝을 위한 `*this` 참조.
+   * @param fn Unary handler function.
+   * @returns `*this` reference for method chaining.
    */
   GrpcHandler& set_unary(UnaryFn fn) {
     unary_fn_ = std::move(fn);
@@ -269,10 +269,10 @@ public:
   }
 
   /**
-   * @brief Server Streaming RPC 핸들러를 등록합니다.
+   * @brief Registers a Server Streaming RPC handler.
    *
-   * @param fn Server Streaming 핸들러 함수.
-   * @returns 메서드 체이닝을 위한 `*this` 참조.
+   * @param fn Server Streaming handler function.
+   * @returns `*this` reference for method chaining.
    */
   GrpcHandler& set_server_stream(ServerStreamFn fn) {
     server_stream_fn_ = std::move(fn);
@@ -280,10 +280,10 @@ public:
   }
 
   /**
-   * @brief Client Streaming RPC 핸들러를 등록합니다.
+   * @brief Registers a Client Streaming RPC handler.
    *
-   * @param fn Client Streaming 핸들러 함수.
-   * @returns 메서드 체이닝을 위한 `*this` 참조.
+   * @param fn Client Streaming handler function.
+   * @returns `*this` reference for method chaining.
    */
   GrpcHandler& set_client_stream(ClientStreamFn fn) {
     client_stream_fn_ = std::move(fn);
@@ -291,10 +291,10 @@ public:
   }
 
   /**
-   * @brief Bidirectional Streaming RPC 핸들러를 등록합니다.
+   * @brief Registers a Bidirectional Streaming RPC handler.
    *
-   * @param fn Bidirectional Streaming 핸들러 함수.
-   * @returns 메서드 체이닝을 위한 `*this` 참조.
+   * @param fn Bidirectional Streaming handler function.
+   * @returns `*this` reference for method chaining.
    */
   GrpcHandler& set_bidi(BidiFn fn) {
     bidi_fn_ = std::move(fn);
@@ -302,14 +302,14 @@ public:
   }
 
   /**
-   * @brief 직렬화/역직렬화 함수를 등록합니다.
+   * @brief Registers serialization/deserialization functions.
    *
-   * 응답 직렬화(`SerializeFn`)와 요청 역직렬화(`DeserializeFn`)를 함께 설정합니다.
-   * 이 함수를 호출하지 않으면 `dispatch_unary()` 등의 호출이 에러를 반환합니다.
+   * Sets the response serializer (`SerializeFn`) and request deserializer (`DeserializeFn`) together.
+   * If this function is not called, calls to `dispatch_unary()` etc. will return an error.
    *
-   * @param s 응답 직렬화 함수.
-   * @param d 요청 역직렬화 함수.
-   * @returns 메서드 체이닝을 위한 `*this` 참조.
+   * @param s Response serialization function.
+   * @param d Request deserialization function.
+   * @returns `*this` reference for method chaining.
    */
   GrpcHandler& set_serializer(SerializeFn s, DeserializeFn d) {
     serialize_fn_   = std::move(s);
@@ -317,16 +317,16 @@ public:
     return *this;
   }
 
-  // ── RPC 디스패치 ─────────────────────────────────────────────────────────
+  // ── RPC dispatch ─────────────────────────────────────────────────────────
 
   /**
-   * @brief Unary RPC를 디스패치합니다.
+   * @brief Dispatches a Unary RPC.
    *
-   * `GrpcMessage` 봉투에서 요청을 역직렬화하고, 등록된 `UnaryFn`을 호출한 후,
-   * 응답을 `GrpcMessage` 봉투로 직렬화합니다.
+   * Deserializes the request from a `GrpcMessage` envelope, invokes the registered `UnaryFn`,
+   * then serializes the response back into a `GrpcMessage` envelope.
    *
-   * @param request 클라이언트로부터 수신한 원시 gRPC 메시지.
-   * @returns 직렬화된 응답 메시지. 에러 시 에러 코드.
+   * @param request Raw gRPC message received from the client.
+   * @returns Serialized response message, or an error code on failure.
    */
   Task<Result<GrpcMessage>> dispatch_unary(const GrpcMessage& request) {
     if (!serialize_fn_ || !deserialize_fn_) {
@@ -358,13 +358,13 @@ public:
   }
 
   /**
-   * @brief Server Streaming RPC를 디스패치합니다.
+   * @brief Dispatches a Server Streaming RPC.
    *
-   * 단일 요청을 역직렬화하고, `stream`을 통해 여러 응답을 전송합니다.
+   * Deserializes a single request and sends multiple responses via `stream`.
    *
-   * @param request 클라이언트 요청 메시지.
-   * @param stream  응답 전송에 사용할 서버 스트림.
-   * @returns 성공 시 `Result<void>::ok()`.
+   * @param request Client request message.
+   * @param stream  Server stream used to send responses.
+   * @returns `Result<void>::ok()` on success.
    */
   Task<Result<void>> dispatch_server_stream(const GrpcMessage& request,
                                              Stream<Res>&        stream) {
@@ -383,12 +383,12 @@ public:
   }
 
   /**
-   * @brief Client Streaming RPC를 디스패치합니다.
+   * @brief Dispatches a Client Streaming RPC.
    *
-   * `channel`에서 여러 요청을 읽고 단일 응답 메시지를 반환합니다.
+   * Reads multiple requests from `channel` and returns a single response message.
    *
-   * @param channel 클라이언트 요청 스트림.
-   * @returns 직렬화된 단일 응답. 에러 시 에러 코드.
+   * @param channel Client request stream.
+   * @returns Serialized single response, or an error code on failure.
    */
   Task<Result<GrpcMessage>> dispatch_client_stream(AsyncChannel<Req>& channel) {
     if (!serialize_fn_ || !client_stream_fn_) {
@@ -411,13 +411,13 @@ public:
   }
 
   /**
-   * @brief Bidirectional Streaming RPC를 디스패치합니다.
+   * @brief Dispatches a Bidirectional Streaming RPC.
    *
-   * `channel`에서 요청을 읽으면서 `stream`으로 응답을 동시에 전송합니다.
+   * Reads requests from `channel` while simultaneously sending responses via `stream`.
    *
-   * @param channel 클라이언트 요청 스트림.
-   * @param stream  서버 응답 스트림.
-   * @returns 성공 시 `Result<void>::ok()`.
+   * @param channel Client request stream.
+   * @param stream  Server response stream.
+   * @returns `Result<void>::ok()` on success.
    */
   Task<Result<void>> dispatch_bidi(AsyncChannel<Req>& channel,
                                     Stream<Res>&        stream) {
@@ -430,24 +430,24 @@ public:
     co_return Result<void>::ok();
   }
 
-  // ── gRPC 프레임 직렬화/역직렬화 ─────────────────────────────────────────
+  // ── gRPC frame serialization/deserialization ─────────────────────────────
 
   /**
-   * @brief `GrpcMessage`를 Length-Prefixed 5바이트 헤더 + 페이로드로 인코딩합니다.
+   * @brief Encodes a `GrpcMessage` as a Length-Prefixed 5-byte header + payload.
    *
-   * 형식: [Compressed-Flag(1B)][Message-Length(4B, BE)][Payload]
+   * Format: [Compressed-Flag(1B)][Message-Length(4B, BE)][Payload]
    *
-   * @param msg 인코딩할 gRPC 메시지.
-   * @returns 인코딩된 바이트 벡터.
+   * @param msg gRPC message to encode.
+   * @returns Encoded byte vector.
    */
   static std::vector<uint8_t> encode_message(const GrpcMessage& msg) {
     std::vector<uint8_t> out;
     out.reserve(5 + msg.payload.size());
 
-    // Compressed-Flag (0x00 = 비압축, 0x01 = 압축)
+    // Compressed-Flag (0x00 = uncompressed, 0x01 = compressed)
     out.push_back(msg.compressed ? 0x01u : 0x00u);
 
-    // Message-Length (4바이트 빅엔디언)
+    // Message-Length (4-byte big-endian)
     uint32_t len = static_cast<uint32_t>(msg.payload.size());
     out.push_back(static_cast<uint8_t>(len >> 24u));
     out.push_back(static_cast<uint8_t>(len >> 16u));
@@ -460,19 +460,19 @@ public:
   }
 
   /**
-   * @brief Length-Prefixed 바이트 스팬에서 `GrpcMessage`를 디코딩합니다.
+   * @brief Decodes a `GrpcMessage` from a Length-Prefixed byte span.
    *
-   * 데이터가 부족하면 `has_value() == false`인 결과를 반환합니다.
+   * Returns a result with `has_value() == false` if data is insufficient.
    *
-   * @param data     디코딩할 바이트 범위.
-   * @param consumed 성공 시 소비한 바이트 수.
-   * @returns 디코딩된 GrpcMessage. 데이터 부족 시 에러 코드.
+   * @param data     Byte range to decode.
+   * @param consumed Number of bytes consumed on success.
+   * @returns Decoded GrpcMessage, or an error code if data is insufficient.
    */
   static Result<GrpcMessage> decode_message(std::span<const uint8_t> data,
                                              size_t& consumed) {
     consumed = 0;
 
-    // 5바이트 헤더 필요
+    // 5-byte header required
     if (data.size() < 5) {
       return unexpected(
           std::make_error_code(std::errc::resource_unavailable_try_again));
@@ -498,22 +498,22 @@ public:
     return msg;
   }
 
-  // ── gRPC 트레일러 헬퍼 ──────────────────────────────────────────────────
+  // ── gRPC trailer helpers ─────────────────────────────────────────────────
 
   /**
-   * @brief gRPC 상태 트레일러 문자열을 생성합니다.
+   * @brief Generates a gRPC status trailer string.
    *
-   * HTTP/2 gRPC 응답의 마지막 HEADERS 프레임에 포함되는 트레일러 블록입니다.
+   * This is the trailer block included in the final HEADERS frame of an HTTP/2 gRPC response.
    *
-   * 형식:
+   * Format:
    * ```
    * grpc-status: <code>\r\n
-   * grpc-message: <message>\r\n   (message가 비어 있지 않을 때만)
+   * grpc-message: <message>\r\n   (only when message is non-empty)
    * ```
    *
-   * @param code    gRPC 상태 코드.
-   * @param message 선택적 사람이 읽을 수 있는 에러 메시지.
-   * @returns 트레일러 헤더 문자열.
+   * @param code    gRPC status code.
+   * @param message Optional human-readable error message.
+   * @returns Trailer header string.
    */
   static std::string status_trailer(GrpcStatus        code,
                                      std::string_view  message = "") {
@@ -530,63 +530,63 @@ public:
     return trailer;
   }
 
-  // ── 접근자 ──────────────────────────────────────────────────────────────
+  // ── Accessors ────────────────────────────────────────────────────────────
 
   /**
-   * @brief gRPC 경로 문자열을 반환합니다.
+   * @brief Returns the gRPC path string.
    *
-   * gRPC HTTP/2 요청의 `:path` 의사 헤더 형식입니다.
-   * 형식: `/<service_name>/<method_name>`
+   * This is the `:path` pseudo-header format for gRPC HTTP/2 requests.
+   * Format: `/<service_name>/<method_name>`
    *
-   * @returns gRPC 경로 문자열.
+   * @returns gRPC path string.
    */
   [[nodiscard]] std::string grpc_path() const {
     return "/" + cfg_.service_name + "/" + cfg_.method_name;
   }
 
-  /** @brief 현재 설정을 반환합니다. */
+  /** @brief Returns the current configuration. */
   [[nodiscard]] const Config& config() const noexcept { return cfg_; }
 
-  /** @brief Unary 핸들러가 등록되어 있으면 true를 반환합니다. */
+  /** @brief Returns true if a Unary handler is registered. */
   [[nodiscard]] bool has_unary() const noexcept {
     return static_cast<bool>(unary_fn_);
   }
 
-  /** @brief Server Streaming 핸들러가 등록되어 있으면 true를 반환합니다. */
+  /** @brief Returns true if a Server Streaming handler is registered. */
   [[nodiscard]] bool has_server_stream() const noexcept {
     return static_cast<bool>(server_stream_fn_);
   }
 
-  /** @brief Client Streaming 핸들러가 등록되어 있으면 true를 반환합니다. */
+  /** @brief Returns true if a Client Streaming handler is registered. */
   [[nodiscard]] bool has_client_stream() const noexcept {
     return static_cast<bool>(client_stream_fn_);
   }
 
-  /** @brief Bidirectional Streaming 핸들러가 등록되어 있으면 true를 반환합니다. */
+  /** @brief Returns true if a Bidirectional Streaming handler is registered. */
   [[nodiscard]] bool has_bidi() const noexcept {
     return static_cast<bool>(bidi_fn_);
   }
 
 private:
-  /** @brief 핸들러 설정. */
+  /** @brief Handler configuration. */
   Config cfg_;
 
-  /** @brief Unary RPC 핸들러. 미등록 시 nullptr. */
+  /** @brief Unary RPC handler. nullptr if not registered. */
   UnaryFn unary_fn_;
 
-  /** @brief Server Streaming RPC 핸들러. 미등록 시 nullptr. */
+  /** @brief Server Streaming RPC handler. nullptr if not registered. */
   ServerStreamFn server_stream_fn_;
 
-  /** @brief Client Streaming RPC 핸들러. 미등록 시 nullptr. */
+  /** @brief Client Streaming RPC handler. nullptr if not registered. */
   ClientStreamFn client_stream_fn_;
 
-  /** @brief Bidirectional Streaming RPC 핸들러. 미등록 시 nullptr. */
+  /** @brief Bidirectional Streaming RPC handler. nullptr if not registered. */
   BidiFn bidi_fn_;
 
-  /** @brief 응답 직렬화 함수. `set_serializer()` 호출 전에는 nullptr. */
+  /** @brief Response serialization function. nullptr before `set_serializer()` is called. */
   SerializeFn serialize_fn_;
 
-  /** @brief 요청 역직렬화 함수. `set_serializer()` 호출 전에는 nullptr. */
+  /** @brief Request deserialization function. nullptr before `set_serializer()` is called. */
   DeserializeFn deserialize_fn_;
 };
 

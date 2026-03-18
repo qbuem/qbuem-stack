@@ -2,23 +2,23 @@
 
 /**
  * @file qbuem/pipeline/event_actions.hpp
- * @brief 고급 이벤트 처리 액션 — DebounceAction, ThrottleAction, ScatterGatherAction
+ * @brief Advanced event-processing actions — DebounceAction, ThrottleAction, ScatterGatherAction
  * @defgroup qbuem_event_actions EventActions
  * @ingroup qbuem_pipeline
  *
- * ## 포함된 컴포넌트
+ * ## Included components
  *
  * ### DebounceAction<T>
- * 일정 시간(gap) 동안 새 아이템이 없으면 마지막 아이템을 출력합니다.
- * 이벤트 폭주(burst) 후 안정 구간을 대기하는 패턴에 유용합니다.
+ * Emits the last item after a silence period (gap) with no new arrivals.
+ * Useful for waiting for a stable interval after an event burst.
  *
  * ### ThrottleAction<T>
- * 토큰 버킷 알고리즘으로 처리량을 제한합니다.
- * `rate_per_sec` 속도, `burst` 버스트 용량을 지원합니다.
+ * Limits throughput using a token-bucket algorithm.
+ * Supports `rate_per_sec` rate and `burst` burst capacity.
  *
  * ### ScatterGatherAction<In, SubIn, SubOut, Out>
- * 하나의 입력을 여러 SubIn으로 분산(scatter)하고,
- * 각각 병렬 처리한 뒤 결과를 집계(gather)하여 Out으로 출력합니다.
+ * Scatters one input into multiple SubIn items,
+ * processes each in parallel, then gathers the results into a single Out.
  *
  * @{
  */
@@ -48,28 +48,29 @@ namespace qbuem {
 // ============================================================================
 
 /**
- * @brief 디바운스 액션 — 정적 구간(gap) 후 마지막 아이템 출력.
+ * @brief Debounce action — emit the last item after a static silence gap.
  *
- * 새 아이템이 도착할 때마다 타이머를 재설정합니다.
- * `gap` 동안 새 아이템이 없으면 마지막 아이템을 출력 채널에 전달합니다.
+ * Resets the timer each time a new item arrives.
+ * Forwards the last item to the output channel once no new item has arrived
+ * within the `gap` window.
  *
- * @tparam T 아이템 타입.
+ * @tparam T Item type.
  */
 template <typename T>
 class DebounceAction {
 public:
   /**
-   * @brief DebounceAction 설정 구조체.
+   * @brief DebounceAction configuration.
    */
   struct Config {
-    std::chrono::milliseconds gap{100}; ///< 정적 구간 (조용한 시간)
-    size_t channel_cap = 256;           ///< 입력 채널 용량
+    std::chrono::milliseconds gap{100}; ///< Silence gap (quiet time)
+    size_t channel_cap = 256;           ///< Input channel capacity
   };
 
   /**
-   * @brief DebounceAction을 생성합니다.
+   * @brief Construct a DebounceAction.
    *
-   * @param cfg 설정.
+   * @param cfg Configuration.
    */
   explicit DebounceAction(Config cfg = {})
       : cfg_(std::move(cfg)),
@@ -82,7 +83,7 @@ public:
   DebounceAction& operator=(DebounceAction&&)      = default;
 
   /**
-   * @brief 아이템을 입력 채널에 넣습니다 (backpressure).
+   * @brief Push an item into the input channel (with backpressure).
    */
   Task<Result<void>> push(T item, Context ctx = {}) {
     co_return co_await in_channel_->send(
@@ -90,7 +91,7 @@ public:
   }
 
   /**
-   * @brief 아이템을 논블로킹으로 넣으려 시도합니다.
+   * @brief Attempt to push an item in a non-blocking manner.
    */
   bool try_push(T item, Context ctx = {}) {
     return in_channel_->try_send(
@@ -98,10 +99,10 @@ public:
   }
 
   /**
-   * @brief DebounceAction을 시작합니다.
+   * @brief Start the DebounceAction.
    *
-   * @param dispatcher 코루틴을 실행할 Dispatcher.
-   * @param out        출력 채널.
+   * @param dispatcher Dispatcher on which to run the coroutine.
+   * @param out        Output channel.
    */
   void start(Dispatcher& dispatcher,
              std::shared_ptr<AsyncChannel<ContextualItem<T>>> out = nullptr) {
@@ -111,7 +112,7 @@ public:
   }
 
   /**
-   * @brief 입력 채널을 닫고 워커가 완료될 때까지 기다립니다.
+   * @brief Close the input channel and wait for the worker to finish.
    */
   Task<void> drain() {
     in_channel_->close();
@@ -134,7 +135,7 @@ public:
   }
 
   /**
-   * @brief 즉시 정지합니다.
+   * @brief Stop immediately.
    */
   void stop() {
     if (stop_src_) stop_src_->request_stop();
@@ -142,14 +143,14 @@ public:
   }
 
   /**
-   * @brief 출력 채널을 반환합니다.
+   * @brief Return the output channel.
    */
   [[nodiscard]] std::shared_ptr<AsyncChannel<ContextualItem<T>>> output() const {
     return out_channel_;
   }
 
   /**
-   * @brief 입력 채널을 반환합니다.
+   * @brief Return the input channel.
    */
   [[nodiscard]] std::shared_ptr<AsyncChannel<ContextualItem<T>>> input() const {
     return in_channel_;
@@ -157,12 +158,12 @@ public:
 
 private:
   /**
-   * @brief 디바운스 워커 루프.
+   * @brief Debounce worker loop.
    *
-   * 알고리즘:
-   * 1. 블로킹 recv()로 아이템 대기.
-   * 2. 새 아이템이 오면 deadline 갱신.
-   * 3. deadline 이내 새 아이템이 없으면 마지막 아이템 출력.
+   * Algorithm:
+   * 1. Wait for an item via blocking recv().
+   * 2. Update the deadline whenever a new item arrives.
+   * 3. Forward the last item when no new item arrives before the deadline.
    */
   Task<void> worker_loop() {
     running_.store(true, std::memory_order_release);
@@ -171,11 +172,11 @@ private:
     auto deadline = std::chrono::steady_clock::time_point::max();
 
     for (;;) {
-      // pending이 있으면 deadline까지 try_recv 시도
+      // If there is a pending item, poll try_recv until the deadline
       if (pending) {
         auto now = std::chrono::steady_clock::now();
         if (now >= deadline) {
-          // gap 경과 — 마지막 아이템 출력
+          // Gap elapsed — forward the last item
           if (out_channel_) {
             co_await out_channel_->send(
                 ContextualItem<T>{std::move(pending->value), pending->ctx});
@@ -185,10 +186,10 @@ private:
           continue;
         }
 
-        // 논블로킹으로 새 아이템 확인
+        // Check for a new item in a non-blocking manner
         auto item = in_channel_->try_recv();
         if (item) {
-          // 새 아이템 → deadline 갱신
+          // New item arrived — refresh deadline
           pending  = std::move(*item);
           deadline = std::chrono::steady_clock::now() +
                      std::chrono::duration_cast<std::chrono::nanoseconds>(cfg_.gap);
@@ -197,7 +198,7 @@ private:
 
         if (in_channel_->is_closed()) break;
 
-        // yield → Reactor가 다른 코루틴을 실행할 기회
+        // Yield — give the Reactor a chance to run other coroutines
         struct Yield {
           bool await_ready() noexcept { return false; }
           void await_suspend(std::coroutine_handle<> h) noexcept {
@@ -210,7 +211,7 @@ private:
         };
         co_await Yield{};
       } else {
-        // pending 없음 → 블로킹 recv
+        // No pending item — blocking recv
         auto item = co_await in_channel_->recv();
         if (!item) break; // EOS
         pending  = std::move(*item);
@@ -219,7 +220,7 @@ private:
       }
     }
 
-    // EOS 시 pending이 있으면 마지막 출력
+    // On EOS, flush any remaining pending item
     if (pending && out_channel_) {
       co_await out_channel_->send(
           ContextualItem<T>{std::move(pending->value), pending->ctx});
@@ -241,31 +242,31 @@ private:
 // ============================================================================
 
 /**
- * @brief 스로틀 액션 — 토큰 버킷 기반 처리량 제한.
+ * @brief Throttle action — token-bucket throughput limiter.
  *
- * `rate_per_sec` 토큰/초 속도로 아이템을 통과시킵니다.
- * `burst`개까지 순간적인 폭주를 허용합니다.
+ * Passes items through at a rate of `rate_per_sec` tokens per second.
+ * Allows instantaneous bursts of up to `burst` items.
  *
- * 토큰이 부족하면 충분한 토큰이 축적될 때까지 대기합니다.
+ * Waits until enough tokens have accumulated when the bucket is empty.
  *
- * @tparam T 아이템 타입.
+ * @tparam T Item type.
  */
 template <typename T>
 class ThrottleAction {
 public:
   /**
-   * @brief ThrottleAction 설정 구조체.
+   * @brief ThrottleAction configuration.
    */
   struct Config {
-    size_t rate_per_sec = 1000; ///< 초당 처리 아이템 수
-    size_t burst        = 100;  ///< 버스트 허용 용량
-    size_t channel_cap  = 1024; ///< 입력 채널 용량
+    size_t rate_per_sec = 1000; ///< Items processed per second
+    size_t burst        = 100;  ///< Burst capacity
+    size_t channel_cap  = 1024; ///< Input channel capacity
   };
 
   /**
-   * @brief ThrottleAction을 생성합니다.
+   * @brief Construct a ThrottleAction.
    *
-   * @param cfg 설정.
+   * @param cfg Configuration.
    */
   explicit ThrottleAction(Config cfg = {})
       : cfg_(std::move(cfg)),
@@ -279,7 +280,7 @@ public:
   ThrottleAction& operator=(ThrottleAction&&)      = default;
 
   /**
-   * @brief 아이템을 입력 채널에 넣습니다 (backpressure).
+   * @brief Push an item into the input channel (with backpressure).
    */
   Task<Result<void>> push(T item, Context ctx = {}) {
     co_return co_await in_channel_->send(
@@ -287,7 +288,7 @@ public:
   }
 
   /**
-   * @brief 아이템을 논블로킹으로 넣으려 시도합니다.
+   * @brief Attempt to push an item in a non-blocking manner.
    */
   bool try_push(T item, Context ctx = {}) {
     return in_channel_->try_send(
@@ -295,10 +296,10 @@ public:
   }
 
   /**
-   * @brief ThrottleAction을 시작합니다.
+   * @brief Start the ThrottleAction.
    *
-   * @param dispatcher 코루틴을 실행할 Dispatcher.
-   * @param out        출력 채널.
+   * @param dispatcher Dispatcher on which to run the coroutine.
+   * @param out        Output channel.
    */
   void start(Dispatcher& dispatcher,
              std::shared_ptr<AsyncChannel<ContextualItem<T>>> out = nullptr) {
@@ -309,7 +310,7 @@ public:
   }
 
   /**
-   * @brief 입력 채널을 닫고 워커가 완료될 때까지 기다립니다.
+   * @brief Close the input channel and wait for the worker to finish.
    */
   Task<void> drain() {
     in_channel_->close();
@@ -332,7 +333,7 @@ public:
   }
 
   /**
-   * @brief 즉시 정지합니다.
+   * @brief Stop immediately.
    */
   void stop() {
     if (stop_src_) stop_src_->request_stop();
@@ -340,14 +341,14 @@ public:
   }
 
   /**
-   * @brief 출력 채널을 반환합니다.
+   * @brief Return the output channel.
    */
   [[nodiscard]] std::shared_ptr<AsyncChannel<ContextualItem<T>>> output() const {
     return out_channel_;
   }
 
   /**
-   * @brief 입력 채널을 반환합니다.
+   * @brief Return the input channel.
    */
   [[nodiscard]] std::shared_ptr<AsyncChannel<ContextualItem<T>>> input() const {
     return in_channel_;
@@ -355,9 +356,9 @@ public:
 
 private:
   /**
-   * @brief 토큰 보충 — 경과 시간에 비례하여 토큰 추가.
+   * @brief Refill tokens proportional to elapsed time.
    *
-   * 최대 burst 토큰 유지.
+   * Caps the token count at burst capacity.
    */
   void refill_tokens() {
     auto now = std::chrono::steady_clock::now();
@@ -372,13 +373,13 @@ private:
   }
 
   /**
-   * @brief 스로틀 워커 루프.
+   * @brief Throttle worker loop.
    *
-   * 토큰 버킷:
-   * 1. 아이템을 recv().
-   * 2. 토큰 보충.
-   * 3. 토큰이 1 이상이면 토큰 소비 후 즉시 전달.
-   * 4. 토큰 부족 시 yield 후 재시도.
+   * Token bucket algorithm:
+   * 1. Receive an item via recv().
+   * 2. Refill tokens.
+   * 3. If tokens >= 1, consume a token and forward immediately.
+   * 4. If insufficient tokens, yield and retry.
    */
   Task<void> worker_loop() {
     running_.store(true, std::memory_order_release);
@@ -390,16 +391,16 @@ private:
       auto citem = co_await in_channel_->recv();
       if (!citem) break; // EOS
 
-      // 토큰이 생길 때까지 대기
+      // Wait until a token is available
       for (;;) {
         refill_tokens();
         if (tokens_ >= 1.0) {
           tokens_ -= 1.0;
-          break; // 토큰 획득
+          break; // Token acquired
         }
 
-        // 대기: 필요한 시간만큼 yield
-        // (토큰 1개를 생성하는 데 필요한 시간 = 1 / rate_per_sec 초)
+        // Wait: yield for the time needed to generate one token
+        // (time to generate 1 token = 1 / rate_per_sec seconds)
         struct Yield {
           bool await_ready() noexcept { return false; }
           void await_suspend(std::coroutine_handle<> h) noexcept {
@@ -427,7 +428,7 @@ private:
   std::shared_ptr<AsyncChannel<ContextualItem<T>>>        out_channel_;
   std::unique_ptr<std::stop_source>                       stop_src_;
   std::atomic<bool>                                       running_{false};
-  // 토큰 버킷 상태 (워커 코루틴에서만 접근 — 단일 워커이므로 동기화 불필요)
+  // Token bucket state (accessed only by the worker coroutine — single worker, no sync needed)
   double                                                  tokens_{0.0};
   std::chrono::steady_clock::time_point                   last_refill_;
 };
@@ -437,44 +438,44 @@ private:
 // ============================================================================
 
 /**
- * @brief 스캐터-개더 액션 — 분산 처리 후 집계.
+ * @brief Scatter-gather action — distribute then aggregate.
  *
- * 처리 흐름:
- * 1. **Scatter**: 하나의 `In`을 여러 `SubIn`으로 분할.
- * 2. **Process**: 각 `SubIn`을 병렬로 처리하여 `SubOut` 생성.
- * 3. **Gather**: 모든 `SubOut`을 `Out` 하나로 집계.
+ * Processing flow:
+ * 1. **Scatter**: Split one `In` into multiple `SubIn` items.
+ * 2. **Process**: Process each `SubIn` in parallel to produce a `SubOut`.
+ * 3. **Gather**: Aggregate all `SubOut` items into a single `Out`.
  *
- * @tparam In     원본 입력 타입.
- * @tparam SubIn  분산된 하위 작업 입력 타입.
- * @tparam SubOut 하위 작업 출력 타입.
- * @tparam Out    집계된 최종 출력 타입.
+ * @tparam In     Original input type.
+ * @tparam SubIn  Distributed sub-task input type.
+ * @tparam SubOut Sub-task output type.
+ * @tparam Out    Aggregated final output type.
  */
 template <typename In, typename SubIn, typename SubOut, typename Out>
 class ScatterGatherAction {
 public:
-  /** @brief 분산 함수 타입: `In → vector<SubIn>`. */
+  /** @brief Scatter function type: `In → vector<SubIn>`. */
   using ScatterFn = std::function<std::vector<SubIn>(In)>;
-  /** @brief 하위 처리 함수 타입: `(SubIn, ActionEnv) → Task<Result<SubOut>>`. */
+  /** @brief Sub-task processing function type: `(SubIn, ActionEnv) → Task<Result<SubOut>>`. */
   using ProcessFn = std::function<Task<Result<SubOut>>(SubIn, ActionEnv)>;
-  /** @brief 집계 함수 타입: `(In, vector<SubOut>) → Out`. */
+  /** @brief Gather function type: `(In, vector<SubOut>) → Out`. */
   using GatherFn  = std::function<Out(In, std::vector<SubOut>)>;
 
   /**
-   * @brief ScatterGatherAction 설정 구조체.
+   * @brief ScatterGatherAction configuration.
    */
   struct Config {
-    size_t max_parallel = 8;    ///< 최대 병렬 하위 작업 수
-    size_t channel_cap  = 256;  ///< 입력 채널 용량
-    ServiceRegistry* registry = nullptr; ///< 파이프라인 ServiceRegistry
+    size_t max_parallel = 8;    ///< Maximum number of parallel sub-tasks
+    size_t channel_cap  = 256;  ///< Input channel capacity
+    ServiceRegistry* registry = nullptr; ///< Pipeline ServiceRegistry
   };
 
   /**
-   * @brief ScatterGatherAction을 생성합니다.
+   * @brief Construct a ScatterGatherAction.
    *
-   * @param scatter 분산 함수.
-   * @param process 하위 처리 함수.
-   * @param gather  집계 함수.
-   * @param cfg     설정.
+   * @param scatter Scatter function.
+   * @param process Sub-task processing function.
+   * @param gather  Gather function.
+   * @param cfg     Configuration.
    */
   ScatterGatherAction(ScatterFn scatter, ProcessFn process, GatherFn gather,
                       Config cfg = {})
@@ -491,7 +492,7 @@ public:
   ScatterGatherAction& operator=(ScatterGatherAction&&)      = default;
 
   /**
-   * @brief 아이템을 입력 채널에 넣습니다 (backpressure).
+   * @brief Push an item into the input channel (with backpressure).
    */
   Task<Result<void>> push(In item, Context ctx = {}) {
     co_return co_await in_channel_->send(
@@ -499,7 +500,7 @@ public:
   }
 
   /**
-   * @brief 아이템을 논블로킹으로 넣으려 시도합니다.
+   * @brief Attempt to push an item in a non-blocking manner.
    */
   bool try_push(In item, Context ctx = {}) {
     return in_channel_->try_send(
@@ -507,10 +508,10 @@ public:
   }
 
   /**
-   * @brief ScatterGatherAction을 시작합니다.
+   * @brief Start the ScatterGatherAction.
    *
-   * @param dispatcher 코루틴을 실행할 Dispatcher.
-   * @param out        출력 채널.
+   * @param dispatcher Dispatcher on which to run the coroutine.
+   * @param out        Output channel.
    */
   void start(Dispatcher& dispatcher,
              std::shared_ptr<AsyncChannel<ContextualItem<Out>>> out = nullptr) {
@@ -520,7 +521,7 @@ public:
   }
 
   /**
-   * @brief 입력 채널을 닫고 워커가 완료될 때까지 기다립니다.
+   * @brief Close the input channel and wait for the worker to finish.
    */
   Task<void> drain() {
     in_channel_->close();
@@ -543,7 +544,7 @@ public:
   }
 
   /**
-   * @brief 즉시 정지합니다.
+   * @brief Stop immediately.
    */
   void stop() {
     if (stop_src_) stop_src_->request_stop();
@@ -551,14 +552,14 @@ public:
   }
 
   /**
-   * @brief 출력 채널을 반환합니다.
+   * @brief Return the output channel.
    */
   [[nodiscard]] std::shared_ptr<AsyncChannel<ContextualItem<Out>>> output() const {
     return out_channel_;
   }
 
   /**
-   * @brief 입력 채널을 반환합니다.
+   * @brief Return the input channel.
    */
   [[nodiscard]] std::shared_ptr<AsyncChannel<ContextualItem<In>>> input() const {
     return in_channel_;
@@ -566,10 +567,10 @@ public:
 
 private:
   /**
-   * @brief 개별 SubIn 처리 코루틴.
+   * @brief Coroutine to process a single SubIn item.
    *
-   * 처리 결과를 공유 결과 벡터에 원자적으로 기록하고
-   * 완료 카운터를 감소시킵니다.
+   * Atomically writes the result to the shared result vector and
+   * decrements the completion counter.
    */
   struct SubTask {
     static Task<void> run(
@@ -583,7 +584,7 @@ private:
       auto result = co_await process(std::move(item), env);
       if (result.has_value())
         (*results)[idx] = std::move(*result);
-      // 마지막 완료 시 done 신호
+      // Signal done when the last sub-task completes
       size_t remaining = pending->fetch_sub(1, std::memory_order_acq_rel) - 1;
       if (remaining == 0)
         done_chan->try_send(0);
@@ -592,13 +593,13 @@ private:
   };
 
   /**
-   * @brief 스캐터-개더 워커 루프.
+   * @brief Scatter-gather worker loop.
    *
-   * 각 입력 아이템에 대해:
-   * 1. scatter() 호출로 SubIn 목록 생성.
-   * 2. 각 SubIn을 병렬 코루틴으로 처리 (최대 max_parallel).
-   * 3. 모든 SubIn 처리 완료 대기.
-   * 4. gather() 호출로 결과 집계 후 출력.
+   * For each input item:
+   * 1. Call scatter() to produce the SubIn list.
+   * 2. Process each SubIn in parallel coroutines (up to max_parallel).
+   * 3. Wait for all SubIn items to finish processing.
+   * 4. Call gather() to aggregate the results and emit the output.
    */
   Task<void> worker_loop() {
     running_.store(true, std::memory_order_release);
@@ -611,14 +612,14 @@ private:
       auto citem = co_await in_channel_->recv();
       if (!citem) break; // EOS
 
-      // 원본 값 저장 (gather에서 필요)
+      // Save original value (needed by gather)
       In orig_value = citem->value;
       Context orig_ctx = citem->ctx;
 
       // 1. Scatter
       std::vector<SubIn> sub_items = scatter_(orig_value);
       if (sub_items.empty()) {
-        // 하위 작업 없음 → gather에 빈 결과 전달
+        // No sub-tasks — pass empty results to gather
         Out out_val = gather_(std::move(orig_value), {});
         if (out_channel_) {
           co_await out_channel_->send(
@@ -630,10 +631,10 @@ private:
       size_t total = sub_items.size();
       auto results = std::make_shared<std::vector<std::optional<SubOut>>>(total);
       auto pending = std::make_shared<std::atomic<size_t>>(total);
-      // done_chan: 모든 하위 작업 완료 시 신호
+      // done_chan: signals when all sub-tasks complete
       auto done_chan = std::make_shared<AsyncChannel<int>>(2);
 
-      // 2. 병렬 처리 — max_parallel 단위로 배치 spawn
+      // 2. Parallel processing — spawn in batches of max_parallel
       size_t dispatch_count = std::min(total, cfg_.max_parallel);
 
       ServiceRegistry* reg =
@@ -664,14 +665,14 @@ private:
             r->post([h]() mutable { h.resume(); });
         }
 
-        // 현재 배치 완료 대기 후 다음 배치 진행
+        // Wait for the current batch to finish before starting the next one
         co_await batch_done->recv();
       }
-      // done_chan은 배치 루프로 대체됨
+      // done_chan is superseded by the batch loop
       (void)done_chan;
       (void)pending;
 
-      // 4. Gather: 성공한 SubOut만 수집
+      // 4. Gather: collect only successful SubOut items
       std::vector<SubOut> sub_results;
       sub_results.reserve(total);
       for (auto& opt : *results) {

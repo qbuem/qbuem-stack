@@ -54,12 +54,13 @@ struct RateLimitConfig {
   std::function<std::string(const Request &)> key_fn;
 
   /**
-   * @brief 동적 IP별 설정 오버라이드 콜백.
+   * @brief Dynamic per-key configuration override callback.
    *
-   * 특정 키(IP 등)에 대해 전역 rate/burst 대신 다른 값을 적용할 때 사용합니다.
-   * 반환값 `std::nullopt` 이면 전역 설정을 사용합니다.
+   * Used to apply different rate/burst values for specific keys (IP, etc.)
+   * instead of the global settings.
+   * Return value `std::nullopt` means use the global configuration.
    *
-   * 예시 (특정 IP 화이트리스트):
+   * Example (specific IP whitelist):
    *   cfg.per_key_override = [](const std::string& key)
    *       -> std::optional<std::pair<double,double>> {
    *     if (key == "10.0.0.1") return std::make_pair(1000.0, 200.0);

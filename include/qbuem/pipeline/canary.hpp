@@ -2,20 +2,20 @@
 
 /**
  * @file qbuem/pipeline/canary.hpp
- * @brief 카나리 배포 자동화 — CanaryRouter
+ * @brief Canary deployment automation — CanaryRouter
  * @defgroup qbuem_canary CanaryRouter
  * @ingroup qbuem_pipeline
  *
- * CanaryRouter는 트래픽을 stable(기존) 파이프라인과 canary(신규) 파이프라인으로
- * 비율에 따라 분배하고, 지표를 모니터링하여 자동/수동 롤백을 지원합니다.
+ * CanaryRouter distributes traffic between a stable (existing) pipeline and a canary (new) pipeline
+ * according to a configured ratio, monitors metrics, and supports automatic/manual rollback.
  *
- * ## 롤아웃 절차
+ * ## Rollout procedure
  * ```
- * 1% → 5% → 25% → 100%  (단계별 자동 증가)
- *                         ↑ 각 단계에서 error_delta / p99 / budget 검사
+ * 1% → 5% → 25% → 100%  (automatic step-by-step increase)
+ *                         ↑ error_delta / p99 / budget checked at each step
  * ```
  *
- * ## 사용 예시
+ * ## Usage example
  * ```cpp
  * CanaryRouter<int> router;
  * router.set_stable(stable_pipeline);
@@ -23,8 +23,8 @@
  * router.start_gradual_rollout({
  *   .steps             = {1, 5, 25, 100},
  *   .step_duration     = 60s,
- *   .max_error_delta   = 0.01,   // 1% 이상 오류 증가 시 롤백
- *   .max_p99_ratio     = 1.5,    // p99가 50% 이상 악화 시 롤백
+ *   .max_error_delta   = 0.01,   // rollback if errors increase by more than 1%
+ *   .max_p99_ratio     = 1.5,    // rollback if p99 degrades by more than 50%
  * });
  * ```
  * @{
@@ -46,16 +46,16 @@
 namespace qbuem {
 
 // ---------------------------------------------------------------------------
-// CanaryMetrics — 파이프라인별 지표 수집
+// CanaryMetrics — per-pipeline metric collection
 // ---------------------------------------------------------------------------
 
 /**
- * @brief 카나리 배포에서 사용할 파이프라인 지표.
+ * @brief Pipeline metrics used in canary deployments.
  */
 struct CanaryMetrics {
   std::atomic<uint64_t> total{0};
   std::atomic<uint64_t> errors{0};
-  std::atomic<uint64_t> latency_sum_us{0};   // 레이턴시 합계 (µs)
+  std::atomic<uint64_t> latency_sum_us{0};   // cumulative latency (µs)
   std::atomic<uint64_t> latency_count{0};
 
   void record_success(uint64_t latency_us) {
@@ -92,49 +92,49 @@ struct CanaryMetrics {
 // ---------------------------------------------------------------------------
 
 /**
- * @brief 트래픽 분배 + 지표 기반 자동 롤백 카나리 라우터.
+ * @brief Traffic-splitting canary router with metric-based automatic rollback.
  *
- * @tparam T 파이프라인 메시지 타입.
+ * @tparam T Pipeline message type.
  */
 template <typename T>
 class CanaryRouter {
 public:
   // -------------------------------------------------------------------------
-  // 설정
+  // Configuration
   // -------------------------------------------------------------------------
 
   /**
-   * @brief 단계별 롤아웃 설정.
+   * @brief Step-by-step rollout configuration.
    */
   struct RolloutConfig {
-    /// 각 단계의 카나리 트래픽 비율 (%) — 예: {1, 5, 25, 100}
+    /// Canary traffic percentage at each step (%) — e.g., {1, 5, 25, 100}
     std::vector<uint32_t> steps{1, 5, 25, 100};
 
-    /// 각 단계의 지속 시간 (기본 60초)
+    /// Duration of each step (default 60 seconds)
     std::chrono::seconds step_duration{60};
 
-    /// 카나리 오류율이 stable 대비 이 값 이상 증가하면 롤백
+    /// Roll back if the canary error rate exceeds the stable rate by this amount
     double max_error_delta{0.01};
 
-    /// 카나리 평균 레이턴시가 stable 대비 이 배수 초과 시 롤백
+    /// Roll back if the canary average latency exceeds stable by this multiplier
     double max_latency_ratio{1.5};
 
-    /// 롤백 발생 시 호출할 콜백
+    /// Callback invoked on rollback
     std::function<void(std::string_view reason)> on_rollback;
 
-    /// 단계 완료 시 호출할 콜백 (현재 step %)
+    /// Callback invoked on step completion (current step %)
     std::function<void(uint32_t step_pct)> on_step_complete;
   };
 
-  // 파이프라인 push 인터페이스
-  using PushFn = std::function<bool(T)>;  // try_push 래퍼
+  // Pipeline push interface
+  using PushFn = std::function<bool(T)>;  // try_push wrapper
 
   // -------------------------------------------------------------------------
-  // 파이프라인 등록
+  // Pipeline registration
   // -------------------------------------------------------------------------
 
   /**
-   * @brief stable 파이프라인의 push 함수를 설정합니다.
+   * @brief Sets the push function for the stable pipeline.
    */
   CanaryRouter &set_stable(PushFn fn) {
     stable_push_ = std::move(fn);
@@ -142,7 +142,7 @@ public:
   }
 
   /**
-   * @brief canary 파이프라인의 push 함수를 설정합니다.
+   * @brief Sets the push function for the canary pipeline.
    */
   CanaryRouter &set_canary(PushFn fn) {
     canary_push_ = std::move(fn);
@@ -150,13 +150,13 @@ public:
   }
 
   // -------------------------------------------------------------------------
-  // 트래픽 라우팅
+  // Traffic routing
   // -------------------------------------------------------------------------
 
   /**
-   * @brief 아이템을 현재 비율에 따라 stable 또는 canary로 전송합니다.
+   * @brief Routes an item to stable or canary according to the current ratio.
    *
-   * @param item 전송할 아이템.
+   * @param item Item to push.
    * @returns true if pushed successfully.
    */
   bool push(T item) {
@@ -186,38 +186,38 @@ public:
   }
 
   // -------------------------------------------------------------------------
-  // 롤아웃 제어
+  // Rollout control
   // -------------------------------------------------------------------------
 
   /**
-   * @brief 단계별 점진적 롤아웃을 시작합니다.
+   * @brief Starts a step-by-step gradual rollout.
    *
-   * 각 단계에서 지표를 평가하고 조건 위반 시 자동 롤백합니다.
-   * 이 함수는 백그라운드 코루틴으로 실행되어야 합니다.
+   * Evaluates metrics at each step and automatically rolls back on violation.
+   * This function must be run as a background coroutine.
    *
-   * @param cfg 롤아웃 설정.
-   * @returns Task<void> — 롤아웃 완료 또는 롤백 시 종료.
+   * @param cfg Rollout configuration.
+   * @returns Task<void> — exits when rollout completes or a rollback occurs.
    */
   Task<void> start_gradual_rollout(RolloutConfig cfg) {
     cfg_ = std::move(cfg);
     rollout_active_.store(true);
 
     for (uint32_t step_pct : cfg_.steps) {
-      if (!rollout_active_.load()) co_return;  // 수동 롤백됨
+      if (!rollout_active_.load()) co_return;  // manually rolled back
 
-      // 현재 단계 비율 적용
+      // Apply the current step percentage
       set_canary_percent(step_pct);
       stable_metrics_.reset();
       canary_metrics_.reset();
 
-      // step_duration 동안 100ms 간격으로 폴링하며 지표 모니터링
+      // Poll metrics every 100ms for step_duration
       auto deadline = std::chrono::steady_clock::now() + cfg_.step_duration;
       while (std::chrono::steady_clock::now() < deadline) {
         co_await sleep(100);  // 100ms poll interval via AsyncSleep
 
         if (!rollout_active_.load()) co_return;
 
-        // 자동 롤백 조건 검사
+        // Check automatic rollback conditions
         if (auto reason = check_rollback_condition()) {
           rollout_active_.store(false);
           set_canary_percent(0);
@@ -229,12 +229,12 @@ public:
       if (cfg_.on_step_complete) cfg_.on_step_complete(step_pct);
     }
 
-    // 100% 달성 → 롤아웃 완료
+    // 100% reached — rollout complete
     rollout_active_.store(false);
   }
 
   /**
-   * @brief 즉시 stable로 수동 롤백합니다.
+   * @brief Immediately rolls back to stable manually.
    */
   void rollback_to_stable() {
     rollout_active_.store(false);
@@ -242,7 +242,7 @@ public:
   }
 
   /**
-   * @brief 카나리 트래픽 비율을 직접 설정합니다 (0–100).
+   * @brief Directly sets the canary traffic percentage (0–100).
    */
   void set_canary_percent(uint32_t pct) noexcept {
     canary_pct_.store(std::min(pct, 100u), std::memory_order_relaxed);
@@ -253,7 +253,7 @@ public:
   }
 
   // -------------------------------------------------------------------------
-  // 지표 조회
+  // Metric accessors
   // -------------------------------------------------------------------------
 
   [[nodiscard]] const CanaryMetrics &stable_metrics() const noexcept { return stable_metrics_; }
@@ -261,7 +261,7 @@ public:
 
 private:
   // -------------------------------------------------------------------------
-  // 자동 롤백 조건 검사
+  // Automatic rollback condition check
   // -------------------------------------------------------------------------
 
   [[nodiscard]] std::optional<std::string> check_rollback_condition() const {
@@ -284,7 +284,7 @@ private:
   }
 
   // -------------------------------------------------------------------------
-  // 데이터 멤버
+  // Data members
   // -------------------------------------------------------------------------
   PushFn              stable_push_;
   PushFn              canary_push_;
@@ -294,7 +294,7 @@ private:
   std::atomic<bool>   rollout_active_{false};
   RolloutConfig       cfg_;
 
-  // 스레드-로컬 RNG (간단한 구현; 정밀도보다 속도 우선)
+  // Thread-local RNG (simple implementation; speed over precision)
   static thread_local std::mt19937 rng_;
 };
 

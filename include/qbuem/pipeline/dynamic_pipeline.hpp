@@ -2,15 +2,15 @@
 
 /**
  * @file qbuem/pipeline/dynamic_pipeline.hpp
- * @brief 런타임 핫스왑 동적 파이프라인 — DynamicPipeline<T>
+ * @brief Runtime hot-swap dynamic pipeline — DynamicPipeline<T>
  * @defgroup qbuem_dynamic_pipeline DynamicPipeline
  * @ingroup qbuem_pipeline
  *
- * DynamicPipeline은 런타임에 스테이지를 추가/제거/교체할 수 있는 파이프라인입니다.
- * StaticPipeline(컴파일 타임 타입 체인)과 달리, std::any를 통한 타입 소거로
- * 런타임 유연성을 제공합니다. 모든 스테이지는 동일한 메시지 타입 T를 처리합니다.
+ * DynamicPipeline is a pipeline whose stages can be added, removed, or replaced at runtime.
+ * Unlike StaticPipeline (compile-time type chain), it uses type erasure via std::any
+ * to provide runtime flexibility. All stages process the same message type T.
  *
- * ## 사용 예시
+ * ## Usage example
  * ```cpp
  * DynamicPipeline<int> dp;
  * dp.add_stage("double", [](int x, ActionEnv) -> Task<Result<int>> { co_return x*2; });
@@ -41,61 +41,61 @@
 namespace qbuem {
 
 /**
- * @brief 핫스왑 가능한 동적 액션의 인터페이스.
+ * @brief Interface for a hot-swappable dynamic action.
  *
- * 런타임 교체를 지원하는 스테이지에 대한 타입 소거 인터페이스입니다.
+ * Type-erased interface for stages that support runtime replacement.
  */
 class IDynamicAction {
 public:
     virtual ~IDynamicAction() = default;
 
-    /// @brief 스테이지 이름을 반환합니다.
+    /// @brief Return the stage name.
     virtual std::string_view name() const noexcept = 0;
 
-    /// @brief 스테이지가 현재 실행 중인지 확인합니다.
+    /// @brief Return whether the stage is currently running.
     virtual bool is_running() const noexcept = 0;
 };
 
 /**
- * @brief 타입 소거된 동적 파이프라인 스테이지.
+ * @brief Type-erased dynamic pipeline stage.
  *
- * std::any를 통해 Action<T,T> 또는 호환 가능한 액션을 래핑합니다.
+ * Wraps an Action<T,T> or compatible action via std::any.
  */
 class DynamicPipelineStage {
 public:
     std::string name;
-    std::any    action;       ///< Action<T,T>를 보유 (shared_ptr을 통해)
+    std::any    action;       ///< Holds an Action<T,T> (via shared_ptr)
     bool        enabled = true;
 };
 
 /**
- * @brief 런타임 핫스왑 파이프라인.
+ * @brief Runtime hot-swap pipeline.
  *
- * 스테이지를 런타임에 추가/제거/교체할 수 있습니다.
- * StaticPipeline(컴파일 타임)과 달리 런타임 타입 소거를 사용합니다.
- * 모든 스테이지는 동일한 메시지 타입 T를 처리해야 합니다.
+ * Stages can be added, removed, or replaced at runtime.
+ * Uses runtime type erasure unlike StaticPipeline (compile-time).
+ * All stages must process the same message type T.
  *
- * @tparam T 파이프라인을 흐르는 메시지 타입.
+ * @tparam T Message type flowing through the pipeline.
  */
 template <typename T>
 class DynamicPipeline {
 public:
     /**
-     * @brief DynamicPipeline 설정 구조체.
+     * @brief DynamicPipeline configuration.
      */
     struct Config {
-        size_t           default_channel_cap  = 256;   ///< 기본 채널 용량
-        size_t           default_workers      = 2;     ///< 기본 워커 수
-        bool             checkpoint_enabled   = false; ///< 체크포인트 활성화
-        ServiceRegistry* registry             = nullptr; ///< 서비스 레지스트리
+        size_t           default_channel_cap  = 256;   ///< Default channel capacity
+        size_t           default_workers      = 2;     ///< Default number of workers
+        bool             checkpoint_enabled   = false; ///< Enable checkpointing
+        ServiceRegistry* registry             = nullptr; ///< Service registry
     };
 
-    /// @brief 스테이지 함수 타입 — add_stage()에 전달 가능한 구체적 타입.
+    /// @brief Stage function type — the concrete type passed to add_stage().
     using StageFn = std::function<Task<Result<T>>(T, ActionEnv)>;
 
     /**
-     * @brief DynamicPipeline을 생성합니다.
-     * @param cfg 파이프라인 설정.
+     * @brief Construct a DynamicPipeline.
+     * @param cfg Pipeline configuration.
      */
     explicit DynamicPipeline(Config cfg = {})
         : cfg_(std::move(cfg)) {}
@@ -106,17 +106,17 @@ public:
     DynamicPipeline& operator=(DynamicPipeline&&) = default;
 
     // -------------------------------------------------------------------------
-    // 스테이지 관리
+    // Stage management
     // -------------------------------------------------------------------------
 
     /**
-     * @brief 체인 끝에 새 스테이지를 추가합니다.
+     * @brief Append a new stage to the end of the chain.
      *
-     * @tparam FnT ActionFn<FnT, T, T> concept을 만족하는 함수 타입.
-     * @param name      스테이지 이름 (고유해야 함).
-     * @param fn        처리 함수: T -> Task<Result<T>>.
-     * @param workers   워커 수 (0이면 default_workers 사용).
-     * @param chan_cap  채널 용량 (0이면 default_channel_cap 사용).
+     * @tparam FnT Function type satisfying ActionFn<FnT, T, T>.
+     * @param name      Stage name (must be unique).
+     * @param fn        Processing function: T -> Task<Result<T>>.
+     * @param workers   Number of workers (0 uses default_workers).
+     * @param chan_cap  Channel capacity (0 uses default_channel_cap).
      */
     template <typename FnT>
         requires ActionFn<FnT, T, T>
@@ -153,10 +153,10 @@ public:
     }
 
     /**
-     * @brief 이름으로 스테이지를 제거합니다 (체인에서 우회).
+     * @brief Remove a stage by name (bypass in chain).
      *
-     * @param name 제거할 스테이지 이름.
-     * @returns 성공 시 true, 스테이지를 찾지 못하면 false.
+     * @param name Stage name to remove.
+     * @returns true on success; false if the stage was not found.
      */
     bool remove_stage(std::string_view name) {
         std::unique_lock lock(stages_mtx_);
@@ -170,16 +170,16 @@ public:
     }
 
     /**
-     * @brief 스테이지를 원자적으로 교체합니다 (핫스왑).
+     * @brief Atomically replace a stage (hot-swap).
      *
-     * 새 액션이 처리를 시작하고, 기존 액션은 드레인됩니다.
-     * 출력 채널은 브리지됩니다.
+     * The new action begins processing; the old action is drained.
+     * Output channels are bridged.
      *
-     * @tparam FnT ActionFn<FnT, T, T> concept을 만족하는 함수 타입.
-     * @param name       교체할 스테이지 이름.
-     * @param new_fn     새 처리 함수.
-     * @param timeout_ms 드레인 대기 시간 (ms). 현재는 무시됨.
-     * @returns 성공 시 true, 스테이지를 찾지 못하면 false.
+     * @tparam FnT Function type satisfying ActionFn<FnT, T, T>.
+     * @param name       Stage name to replace.
+     * @param new_fn     New processing function.
+     * @param timeout_ms Drain wait time in ms. Currently ignored.
+     * @returns true on success; false if the stage was not found.
      */
     template <typename FnT>
         requires ActionFn<FnT, T, T>
@@ -211,11 +211,11 @@ public:
     }
 
     /**
-     * @brief 스테이지를 활성화/비활성화합니다 (비활성화 = 패스스루).
+     * @brief Enable or disable a stage (disabled = pass-through).
      *
-     * @param name    대상 스테이지 이름.
-     * @param enabled true이면 활성, false이면 패스스루.
-     * @returns 성공 시 true, 스테이지를 찾지 못하면 false.
+     * @param name    Target stage name.
+     * @param enabled true to activate; false for pass-through.
+     * @returns true on success; false if the stage was not found.
      */
     bool set_enabled(std::string_view name, bool enabled) {
         std::shared_lock lock(stages_mtx_);
@@ -228,15 +228,15 @@ public:
     }
 
     // -------------------------------------------------------------------------
-    // 아이템 전송
+    // Item submission
     // -------------------------------------------------------------------------
 
     /**
-     * @brief 첫 번째 스테이지에 아이템을 전송합니다 (backpressure).
+     * @brief Send an item to the first stage (with backpressure).
      *
-     * @param item 처리할 아이템.
-     * @param ctx  아이템 컨텍스트.
-     * @returns Result<void>::ok() 또는 에러.
+     * @param item Item to process.
+     * @param ctx  Item context.
+     * @returns Result<void>::ok() or an error.
      */
     Task<Result<void>> push(T item, Context ctx = {}) {
         std::shared_ptr<AsyncChannel<ContextualItem<T>>> first_in;
@@ -251,9 +251,9 @@ public:
     }
 
     /**
-     * @brief 논블로킹 push.
+     * @brief Non-blocking push.
      *
-     * @returns 성공 시 true, 채널 포화 또는 스테이지 없음 시 false.
+     * @returns true on success; false if the channel is full or no stages exist.
      */
     bool try_push(T item, Context ctx = {}) {
         std::shared_lock lock(stages_mtx_);
@@ -264,13 +264,13 @@ public:
     }
 
     // -------------------------------------------------------------------------
-    // 라이프사이클
+    // Lifecycle
     // -------------------------------------------------------------------------
 
     /**
-     * @brief 모든 스테이지를 시작합니다 — 각 스테이지에 워커 코루틴 spawn.
+     * @brief Start all stages — spawn worker coroutines for each stage.
      *
-     * @param dispatcher 코루틴을 실행할 Dispatcher.
+     * @param dispatcher Dispatcher to run coroutines on.
      */
     void start(Dispatcher& dispatcher) {
         std::shared_lock lock(stages_mtx_);
@@ -284,7 +284,7 @@ public:
     }
 
     /**
-     * @brief 입력을 닫고 모든 스테이지가 처리를 마칠 때까지 기다립니다.
+     * @brief Close input and wait for all stages to finish processing.
      */
     Task<void> drain() {
         std::vector<std::shared_ptr<Stage>> snapshot;
@@ -304,7 +304,7 @@ public:
     }
 
     /**
-     * @brief 파이프라인을 즉시 정지합니다.
+     * @brief Stop the pipeline immediately.
      */
     void stop() {
         std::shared_lock lock(stages_mtx_);
@@ -316,13 +316,13 @@ public:
     }
 
     // -------------------------------------------------------------------------
-    // 출력 채널
+    // Output channel
     // -------------------------------------------------------------------------
 
     /**
-     * @brief 마지막 스테이지의 출력 채널을 반환합니다.
+     * @brief Return the output channel of the last stage.
      *
-     * @returns 출력 채널 포인터. 스테이지가 없으면 nullptr.
+     * @returns Output channel pointer; nullptr if there are no stages.
      */
     [[nodiscard]] std::shared_ptr<AsyncChannel<ContextualItem<T>>> output() const {
         std::shared_lock lock(stages_mtx_);
@@ -332,10 +332,10 @@ public:
     }
 
     // -------------------------------------------------------------------------
-    // 조회
+    // Queries
     // -------------------------------------------------------------------------
 
-    /// @brief 스테이지 이름 목록을 반환합니다.
+    /// @brief Return the list of stage names.
     [[nodiscard]] std::vector<std::string> stage_names() const {
         std::shared_lock lock(stages_mtx_);
         std::vector<std::string> names;
@@ -345,7 +345,7 @@ public:
         return names;
     }
 
-    /// @brief 스테이지 수를 반환합니다.
+    /// @brief Return the number of stages.
     [[nodiscard]] size_t stage_count() const {
         std::shared_lock lock(stages_mtx_);
         return stages_.size();
@@ -353,7 +353,7 @@ public:
 
 private:
     // -------------------------------------------------------------------------
-    // 내부 스테이지 구조체
+    // Internal stage structure
     // -------------------------------------------------------------------------
     struct Stage {
         std::string name;
@@ -368,14 +368,14 @@ private:
     };
 
     // -------------------------------------------------------------------------
-    // 채널 재연결 (stages_mtx_ exclusive lock 보유 상태에서 호출)
+    // Channel rewiring (must be called while holding stages_mtx_ exclusively)
     // -------------------------------------------------------------------------
 
     /**
-     * @brief 스테이지 체인의 채널을 재연결합니다.
+     * @brief Rewire channels across the stage chain.
      *
-     * stage[i].out_channel == stage[i+1].in_channel 이 되도록 연결합니다.
-     * stages_mtx_ exclusive lock 보유 상태에서 호출해야 합니다.
+     * Ensures stage[i].out_channel == stage[i+1].in_channel.
+     * Must be called while holding stages_mtx_ exclusively.
      */
     void rewire_channels_locked() {
         for (size_t i = 0; i + 1 < stages_.size(); ++i) {
@@ -385,14 +385,14 @@ private:
     }
 
     // -------------------------------------------------------------------------
-    // 워커 루프
+    // Worker loop
     // -------------------------------------------------------------------------
 
     /**
-     * @brief 단일 스테이지 워커 코루틴.
+     * @brief Single stage worker coroutine.
      *
-     * 입력 채널에서 아이템을 읽어 fn을 적용하고 출력 채널에 전달합니다.
-     * 스테이지가 비활성화된 경우 아이템을 그대로 패스스루합니다.
+     * Reads items from the input channel, applies fn, and forwards to the output channel.
+     * If the stage is disabled, items are forwarded unchanged (pass-through).
      */
     Task<void> stage_worker(
         std::shared_ptr<Stage> stage,
@@ -436,7 +436,7 @@ private:
     }
 
     // -------------------------------------------------------------------------
-    // 코루틴 yield 헬퍼
+    // Coroutine yield helper
     // -------------------------------------------------------------------------
     struct YieldAwaiter {
         bool await_ready() noexcept { return false; }
@@ -455,7 +455,7 @@ private:
     }
 
     // -------------------------------------------------------------------------
-    // 데이터 멤버
+    // Data members
     // -------------------------------------------------------------------------
     Config                                   cfg_;
     std::vector<std::shared_ptr<Stage>>      stages_;

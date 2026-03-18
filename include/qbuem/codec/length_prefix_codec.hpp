@@ -2,25 +2,25 @@
 
 /**
  * @file qbuem/codec/length_prefix_codec.hpp
- * @brief 4바이트 빅엔디안 길이 접두사 프레임 코덱
+ * @brief 4-byte big-endian length-prefix frame codec
  * @ingroup qbuem_codec
  *
- * 이 헤더는 `IFrameCodec<LengthPrefixedFrame>` 구체 구현을 제공합니다.
+ * This header provides a concrete implementation of `IFrameCodec<LengthPrefixedFrame>`.
  *
- * ## 프레임 형식
+ * ## Frame Format
  * ```
  * ┌─────────────────────────────┬───────────────────────────────┐
  * │  length (4 bytes, big-endian) │   payload (length bytes)    │
  * └─────────────────────────────┴───────────────────────────────┘
  * ```
  *
- * ## 사용 예시
+ * ## Usage Example
  * @code
  * LengthPrefixedCodec codec;
  * LengthPrefixedFrame frame;
  * auto status = codec.decode(recv_buf, frame);
  * if (status == DecodeStatus::Complete) {
- *   // frame.payload에 페이로드 데이터 존재
+ *   // payload data is present in frame.payload
  *   process(frame.payload);
  *   codec.reset();
  * }
@@ -41,61 +41,61 @@ namespace qbuem::codec {
 // ─── LengthPrefixedFrame ──────────────────────────────────────────────────────
 
 /**
- * @brief 길이 접두사 프로토콜의 단일 프레임.
+ * @brief A single frame for the length-prefix protocol.
  *
- * `length`는 호스트 바이트 순서(host byte order)로 저장됩니다.
- * 네트워크로 전송 시 `LengthPrefixedCodec::encode()`가 자동으로 빅엔디안 변환합니다.
+ * `length` is stored in host byte order.
+ * `LengthPrefixedCodec::encode()` automatically converts to big-endian for network transmission.
  */
 struct LengthPrefixedFrame {
-  /** @brief 페이로드 길이 (호스트 바이트 순서). encode() 시 빅엔디안으로 직렬화됨. */
+  /** @brief Payload length (host byte order). Serialized as big-endian during encode(). */
   uint32_t length = 0;
 
-  /** @brief 페이로드 데이터. */
+  /** @brief Payload data. */
   std::vector<std::byte> payload;
 };
 
 // ─── LengthPrefixedCodec ──────────────────────────────────────────────────────
 
 /**
- * @brief 4바이트 빅엔디안 길이 접두사 기반 프레임 코덱.
+ * @brief Frame codec based on a 4-byte big-endian length prefix.
  *
- * `IFrameCodec<LengthPrefixedFrame>`을 구현합니다.
- * 내부적으로 헤더/바디 파싱 상태 머신을 유지합니다.
+ * Implements `IFrameCodec<LengthPrefixedFrame>`.
+ * Internally maintains a header/body parsing state machine.
  *
- * ### 상태 머신
+ * ### State Machine
  * ```
- * Header (4바이트 수신 대기)
- *   → Body (length 바이트 수신 대기)
- *     → Complete (프레임 완성, reset() 호출로 Header로 복귀)
+ * Header (waiting for 4 bytes)
+ *   → Body (waiting for length bytes)
+ *     → Complete (frame complete, call reset() to return to Header)
  * ```
  *
- * ### 인코딩
- * `encode()`는 iovec[0]에 4바이트 빅엔디안 헤더를, iovec[1]에 페이로드를 설정합니다.
- * `arena`를 통해 헤더 버퍼를 할당하거나 nullptr 시 내부 버퍼를 사용합니다.
+ * ### Encoding
+ * `encode()` sets iovec[0] to the 4-byte big-endian header and iovec[1] to the payload.
+ * Allocates the header buffer via `arena`, or uses an internal buffer if arena is nullptr.
  */
 class LengthPrefixedCodec : public IFrameCodec<LengthPrefixedFrame> {
 public:
-  /** @brief 기본 생성자. 상태를 Header로 초기화합니다. */
+  /** @brief Default constructor. Initializes state to Header. */
   LengthPrefixedCodec() = default;
 
   /**
-   * @brief 버퍼에서 길이 접두사 프레임을 디코딩합니다.
+   * @brief Decodes a length-prefixed frame from a buffer.
    *
-   * 두 단계로 처리됩니다:
-   * 1. Header 단계: 4바이트 빅엔디안 길이 값을 읽습니다.
-   * 2. Body 단계: `pending_length_` 바이트를 읽어 페이로드를 완성합니다.
+   * Processed in two stages:
+   * 1. Header stage: reads the 4-byte big-endian length value.
+   * 2. Body stage: reads `pending_length_` bytes to complete the payload.
    *
-   * 성공 시 `buf`는 소비된 바이트만큼 앞으로 이동합니다.
+   * On success, `buf` advances by the number of consumed bytes.
    *
-   * @param[in,out] buf 원시 바이트 뷰. `Complete` 시 소비 바이트만큼 이동.
-   * @param[out]    out 디코딩된 프레임. `Complete` 시에만 유효.
+   * @param[in,out] buf Raw byte view. Advances by consumed bytes on `Complete`.
+   * @param[out]    out Decoded frame. Valid only on `Complete`.
    * @returns `Complete` | `Incomplete` | `Error`.
    */
   DecodeStatus decode(BufferView &buf, LengthPrefixedFrame &out) override {
     size_t consumed = 0;
 
     if (state_ == ParseState::Header) {
-      // 헤더 버퍼에 데이터 누적
+      // Accumulate data into header buffer
       while (header_received_ < kHeaderSize && consumed < buf.size()) {
         header_buf_[header_received_++] = buf[consumed++];
       }
@@ -105,7 +105,7 @@ public:
         return DecodeStatus::Incomplete;
       }
 
-      // 4바이트 빅엔디안 → 호스트 바이트 순서 변환
+      // Convert 4-byte big-endian to host byte order
       uint32_t net_len = 0;
       std::memcpy(&net_len, header_buf_, kHeaderSize);
       pending_length_ = ntohl(net_len);
@@ -115,7 +115,7 @@ public:
       body_buf_.reserve(pending_length_);
     }
 
-    // Body 단계: pending_length_ 바이트 수신
+    // Body stage: receive pending_length_ bytes
     size_t remaining = pending_length_ - body_buf_.size();
     size_t available = buf.size() - consumed;
     size_t to_copy   = std::min(remaining, available);
@@ -130,31 +130,31 @@ public:
       return DecodeStatus::Incomplete;
     }
 
-    // 프레임 완성
+    // Frame complete
     out.length  = pending_length_;
     out.payload = std::move(body_buf_);
     return DecodeStatus::Complete;
   }
 
   /**
-   * @brief 프레임을 iovec 배열로 인코딩합니다.
+   * @brief Encodes a frame into an iovec array.
    *
-   * iovec[0] = 4바이트 빅엔디안 길이 헤더 (arena 또는 내부 버퍼 사용)
-   * iovec[1] = 페이로드 데이터 (zero-copy)
+   * iovec[0] = 4-byte big-endian length header (uses arena or internal buffer)
+   * iovec[1] = payload data (zero-copy)
    *
-   * `max_vecs`는 최소 2 이상이어야 합니다.
+   * `max_vecs` must be at least 2.
    *
-   * @param frame    인코딩할 프레임.
-   * @param vecs     출력 iovec 배열.
-   * @param max_vecs iovec 배열 크기 (최소 2 필요).
-   * @param arena    헤더 버퍼 할당에 사용할 메모리 리소스. nullptr 시 내부 버퍼 사용.
-   * @returns 사용된 iovec 항목 수 (2). `max_vecs < 2`이면 0.
+   * @param frame    Frame to encode.
+   * @param vecs     Output iovec array.
+   * @param max_vecs Size of the iovec array (minimum 2 required).
+   * @param arena    Memory resource for header buffer allocation. Uses internal buffer if nullptr.
+   * @returns Number of iovec entries used (2). Returns 0 if `max_vecs < 2`.
    */
   size_t encode(const LengthPrefixedFrame &frame, iovec *vecs, size_t max_vecs,
                 std::pmr::memory_resource *arena) override {
     if (max_vecs < 2) return 0;
 
-    // 헤더 버퍼: arena가 있으면 arena에서, 없으면 내부 버퍼 사용
+    // Header buffer: use arena if available, otherwise use internal buffer
     uint8_t *hdr_buf;
     if (arena) {
       hdr_buf = static_cast<uint8_t *>(arena->allocate(kHeaderSize, alignof(uint32_t)));
@@ -174,9 +174,9 @@ public:
   }
 
   /**
-   * @brief 파서 상태를 초기화합니다.
+   * @brief Resets the parser state.
    *
-   * 다음 프레임 파싱을 위해 Header 단계로 돌아갑니다.
+   * Returns to the Header stage to prepare for parsing the next frame.
    */
   void reset() override {
     state_            = ParseState::Header;
@@ -186,28 +186,28 @@ public:
   }
 
 private:
-  /** @brief 길이 헤더 크기 (바이트). */
+  /** @brief Length header size (bytes). */
   static constexpr size_t kHeaderSize = 4;
 
-  /** @brief 파서 단계를 나타내는 상태 열거형. */
+  /** @brief State enum representing the parser stage. */
   enum class ParseState { Header, Body };
 
-  /** @brief 현재 파서 상태. */
+  /** @brief Current parser state. */
   ParseState state_ = ParseState::Header;
 
-  /** @brief 헤더 수신 버퍼 (4바이트). */
+  /** @brief Header receive buffer (4 bytes). */
   uint8_t  header_buf_[kHeaderSize] = {};
 
-  /** @brief 현재까지 수신된 헤더 바이트 수. */
+  /** @brief Number of header bytes received so far. */
   size_t   header_received_ = 0;
 
-  /** @brief 수신 예정인 페이로드 길이 (호스트 바이트 순서). */
+  /** @brief Expected payload length (host byte order). */
   uint32_t pending_length_ = 0;
 
-  /** @brief 페이로드 수신 버퍼. */
+  /** @brief Payload receive buffer. */
   std::vector<std::byte> body_buf_;
 
-  /** @brief arena가 nullptr일 때 encode()에서 사용하는 내부 헤더 버퍼. */
+  /** @brief Internal header buffer used by encode() when arena is nullptr. */
   uint8_t encode_hdr_buf_[kHeaderSize] = {};
 };
 

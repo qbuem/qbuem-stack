@@ -2,12 +2,13 @@
 
 /**
  * @file qbuem/core/session_store.hpp
- * @brief 세션 저장소 추상 인터페이스 — ISessionStore
+ * @brief Abstract session store interface — ISessionStore
  * @defgroup qbuem_session Session Store
  * @ingroup qbuem_core
  *
- * 세션 데이터의 저장/조회/만료를 추상화합니다.
- * Redis, 인메모리, DB 등의 구현체는 서비스에서 이 인터페이스를 구현합니다.
+ * Abstracts storage, retrieval, and expiry of session data.
+ * Implementations for Redis, in-memory, database, etc. implement this
+ * interface at the service layer.
  * @{
  */
 
@@ -22,21 +23,22 @@
 namespace qbuem {
 
 /**
- * @brief 세션 저장소 추상 인터페이스.
+ * @brief Abstract session store interface.
  *
- * 세션 ID → 직렬화된 세션 데이터(문자열) 매핑을 TTL과 함께 관리합니다.
- * 직렬화 형식(JSON, MessagePack 등)은 서비스에서 결정합니다.
+ * Manages a session ID → serialized session data (string) mapping with TTL.
+ * The serialization format (JSON, MessagePack, etc.) is decided by the service.
  *
- * ### 스레드 안전성
- * 구현체는 여러 워커 스레드에서 동시 호출될 수 있으므로 스레드 안전해야 합니다.
+ * ### Thread Safety
+ * Implementations may be called concurrently from multiple worker threads
+ * and must therefore be thread-safe.
  *
- * ### 사용 예시
+ * ### Usage Example
  * @code
- * // Redis 구현체를 ServiceRegistry에 등록
+ * // Register a Redis implementation in the ServiceRegistry
  * global_registry().register_singleton<ISessionStore>(
  *     std::make_shared<RedisSessionStore>("redis://localhost:6379"));
  *
- * // 라우트 핸들러에서 사용
+ * // Use inside a route handler
  * auto store = global_registry().require<ISessionStore>();
  * auto data = co_await store->get(req.cookie("session_id"));
  * @endcode
@@ -46,54 +48,55 @@ public:
   virtual ~ISessionStore() = default;
 
   /**
-   * @brief 세션 데이터를 조회합니다.
+   * @brief Retrieve session data.
    *
-   * @param session_id 세션 식별자.
-   * @returns 세션 데이터 문자열. 세션이 없거나 만료되면 `std::nullopt`.
+   * @param session_id Session identifier.
+   * @returns Session data string. Returns `std::nullopt` if the session does
+   *          not exist or has expired.
    */
   virtual Task<Result<std::optional<std::string>>>
   get(std::string_view session_id) = 0;
 
   /**
-   * @brief 세션 데이터를 저장(upsert)합니다.
+   * @brief Store (upsert) session data.
    *
-   * 이미 존재하는 세션이면 덮어쓰고 TTL을 갱신합니다.
+   * Overwrites an existing session and refreshes its TTL.
    *
-   * @param session_id 세션 식별자.
-   * @param value      직렬화된 세션 데이터.
-   * @param ttl        세션 유효 시간. 기본 1시간.
+   * @param session_id Session identifier.
+   * @param value      Serialized session data.
+   * @param ttl        Session lifetime. Default: 1 hour.
    */
   virtual Task<Result<void>>
   set(std::string_view session_id, std::string value,
       std::chrono::seconds ttl = std::chrono::seconds{3600}) = 0;
 
   /**
-   * @brief 세션을 삭제합니다 (로그아웃 등).
+   * @brief Delete a session (e.g., on logout).
    *
-   * 없는 세션을 삭제해도 에러를 반환하지 않습니다.
+   * Deleting a non-existent session does not return an error.
    *
-   * @param session_id 삭제할 세션 식별자.
+   * @param session_id Identifier of the session to delete.
    */
   virtual Task<Result<void>> del(std::string_view session_id) = 0;
 
   /**
-   * @brief 세션 TTL을 연장합니다 (슬라이딩 만료).
+   * @brief Extend the session TTL (sliding expiry).
    *
-   * 세션 데이터를 변경하지 않고 만료 시간만 갱신합니다.
-   * 세션이 이미 만료되었으면 에러를 반환합니다.
+   * Refreshes the expiry time without modifying session data.
+   * Returns an error if the session has already expired.
    *
-   * @param session_id 갱신할 세션 식별자.
-   * @param ttl        새로운 유효 시간. 기본 1시간.
+   * @param session_id Identifier of the session to refresh.
+   * @param ttl        New lifetime. Default: 1 hour.
    */
   virtual Task<Result<void>>
   touch(std::string_view session_id,
         std::chrono::seconds ttl = std::chrono::seconds{3600}) = 0;
 
   /**
-   * @brief 세션 존재 여부를 확인합니다.
+   * @brief Check whether a session exists.
    *
-   * `get()` 호출 없이 존재 여부만 확인할 때 사용합니다.
-   * 기본 구현은 `get() != nullopt`로 동작합니다.
+   * Use this when you only need existence without fetching data via `get()`.
+   * The default implementation delegates to `get() != nullopt`.
    */
   virtual Task<Result<bool>> exists(std::string_view session_id) {
     auto r = co_await get(session_id);

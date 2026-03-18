@@ -2,16 +2,16 @@
 
 /**
  * @file qbuem/net/tcp_listener.hpp
- * @brief 비동기 TCP 수신 대기 소켓 타입.
+ * @brief Asynchronous TCP listening socket type.
  * @ingroup qbuem_net
  *
- * `TcpListener`는 SO_REUSEPORT 리슨 소켓을 RAII로 관리하며,
- * 코루틴 기반의 비동기 accept 인터페이스를 제공합니다.
+ * `TcpListener` manages a SO_REUSEPORT listen socket via RAII and provides
+ * a coroutine-based asynchronous accept interface.
  *
- * ### 설계 원칙
- * - Move-only: 복사 불가, 소멸자에서 fd 자동 close
- * - SO_REUSEPORT 기본 활성화 (멀티 워커 포트 공유)
- * - 가용 시 TCP_FASTOPEN, TCP_DEFER_ACCEPT(Linux 한정) 자동 적용
+ * ### Design Principles
+ * - Move-only: non-copyable, fd is automatically closed in the destructor
+ * - SO_REUSEPORT enabled by default (multiple workers share the same port)
+ * - TCP_FASTOPEN and TCP_DEFER_ACCEPT (Linux only) applied automatically when available
  * @{
  */
 
@@ -33,54 +33,54 @@
 namespace qbuem {
 
 /**
- * @brief 비동기 TCP 수신 대기 소켓.
+ * @brief Asynchronous TCP listening socket.
  *
- * `bind()`로 포트에 바인딩한 후 `accept()`를 반복 호출하여
- * 클라이언트 연결을 수락합니다. 각 수락된 연결은 TcpStream으로 반환됩니다.
+ * After binding to a port with `bind()`, repeatedly call `accept()` to
+ * accept client connections. Each accepted connection is returned as a TcpStream.
  *
- * ### 사용 예시
+ * ### Usage Example
  * @code
  * auto addr = SocketAddr::from_ipv4("0.0.0.0", 8080);
  * auto listener = TcpListener::bind(*addr);
- * if (!listener) { // 에러 처리 }
+ * if (!listener) { // error handling }
  *
  * while (true) {
  *     auto stream = co_await listener->accept();
  *     if (!stream) break;
- *     // stream 처리
+ *     // handle stream
  * }
  * @endcode
  */
 class TcpListener {
 public:
-  /** @brief 유효하지 않은 fd로 초기화. */
+  /** @brief Initialize with an invalid fd. */
   TcpListener() noexcept : fd_(-1) {}
 
   /**
-   * @brief 이미 리슨 중인 fd로 TcpListener를 구성합니다.
-   * @param fd 논블로킹 리슨 소켓 파일 디스크립터.
+   * @brief Construct a TcpListener from an already-listening fd.
+   * @param fd Non-blocking listen socket file descriptor.
    */
   explicit TcpListener(int fd) noexcept : fd_(fd) {}
 
-  /** @brief 소멸자: 리슨 소켓을 자동으로 닫습니다. */
+  /** @brief Destructor: automatically closes the listen socket. */
   ~TcpListener() {
     if (fd_ >= 0) {
       ::close(fd_);
     }
   }
 
-  /** @brief 복사 생성자 삭제 (Move-only). */
+  /** @brief Copy constructor deleted (Move-only). */
   TcpListener(const TcpListener &) = delete;
 
-  /** @brief 복사 대입 삭제 (Move-only). */
+  /** @brief Copy assignment deleted (Move-only). */
   TcpListener &operator=(const TcpListener &) = delete;
 
-  /** @brief 이동 생성자. */
+  /** @brief Move constructor. */
   TcpListener(TcpListener &&other) noexcept : fd_(other.fd_) {
     other.fd_ = -1;
   }
 
-  /** @brief 이동 대입 연산자. */
+  /** @brief Move assignment operator. */
   TcpListener &operator=(TcpListener &&other) noexcept {
     if (this != &other) {
       if (fd_ >= 0) ::close(fd_);
@@ -90,18 +90,18 @@ public:
     return *this;
   }
 
-  // ─── 팩토리 메서드 ──────────────────────────────────────────────────────
+  // ─── Factory Methods ────────────────────────────────────────────────────────
 
   /**
-   * @brief 지정된 주소에 바인딩하고 수신 대기 소켓을 생성합니다.
+   * @brief Bind to the specified address and create a listening socket.
    *
-   * 다음 옵션을 자동으로 적용합니다:
-   * - SO_REUSEPORT: 동일 포트를 여러 워커가 공유 가능
-   * - TCP_FASTOPEN: 가용 시 TFO 활성화 (큐 크기 128)
-   * - TCP_DEFER_ACCEPT: Linux에서 데이터가 올 때까지 accept 지연
+   * The following options are applied automatically:
+   * - SO_REUSEPORT: allows multiple workers to share the same port
+   * - TCP_FASTOPEN: enables TFO when available (queue size 128)
+   * - TCP_DEFER_ACCEPT: on Linux, defers accept until data arrives
    *
-   * @param addr 바인딩할 로컬 주소.
-   * @returns 성공 시 TcpListener, 실패 시 에러 코드.
+   * @param addr Local address to bind to.
+   * @returns TcpListener on success, or an error code on failure.
    */
   static Result<TcpListener> bind(SocketAddr addr) noexcept {
     int domain = (addr.family() == SocketAddr::Family::IPv6) ? AF_INET6 : AF_INET;
@@ -109,20 +109,20 @@ public:
     if (fd < 0)
       return unexpected(std::error_code(errno, std::system_category()));
 
-    // SO_REUSEPORT: 멀티 워커 포트 공유
+    // SO_REUSEPORT: allow multiple workers to share the port
     {
       int opt = 1;
       ::setsockopt(fd, SOL_SOCKET, SO_REUSEPORT, &opt, sizeof(opt));
     }
 
-    // SO_REUSEADDR: TIME_WAIT 상태 주소 재사용
+    // SO_REUSEADDR: allow reuse of addresses in TIME_WAIT state
     {
       int opt = 1;
       ::setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
     }
 
 #ifdef TCP_FASTOPEN
-    // TCP_FASTOPEN: 첫 번째 SYN에서 데이터 전송 (가용 시)
+    // TCP_FASTOPEN: send data on the first SYN when available
     {
       int qlen = 128;
       ::setsockopt(fd, IPPROTO_TCP, TCP_FASTOPEN, &qlen, sizeof(qlen));
@@ -130,7 +130,7 @@ public:
 #endif
 
 #ifdef TCP_DEFER_ACCEPT
-    // TCP_DEFER_ACCEPT: Linux에서 데이터가 도착해야 accept 반환
+    // TCP_DEFER_ACCEPT: on Linux, return from accept only when data has arrived
     {
       int timeout = 1;
       ::setsockopt(fd, IPPROTO_TCP, TCP_DEFER_ACCEPT, &timeout, sizeof(timeout));
@@ -160,16 +160,16 @@ public:
     return TcpListener(fd);
   }
 
-  // ─── 비동기 accept ──────────────────────────────────────────────────────
+  // ─── Asynchronous accept ────────────────────────────────────────────────────
 
   /**
-   * @brief 클라이언트 연결을 비동기로 수락합니다.
+   * @brief Asynchronously accept a client connection.
    *
-   * 리슨 소켓이 읽기 가능해질 때까지 Reactor 이벤트를 대기한 뒤
-   * `accept4(2)`로 클라이언트 소켓을 수락합니다.
-   * 반환된 TcpStream의 소켓은 SOCK_NONBLOCK | SOCK_CLOEXEC로 설정됩니다.
+   * Waits for a Reactor event until the listen socket becomes readable, then
+   * accepts a client socket via `accept4(2)`.
+   * The returned TcpStream socket is configured with SOCK_NONBLOCK | SOCK_CLOEXEC.
    *
-   * @returns 성공 시 클라이언트 TcpStream, 실패 시 에러 코드.
+   * @returns Client TcpStream on success, or an error code on failure.
    */
   Task<Result<TcpStream>> accept() {
     struct AcceptAwaiter {
@@ -219,16 +219,16 @@ public:
     co_return TcpStream(aw.client_fd_);
   }
 
-  // ─── 접근자 ─────────────────────────────────────────────────────────────
+  // ─── Accessors ──────────────────────────────────────────────────────────────
 
   /**
-   * @brief 내부 파일 디스크립터를 반환합니다.
-   * @returns 리슨 소켓 fd. 유효하지 않으면 -1.
+   * @brief Returns the underlying file descriptor.
+   * @returns The listen socket fd. -1 if invalid.
    */
   int fd() const noexcept { return fd_; }
 
 private:
-  /** @brief 관리 중인 리슨 소켓 파일 디스크립터. */
+  /** @brief The managed listen socket file descriptor. */
   int fd_;
 };
 

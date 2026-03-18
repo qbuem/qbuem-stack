@@ -2,25 +2,25 @@
 
 /**
  * @file qbuem/codec/http1_codec.hpp
- * @brief HTTP/1.1 요청 코덱 — IFrameCodec<http::Request> 래퍼
+ * @brief HTTP/1.1 request codec — IFrameCodec<http::Request> wrapper
  * @ingroup qbuem_codec
  *
- * `HttpParser`를 `IFrameCodec<Request>` 인터페이스로 감싸는 어댑터입니다.
+ * An adapter that wraps `HttpParser` in the `IFrameCodec<Request>` interface.
  *
- * ### 동작 개요
- * - `decode()`: `HttpParser`를 사용하여 HTTP/1.1 요청을 점진적으로 파싱합니다.
- * - `encode()`: HTTP 서버는 요청을 인코딩하지 않습니다.
- *              응답 직렬화는 `http::Response`와 `http::Response::serialize()`를 사용하세요.
- * - `reset()` : 파서를 재생성하여 다음 요청 파싱 준비를 합니다.
+ * ### Behavior Overview
+ * - `decode()`: Uses `HttpParser` to incrementally parse HTTP/1.1 requests.
+ * - `encode()`: HTTP servers do not encode requests.
+ *              Use `http::Response` and `http::Response::serialize()` for response serialization.
+ * - `reset()` : Recreates the parser to prepare for parsing the next request.
  *
- * ### 사용 예시
+ * ### Usage Example
  * @code
  * Http1Codec codec;
  * Request req;
  * auto status = codec.decode(recv_buf, req);
  * if (status == DecodeStatus::Complete) {
  *   handle_request(req);
- *   codec.reset(); // keep-alive: 다음 요청 파싱 준비
+ *   codec.reset(); // keep-alive: prepare for next request
  * } else if (status == DecodeStatus::Error) {
  *   send_400_bad_request();
  * }
@@ -39,35 +39,35 @@
 namespace qbuem::codec {
 
 /**
- * @brief HTTP/1.1 요청 파서를 `IFrameCodec<Request>` 인터페이스로 감싸는 코덱.
+ * @brief Codec that wraps the HTTP/1.1 request parser in the `IFrameCodec<Request>` interface.
  *
- * 내부적으로 `HttpParser` 상태 머신을 유지합니다.
- * `reset()`을 호출하면 파서가 재초기화되어 다음 HTTP 요청을 파싱할 수 있습니다.
- * HTTP keep-alive 연결에서 연속적인 요청 처리에 적합합니다.
+ * Internally maintains an `HttpParser` state machine.
+ * Calling `reset()` reinitializes the parser so it can parse the next HTTP request.
+ * Suitable for processing consecutive requests over HTTP keep-alive connections.
  *
- * ### encode() 주의사항
- * HTTP 서버 코덱에서 `encode(Request)`는 의미가 없습니다.
- * 항상 `DecodeStatus::Error`에 해당하는 0을 반환합니다.
- * HTTP 응답 직렬화는 `http::Response`를 사용하세요.
+ * ### encode() Notes
+ * `encode(Request)` has no meaning in an HTTP server codec.
+ * It always returns 0, which corresponds to `DecodeStatus::Error`.
+ * Use `http::Response` for HTTP response serialization.
  */
 class Http1Codec : public IFrameCodec<Request> {
 public:
-  /** @brief 기본 생성자. HttpParser를 초기화합니다. */
+  /** @brief Default constructor. Initializes the HttpParser. */
   Http1Codec() = default;
 
   /**
-   * @brief 버퍼에서 HTTP/1.1 요청을 디코딩합니다.
+   * @brief Decodes an HTTP/1.1 request from a buffer.
    *
-   * 내부 `HttpParser`에 데이터를 공급하여 요청을 점진적으로 파싱합니다.
-   * 완성된 요청은 `out`에 저장됩니다.
+   * Feeds data to the internal `HttpParser` to incrementally parse the request.
+   * The completed request is stored in `out`.
    *
-   * 성공 시 `buf`는 소비된 바이트만큼 앞으로 이동합니다.
-   * 다음 요청 파싱을 위해 반드시 `reset()`을 호출하세요.
+   * On success, `buf` advances by the number of consumed bytes.
+   * Call `reset()` before parsing the next request.
    *
-   * @param[in,out] buf 원시 바이트 뷰. `Complete` 시 소비 바이트만큼 이동.
-   * @param[out]    out 디코딩된 HTTP 요청. `Complete` 시에만 유효.
-   * @returns `Complete` = 요청 완성, `Incomplete` = 데이터 부족,
-   *          `Error` = HTTP 파싱 오류 (400/413 등).
+   * @param[in,out] buf Raw byte view. Advances by consumed bytes on `Complete`.
+   * @param[out]    out Decoded HTTP request. Valid only on `Complete`.
+   * @returns `Complete` = request complete, `Incomplete` = insufficient data,
+   *          `Error` = HTTP parse error (400/413, etc.).
    */
   DecodeStatus decode(BufferView &buf, Request &out) override {
     if (buf.empty()) return DecodeStatus::Incomplete;
@@ -80,7 +80,7 @@ public:
     }
 
     if (!parser_.is_complete()) {
-      // 모든 바이트를 소비하되 완성되지 않음
+      // All bytes consumed but not yet complete
       buf = buf.subspan(buf.size());
       return DecodeStatus::Incomplete;
     }
@@ -90,12 +90,12 @@ public:
   }
 
   /**
-   * @brief HTTP 요청 인코딩 — 지원하지 않습니다.
+   * @brief HTTP request encoding — not supported.
    *
-   * HTTP 서버는 요청을 인코딩하지 않습니다.
-   * 응답 인코딩은 `http::Response::serialize()`를 사용하세요.
+   * HTTP servers do not encode requests.
+   * Use `http::Response::serialize()` for response encoding.
    *
-   * @returns 항상 0 (실패).
+   * @returns Always 0 (failure).
    */
   size_t encode(const Request & /*frame*/, iovec * /*vecs*/, size_t /*max_vecs*/,
                 std::pmr::memory_resource * /*arena*/) override {
@@ -103,41 +103,41 @@ public:
   }
 
   /**
-   * @brief HTTP 파서를 재초기화합니다.
+   * @brief Reinitializes the HTTP parser.
    *
-   * keep-alive 연결에서 이전 요청 처리 후 다음 요청 파싱을 위해 호출합니다.
-   * 에러 복구 시에도 호출합니다.
+   * Call after processing a previous request on a keep-alive connection to prepare
+   * for parsing the next request. Also call for error recovery.
    */
   void reset() override {
     parser_ = HttpParser{};
   }
 
   /**
-   * @brief HTTP 헤더 파싱 완료 여부를 반환합니다.
+   * @brief Returns whether HTTP header parsing is complete.
    *
-   * `Expect: 100-continue` 요청 처리 시 헤더 완료 시점에
-   * `100 Continue` 응답을 전송해야 할 때 사용합니다.
+   * Used when handling `Expect: 100-continue` requests to determine
+   * the point at which a `100 Continue` response should be sent.
    *
-   * @returns 헤더 섹션이 완전히 파싱됐으면 true.
+   * @returns true if the header section has been fully parsed.
    */
   [[nodiscard]] bool headers_complete() const noexcept {
     return parser_.headers_complete();
   }
 
   /**
-   * @brief 파싱 오류에 대응하는 HTTP 상태 코드를 반환합니다.
+   * @brief Returns the HTTP status code corresponding to a parse error.
    *
-   * - 400: 잘못된 HTTP 요청 구문
-   * - 413: 페이로드가 허용 크기 초과
+   * - 400: Malformed HTTP request syntax
+   * - 413: Payload exceeds maximum allowed size
    *
-   * @returns HTTP 에러 상태 코드 (400 또는 413).
+   * @returns HTTP error status code (400 or 413).
    */
   [[nodiscard]] int error_status() const noexcept {
     return parser_.error_status();
   }
 
 private:
-  /** @brief HTTP/1.1 요청 파서 상태 머신. */
+  /** @brief HTTP/1.1 request parser state machine. */
   HttpParser parser_;
 };
 

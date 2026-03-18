@@ -2,17 +2,17 @@
 
 /**
  * @file qbuem/net/unix_socket.hpp
- * @brief 비동기 AF_UNIX 도메인 소켓 타입.
+ * @brief Asynchronous AF_UNIX domain socket type.
  * @ingroup qbuem_net
  *
- * `UnixSocket`은 AF_UNIX 스트림 소켓을 RAII로 관리하며,
- * 코루틴 기반의 비동기 bind/connect/accept/read/write를 제공합니다.
+ * `UnixSocket` manages an AF_UNIX stream socket via RAII and provides
+ * coroutine-based asynchronous bind/connect/accept/read/write.
  *
- * ### 설계 원칙
- * - Move-only: 복사 불가, 소멸자에서 fd 자동 close
- * - `bind()`: AF_UNIX SOCK_STREAM 서버 소켓 (bind + listen)
- * - `connect()`: 비동기 클라이언트 연결
- * - `accept()`: 비동기 클라이언트 수락, UnixSocket으로 반환
+ * ### Design Principles
+ * - Move-only: non-copyable, fd is automatically closed in the destructor
+ * - `bind()`: AF_UNIX SOCK_STREAM server socket (bind + listen)
+ * - `connect()`: asynchronous client connection
+ * - `accept()`: asynchronous client accept, returned as UnixSocket
  * @{
  */
 
@@ -33,56 +33,56 @@
 namespace qbuem {
 
 /**
- * @brief 비동기 AF_UNIX 도메인 소켓.
+ * @brief Asynchronous AF_UNIX domain socket.
  *
- * AF_UNIX SOCK_STREAM 소켓을 래핑하여 IPC 통신을 위한
- * 코루틴 기반 비동기 인터페이스를 제공합니다.
- * Move-only 타입이며 소멸 시 소켓이 자동으로 닫힙니다.
+ * Wraps an AF_UNIX SOCK_STREAM socket to provide a coroutine-based
+ * asynchronous interface for IPC communication.
+ * Move-only type; the socket is closed automatically on destruction.
  *
- * ### 사용 예시 (서버)
+ * ### Usage Example (Server)
  * @code
  * auto server = UnixSocket::bind("/tmp/my.sock");
- * if (!server) { // 에러 처리 }
+ * if (!server) { // error handling }
  *
  * auto client = co_await server->accept();
  * @endcode
  *
- * ### 사용 예시 (클라이언트)
+ * ### Usage Example (Client)
  * @code
  * auto conn = co_await UnixSocket::connect("/tmp/my.sock");
- * if (!conn) { // 에러 처리 }
+ * if (!conn) { // error handling }
  * @endcode
  */
 class UnixSocket {
 public:
-  /** @brief 유효하지 않은 fd로 초기화. */
+  /** @brief Initialize with an invalid fd. */
   UnixSocket() noexcept : fd_(-1) {}
 
   /**
-   * @brief 기존 fd로 UnixSocket을 구성합니다.
-   * @param fd 논블로킹 AF_UNIX 소켓 파일 디스크립터.
+   * @brief Construct a UnixSocket from an existing fd.
+   * @param fd Non-blocking AF_UNIX socket file descriptor.
    */
   explicit UnixSocket(int fd) noexcept : fd_(fd) {}
 
-  /** @brief 소멸자: 열린 소켓을 자동으로 닫습니다. */
+  /** @brief Destructor: automatically closes the open socket. */
   ~UnixSocket() {
     if (fd_ >= 0) {
       ::close(fd_);
     }
   }
 
-  /** @brief 복사 생성자 삭제 (Move-only). */
+  /** @brief Copy constructor deleted (Move-only). */
   UnixSocket(const UnixSocket &) = delete;
 
-  /** @brief 복사 대입 삭제 (Move-only). */
+  /** @brief Copy assignment deleted (Move-only). */
   UnixSocket &operator=(const UnixSocket &) = delete;
 
-  /** @brief 이동 생성자. */
+  /** @brief Move constructor. */
   UnixSocket(UnixSocket &&other) noexcept : fd_(other.fd_) {
     other.fd_ = -1;
   }
 
-  /** @brief 이동 대입 연산자. */
+  /** @brief Move assignment operator. */
   UnixSocket &operator=(UnixSocket &&other) noexcept {
     if (this != &other) {
       if (fd_ >= 0) ::close(fd_);
@@ -92,22 +92,23 @@ public:
     return *this;
   }
 
-  // ─── 팩토리 메서드 ──────────────────────────────────────────────────────
+  // ─── Factory Methods ────────────────────────────────────────────────────────
 
   /**
-   * @brief 지정된 Unix 도메인 경로에 바인딩하고 수신 대기합니다.
+   * @brief Bind to the specified Unix domain path and start listening.
    *
-   * 소켓 파일이 이미 존재하면 `unlink(2)`로 먼저 삭제한 뒤 새로 생성합니다.
+   * If a socket file already exists, it is removed with `unlink(2)` before
+   * creating a new one.
    *
-   * @param path Unix 도메인 소켓 파일 경로. 107바이트 이하여야 합니다.
-   * @returns 성공 시 UnixSocket(리슨 소켓), 실패 시 에러 코드.
+   * @param path Unix domain socket file path. Must be 107 bytes or fewer.
+   * @returns UnixSocket (listen socket) on success, or an error code on failure.
    */
   static Result<UnixSocket> bind(const char *path) noexcept {
     int fd = ::socket(AF_UNIX, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
     if (fd < 0)
       return unexpected(std::error_code(errno, std::system_category()));
 
-    // 기존 소켓 파일 제거 (무시 가능)
+    // Remove any existing socket file (ignore errors)
     ::unlink(path);
 
     sockaddr_un sa{};
@@ -132,12 +133,13 @@ public:
   }
 
   /**
-   * @brief 지정된 Unix 도메인 경로로 비동기 연결을 수행합니다.
+   * @brief Asynchronously connect to the specified Unix domain path.
    *
-   * 논블로킹 `connect(2)` 호출 후 EINPROGRESS 시 Reactor 쓰기 이벤트를 대기합니다.
+   * Calls non-blocking `connect(2)` and waits for a Reactor write event
+   * on EINPROGRESS.
    *
-   * @param path 연결할 서버 소켓 파일 경로.
-   * @returns 성공 시 연결된 UnixSocket, 실패 시 에러 코드.
+   * @param path Server socket file path to connect to.
+   * @returns Connected UnixSocket on success, or an error code on failure.
    */
   static Task<Result<UnixSocket>> connect(const char *path) {
     int fd = ::socket(AF_UNIX, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
@@ -161,7 +163,7 @@ public:
       co_return unexpected(ec);
     }
 
-    // EINPROGRESS: Reactor 쓰기 이벤트 대기
+    // EINPROGRESS: wait for a Reactor write event
     struct ConnectAwaiter {
       int fd_;
       int err_ = 0;
@@ -192,14 +194,15 @@ public:
     co_return UnixSocket(fd);
   }
 
-  // ─── 비동기 accept ──────────────────────────────────────────────────────
+  // ─── Asynchronous accept ────────────────────────────────────────────────────
 
   /**
-   * @brief 클라이언트 연결을 비동기로 수락합니다.
+   * @brief Asynchronously accept a client connection.
    *
-   * 리슨 소켓이 읽기 가능해질 때까지 Reactor 이벤트를 대기한 뒤 `accept(2)`를 호출합니다.
+   * Waits for a Reactor read event until the listen socket becomes readable,
+   * then calls `accept(2)`.
    *
-   * @returns 성공 시 클라이언트 UnixSocket, 실패 시 에러 코드.
+   * @returns Client UnixSocket on success, or an error code on failure.
    */
   Task<Result<UnixSocket>> accept() {
     struct AcceptAwaiter {
@@ -249,13 +252,13 @@ public:
     co_return UnixSocket(aw.client_fd_);
   }
 
-  // ─── 비동기 I/O ─────────────────────────────────────────────────────────
+  // ─── Asynchronous I/O ───────────────────────────────────────────────────────
 
   /**
-   * @brief 버퍼에 데이터를 비동기로 읽습니다.
+   * @brief Asynchronously read data into a buffer.
    *
-   * @param buf 수신 데이터를 저장할 버퍼.
-   * @returns 읽은 바이트 수. EOF면 0. 에러 시 error_code.
+   * @param buf Buffer to store received data.
+   * @returns Number of bytes read. 0 on EOF. error_code on failure.
    */
   Task<Result<size_t>> read(std::span<std::byte> buf) {
     ssize_t n = co_await AsyncRead{fd_, buf.data(), buf.size()};
@@ -266,10 +269,10 @@ public:
   }
 
   /**
-   * @brief 버퍼의 데이터를 비동기로 씁니다.
+   * @brief Asynchronously write data from a buffer.
    *
-   * @param buf 전송할 데이터 버퍼.
-   * @returns 전송한 바이트 수. 에러 시 error_code.
+   * @param buf Buffer containing data to send.
+   * @returns Number of bytes sent. error_code on failure.
    */
   Task<Result<size_t>> write(std::span<const std::byte> buf) {
     ssize_t n = co_await AsyncWrite{fd_, buf.data(), buf.size()};
@@ -279,16 +282,16 @@ public:
     co_return static_cast<size_t>(n);
   }
 
-  // ─── 접근자 ─────────────────────────────────────────────────────────────
+  // ─── Accessors ──────────────────────────────────────────────────────────────
 
   /**
-   * @brief 내부 파일 디스크립터를 반환합니다.
-   * @returns 소켓 fd. 유효하지 않으면 -1.
+   * @brief Returns the underlying file descriptor.
+   * @returns Socket fd. -1 if invalid.
    */
   int fd() const noexcept { return fd_; }
 
 private:
-  /** @brief 관리 중인 AF_UNIX 소켓 파일 디스크립터. */
+  /** @brief The managed AF_UNIX socket file descriptor. */
   int fd_;
 };
 

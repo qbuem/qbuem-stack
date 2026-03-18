@@ -2,14 +2,14 @@
 
 /**
  * @file qbuem/pipeline/pipeline_graph.hpp
- * @brief DAG 기반 파이프라인 그래프 — PipelineGraph<T>
+ * @brief DAG-based pipeline graph — PipelineGraph<T>
  * @defgroup qbuem_pipeline_graph PipelineGraph
  * @ingroup qbuem_pipeline
  *
- * PipelineGraph는 유향 비순환 그래프(DAG)로 파이프라인을 구성합니다.
- * fan-out (1→N), fan-in (N→1), A/B 라우팅을 지원합니다.
+ * PipelineGraph constructs a pipeline as a directed acyclic graph (DAG).
+ * Supports fan-out (1→N), fan-in (N→1), and A/B routing.
  *
- * ## 사용 예시
+ * ## Usage example
  * ```cpp
  * PipelineGraph<int> graph;
  * graph.node("source", [](int x, ActionEnv) -> Task<Result<int>> { co_return x*2; })
@@ -47,39 +47,39 @@
 namespace qbuem {
 
 /**
- * @brief 파이프라인 그래프의 노드 메타데이터.
+ * @brief Node metadata for a pipeline graph.
  */
 struct GraphNode {
-    std::string name;          ///< 노드 이름 (고유)
-    size_t      workers   = 1; ///< 워커 수
-    size_t      chan_cap  = 256; ///< 채널 용량
-    bool        enabled   = true; ///< 활성화 여부
+    std::string name;          ///< Node name (must be unique)
+    size_t      workers   = 1; ///< Number of workers
+    size_t      chan_cap  = 256; ///< Channel capacity
+    bool        enabled   = true; ///< Whether the node is enabled
 };
 
 /**
- * @brief 파이프라인 그래프의 엣지.
+ * @brief An edge in a pipeline graph.
  */
 struct GraphEdge {
-    std::string from; ///< 출발 노드 이름
-    std::string to;   ///< 도착 노드 이름
-    /// @brief 선택적 라우팅 술어 (nullptr = 항상 라우팅)
+    std::string from; ///< Source node name
+    std::string to;   ///< Destination node name
+    /// @brief Optional routing predicate (nullptr = always route)
     std::function<bool(const std::any& item)> predicate;
 };
 
 /**
- * @brief DAG 기반 파이프라인 그래프.
+ * @brief DAG-based pipeline graph.
  *
- * fan-out(1→N), fan-in(N→1), A/B 라우팅을 지원합니다.
+ * Supports fan-out (1→N), fan-in (N→1), and A/B routing.
  *
- * @tparam T 그래프를 흐르는 메시지 타입.
+ * @tparam T Message type flowing through the graph.
  */
 template <typename T>
 class PipelineGraph {
 public:
     /**
-     * @brief PipelineGraph를 생성합니다.
-     * @param default_chan_cap 기본 채널 용량.
-     * @param registry 서비스 레지스트리 (nullptr이면 전역 레지스트리 사용).
+     * @brief Construct a PipelineGraph.
+     * @param default_chan_cap Default channel capacity.
+     * @param registry Service registry (nullptr uses the global registry).
      */
     explicit PipelineGraph(size_t default_chan_cap = 256,
                            ServiceRegistry* registry = nullptr)
@@ -94,18 +94,18 @@ public:
     PipelineGraph& operator=(PipelineGraph&&) = default;
 
     // -------------------------------------------------------------------------
-    // 그래프 구성
+    // Graph construction
     // -------------------------------------------------------------------------
 
     /**
-     * @brief 처리 노드를 추가합니다.
+     * @brief Add a processing node.
      *
-     * @tparam FnT ActionFn<FnT, T, T> concept을 만족하는 함수 타입.
-     * @param name     노드 이름 (고유해야 함).
-     * @param fn       처리 함수: T -> Task<Result<T>>.
-     * @param workers  워커 수.
-     * @param chan_cap 채널 용량 (0이면 default_chan_cap 사용).
-     * @returns *this (메서드 체이닝용).
+     * @tparam FnT Function type satisfying ActionFn<FnT, T, T>.
+     * @param name     Node name (must be unique).
+     * @param fn       Processing function: T -> Task<Result<T>>.
+     * @param workers  Number of workers.
+     * @param chan_cap Channel capacity (0 uses default_chan_cap).
+     * @returns *this (for method chaining).
      */
     template <typename FnT>
     PipelineGraph& node(std::string name, FnT fn,
@@ -130,17 +130,17 @@ public:
     }
 
     /**
-     * @brief from → to 엣지를 추가합니다 (fan-out 가능).
+     * @brief Add a from → to edge (fan-out supported).
      *
-     * @param from 출발 노드 이름.
-     * @param to   도착 노드 이름.
+     * @param from Source node name.
+     * @param to   Destination node name.
      * @returns *this.
      */
     PipelineGraph& edge(std::string from, std::string to) {
         auto it = nodes_.find(from);
         if (it != nodes_.end()) {
             it->second->successors.push_back(to);
-            it->second->predicates.push_back(nullptr); // 항상 라우팅
+            it->second->predicates.push_back(nullptr); // always route
         }
         auto to_it = nodes_.find(to);
         if (to_it != nodes_.end()) {
@@ -150,11 +150,11 @@ public:
     }
 
     /**
-     * @brief 조건부 엣지를 추가합니다 (A/B 라우팅).
+     * @brief Add a conditional edge (A/B routing).
      *
-     * @param from      출발 노드 이름.
-     * @param to        도착 노드 이름.
-     * @param predicate 라우팅 조건 함수.
+     * @param from      Source node name.
+     * @param to        Destination node name.
+     * @param predicate Routing predicate function.
      * @returns *this.
      */
     PipelineGraph& edge_if(std::string from, std::string to,
@@ -178,9 +178,9 @@ public:
     }
 
     /**
-     * @brief 노드를 진입점으로 표시합니다.
+     * @brief Mark a node as an entry point.
      *
-     * @param node_name 소스 노드 이름.
+     * @param node_name Source node name.
      * @returns *this.
      */
     PipelineGraph& source(std::string node_name) {
@@ -193,9 +193,9 @@ public:
     }
 
     /**
-     * @brief 노드를 출구점으로 표시합니다.
+     * @brief Mark a node as an exit point.
      *
-     * @param node_name 싱크 노드 이름.
+     * @param node_name Sink node name.
      * @returns *this.
      */
     PipelineGraph& sink(std::string node_name) {
@@ -208,14 +208,14 @@ public:
     }
 
     // -------------------------------------------------------------------------
-    // 라이프사이클
+    // Lifecycle
     // -------------------------------------------------------------------------
 
     /**
-     * @brief 위상 정렬 후 모든 노드를 시작합니다 (Kahn's 알고리즘).
+     * @brief Topologically sort and start all nodes (Kahn's algorithm).
      *
-     * @param dispatcher 코루틴을 실행할 Dispatcher.
-     * @returns 사이클이 없으면 true, 사이클 감지 시 false.
+     * @param dispatcher Dispatcher to run coroutines on.
+     * @returns true if no cycle detected; false if a cycle is found.
      */
     bool start(Dispatcher& dispatcher) {
         auto order = topo_sort();
@@ -253,11 +253,11 @@ public:
     }
 
     /**
-     * @brief 아이템을 모든 소스 노드에 전송합니다 (backpressure).
+     * @brief Send an item to all source nodes (with backpressure).
      *
-     * @param item 처리할 아이템.
-     * @param ctx  아이템 컨텍스트.
-     * @returns Result<void>::ok() 또는 에러.
+     * @param item Item to process.
+     * @param ctx  Item context.
+     * @returns Result<void>::ok() or an error.
      */
     Task<Result<void>> push(T item, Context ctx = {}) {
         if (sources_.empty())
@@ -275,9 +275,9 @@ public:
     }
 
     /**
-     * @brief 논블로킹 push.
+     * @brief Non-blocking push.
      *
-     * @returns 모든 소스에 성공적으로 전송 시 true.
+     * @returns true if successfully sent to all sources.
      */
     bool try_push(T item, Context ctx = {}) {
         if (sources_.empty())
@@ -294,7 +294,7 @@ public:
     }
 
     /**
-     * @brief 모든 소스를 닫고 모든 노드가 처리를 완료할 때까지 기다립니다.
+     * @brief Close all sources and wait for all nodes to finish processing.
      */
     Task<void> drain() {
         // Close all source in_channels
@@ -314,7 +314,7 @@ public:
     }
 
     /**
-     * @brief 즉시 정지합니다.
+     * @brief Stop immediately.
      */
     void stop() {
         for (auto& [name, n] : nodes_) {
@@ -326,14 +326,14 @@ public:
     }
 
     /**
-     * @brief 모든 싱크 노드의 병합 출력 채널을 반환합니다.
+     * @brief Return the merged output channel from all sink nodes.
      */
     [[nodiscard]] std::shared_ptr<AsyncChannel<ContextualItem<T>>> output() const {
         return output_channel_;
     }
 
     // -------------------------------------------------------------------------
-    // 토폴로지 내보내기
+    // Topology export
     // -------------------------------------------------------------------------
 
     /**
@@ -375,17 +375,17 @@ public:
     }
 
     // -------------------------------------------------------------------------
-    // 런타임 검증
+    // Runtime validation
     // -------------------------------------------------------------------------
 
     /**
-     * @brief 그래프 유효성을 검사합니다.
+     * @brief Validate the graph.
      *
-     * - 모든 엣지의 노드가 존재하는지 확인
-     * - 연결되지 않은 노드 확인
-     * - 소스/싱크 노드가 존재하는지 확인
+     * - Verify all edge endpoints exist
+     * - Check for disconnected nodes
+     * - Confirm source/sink nodes exist
      *
-     * @returns 유효하면 true.
+     * @returns true if valid.
      */
     [[nodiscard]] bool validate() const {
         if (nodes_.empty())
@@ -415,7 +415,7 @@ public:
 
 private:
     // -------------------------------------------------------------------------
-    // 내부 노드 구조체
+    // Internal node structure
     // -------------------------------------------------------------------------
     struct NodeImpl {
         GraphNode   meta;
@@ -432,16 +432,16 @@ private:
     };
 
     // -------------------------------------------------------------------------
-    // Kahn's 위상 정렬
+    // Kahn's topological sort
     // -------------------------------------------------------------------------
 
     /**
-     * @brief Kahn's 알고리즘으로 위상 정렬을 수행합니다.
+     * @brief Perform topological sort using Kahn's algorithm.
      *
-     * @returns 정렬된 노드 이름 목록. 사이클 감지 시 std::nullopt.
+     * @returns Sorted list of node names; std::nullopt if a cycle is detected.
      */
     [[nodiscard]] std::optional<std::vector<std::string>> topo_sort() const {
-        // 진입 차수 계산
+        // Compute in-degree for each node
         std::unordered_map<std::string, int> in_degree;
         for (const auto& [name, n] : nodes_)
             in_degree[name] = 0;
@@ -482,13 +482,13 @@ private:
     }
 
     // -------------------------------------------------------------------------
-    // 워커 코루틴
+    // Worker coroutines
     // -------------------------------------------------------------------------
 
     /**
-     * @brief 단일 노드 워커 코루틴.
+     * @brief Single node worker coroutine.
      *
-     * 입력 채널에서 아이템을 읽어 fn을 적용하고 출력 채널에 전달합니다.
+     * Reads items from the input channel, applies fn, and forwards to the output channel.
      */
     Task<void> node_worker(std::shared_ptr<NodeImpl> n, size_t worker_idx) {
         auto stop_token = n->stop_src ? n->stop_src->get_token() : std::stop_token{};
@@ -519,10 +519,10 @@ private:
     }
 
     /**
-     * @brief fan-out 워커 코루틴.
+     * @brief Fan-out worker coroutine.
      *
-     * 노드의 out_channel에서 읽어 모든 후속 노드의 in_channel에 배포합니다.
-     * 조건부 술어가 있으면 평가 후 라우팅합니다.
+     * Reads from the node's out_channel and distributes to all successor in_channels.
+     * Evaluates conditional predicates before routing when present.
      */
     Task<void> fanout_worker(std::shared_ptr<NodeImpl> n) {
         for (;;) {
@@ -554,7 +554,7 @@ private:
     }
 
     /**
-     * @brief 싱크 노드의 출력 채널을 통합 출력 채널로 병합합니다.
+     * @brief Merge a sink node's output channel into the unified output channel.
      */
     Task<void> merge_to_output(
         std::shared_ptr<AsyncChannel<ContextualItem<T>>> src,
@@ -568,7 +568,7 @@ private:
     }
 
     // -------------------------------------------------------------------------
-    // 코루틴 yield 헬퍼
+    // Coroutine yield helper
     // -------------------------------------------------------------------------
     struct YieldAwaiter {
         bool await_ready() noexcept { return false; }
@@ -587,7 +587,7 @@ private:
     }
 
     // -------------------------------------------------------------------------
-    // 데이터 멤버
+    // Data members
     // -------------------------------------------------------------------------
     std::unordered_map<std::string, std::shared_ptr<NodeImpl>> nodes_;
     std::vector<std::string>                                   sources_;
