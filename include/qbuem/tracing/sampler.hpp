@@ -2,21 +2,21 @@
 
 /**
  * @file qbuem/tracing/sampler.hpp
- * @brief Pluggable Sampler 인터페이스 및 기본 구현체
+ * @brief Pluggable Sampler interface and built-in implementations.
  * @defgroup qbuem_sampler Sampler
  * @ingroup qbuem_tracing
  *
- * ## 설계
- * `Sampler` 인터페이스는 각 스팬 시작 시점에 샘플링 결정을 내립니다.
+ * ## Design
+ * The `Sampler` interface makes a sampling decision at the start of each span.
  *
- * ## 제공 구현체
- * - `AlwaysSampler`        — 항상 샘플링 (개발/디버그)
- * - `NeverSampler`         — 항상 드롭 (zero-overhead 트레이싱 비활성화)
- * - `ProbabilitySampler`   — 0.0~1.0 확률 기반 샘플링
- * - `RateLimitingSampler`  — token bucket 기반 초당 최대 샘플 수 제한
- * - `ParentBasedSampler`   — 부모 스팬의 sampled 플래그 따름
+ * ## Provided implementations
+ * - `AlwaysSampler`        — always samples (development/debug)
+ * - `NeverSampler`         — always drops (disables tracing with zero overhead)
+ * - `ProbabilitySampler`   — probability-based sampling in the range [0.0, 1.0]
+ * - `RateLimitingSampler`  — token-bucket-based maximum samples per second
+ * - `ParentBasedSampler`   — follows the sampled flag of the parent span
  *
- * ## 사용 예시
+ * ## Usage example
  * ```cpp
  * auto sampler = std::make_shared<qbuem::tracing::ProbabilitySampler>(0.1);
  * qbuem::tracing::PipelineTracer::global().set_sampler(sampler);
@@ -40,11 +40,11 @@ namespace qbuem::tracing {
 // ---------------------------------------------------------------------------
 
 /**
- * @brief 샘플링 결정 열거형.
+ * @brief Sampling decision enumeration.
  */
 enum class SamplingDecision {
-  DROP,             ///< 스팬을 샘플링하지 않음
-  RECORD_AND_SAMPLE ///< 스팬을 기록하고 샘플링
+  DROP,             ///< Do not sample this span.
+  RECORD_AND_SAMPLE ///< Record and sample this span.
 };
 
 // ---------------------------------------------------------------------------

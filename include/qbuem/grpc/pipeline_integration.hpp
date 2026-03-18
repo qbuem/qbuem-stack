@@ -2,35 +2,35 @@
 
 /**
  * @file qbuem/grpc/pipeline_integration.hpp
- * @brief gRPC ↔ Pipeline 통합 어댑터
+ * @brief gRPC ↔ Pipeline integration adapter.
  * @defgroup qbuem_grpc_pipeline gRPC Pipeline Integration
  * @ingroup qbuem_grpc
  *
- * 이 헤더는 gRPC 스트리밍 컨텍스트와 qbuem-stack 파이프라인 채널을
- * 연결하는 어댑터 타입 및 팩토리 함수를 제공합니다.
+ * This header provides adapter types and factory functions that connect
+ * gRPC streaming contexts to qbuem-stack pipeline channels.
  *
- * 외부 의존성 없이 표준 라이브러리와 qbuem 내부 타입만 사용합니다.
+ * Uses only the standard library and qbuem internal types — no external dependencies.
  *
- * ### 제공 컴포넌트
- * - `Stream<T>`         : 서버 → 클라이언트 단방향 스트리밍 타입 (코루틴 기반)
- * - `BidiEnvelope<Req,Res>` : 양방향 스트리밍 봉투 구조체
- * - `grpc_server_streaming_to_pipeline()` : Server Streaming → Pipeline 어댑터
- * - `grpc_client_streaming_to_channel()`  : Client Streaming → AsyncChannel 어댑터
- * - `make_bidi_handler()`                 : Bidi 핸들러 래퍼 팩토리
+ * ### Provided Components
+ * - `Stream<T>`         : Server → client unidirectional streaming type (coroutine-based)
+ * - `BidiEnvelope<Req,Res>` : Bidirectional streaming envelope struct
+ * - `grpc_server_streaming_to_pipeline()` : Server Streaming → Pipeline adapter
+ * - `grpc_client_streaming_to_channel()`  : Client Streaming → AsyncChannel adapter
+ * - `make_bidi_handler()`                 : Bidi handler wrapper factory
  *
- * ### 설계 원칙
- * - 모든 전송 로직은 주입된 함수 객체(`push_fn_`, `close_fn_`)로 위임합니다.
- * - `Stream<T>`는 코루틴 Task를 반환하므로 `co_await`로 백프레셔를 처리합니다.
- * - 파이프라인과의 연결은 `AsyncChannel<T>`를 통한 채널 기반 합성을 사용합니다.
+ * ### Design Principles
+ * - All transport logic is delegated to injected function objects (`push_fn_`, `close_fn_`).
+ * - `Stream<T>` returns a coroutine Task, so backpressure is handled via `co_await`.
+ * - Pipeline integration uses channel-based composition through `AsyncChannel<T>`.
  *
- * ### 사용 예시
+ * ### Usage Example
  * @code
- * // ── Server Streaming: 파이프라인 결과를 클라이언트에 스트리밍 ──
+ * // ── Server Streaming: stream pipeline results to the client ──
  * auto handler = grpc_server_streaming_to_pipeline<MyReq, MyRes>(
- *     my_pipeline_handler_fn,  // Task<Result<MyRes>>(MyReq) 시그니처
- *     my_pipeline              // AsyncChannel<MyRes> 공급 파이프라인
+ *     my_pipeline_handler_fn,  // signature: Task<Result<MyRes>>(MyReq)
+ *     my_pipeline              // AsyncChannel<MyRes> supplying the pipeline
  * );
- * // handler 타입: std::function<Task<void>(MyReq, Stream<MyRes>)>
+ * // handler type: std::function<Task<void>(MyReq, Stream<MyRes>)>
  *
  * // ── Bidi Streaming ──
  * auto bidi = make_bidi_handler<MyReq, MyRes>(
@@ -49,7 +49,7 @@
 
 #include <qbuem/common.hpp>
 #include <qbuem/core/task.hpp>
-// <qbuem/pipeline/channel.hpp> — 프로젝트 내 실제 파일명은 async_channel.hpp
+// <qbuem/pipeline/channel.hpp> — actual filename in project is async_channel.hpp
 #include <qbuem/pipeline/async_channel.hpp>
 
 #include <functional>
@@ -59,53 +59,53 @@
 
 namespace qbuem::grpc {
 
-// ─── AsyncChannel 전방 참조 (pipeline/channel.hpp 에서 가져옴) ───────────────
-// pipeline/channel.hpp 가 AsyncChannel<T>를 qbuem 네임스페이스에 정의합니다.
-// 이 파일에서는 qbuem::AsyncChannel<T>를 사용합니다.
+// ─── AsyncChannel forward declaration (imported from pipeline/channel.hpp) ──
+// pipeline/channel.hpp defines AsyncChannel<T> in the qbuem namespace.
+// This file uses qbuem::AsyncChannel<T>.
 
 // ─── Stream<T> ───────────────────────────────────────────────────────────────
 
 /**
- * @brief 코루틴 기반 서버 → 클라이언트 단방향 스트리밍 타입.
+ * @brief Coroutine-based server → client unidirectional streaming type.
  *
- * gRPC Server Streaming RPC 또는 Bidirectional Streaming RPC에서
- * 서버가 클라이언트로 데이터를 전송할 때 사용합니다.
+ * Used when the server sends data to the client in a gRPC Server Streaming RPC
+ * or Bidirectional Streaming RPC.
  *
- * 내부적으로 두 개의 함수 객체(`push_fn_`, `close_fn_`)에 전송 로직을 위임하므로
- * 실제 전송 레이어(HTTP/2 DATA 프레임, 테스트 목, 인메모리 버퍼 등)와 독립적으로
- * 동작합니다.
+ * Internally delegates transport logic to two function objects (`push_fn_`, `close_fn_`),
+ * so it operates independently of the actual transport layer
+ * (HTTP/2 DATA frames, test mocks, in-memory buffers, etc.).
  *
- * ### 상태 전이
- * - 생성 시: `open_ == true`.
- * - `close()` 호출 후: `open_ == false`. 이후 `send()`는 에러 반환.
- * - `push_fn_` 반환값이 `false`이면 전송 실패 → `open_` 을 `false`로 전환.
+ * ### State Transitions
+ * - On construction: `open_ == true`.
+ * - After `close()` call: `open_ == false`. Subsequent `send()` calls return an error.
+ * - If `push_fn_` returns `false`, the send failed → `open_` transitions to `false`.
  *
- * ### 코루틴 사용 패턴
+ * ### Coroutine Usage Pattern
  * @code
  * Task<void> handle_stream(MyRequest req, Stream<MyResponse> stream) {
  *     for (int i = 0; i < 10 && stream.is_open(); ++i) {
  *         MyResponse res;
  *         res.set_value(i);
  *         auto r = co_await stream.send(std::move(res));
- *         if (!r) break;  // 클라이언트 연결 끊김
+ *         if (!r) break;  // client disconnected
  *     }
  *     co_await stream.close(0, "OK");
  * }
  * @endcode
  *
- * @tparam T 스트림으로 전송할 메시지 타입.
+ * @tparam T Message type to send over the stream.
  */
 template <typename T>
 class Stream {
 public:
     /**
-     * @brief `push_fn`과 `close_fn`으로 Stream을 구성합니다.
+     * @brief Constructs a Stream from `push_fn` and `close_fn`.
      *
-     * @param push_fn  아이템 하나를 클라이언트로 전송하는 함수.
-     *                 반환값이 `true`이면 전송 성공, `false`이면 연결 끊김.
-     * @param close_fn gRPC 트레일러를 전송하고 스트림을 종료하는 함수.
-     *                 첫 번째 인자: gRPC 상태 코드 (0 = OK).
-     *                 두 번째 인자: 사람이 읽을 수 있는 메시지 문자열.
+     * @param push_fn  Function that sends one item to the client.
+     *                 Returns `true` on success, `false` if the connection was lost.
+     * @param close_fn Function that sends gRPC trailers and terminates the stream.
+     *                 First argument: gRPC status code (0 = OK).
+     *                 Second argument: human-readable message string.
      */
     explicit Stream(std::function<bool(T)>                        push_fn,
                     std::function<void(int, std::string)>         close_fn)
@@ -114,11 +114,11 @@ public:
         , open_(true)
     {}
 
-    // 복사 비허용 (push_fn_/close_fn_ 의 단일 소유 의미론 유지)
+    // Non-copyable (preserves single-ownership semantics of push_fn_/close_fn_)
     Stream(const Stream&)            = delete;
     Stream& operator=(const Stream&) = delete;
 
-    // 이동 허용
+    // Movable
     Stream(Stream&&) noexcept            = default;
     Stream& operator=(Stream&&) noexcept = default;
 
@@ -127,21 +127,21 @@ public:
     // ── Public API ─────────────────────────────────────────────────────────
 
     /**
-     * @brief 아이템 하나를 클라이언트로 전송합니다.
+     * @brief Sends one item to the client.
      *
-     * `push_fn_`을 호출하여 실제 전송을 수행합니다.
-     * 스트림이 닫혀 있거나 전송 실패 시 에러를 반환합니다.
+     * Calls `push_fn_` to perform the actual transmission.
+     * Returns an error if the stream is closed or the send fails.
      *
-     * @param value 전송할 메시지 값 (이동됨).
-     * @returns 전송 성공 시 `Result<void>::ok()`.
-     *          스트림이 닫혀 있으면 `errc::broken_pipe`.
-     *          `push_fn_` 반환 `false` 시 `errc::connection_reset`.
+     * @param value Message value to send (moved).
+     * @returns `Result<void>::ok()` on success.
+     *          `errc::broken_pipe` if the stream is already closed.
+     *          `errc::connection_reset` if `push_fn_` returns `false`.
      *
-     * ### 예시
+     * ### Example
      * @code
      * auto r = co_await stream.send(MyResponse{});
      * if (!r) {
-     *     // 클라이언트 연결이 끊겼거나 스트림이 닫힘
+     *     // client disconnected or stream is closed
      * }
      * @endcode
      */
@@ -160,21 +160,20 @@ public:
     }
 
     /**
-     * @brief 스트림을 닫고 gRPC 트레일러를 전송합니다.
+     * @brief Closes the stream and sends gRPC trailers.
      *
-     * `close_fn_`을 통해 `grpc-status` 및 선택적 `grpc-message` 트레일러를
-     * 전송합니다. 이 함수 호출 이후 `is_open() == false`.
+     * Sends `grpc-status` and an optional `grpc-message` trailer via `close_fn_`.
+     * After this call, `is_open() == false`.
      *
-     * 이미 닫힌 스트림에서 호출하는 것은 안전하지만 `close_fn_`은 재호출되지
-     * 않습니다.
+     * Calling on an already-closed stream is safe but `close_fn_` will not be invoked again.
      *
-     * @param grpc_status gRPC 상태 코드 (0 = OK, 기타 = 에러 코드).
-     * @param message     선택적 사람이 읽을 수 있는 메시지 (기본값: 빈 문자열).
+     * @param grpc_status gRPC status code (0 = OK, other = error code).
+     * @param message     Optional human-readable message (default: empty string).
      *
-     * ### 예시
+     * ### Example
      * @code
-     * co_await stream.close(0, "");        // 정상 종료
-     * co_await stream.close(13, "내부 오류"); // INTERNAL 에러
+     * co_await stream.close(0, "");            // normal close
+     * co_await stream.close(13, "internal error"); // INTERNAL error
      * @endcode
      */
     Task<void> close(int grpc_status = 0, std::string_view message = "") {
@@ -186,95 +185,95 @@ public:
     }
 
     /**
-     * @brief 스트림이 아직 열려 있는지 확인합니다.
+     * @brief Checks whether the stream is still open.
      *
-     * `send()` 실패 또는 `close()` 호출 이후 `false`를 반환합니다.
+     * Returns `false` after a `send()` failure or a `close()` call.
      *
-     * @returns 스트림이 열려 있으면 `true`, 닫혀 있으면 `false`.
+     * @returns `true` if the stream is open, `false` if it is closed.
      */
     [[nodiscard]] bool is_open() const noexcept { return open_; }
 
 private:
-    /** @brief 아이템을 실제 전송 레이어로 밀어 넣는 함수. */
+    /** @brief Function that pushes an item to the actual transport layer. */
     std::function<bool(T)>                push_fn_;
-    /** @brief 스트림을 종료하고 gRPC 트레일러를 전송하는 함수. */
+    /** @brief Function that terminates the stream and sends gRPC trailers. */
     std::function<void(int, std::string)> close_fn_;
-    /** @brief 스트림 열림 상태 플래그. */
+    /** @brief Flag indicating whether the stream is open. */
     bool open_{true};
 };
 
 // ─── BidiEnvelope<Req, Res> ──────────────────────────────────────────────────
 
 /**
- * @brief 양방향 스트리밍 봉투 — 클라이언트 수신 채널과 서버 송신 스트림을 묶습니다.
+ * @brief Bidirectional streaming envelope — bundles the client receive channel and server send stream.
  *
- * gRPC Bidirectional Streaming RPC 핸들러에 전달되는 단일 진입 구조체입니다.
+ * A single entry struct passed to gRPC Bidirectional Streaming RPC handlers.
  *
- * - `incoming` : 클라이언트 → 서버 방향. `co_await incoming->recv()`로 소비합니다.
- *   EOS(채널 닫힘) 시 `std::nullopt` 반환.
- * - `outgoing`  : 서버 → 클라이언트 방향. `co_await outgoing.send(res)`로 전송합니다.
+ * - `incoming` : Client → server direction. Consume via `co_await incoming->recv()`.
+ *   Returns `std::nullopt` on EOS (channel closed).
+ * - `outgoing`  : Server → client direction. Send via `co_await outgoing.send(res)`.
  *
- * ### 사용 예시
+ * ### Usage Example
  * @code
  * auto handler = make_bidi_handler<ChatMsg, ChatMsg>(
  *     [](BidiEnvelope<ChatMsg, ChatMsg> env) -> Task<void> {
  *         while (true) {
  *             auto item = co_await env.incoming->recv();
- *             if (!item) break;              // 클라이언트 스트림 종료
+ *             if (!item) break;              // client stream ended
  *             ChatMsg echo = *item;
  *             echo.set_prefix("[echo] ");
  *             auto r = co_await env.outgoing.send(std::move(echo));
- *             if (!r) break;                 // 전송 실패 (연결 끊김)
+ *             if (!r) break;                 // send failed (connection dropped)
  *         }
  *         co_await env.outgoing.close(0, "");
  *     }
  * );
  * @endcode
  *
- * @tparam Req 클라이언트 → 서버 요청 메시지 타입.
- * @tparam Res 서버 → 클라이언트 응답 메시지 타입.
+ * @tparam Req Client → server request message type.
+ * @tparam Res Server → client response message type.
  */
 template <typename Req, typename Res>
 struct BidiEnvelope {
     /**
-     * @brief 클라이언트 → 서버 방향 비동기 수신 채널.
+     * @brief Client → server direction asynchronous receive channel.
      *
-     * `AsyncChannel<Req>::recv()`를 통해 클라이언트 메시지를 순서대로 수신합니다.
-     * 채널이 닫히면 EOS(`std::nullopt`)를 반환합니다.
+     * Receives client messages in order via `AsyncChannel<Req>::recv()`.
+     * Returns EOS (`std::nullopt`) when the channel is closed.
      */
     std::shared_ptr<::qbuem::AsyncChannel<Req>> incoming;
 
     /**
-     * @brief 서버 → 클라이언트 방향 스트리밍 채널.
+     * @brief Server → client direction streaming channel.
      *
-     * `Stream<Res>::send()`를 통해 클라이언트로 메시지를 전송합니다.
-     * 전송 완료 후 `close()`로 gRPC 트레일러를 전송합니다.
+     * Sends messages to the client via `Stream<Res>::send()`.
+     * After sending is complete, transmit gRPC trailers via `close()`.
      */
     Stream<Res> outgoing;
 };
 
-// ─── 어댑터 팩토리 함수들 ──────────────────────────────────────────────────────
+// ─── Adapter factory functions ───────────────────────────────────────────────
 
 /**
- * @brief Server Streaming RPC 핸들러를 파이프라인에 연결하는 어댑터를 생성합니다.
+ * @brief Creates an adapter that connects a Server Streaming RPC handler to a pipeline.
  *
- * `handler_fn`을 호출하여 요청을 파이프라인으로 전달하고,
- * `pipeline` 채널에서 결과를 읽어 `Stream<Res>`를 통해 클라이언트로 스트리밍합니다.
+ * Calls `handler_fn` to forward the request to the pipeline, then reads results
+ * from the `pipeline` channel and streams them to the client via `Stream<Res>`.
  *
- * 반환된 함수의 시그니처:
+ * Signature of the returned function:
  * ```cpp
  * Task<void>(Req request, Stream<Res> stream)
  * ```
  *
- * ### 동작 흐름
- * 1. `handler_fn(request, pipeline)` 호출 — 요청을 파이프라인 채널로 전달.
- * 2. `pipeline.recv()` 루프 — 파이프라인이 생성하는 결과를 하나씩 수신.
- * 3. 각 결과를 `stream.send(result)` 로 클라이언트에 전달.
- * 4. 파이프라인 EOS 또는 스트림 닫힘 시 `stream.close(0, "OK")` 호출.
+ * ### Operation Flow
+ * 1. Call `handler_fn(request, pipeline)` — forwards the request to the pipeline channel.
+ * 2. `pipeline.recv()` loop — receives results produced by the pipeline one at a time.
+ * 3. Deliver each result to the client via `stream.send(result)`.
+ * 4. Call `stream.close(0, "OK")` when the pipeline reaches EOS or the stream is closed.
  *
- * ### 사용 예시
+ * ### Usage Example
  * @code
- * // 파이프라인: 요청 하나 → 여러 응답
+ * // Pipeline: one request → multiple responses
  * auto pipeline = std::make_shared<AsyncChannel<MyResponse>>(256);
  *
  * auto grpc_handler = grpc_server_streaming_to_pipeline<MyRequest, MyResponse>(
@@ -291,12 +290,12 @@ struct BidiEnvelope {
  * co_await grpc_handler(request, std::move(stream));
  * @endcode
  *
- * @tparam Req 요청 메시지 타입.
- * @tparam Res 응답 메시지 타입.
- * @param handler_fn 요청을 파이프라인 채널로 전달하는 코루틴 함수.
- *                   시그니처: `Task<void>(Req, std::shared_ptr<AsyncChannel<Res>>)`.
- * @param pipeline   파이프라인 결과를 수신하는 공유 비동기 채널.
- * @returns `std::function<Task<void>(Req, Stream<Res>)>` 형태의 gRPC 핸들러.
+ * @tparam Req Request message type.
+ * @tparam Res Response message type.
+ * @param handler_fn Coroutine function that forwards the request to the pipeline channel.
+ *                   Signature: `Task<void>(Req, std::shared_ptr<AsyncChannel<Res>>)`.
+ * @param pipeline   Shared async channel that receives pipeline results.
+ * @returns gRPC handler in the form `std::function<Task<void>(Req, Stream<Res>)>`.
  */
 template <typename Req, typename Res>
 std::function<Task<void>(Req, Stream<Res>)>

@@ -6,21 +6,21 @@
  *        and hardware entropy (RDRAND / RDSEED).
  *
  * All functions are header-only and platform-aware:
- *   - x86-64 (RDRAND/RDSEED): CPU 하드웨어 TRNG/DRNG 직접 접근
+ *   - x86-64 (RDRAND/RDSEED): direct CPU hardware TRNG/DRNG access
  *   - Linux:  getrandom(2) syscall (no file descriptor needed)
  *   - macOS:  arc4random_buf() (kernel CSPRNG)
  *   - Other:  /dev/urandom fallback
  *
- * ## Hardware Entropy 전략 (v1.5.0)
- * `rdrand64()` / `rdseed64()` inline 함수로 CPU 엔트로피를 직접 수집합니다.
- * `hw_entropy_fill()`은 RDRAND를 우선 사용하고, 미지원 CPU에서는
- * `random_fill()` (getrandom/arc4random)으로 투명하게 폴백합니다.
+ * ## Hardware Entropy Strategy (v1.5.0)
+ * `rdrand64()` / `rdseed64()` inline functions collect CPU entropy directly.
+ * `hw_entropy_fill()` prefers RDRAND and transparently falls back to
+ * `random_fill()` (getrandom/arc4random) on unsupported CPUs.
  *
  * ### RDRAND vs RDSEED
- * | 명령어 | 소스 | 특성 |
- * |--------|------|------|
- * | RDRAND | CSPRNG (HW PRNG 기반) | 고속, 엔트로피 고갈 없음 |
- * | RDSEED | 진성 난수 (TRNG, 열 잡음 기반) | 저속, 시딩 목적 |
+ * | Instruction | Source | Characteristics |
+ * |-------------|--------|-----------------|
+ * | RDRAND | CSPRNG (HW PRNG-based) | Fast, no entropy depletion |
+ * | RDSEED | True random (TRNG, thermal noise) | Slow, intended for seeding |
  */
 
 #include <array>
@@ -36,7 +36,7 @@
 #  include <cstdlib>       // arc4random_buf
 #endif
 
-// RDRAND / RDSEED (x86-64, -mrdrnd 플래그 또는 __RDRND__ 정의 필요)
+// RDRAND / RDSEED (x86-64, requires -mrdrnd flag or __RDRND__ defined)
 #if defined(__x86_64__) || defined(__i386__)
 #  if __has_include(<immintrin.h>)
 #    include <immintrin.h>
@@ -169,17 +169,17 @@ inline std::string base64url_encode(const uint8_t *data, size_t len) {
 // ─── Hardware Entropy (RDRAND / RDSEED) ──────────────────────────────────────
 
 /**
- * @brief CPU RDRAND 명령어로 64-bit 난수를 직접 수집합니다.
+ * @brief Collect a 64-bit random number directly via the CPU RDRAND instruction.
  *
- * RDRAND는 Intel/AMD CPU의 하드웨어 CSPRNG(AES-CTR 기반)에서
- * 직접 출력을 가져옵니다. 엔트로피 고갈이 없으며 FIPS 140-2 검증됩니다.
+ * RDRAND reads directly from the hardware CSPRNG (AES-CTR based) on
+ * Intel/AMD CPUs. It never depletes entropy and is FIPS 140-2 validated.
  *
- * ## 재시도 정책
- * 하드웨어 CSPRNG는 드물게 실패할 수 있으므로(캐리 플래그 0)
- * 최대 `kMaxRetries`번 재시도합니다.
+ * ## Retry policy
+ * The hardware CSPRNG can occasionally fail (carry flag = 0), so the
+ * function retries up to `kMaxRetries` times.
  *
- * @param[out] out  수집된 64-bit 난수.
- * @returns 성공이면 true, RDRAND 미지원 또는 재시도 초과이면 false.
+ * @param[out] out  The collected 64-bit random value.
+ * @returns true on success, false if RDRAND is unsupported or retries exhausted.
  */
 [[nodiscard]] inline bool rdrand64(uint64_t &out) noexcept {
 #if defined(QBUEM_HAS_RDRAND) && defined(__RDRND__)
@@ -193,7 +193,7 @@ inline std::string base64url_encode(const uint8_t *data, size_t len) {
   }
   return false;
 #elif defined(QBUEM_HAS_RDRAND)
-  // __RDRND__ 없는 빌드: inline asm 직접 호출
+  // Build without __RDRND__: fall back to direct inline asm
   uint64_t val = 0;
   uint8_t  cf  = 0;
   __asm__ volatile (
@@ -207,19 +207,19 @@ inline std::string base64url_encode(const uint8_t *data, size_t len) {
   return false;
 #else
   (void)out;
-  return false; // 비x86 환경 폴백
+  return false; // non-x86 fallback
 #endif
 }
 
 /**
- * @brief CPU RDSEED 명령어로 64-bit 진성 난수(TRNG)를 수집합니다.
+ * @brief Collect a 64-bit true random number (TRNG) via the CPU RDSEED instruction.
  *
- * RDSEED는 열 잡음(thermal noise) 기반 TRNG에서 직접 출력을 가져옵니다.
- * RDRAND보다 느리지만 물리적 엔트로피를 포함합니다.
- * PRNG 시드 초기화나 키 생성에 적합합니다.
+ * RDSEED reads directly from a thermal-noise based TRNG.
+ * It is slower than RDRAND but contains physical entropy.
+ * Suitable for PRNG seed initialization and key generation.
  *
- * @param[out] out  수집된 64-bit 진성 난수.
- * @returns 성공이면 true, RDSEED 미지원 또는 재시도 초과이면 false.
+ * @param[out] out  The collected 64-bit true random value.
+ * @returns true on success, false if RDSEED is unsupported or retries exhausted.
  */
 [[nodiscard]] inline bool rdseed64(uint64_t &out) noexcept {
 #if defined(QBUEM_HAS_RDRAND) && defined(__RDSEED__)

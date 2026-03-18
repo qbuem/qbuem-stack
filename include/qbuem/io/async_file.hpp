@@ -70,18 +70,18 @@ public:
       ::close(fd_);
   }
 
-  /** @brief 복사 생성자 삭제 (Move-only). */
+  /** @brief Copy constructor deleted (Move-only). */
   AsyncFile(const AsyncFile &) = delete;
 
-  /** @brief 복사 대입 삭제 (Move-only). */
+  /** @brief Copy assignment deleted (Move-only). */
   AsyncFile &operator=(const AsyncFile &) = delete;
 
-  /** @brief 이동 생성자. */
+  /** @brief Move constructor. */
   AsyncFile(AsyncFile &&other) noexcept : fd_(other.fd_) {
     other.fd_ = -1;
   }
 
-  /** @brief 이동 대입 연산자. */
+  /** @brief Move assignment operator. */
   AsyncFile &operator=(AsyncFile &&other) noexcept {
     if (this != &other) {
       if (fd_ >= 0) ::close(fd_);
@@ -91,24 +91,24 @@ public:
     return *this;
   }
 
-  // ─── 팩토리 메서드 ──────────────────────────────────────────────────────
+  // ─── Factory methods ────────────────────────────────────────────────────
 
   /**
-   * @brief 파일을 비동기로 엽니다.
+   * @brief Opens a file asynchronously.
    *
-   * `open(2)` syscall로 파일을 열고 성공 시 AsyncFile을 반환합니다.
-   * `O_CLOEXEC`는 항상 적용됩니다.
+   * Opens the file using the `open(2)` syscall and returns an AsyncFile on success.
+   * `O_CLOEXEC` is always applied.
    *
-   * @param path  열 파일 경로.
-   * @param flags `open(2)` 플래그 (예: `O_RDONLY`, `O_WRONLY|O_CREAT`).
-   * @param mode  파일 생성 시 권한 비트 (기본값: 0644).
-   * @returns 성공 시 AsyncFile, 실패 시 에러 코드.
+   * @param path  Path of the file to open.
+   * @param flags `open(2)` flags (e.g. `O_RDONLY`, `O_WRONLY|O_CREAT`).
+   * @param mode  Permission bits when creating a file (default: 0644).
+   * @returns AsyncFile on success, or an error code on failure.
    */
   static Task<Result<AsyncFile>> open(std::string_view path,
                                       int flags,
                                       mode_t mode = 0644) {
-    // string_view는 null-terminated 보장이 없으므로 임시 복사
-    // 경로가 PATH_MAX를 초과하면 에러 반환
+    // string_view does not guarantee null-termination, so copy into a temporary buffer.
+    // Return an error if the path exceeds PATH_MAX.
     if (path.size() >= 4096) {
       co_return unexpected(
           std::make_error_code(std::errc::filename_too_long));
@@ -126,17 +126,17 @@ public:
     co_return AsyncFile(fd);
   }
 
-  // ─── 비동기 I/O ─────────────────────────────────────────────────────────
+  // ─── Async I/O ──────────────────────────────────────────────────────────
 
   /**
-   * @brief 지정된 오프셋에서 데이터를 읽습니다 (pread).
+   * @brief Reads data from the specified offset (pread).
    *
-   * 파일의 현재 위치 포인터를 변경하지 않습니다.
-   * 여러 코루틴이 동시에 서로 다른 오프셋을 읽어도 안전합니다.
+   * Does not change the file's current position pointer.
+   * Safe for multiple coroutines to read different offsets concurrently.
    *
-   * @param buf    읽은 데이터를 저장할 버퍼.
-   * @param offset 파일 내 읽기 시작 오프셋 (바이트).
-   * @returns 읽은 바이트 수. EOF면 0. 에러 시 error_code.
+   * @param buf    Buffer to store the read data.
+   * @param offset Read start offset within the file (bytes).
+   * @returns Number of bytes read. 0 on EOF. error_code on failure.
    */
   Task<Result<size_t>> read_at(MutableBufferView buf, off_t offset) {
     ssize_t n = ::pread(fd_,
@@ -151,13 +151,13 @@ public:
   }
 
   /**
-   * @brief 지정된 오프셋에 데이터를 씁니다 (pwrite).
+   * @brief Writes data at the specified offset (pwrite).
    *
-   * 파일의 현재 위치 포인터를 변경하지 않습니다.
+   * Does not change the file's current position pointer.
    *
-   * @param buf    쓸 데이터 버퍼.
-   * @param offset 파일 내 쓰기 시작 오프셋 (바이트).
-   * @returns 쓴 바이트 수. 에러 시 error_code.
+   * @param buf    Data buffer to write.
+   * @param offset Write start offset within the file (bytes).
+   * @returns Number of bytes written. error_code on failure.
    */
   Task<Result<size_t>> write_at(BufferView buf, off_t offset) {
     ssize_t n = ::pwrite(fd_,
@@ -172,11 +172,11 @@ public:
   }
 
   /**
-   * @brief 파일을 닫습니다.
+   * @brief Closes the file.
    *
-   * 이미 닫혀 있는 경우 no-op입니다.
+   * No-op if the file is already closed.
    *
-   * @returns 성공 시 `Result<void>::ok()`, 실패 시 에러 코드.
+   * @returns `Result<void>::ok()` on success, or an error code on failure.
    */
   Task<Result<void>> close() {
     if (fd_ < 0) {
@@ -191,22 +191,22 @@ public:
     co_return Result<void>::ok();
   }
 
-  // ─── 접근자 ─────────────────────────────────────────────────────────────
+  // ─── Accessors ──────────────────────────────────────────────────────────
 
   /**
-   * @brief 내부 파일 디스크립터를 반환합니다.
-   * @returns 파일 fd. 유효하지 않으면 -1.
+   * @brief Returns the internal file descriptor.
+   * @returns The file fd, or -1 if invalid.
    */
   [[nodiscard]] int fd() const noexcept { return fd_; }
 
   /**
-   * @brief 파일이 열려 있는지 확인합니다.
-   * @returns fd >= 0이면 true.
+   * @brief Checks whether the file is open.
+   * @returns true if fd >= 0.
    */
   [[nodiscard]] bool is_open() const noexcept { return fd_ >= 0; }
 
 private:
-  /** @brief 관리 중인 파일 디스크립터. */
+  /** @brief The managed file descriptor. */
   int fd_;
 };
 
