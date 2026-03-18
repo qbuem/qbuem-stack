@@ -91,17 +91,17 @@ struct Http2Frame {
     std::vector<uint8_t>  payload;      ///< Frame payload bytes
 };
 
-// ─── HPACK 정적 테이블 플래그 상수 ─────────────────────────────────────────
+// ─── HPACK static table flag constants ──────────────────────────────────────
 
-/// @brief HEADERS 프레임의 END_STREAM 플래그 (비트 0)
+/// @brief END_STREAM flag for HEADERS frames (bit 0)
 static constexpr uint8_t HTTP2_FLAG_END_STREAM  = 0x1;
-/// @brief HEADERS/CONTINUATION 프레임의 END_HEADERS 플래그 (비트 2)
+/// @brief END_HEADERS flag for HEADERS/CONTINUATION frames (bit 2)
 static constexpr uint8_t HTTP2_FLAG_END_HEADERS = 0x4;
-/// @brief SETTINGS 프레임의 ACK 플래그 (비트 0)
+/// @brief ACK flag for SETTINGS frames (bit 0)
 static constexpr uint8_t HTTP2_FLAG_ACK         = 0x1;
-/// @brief DATA 프레임의 PADDED 플래그 (비트 3)
+/// @brief PADDED flag for DATA frames (bit 3)
 static constexpr uint8_t HTTP2_FLAG_PADDED      = 0x8;
-/// @brief HEADERS 프레임의 PRIORITY 플래그 (비트 5)
+/// @brief PRIORITY flag for HEADERS frames (bit 5)
 static constexpr uint8_t HTTP2_FLAG_PRIORITY    = 0x20;
 
 // ─── HpackDecoder ─────────────────────────────────────────────────────────────

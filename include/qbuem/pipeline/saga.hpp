@@ -130,7 +130,7 @@ public:
             Result<T> result = co_await steps_[i].execute(current);
 
             if (!result.has_value()) {
-                // 단계 i 실패 — i-1부터 0까지 역순 보상 수행
+                // Step i failed — perform reverse compensation from i-1 down to 0
                 co_await compensate_steps_(step_inputs, i);
                 co_return result;
             }
@@ -142,47 +142,47 @@ public:
     }
 
     /**
-     * @brief 보상 실패 목록을 반환합니다.
+     * @brief Returns the list of compensation failures.
      *
-     * 보상 함수 실행 중 예외가 발생한 경우 해당 단계 이름이
-     * 이 목록에 기록됩니다 (데드 레터 큐 역할).
+     * If an exception occurs during compensation, the name of the failed step
+     * is recorded in this list (acting as a dead-letter queue).
      *
-     * @returns 보상 실패가 발생한 단계 이름 목록.
+     * @returns List of step names where compensation failed.
      */
     const std::vector<std::string>& compensation_failures() const {
         return compensation_failures_;
     }
 
 private:
-    /** @brief 등록된 Saga 단계 목록. */
+    /** @brief List of registered Saga steps. */
     std::vector<SagaStep<T, T>> steps_;
 
     /**
-     * @brief 보상 실패 기록 (데드 레터 큐).
+     * @brief Compensation failure record (dead-letter queue).
      *
-     * 보상 함수가 실패한 단계의 이름이 저장됩니다.
-     * 보상 실패가 발생해도 후속 보상 단계는 계속 실행됩니다.
+     * Stores the names of steps whose compensation function failed.
+     * Subsequent compensation steps continue to execute even when a failure occurs.
      */
     std::vector<std::string> compensation_failures_;
 
     /**
-     * @brief 지정한 범위의 단계를 역순으로 보상합니다.
+     * @brief Compensates the specified range of steps in reverse order.
      *
-     * 단계 `failed_idx - 1`부터 0까지 각 단계의 `compensate`를 호출합니다.
-     * 보상 중 예외가 발생하면 `compensation_failures_`에 단계 이름을 기록하고
-     * 나머지 보상 단계를 계속 실행합니다.
+     * Calls `compensate` on each step from `failed_idx - 1` down to 0.
+     * If an exception occurs during compensation, the step name is recorded in
+     * `compensation_failures_` and the remaining compensation steps continue.
      *
-     * @param step_inputs 각 단계가 받았던 원본 입력값 목록.
-     * @param failed_idx  실패한 단계 인덱스 (이 단계는 보상하지 않음).
+     * @param step_inputs List of original input values received by each step.
+     * @param failed_idx  Index of the failed step (this step is not compensated).
      */
     Task<void> compensate_steps_(const std::vector<T>& step_inputs, size_t failed_idx) {
-        // failed_idx 단계는 execute가 실패했으므로 보상 불필요.
-        // 그 이전 단계(failed_idx - 1 ~ 0)를 역순으로 보상합니다.
+        // The step at failed_idx does not need compensation since its execute failed.
+        // Compensate the preceding steps (failed_idx - 1 down to 0) in reverse order.
         for (size_t j = failed_idx; j-- > 0; ) {
             try {
                 co_await steps_[j].compensate(step_inputs[j]);
             } catch (...) {
-                // 보상 실패를 데드 레터 큐에 기록하고 계속 진행합니다.
+                // Record the compensation failure in the dead-letter queue and continue.
                 compensation_failures_.push_back(steps_[j].name);
             }
         }

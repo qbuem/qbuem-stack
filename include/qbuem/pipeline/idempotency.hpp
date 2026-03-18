@@ -138,7 +138,7 @@ public:
         }
 
         if (it->second <= now) {
-            // 만료된 항목을 즉시 제거합니다(lazy expiry).
+            // Remove the expired entry immediately (lazy expiry).
             map_.erase(it);
             co_return false;
         }
@@ -147,31 +147,31 @@ public:
     }
 
 private:
-    /** @brief 멱등성 키 → 만료 시각 맵. */
+    /** @brief Idempotency key → expiry timestamp map. */
     std::unordered_map<std::string, std::chrono::steady_clock::time_point> map_;
 
-    /** @brief 맵 접근 보호를 위한 뮤텍스. */
+    /** @brief Mutex protecting map access. */
     std::mutex mutex_;
 };
 
 /**
- * @brief 중복 아이템을 걸러내는 멱등성 필터.
+ * @brief Idempotency filter that discards duplicate items.
  *
- * `env.ctx`에서 `IdempotencyKey`를 읽어 스토어에 조회합니다.
- * - 처음 등장하는 키: 아이템을 `optional<T>`에 담아 반환합니다.
- * - 중복 키: `std::nullopt`를 반환하여 이후 처리를 건너뜁니다.
- * - 키가 없는 경우: 멱등성 검사를 수행하지 않고 아이템을 그대로 통과시킵니다.
+ * Reads the `IdempotencyKey` from `env.ctx` and looks it up in the store.
+ * - First-seen key: wraps the item in `optional<T>` and returns it.
+ * - Duplicate key: returns `std::nullopt` to skip further processing.
+ * - No key present: passes the item through without performing an idempotency check.
  *
- * @tparam T 처리할 아이템 타입.
+ * @tparam T Type of item to process.
  */
 template <typename T>
 class IdempotencyFilter {
 public:
     /**
-     * @brief IdempotencyFilter를 생성합니다.
+     * @brief Creates an IdempotencyFilter.
      *
-     * @param store 멱등성 키 저장소. nullptr이면 안 됩니다.
-     * @param ttl   키 유효 기간 (기본값: 24시간).
+     * @param store Idempotency key store. Must not be nullptr.
+     * @param ttl   Key validity period (default: 24 hours).
      */
     explicit IdempotencyFilter(
         std::shared_ptr<IIdempotencyStore> store,
@@ -180,22 +180,22 @@ public:
         : store_(std::move(store)), ttl_(ttl) {}
 
     /**
-     * @brief 아이템의 멱등성을 검사하고 중복이면 건너뜁니다.
+     * @brief Checks the idempotency of an item and skips it if it is a duplicate.
      *
-     * `env.ctx`에서 `IdempotencyKey`를 읽어 스토어를 조회합니다.
-     * - `IdempotencyKey` 슬롯이 없으면 검사를 생략하고 아이템을 그대로 반환합니다.
-     * - 키가 처음 등장하면 스토어에 등록 후 아이템을 반환합니다.
-     * - 키가 이미 존재하면(중복) `std::nullopt`를 반환합니다.
+     * Reads the `IdempotencyKey` from `env.ctx` and queries the store.
+     * - If no `IdempotencyKey` slot is present, skips the check and returns the item as-is.
+     * - If the key is seen for the first time, registers it in the store and returns the item.
+     * - If the key already exists (duplicate), returns `std::nullopt`.
      *
-     * @param item 처리할 아이템.
-     * @param env  실행 환경 (`env.ctx`에서 `IdempotencyKey`를 읽습니다).
-     * @returns 중복이 아니면 `Result<optional<T>>`에 아이템을,
-     *          중복이면 `Result<optional<T>>`에 `nullopt`를 담아 반환합니다.
+     * @param item Item to process.
+     * @param env  Execution environment (`IdempotencyKey` is read from `env.ctx`).
+     * @returns `Result<optional<T>>` containing the item if not a duplicate,
+     *          or `Result<optional<T>>` containing `nullopt` if it is a duplicate.
      */
     Task<Result<std::optional<T>>> process(T item, ActionEnv env) {
         const auto* key_slot = env.ctx.get_ptr<IdempotencyKey>();
 
-        // IdempotencyKey 슬롯이 없으면 멱등성 검사를 건너뜁니다.
+        // If no IdempotencyKey slot is present, skip the idempotency check.
         if (!key_slot || key_slot->value.empty()) {
             co_return std::optional<T>{std::move(item)};
         }
@@ -203,7 +203,7 @@ public:
         const bool is_new = co_await store_->set_if_absent(key_slot->value, ttl_);
 
         if (!is_new) {
-            // 중복 키 — 아이템 처리를 건너뜁니다.
+            // Duplicate key — skip item processing.
             co_return std::optional<T>{std::nullopt};
         }
 
@@ -211,10 +211,10 @@ public:
     }
 
 private:
-    /** @brief 멱등성 키 저장소. */
+    /** @brief Idempotency key store. */
     std::shared_ptr<IIdempotencyStore> store_;
 
-    /** @brief 키 유효 기간. */
+    /** @brief Key validity period. */
     std::chrono::seconds ttl_;
 };
 

@@ -2,25 +2,25 @@
 
 /**
  * @file qbuem/db/value.hpp
- * @brief db::Value — 힙 할당 없는 DB 파라미터/결과 바인딩 타입.
+ * @brief db::Value — Heap-allocation-free DB parameter/result binding type.
  * @defgroup qbuem_db_value db::Value
  * @ingroup qbuem_db
  *
- * `db::Value`는 SQL 파라미터 바인딩 및 결과 추출에 사용되는
- * 힙-프리 variant 타입입니다.
+ * `db::Value` is a heap-free variant type used for SQL parameter binding
+ * and result extraction.
  *
- * ## 지원 타입
+ * ## Supported Types
  * - `Null`    : SQL NULL
- * - `int64_t` : 정수 (8바이트)
- * - `double`  : 부동소수점
- * - `bool`    : 논리값
- * - `StringView` : 문자열 뷰 (zero-copy, 외부 버퍼 참조)
- * - `BlobView`   : 이진 데이터 뷰 (zero-copy)
+ * - `int64_t` : Integer (8 bytes)
+ * - `double`  : Floating point
+ * - `bool`    : Boolean
+ * - `StringView` : String view (zero-copy, references external buffer)
+ * - `BlobView`   : Binary data view (zero-copy)
  *
- * ## 설계 원칙
- * - **Zero Allocation**: 힙 메모리를 일절 사용하지 않습니다.
- *   문자열/블롭은 소유하지 않고 뷰(span)로 참조합니다.
- * - **Cache-Friendly**: sizeof(Value) == 24B (포인터 + 길이 + 태그).
+ * ## Design Principles
+ * - **Zero Allocation**: No heap memory is used at all.
+ *   Strings and blobs are referenced as views (span) without ownership.
+ * - **Cache-Friendly**: sizeof(Value) == 24B (pointer + length + tag).
  *
  * @code
  * db::Value v1 = db::null;
@@ -46,78 +46,79 @@ namespace qbuem::db {
 
 // ─── Null sentinel ────────────────────────────────────────────────────────────
 
-/** @brief SQL NULL을 표현하는 태그 타입. */
+/** @brief Tag type representing SQL NULL. */
 struct Null {
     constexpr bool operator==(Null) const noexcept { return true; }
 };
 
-/** @brief SQL NULL 싱글톤. */
+/** @brief SQL NULL singleton. */
 inline constexpr Null null{};
 
 // ─── Value ────────────────────────────────────────────────────────────────────
 
 /**
- * @brief 힙 할당 없는 DB 파라미터 / 결과 바인딩 타입.
+ * @brief Heap-allocation-free DB parameter / result binding type.
  *
- * 내부적으로 union + 타입 태그를 사용하므로 힙 할당이 발생하지 않습니다.
- * 문자열과 블롭은 참조(뷰)만 저장하므로 수명 관리는 호출자의 책임입니다.
+ * Uses a union + type tag internally, so no heap allocation occurs.
+ * Strings and blobs store only a reference (view); lifetime management
+ * is the caller's responsibility.
  */
 class Value {
 public:
-    /** @brief 지원하는 타입 목록. */
+    /** @brief List of supported types. */
     enum class Type : uint8_t {
         Null    = 0,
         Int64   = 1,
         Float64 = 2,
         Bool    = 3,
-        Text    = 4,  ///< UTF-8 문자열 (zero-copy 뷰)
-        Blob    = 5,  ///< 이진 데이터 (zero-copy 뷰)
+        Text    = 4,  ///< UTF-8 string (zero-copy view)
+        Blob    = 5,  ///< Binary data (zero-copy view)
     };
 
-    // ── 생성자 ─────────────────────────────────────────────────────────────
+    // ── Constructors ────────────────────────────────────────────────────────
 
-    /** @brief NULL 값으로 기본 초기화. */
+    /** @brief Default initialization to NULL. */
     constexpr Value() noexcept : type_(Type::Null), i64_(0) {}
 
-    /** @brief NULL 값으로 초기화. */
+    /** @brief Initializes to NULL. */
     constexpr Value(Null) noexcept : type_(Type::Null), i64_(0) {} // NOLINT
 
-    /** @brief 정수값으로 초기화. */
+    /** @brief Initializes with an integer value. */
     constexpr Value(int64_t v) noexcept : type_(Type::Int64), i64_(v) {} // NOLINT
 
-    /** @brief int32를 int64로 변환하여 초기화. */
+    /** @brief Initializes by converting int32 to int64. */
     constexpr Value(int32_t v) noexcept : type_(Type::Int64), i64_(v) {} // NOLINT
 
-    /** @brief 부동소수점값으로 초기화. */
+    /** @brief Initializes with a floating-point value. */
     constexpr Value(double v) noexcept : type_(Type::Float64), f64_(v) {} // NOLINT
 
-    /** @brief float를 double로 변환하여 초기화. */
+    /** @brief Initializes by converting float to double. */
     constexpr Value(float v) noexcept : type_(Type::Float64), f64_(v) {} // NOLINT
 
-    /** @brief 논리값으로 초기화. */
+    /** @brief Initializes with a boolean value. */
     constexpr Value(bool v) noexcept : type_(Type::Bool), i64_(v ? 1 : 0) {} // NOLINT
 
-    /** @brief 문자열 뷰로 초기화 (zero-copy). 수명 관리는 호출자 책임. */
+    /** @brief Initializes with a string view (zero-copy). Caller is responsible for lifetime. */
     constexpr Value(std::string_view sv) noexcept // NOLINT
         : type_(Type::Text), text_(sv) {}
 
-    /** @brief 이진 데이터 뷰로 초기화 (zero-copy). */
+    /** @brief Initializes with a binary data view (zero-copy). */
     constexpr Value(BufferView bv) noexcept // NOLINT
         : type_(Type::Blob), blob_(bv) {}
 
-    // ── 타입 검사 ──────────────────────────────────────────────────────────
+    // ── Type checks ─────────────────────────────────────────────────────────
 
-    /** @brief 현재 저장된 타입을 반환합니다. */
+    /** @brief Returns the currently stored type. */
     [[nodiscard]] constexpr Type type() const noexcept { return type_; }
 
-    /** @brief NULL인지 확인합니다. */
+    /** @brief Checks whether the value is NULL. */
     [[nodiscard]] constexpr bool is_null() const noexcept {
         return type_ == Type::Null;
     }
 
     /**
-     * @brief 특정 타입인지 확인합니다.
-     * @tparam T 확인할 타입 (int64_t, double, bool, std::string_view, BufferView, Null).
+     * @brief Checks whether the value holds a specific type.
+     * @tparam T Type to check (int64_t, double, bool, std::string_view, BufferView, Null).
      */
     template <typename T>
     [[nodiscard]] constexpr bool is() const noexcept {
@@ -137,13 +138,13 @@ public:
             return false;
     }
 
-    // ── 값 추출 ────────────────────────────────────────────────────────────
+    // ── Value extraction ────────────────────────────────────────────────────
 
     /**
-     * @brief 값을 추출합니다.
-     * @tparam T 추출할 타입.
-     * @returns 저장된 값.
-     * @note 타입이 맞지 않으면 UB — 반드시 `is<T>()` 후 호출.
+     * @brief Extracts the stored value.
+     * @tparam T Type to extract.
+     * @returns The stored value.
+     * @note UB if the type does not match — always call `is<T>()` first.
      */
     template <typename T>
     [[nodiscard]] constexpr T get() const noexcept {
@@ -155,7 +156,7 @@ public:
         else static_assert(sizeof(T) == 0, "Unsupported type for db::Value::get<T>()");
     }
 
-    // ── 비교 연산자 ────────────────────────────────────────────────────────
+    // ── Comparison operators ────────────────────────────────────────────────
 
     [[nodiscard]] bool operator==(const Value& o) const noexcept {
         if (type_ != o.type_) return false;
@@ -191,9 +192,10 @@ static_assert(sizeof(Value) <= 32, "db::Value must fit in 32 bytes");
 // ─── Params ───────────────────────────────────────────────────────────────────
 
 /**
- * @brief 파라미터 바인딩을 위한 고정-크기 배열.
+ * @brief Fixed-size array for parameter binding.
  *
- * 스택 할당 최적화: 소량 파라미터(≤8개)는 힙 없이 스택에 저장.
+ * Stack allocation optimization: small numbers of parameters (≤8) are stored
+ * on the stack without heap allocation.
  */
 template <size_t N = 8>
 struct BoundParams {

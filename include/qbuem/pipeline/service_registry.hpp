@@ -2,36 +2,36 @@
 
 /**
  * @file qbuem/pipeline/service_registry.hpp
- * @brief 스코프 기반 의존성 주입(DI) 컨테이너 — ServiceRegistry
+ * @brief Scope-based dependency injection (DI) container — ServiceRegistry
  * @defgroup qbuem_service_registry ServiceRegistry
  * @ingroup qbuem_pipeline
  *
- * ServiceRegistry는 파이프라인 계층 구조의 DI 컨테이너입니다.
+ * ServiceRegistry is the DI container for the pipeline hierarchy.
  *
- * ## 계층 구조
+ * ## Hierarchy
  * ```
- * GlobalRegistry  (프로세스 싱글톤)
- *     └── PipelineRegistry  (파이프라인별)
- *             └── ActionRegistry  (Action별, 선택적)
+ * GlobalRegistry  (process singleton)
+ *     └── PipelineRegistry  (per-pipeline)
+ *             └── ActionRegistry  (per-Action, optional)
  * ```
  *
- * ## 의존성 강도
- * - `get<T>()` — **약한 의존성**: nullptr 반환, 선택적 기능에 사용
- * - `require<T>()` — **강한 의존성**: 없으면 `std::terminate()`, fail-fast
+ * ## Dependency strength
+ * - `get<T>()` — **weak dependency**: returns nullptr, use for optional features
+ * - `require<T>()` — **strong dependency**: calls `std::terminate()` if not found, fail-fast
  *
- * ## 사용 예시
+ * ## Usage example
  * @code
- * // 프로세스 시작 시 등록
+ * // Register at process startup
  * global_registry().register_singleton<ILogger>(make_logger());
  * global_registry().register_singleton<ISessionStore>(make_redis_store());
  *
- * // 파이프라인 스코프
+ * // Pipeline scope
  * ServiceRegistry pipe_reg(&global_registry());
  * pipe_reg.register_singleton<IMetricsExporter>(make_metrics_exporter());
  *
- * // Action 내 사용
- * auto logger = env.registry->require<ILogger>(); // 없으면 terminate
- * auto store  = env.registry->get<ISessionStore>(); // 없으면 nullptr
+ * // Usage inside an Action
+ * auto logger = env.registry->require<ILogger>(); // terminates if not found
+ * auto store  = env.registry->get<ISessionStore>(); // returns nullptr if not found
  * @endcode
  * @{
  */
@@ -47,21 +47,21 @@
 namespace qbuem {
 
 /**
- * @brief 스코프 기반 DI 컨테이너.
+ * @brief Scope-based DI container.
  *
- * 스레드 안전합니다. `register_*()` 함수는 런타임 중 동적으로 호출 가능합니다.
+ * Thread-safe. `register_*()` functions can be called dynamically at runtime.
  *
- * ### 조회 순서
- * 1. 현재 레지스트리에서 검색
- * 2. `parent_` 레지스트리로 재귀 검색
- * 3. 없으면 nullptr(`get`) 또는 `std::terminate`(`require`)
+ * ### Lookup order
+ * 1. Search the current registry
+ * 2. Recursively search the `parent_` registry
+ * 3. If not found: nullptr (`get`) or `std::terminate` (`require`)
  */
 class ServiceRegistry {
 public:
   /**
-   * @brief 부모 레지스트리를 지정해 스코프 레지스트리를 생성합니다.
+   * @brief Constructs a scoped registry with the given parent registry.
    *
-   * @param parent 상위 스코프 레지스트리. nullptr이면 루트.
+   * @param parent Parent scope registry. nullptr makes this the root.
    */
   explicit ServiceRegistry(ServiceRegistry *parent = nullptr)
       : parent_(parent) {}
@@ -70,12 +70,12 @@ public:
   ServiceRegistry &operator=(const ServiceRegistry &) = delete;
 
   /**
-   * @brief 싱글톤 인스턴스를 등록합니다.
+   * @brief Registers a singleton instance.
    *
-   * 이미 등록된 타입을 재등록하면 덮어씁니다.
+   * Re-registering an already-registered type overwrites the previous entry.
    *
-   * @tparam T 서비스 타입 (보통 추상 인터페이스).
-   * @param  instance 공유 소유권 인스턴스.
+   * @tparam T Service type (typically an abstract interface).
+   * @param  instance Shared-ownership instance.
    */
   template <typename T>
   void register_singleton(std::shared_ptr<T> instance) {

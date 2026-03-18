@@ -121,20 +121,20 @@ public:
   }
 
   /**
-   * @brief 디코딩된 HTTP 요청마다 호출됩니다.
+   * @brief Called for each decoded HTTP request.
    *
-   * ### 처리 순서
-   * 1. `Upgrade: websocket` 헤더 확인 → 업그레이드 처리.
-   * 2. `Expect: 100-continue` 헤더 확인 → `100 Continue` 전송.
-   * 3. `Connection` 헤더 확인 → keep-alive 상태 갱신.
-   * 4. Router로 요청 디스패치.
-   * 5. 응답 직렬화 후 소켓에 전송.
+   * ### Processing order
+   * 1. Check `Upgrade: websocket` header → handle upgrade.
+   * 2. Check `Expect: 100-continue` header → send `100 Continue`.
+   * 3. Check `Connection` header → update keep-alive state.
+   * 4. Dispatch request to Router.
+   * 5. Serialize response and send over socket.
    *
-   * @param frame 파싱된 HTTP 요청.
-   * @returns 처리 결과. 에러 반환 시 연결이 종료됩니다.
+   * @param frame Parsed HTTP request.
+   * @returns Processing result. Returning an error closes the connection.
    */
   Task<Result<void>> on_frame(http::Request frame) override {
-    // ── 1. WebSocket 업그레이드 감지 ──────────────────────────────────────
+    // ── 1. Detect WebSocket upgrade ───────────────────────────────────────
     {
       std::string_view upgrade_hdr = frame.header("Upgrade");
       std::string upgrade_lower(upgrade_hdr);
@@ -144,11 +144,11 @@ public:
 
       if (upgrade_lower == "websocket") {
         if (upgrade_callback_) {
-          keep_alive_ = false; // 업그레이드 후 HTTP keep-alive 루프 종료
+          keep_alive_ = false; // Terminate HTTP keep-alive loop after upgrade
           co_await upgrade_callback_(UpgradeRequest{std::move(frame), fd_});
           co_return Result<void>::ok();
         } else {
-          // 업그레이드 콜백 미등록 — 426 Upgrade Required 반환
+          // Upgrade callback not registered — return 426 Upgrade Required
           static constexpr std::string_view kUpgradeRequired =
               "HTTP/1.1 426 Upgrade Required\r\n"
               "Connection: close\r\n"
@@ -174,7 +174,7 @@ public:
       }
     }
 
-    // ── 3. Connection 헤더로 keep-alive 상태 갱신 ─────────────────────────
+    // ── 3. Update keep-alive state from Connection header ─────────────────
     {
       std::string_view conn_hdr = frame.header("Connection");
       std::string conn_lower(conn_hdr);
@@ -186,14 +186,14 @@ public:
       }
     }
 
-    // ── 4. Router 디스패치 ────────────────────────────────────────────────
+    // ── 4. Router dispatch ────────────────────────────────────────────────
     Response res;
 
     if (router_) {
       std::unordered_map<std::string, std::string> params;
       auto handler_var = router_->match(frame.method(), frame.path(), params);
 
-      // 매칭된 파라미터를 요청에 주입
+      // Inject matched parameters into the request
       for (auto &[k, v] : params) {
         frame.set_param(k, v);
       }
@@ -203,7 +203,7 @@ public:
       } else if (std::holds_alternative<Handler>(handler_var)) {
         std::get<Handler>(handler_var)(frame, res);
       } else {
-        // 라우트 없음
+        // No route matched
         if (router_->path_exists(frame.path())) {
           res.status(405).header("Content-Length", "0");
         } else {
@@ -214,14 +214,14 @@ public:
       res.status(503).body("No router configured");
     }
 
-    // ── 5. keep-alive 응답 헤더 주입 ──────────────────────────────────────
+    // ── 5. Inject keep-alive response header ─────────────────────────────
     if (keep_alive_) {
       res.header("Connection", "keep-alive");
     } else {
       res.header("Connection", "close");
     }
 
-    // ── 6. 응답 직렬화 및 전송 ────────────────────────────────────────────
+    // ── 6. Serialize and send response ───────────────────────────────────
     std::string serialized = res.serialize();
     if (!write_all(fd_, serialized)) {
       co_return unexpected(
@@ -232,11 +232,11 @@ public:
   }
 
   /**
-   * @brief 연결이 종료될 때 호출됩니다.
+   * @brief Called when the connection is closed.
    *
-   * 소켓 fd를 초기화합니다. 실제 `close()` 호출은 AcceptLoop의 책임입니다.
+   * Resets the socket fd. Calling `close()` is the responsibility of AcceptLoop.
    *
-   * @param ec 종료 원인 에러 코드. 정상 종료면 기본값(무효) 코드.
+   * @param ec Error code indicating the reason for closure. Default (invalid) code for normal closure.
    */
   Task<void> on_disconnect(std::error_code /*ec*/) override {
     fd_ = -1;
@@ -244,21 +244,21 @@ public:
   }
 
   /**
-   * @brief 현재 keep-alive 상태를 반환합니다.
+   * @brief Returns the current keep-alive state.
    *
-   * AcceptLoop 또는 전송 계층이 연결 재사용 여부를 결정할 때 사용합니다.
+   * Used by AcceptLoop or the transport layer to decide whether to reuse the connection.
    *
-   * @returns keep-alive가 활성 상태면 true.
+   * @returns true if keep-alive is active.
    */
   [[nodiscard]] bool keep_alive() const noexcept { return keep_alive_; }
 
 private:
   /**
-   * @brief 소켓에 데이터를 모두 전송할 때까지 반복 write합니다.
+   * @brief Repeatedly writes to a socket until all data is sent.
    *
-   * @param fd   대상 소켓 파일 디스크립터.
-   * @param data 전송할 데이터.
-   * @returns 성공 시 true, 에러 시 false.
+   * @param fd   Target socket file descriptor.
+   * @param data Data to send.
+   * @returns true on success, false on error.
    */
   static bool write_all(int fd, std::string_view data) noexcept {
     const char *ptr = data.data();
@@ -272,19 +272,19 @@ private:
     return true;
   }
 
-  /** @brief 요청을 라우팅할 Router. */
+  /** @brief Router used to route requests. */
   std::shared_ptr<http::Router> router_;
 
-  /** @brief WebSocket 업그레이드 요청 콜백. nullptr이면 업그레이드 거부. */
+  /** @brief WebSocket upgrade request callback. Upgrade is rejected if nullptr. */
   UpgradeCallback upgrade_callback_;
 
-  /** @brief 현재 연결의 소켓 파일 디스크립터. -1이면 연결 없음. */
+  /** @brief Socket file descriptor of the current connection. -1 when no connection. */
   int fd_{-1};
 
-  /** @brief 원격 클라이언트 주소. on_connect() 시 설정됩니다. */
+  /** @brief Remote client address. Set during on_connect(). */
   SocketAddr remote_{};
 
-  /** @brief HTTP keep-alive 활성 상태. false이면 응답 후 연결 종료. */
+  /** @brief HTTP keep-alive active state. Connection is closed after response if false. */
   bool keep_alive_{true};
 };
 
