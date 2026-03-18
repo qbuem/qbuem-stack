@@ -71,7 +71,7 @@ struct ActionResult {
     static ActionResult stop(std::error_code ec) noexcept { return {false, ec}; }
 };
 
-// ─── JwtClaims (Context 주입용) ──────────────────────────────────────────────
+// ─── JwtClaims (for injection into Context) ──────────────────────────────────
 
 /**
  * @brief Validated JWT claims — type injected into Context.
@@ -105,10 +105,10 @@ struct JwtAuthConfig {
     bool     require_exp{true}; ///< Whether the exp claim is required
     bool     require_sub{false};///< Whether the sub claim is required
 
-    /** @brief Authorization 헤더 이름 (기본: "authorization"). */
+    /** @brief Authorization header name (default: "authorization"). */
     std::string_view auth_header{"authorization"};
 
-    /** @brief Bearer 접두사 길이. `"Bearer "` = 7. */
+    /** @brief Bearer prefix length. `"Bearer "` = 7. */
     static constexpr size_t kBearerPrefixLen = 7;
 };
 
