@@ -28,7 +28,7 @@
 #include <qbuem/ebpf/ebpf_tracer.hpp>
 #include <qbuem/spdk/nvme_io.hpp>
 
-// 고도화: Lock-free Pool, Futex-uring Sync, JWT Pipeline Action
+// Enhancement: Lock-free Pool, Futex-uring Sync, JWT Pipeline Action
 #include <qbuem/db/connection_pool.hpp>
 #include <qbuem/shm/futex_sync.hpp>
 #include <qbuem/security/jwt_action.hpp>
@@ -77,17 +77,17 @@ public:
   void use(Middleware mw);
 
   /**
-   * @brief Register a global next() 기반 비동기 미들웨어.
+   * @brief Register a global next()-based async middleware.
    *
-   * 미들웨어 내부에서 `co_await next()`를 호출하면 체인의 나머지가 실행됩니다.
-   * next()를 호출하지 않으면 체인이 중단되며, false를 co_return 해야 합니다.
+   * Calling `co_await next()` inside the middleware executes the rest of the chain.
+   * If next() is not called, the chain is halted and false must be co_returned.
    *
    * Example:
    *   app.use_async([](const qbuem::Request& req, qbuem::Response& res,
    *                    qbuem::NextFn next) -> qbuem::Task<bool> {
-   *     // 전처리 로직
+   *     // Pre-processing logic
    *     co_await next();
-   *     // 후처리 로직 (응답 완성 후)
+   *     // Post-processing logic (after response is finalized)
    *     co_return true;
    *   });
    */

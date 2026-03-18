@@ -169,37 +169,37 @@ struct SpanId {
 // ─── TraceContext ──────────────────────────────────────────────────────────────
 
 /**
- * @brief W3C Trace Context — traceparent 헤더 직렬화/역직렬화 및 스팬 계층 관리.
+ * @brief W3C Trace Context — traceparent header serialization/deserialization and span hierarchy management.
  *
- * `traceparent` 헤더 형식:
+ * `traceparent` header format:
  * ```
  * 00-{trace_id(32)}-{parent_span_id(16)}-{flags(2)}
  * ```
  *
- * ### flags 비트
- * - bit 0 (0x01): sampled — 이 추적이 샘플링됨을 수신자에게 알림.
+ * ### flags bits
+ * - bit 0 (0x01): sampled — notifies the receiver that this trace is being sampled.
  *
- * ### 사용 예시
+ * ### Usage example
  * @code
- * // 인바운드 HTTP 요청에서 traceparent 파싱
+ * // Parse traceparent from an inbound HTTP request
  * auto result = TraceContext::from_traceparent(req.header("traceparent"));
  * TraceContext ctx = result ? *result : TraceContext::generate();
  *
- * // 아웃바운드 호출 시 child span 생성 후 전파
+ * // Create a child span and propagate it on outbound calls
  * auto child = ctx.child_span();
  * outbound_req.set_header("traceparent", child.to_traceparent());
  * @endcode
  */
 struct TraceContext {
-  TraceId trace_id;         ///< 128-bit 전역 추적 식별자
-  SpanId  parent_span_id;   ///< 64-bit 부모 스팬 식별자 (현재 스팬 ID)
-  uint8_t flags = 1;        ///< 추적 플래그 (기본값: sampled=1)
+  TraceId trace_id;         ///< 128-bit global trace identifier
+  SpanId  parent_span_id;   ///< 64-bit parent span identifier (current span ID)
+  uint8_t flags = 1;        ///< Trace flags (default: sampled=1)
 
   /**
-   * @brief 새 루트 스팬 TraceContext를 생성합니다.
+   * @brief Generates a new root span TraceContext.
    *
-   * 새 TraceId와 SpanId를 난수로 생성합니다.
-   * @returns 유효한 루트 스팬 TraceContext (sampled 플래그 설정됨).
+   * Generates a new TraceId and SpanId using random numbers.
+   * @returns A valid root span TraceContext (with the sampled flag set).
    */
   static TraceContext generate() {
     TraceContext ctx;
@@ -210,12 +210,12 @@ struct TraceContext {
   }
 
   /**
-   * @brief 현재 컨텍스트에서 child span을 생성합니다.
+   * @brief Creates a child span from the current context.
    *
-   * 동일한 trace_id를 유지하고, 새 SpanId를 생성합니다.
-   * 새 스팬의 parent_span_id는 현재 스팬의 SpanId가 됩니다.
+   * Keeps the same trace_id and generates a new SpanId.
+   * The new span's parent_span_id becomes the current span's SpanId.
    *
-   * @returns 새 SpanId를 가진 child TraceContext.
+   * @returns A child TraceContext with a new SpanId.
    */
   TraceContext child_span() const {
     TraceContext child;
@@ -226,15 +226,15 @@ struct TraceContext {
   }
 
   /**
-   * @brief W3C traceparent 헤더 문자열로 직렬화합니다.
+   * @brief Serializes to a W3C traceparent header string.
    *
-   * 형식: `"00-{trace_id}-{parent_span_id}-{flags}"`
-   * 예:   `"00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"`
+   * Format: `"00-{trace_id}-{parent_span_id}-{flags}"`
+   * Example: `"00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"`
    *
-   * @returns traceparent 헤더 문자열 (55자 고정).
+   * @returns traceparent header string (fixed 55 characters).
    */
   std::string to_traceparent() const {
-    // "00-" + 32 + "-" + 16 + "-" + 2 = 55자
+    // "00-" + 32 + "-" + 16 + "-" + 2 = 55 chars
     char buf[56];
     buf[0] = '0'; buf[1] = '0'; buf[2] = '-';
     trace_id.to_chars(buf + 3, 33);
@@ -249,20 +249,20 @@ struct TraceContext {
   }
 
   /**
-   * @brief W3C traceparent 헤더 문자열을 파싱합니다.
+   * @brief Parses a W3C traceparent header string.
    *
-   * 유효한 형식: `"00-{32자 hex}-{16자 hex}-{2자 hex}"`
-   * version 00만 지원합니다.
+   * Valid format: `"00-{32 hex chars}-{16 hex chars}-{2 hex chars}"`
+   * Only version 00 is supported.
    *
-   * @param header 파싱할 traceparent 헤더 문자열.
-   * @returns 성공 시 TraceContext, 형식 오류 시 에러 Result.
+   * @param header traceparent header string to parse.
+   * @returns TraceContext on success, error Result on format error.
    */
   static Result<TraceContext> from_traceparent(std::string_view header) {
-    // 최소 길이: "00-{32}-{16}-{2}" = 55자
+    // Minimum length: "00-{32}-{16}-{2}" = 55 chars
     if (header.size() < 55) {
       return unexpected(std::make_error_code(std::errc::invalid_argument));
     }
-    // version 확인 ("00")
+    // Verify version ("00")
     if (header[0] != '0' || header[1] != '0') {
       return unexpected(std::make_error_code(std::errc::invalid_argument));
     }
@@ -279,7 +279,7 @@ struct TraceContext {
 
     TraceContext ctx;
 
-    // trace_id 파싱 (32자)
+    // Parse trace_id (32 chars)
     for (size_t i = 0; i < 16; ++i) {
       int hi = hex_digit(header[3 + i * 2]);
       int lo = hex_digit(header[3 + i * 2 + 1]);
@@ -288,7 +288,7 @@ struct TraceContext {
       ctx.trace_id.bytes[i] = static_cast<uint8_t>((hi << 4) | lo);
     }
 
-    // parent_span_id 파싱 (16자)
+    // Parse parent_span_id (16 chars)
     for (size_t i = 0; i < 8; ++i) {
       int hi = hex_digit(header[36 + i * 2]);
       int lo = hex_digit(header[36 + i * 2 + 1]);
@@ -297,14 +297,14 @@ struct TraceContext {
       ctx.parent_span_id.bytes[i] = static_cast<uint8_t>((hi << 4) | lo);
     }
 
-    // flags 파싱 (2자)
+    // Parse flags (2 chars)
     int fhi = hex_digit(header[53]);
     int flo = hex_digit(header[54]);
     if (fhi < 0 || flo < 0)
       return unexpected(std::make_error_code(std::errc::invalid_argument));
     ctx.flags = static_cast<uint8_t>((fhi << 4) | flo);
 
-    // 유효성 검사
+    // Validity check
     if (!ctx.trace_id.is_valid() || !ctx.parent_span_id.is_valid())
       return unexpected(std::make_error_code(std::errc::invalid_argument));
 
@@ -312,8 +312,8 @@ struct TraceContext {
   }
 
   /**
-   * @brief 이 추적이 샘플링되는지 확인합니다.
-   * @returns flags의 bit 0이 설정되어 있으면 true.
+   * @brief Checks whether this trace is being sampled.
+   * @returns true if bit 0 of flags is set.
    */
   bool is_sampled() const noexcept { return (flags & 0x01) != 0; }
 };

@@ -49,30 +49,30 @@ namespace qbuem {
 class PlainTransport : public ITransport {
 public:
   /**
-   * @brief 지정된 fd로 PlainTransport를 구성합니다.
+   * @brief Constructs a PlainTransport with the specified fd.
    *
-   * @param fd 논블로킹 TCP 소켓 파일 디스크립터.
-   *           반드시 `O_NONBLOCK`이 설정된 상태여야 합니다.
+   * @param fd Non-blocking TCP socket file descriptor.
+   *           Must have `O_NONBLOCK` set.
    */
   explicit PlainTransport(int fd) noexcept : fd_(fd) {}
 
   /**
-   * @brief 소멸자.
+   * @brief Destructor.
    *
-   * fd를 닫지 않습니다. fd의 수명은 호출자가 관리합니다.
-   * fd를 소유해야 한다면 `close()`를 명시적으로 호출하세요.
+   * Does not close the fd. The fd lifetime is managed by the caller.
+   * Call `close()` explicitly if this instance should own the fd.
    */
   ~PlainTransport() override = default;
 
-  // ─── ITransport 구현 ────────────────────────────────────────────────────
+  // ─── ITransport implementation ──────────────────────────────────────────
 
   /**
-   * @brief 소켓에서 데이터를 비동기로 읽습니다.
+   * @brief Asynchronously reads data from the socket.
    *
-   * `AsyncRead` awaiter를 통해 소켓이 읽기 가능해질 때까지 Reactor에 등록합니다.
+   * Registers with the Reactor via the `AsyncRead` awaiter until the socket becomes readable.
    *
-   * @param buf 수신 데이터를 저장할 버퍼. 비어 있으면 즉시 0 반환.
-   * @returns 읽은 바이트 수. EOF/연결 종료면 0. 에러 시 error_code.
+   * @param buf Buffer to store received data. Returns 0 immediately if empty.
+   * @returns Number of bytes read. 0 on EOF/connection close. error_code on error.
    */
   Task<Result<size_t>> read(std::span<std::byte> buf) override {
     if (buf.empty()) co_return size_t{0};
@@ -84,12 +84,12 @@ public:
   }
 
   /**
-   * @brief 소켓으로 데이터를 비동기로 씁니다.
+   * @brief Asynchronously writes data to the socket.
    *
-   * `AsyncWrite` awaiter를 통해 소켓이 쓰기 가능해질 때까지 Reactor에 등록합니다.
+   * Registers with the Reactor via the `AsyncWrite` awaiter until the socket becomes writable.
    *
-   * @param buf 전송할 데이터 버퍼. 비어 있으면 즉시 0 반환.
-   * @returns 전송한 바이트 수. 에러 시 error_code.
+   * @param buf Data buffer to send. Returns 0 immediately if empty.
+   * @returns Number of bytes sent. error_code on error.
    */
   Task<Result<size_t>> write(std::span<const std::byte> buf) override {
     if (buf.empty()) co_return size_t{0};
@@ -101,23 +101,23 @@ public:
   }
 
   /**
-   * @brief TLS 핸드셰이크 (평문 TCP이므로 no-op).
+   * @brief TLS handshake (no-op for plain TCP).
    *
-   * 평문 TCP 연결에서는 핸드셰이크가 필요 없으므로 즉시 ok()를 반환합니다.
+   * No handshake is required for plain TCP connections, so ok() is returned immediately.
    *
-   * @returns 항상 `Result<void>::ok()`.
+   * @returns Always `Result<void>::ok()`.
    */
   Task<Result<void>> handshake() override {
     co_return Result<void>::ok();
   }
 
   /**
-   * @brief 전송 계층을 닫습니다.
+   * @brief Closes the transport layer.
    *
-   * `shutdown(SHUT_WR)`으로 쓰기를 종료한 뒤 fd를 닫습니다.
-   * 이미 닫힌 상태에서 호출 시 no-op입니다.
+   * Terminates writes via `shutdown(SHUT_WR)` and then closes the fd.
+   * Is a no-op if already closed.
    *
-   * @returns 성공 시 `Result<void>::ok()`, 실패 시 에러 코드.
+   * @returns `Result<void>::ok()` on success, error code on failure.
    */
   Task<Result<void>> close() override {
     if (fd_ < 0) {
@@ -125,7 +125,7 @@ public:
     }
     int fd = fd_;
     fd_ = -1;
-    // 쓰기 종료로 FIN 전송 (수신은 계속 가능)
+    // Send FIN by shutting down writes (receive side remains open)
     ::shutdown(fd, SHUT_WR);
     if (::close(fd) != 0) {
       co_return unexpected(std::error_code(errno, std::system_category()));
@@ -134,23 +134,23 @@ public:
   }
 
   /**
-   * @brief ALPN 협상 프로토콜 반환 (평문 TCP이므로 빈 문자열).
-   * @returns 항상 `""`.
+   * @brief Returns the ALPN negotiated protocol (empty string for plain TCP).
+   * @returns Always `""`.
    */
   std::string_view negotiated_protocol() const noexcept override {
     return "";
   }
 
-  // ─── 접근자 ─────────────────────────────────────────────────────────────
+  // ─── Accessors ───────────────────────────────────────────────────────────
 
   /**
-   * @brief 내부 파일 디스크립터를 반환합니다.
-   * @returns 소켓 fd. close() 후에는 -1.
+   * @brief Returns the internal file descriptor.
+   * @returns Socket fd. -1 after close().
    */
   int fd() const noexcept { return fd_; }
 
 private:
-  /** @brief 관리 중인 TCP 소켓 파일 디스크립터. */
+  /** @brief The managed TCP socket file descriptor. */
   int fd_;
 };
 

@@ -251,30 +251,30 @@ inline std::string base64url_encode(const uint8_t *data, size_t len) {
 }
 
 /**
- * @brief 하드웨어 RDRAND로 버퍼를 채웁니다. 미지원 시 `random_fill()`으로 폴백.
+ * @brief Fills a buffer using hardware RDRAND. Falls back to `random_fill()` if unsupported.
  *
- * RDRAND가 지원되면 8바이트 단위로 빠르게 채우고,
- * 지원되지 않으면 `random_fill()` (getrandom/arc4random_buf)을 호출합니다.
+ * If RDRAND is supported, fills the buffer in 8-byte chunks quickly.
+ * Otherwise, calls `random_fill()` (getrandom/arc4random_buf).
  *
- * ## 사용 예시
+ * ## Usage example
  * @code
  * std::array<uint8_t, 32> key;
- * qbuem::hw_entropy_fill(key.data(), key.size()); // 256-bit 하드웨어 엔트로피
+ * qbuem::hw_entropy_fill(key.data(), key.size()); // 256-bit hardware entropy
  * @endcode
  *
- * @param buf 채울 버퍼 포인터.
- * @param len 채울 바이트 수.
- * @throws std::runtime_error 엔트로피 소스를 사용할 수 없을 때.
+ * @param buf Pointer to the buffer to fill.
+ * @param len Number of bytes to fill.
+ * @throws std::runtime_error if the entropy source is unavailable.
  */
 inline void hw_entropy_fill(void *buf, size_t len) {
   auto *ptr = static_cast<uint8_t*>(buf);
   size_t done = 0;
 
-  // 8바이트 단위: RDRAND 사용
+  // 8-byte chunks: use RDRAND
   while (done + 8 <= len) {
     uint64_t rand_val = 0;
     if (!rdrand64(rand_val)) {
-      // RDRAND 실패 → 나머지는 kernel CSPRNG로 처리
+      // RDRAND failed — handle remainder with kernel CSPRNG
       random_fill(ptr + done, len - done);
       return;
     }
@@ -282,7 +282,7 @@ inline void hw_entropy_fill(void *buf, size_t len) {
     done += 8;
   }
 
-  // 잔여 바이트: kernel CSPRNG
+  // Remaining bytes: kernel CSPRNG
   if (done < len) {
     uint64_t rand_val = 0;
     if (rdrand64(rand_val)) {
@@ -294,13 +294,13 @@ inline void hw_entropy_fill(void *buf, size_t len) {
 }
 
 /**
- * @brief RDSEED로 버퍼를 채웁니다. RDRAND보다 느리지만 물리적 엔트로피 포함.
+ * @brief Fills a buffer using RDSEED. Slower than RDRAND but contains physical entropy.
  *
- * RDSEED 실패 시 `hw_entropy_fill()`(RDRAND 우선)으로 폴백합니다.
+ * Falls back to `hw_entropy_fill()` (RDRAND preferred) if RDSEED fails.
  *
- * @param buf 채울 버퍼.
- * @param len 바이트 수.
- * @throws std::runtime_error 엔트로피 소스 없을 때.
+ * @param buf Buffer to fill.
+ * @param len Number of bytes.
+ * @throws std::runtime_error if no entropy source is available.
  */
 inline void hw_seed_fill(void *buf, size_t len) {
   auto *ptr = static_cast<uint8_t*>(buf);
@@ -309,7 +309,7 @@ inline void hw_seed_fill(void *buf, size_t len) {
   while (done + 8 <= len) {
     uint64_t seed_val = 0;
     if (!rdseed64(seed_val)) {
-      // RDSEED 미지원/실패 → RDRAND + kernel CSPRNG 폴백
+      // RDSEED unsupported/failed — fall back to RDRAND + kernel CSPRNG
       hw_entropy_fill(ptr + done, len - done);
       return;
     }
@@ -328,12 +328,12 @@ inline void hw_seed_fill(void *buf, size_t len) {
 }
 
 /**
- * @brief 하드웨어 RDRAND가 사용 가능한지 런타임 확인합니다.
+ * @brief Checks at runtime whether hardware RDRAND is available.
  *
- * CPUID를 이용해 ECX bit 30 (RDRAND 지원 여부)을 확인합니다.
- * 최초 호출 후 캐시합니다.
+ * Uses CPUID to check ECX bit 30 (RDRAND support flag).
+ * Caches the result after the first call.
  *
- * @returns RDRAND 사용 가능이면 true.
+ * @returns true if RDRAND is available.
  */
 [[nodiscard]] inline bool has_rdrand() noexcept {
 #if defined(__x86_64__) || defined(__i386__)
@@ -356,11 +356,11 @@ inline void hw_seed_fill(void *buf, size_t len) {
 }
 
 /**
- * @brief CPU RDSEED가 사용 가능한지 런타임 확인합니다.
+ * @brief Checks at runtime whether CPU RDSEED is available.
  *
- * CPUID EBX bit 18 (RDSEED)를 확인합니다.
+ * Checks CPUID EBX bit 18 (RDSEED support flag).
  *
- * @returns RDSEED 사용 가능이면 true.
+ * @returns true if RDSEED is available.
  */
 [[nodiscard]] inline bool has_rdseed() noexcept {
 #if defined(__x86_64__) || defined(__i386__)

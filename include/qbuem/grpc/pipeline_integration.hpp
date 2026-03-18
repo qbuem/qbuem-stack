@@ -305,93 +305,93 @@ grpc_server_streaming_to_pipeline(
 {
     return [handler_fn = std::move(handler_fn),
             pipeline   = std::move(pipeline)](Req request, Stream<Res> stream) -> Task<void> {
-        // 요청을 파이프라인으로 전달
+        // Forward the request to the pipeline
         co_await handler_fn(std::move(request), pipeline);
 
-        // 파이프라인에서 결과를 읽어 클라이언트 스트림으로 전달
+        // Read results from the pipeline and deliver them to the client stream
         while (stream.is_open()) {
             auto item = co_await pipeline->recv();
             if (!item) {
-                // EOS: 파이프라인 채널이 닫힘
+                // EOS: pipeline channel is closed
                 break;
             }
             auto r = co_await stream.send(std::move(*item));
             if (!r) {
-                // 클라이언트 연결 끊김
+                // Client connection dropped
                 break;
             }
         }
 
-        // 트레일러 전송 (이미 닫힌 경우 no-op)
+        // Send trailers (no-op if already closed)
         co_await stream.close(0, "OK");
     };
 }
 
 /**
- * @brief Client Streaming RPC용 `AsyncChannel<Req>`를 생성하고 피더 핸들러를 반환합니다.
+ * @brief Creates an `AsyncChannel<Req>` for a Client Streaming RPC and returns a feeder handler.
  *
- * 클라이언트 스트리밍 RPC에서 수신되는 메시지를 `AsyncChannel<Req>`에 순서대로
- * 전달하는 핸들러 함수를 함께 생성합니다.
+ * Also creates a handler function that forwards messages received in a client
+ * streaming RPC to an `AsyncChannel<Req>` in order.
  *
- * 반환 타입:
+ * Return type:
  * ```cpp
  * struct {
- *     std::shared_ptr<AsyncChannel<Req>> channel;   // 소비자가 recv() 호출
- *     std::function<Task<void>(Req)>     feeder;    // 수신 메시지마다 호출
+ *     std::shared_ptr<AsyncChannel<Req>> channel;   // consumer calls recv()
+ *     std::function<Task<void>(Req)>     feeder;    // called for each received message
  * };
  * ```
  *
- * ### 사용 예시
+ * ### Usage example
  * @code
  * auto [channel, feeder] = grpc_client_streaming_to_channel<MyRequest, MyResponse>();
  *
- * // gRPC 프레임워크가 수신 메시지마다 feeder 호출
+ * // gRPC framework calls feeder for each received message
  * co_await feeder(incoming_request);
  *
- * // 소비 측 (별도 코루틴):
+ * // Consumer side (separate coroutine):
  * while (auto msg = co_await channel->recv()) {
  *     process(*msg);
  * }
  * @endcode
  *
- * @tparam Req 클라이언트가 전송하는 요청 메시지 타입.
- * @tparam Res 서버가 반환하는 응답 메시지 타입 (채널 타입 태깅용, 실제 사용 안 함).
- * @param capacity 내부 링 버퍼 용량 (기본값: 256).
- * @returns `channel`과 `feeder`를 담는 구조체.
+ * @tparam Req Request message type sent by the client.
+ * @tparam Res Response message type returned by the server (used only for channel type tagging).
+ * @param capacity Internal ring buffer capacity (default: 256).
+ * @returns Struct containing `channel` and `feeder`.
  */
 template <typename Req, typename Res = void>
 struct ClientStreamingPair {
-    /** @brief 소비자가 `recv()`로 메시지를 읽는 채널. */
+    /** @brief Channel from which the consumer reads messages via `recv()`. */
     std::shared_ptr<::qbuem::AsyncChannel<Req>> channel;
     /**
-     * @brief gRPC 프레임워크가 수신 메시지마다 호출하는 피더 함수.
-     *        채널이 닫히면 내부적으로 EOS를 전파합니다.
+     * @brief Feeder function called by the gRPC framework for each received message.
+     *        Propagates EOS internally when the channel is closed.
      */
     std::function<Task<void>(Req)>              feeder;
 };
 
 /**
- * @brief `AsyncChannel<Req>` + 피더 핸들러 쌍을 생성합니다.
+ * @brief Creates an `AsyncChannel<Req>` + feeder handler pair.
  *
  * @see ClientStreamingPair
  *
- * @tparam Req 클라이언트 요청 메시지 타입.
- * @tparam Res 응답 메시지 타입 (태깅 전용).
- * @param capacity 채널 링 버퍼 용량 (기본값: 256).
+ * @tparam Req Client request message type.
+ * @tparam Res Response message type (for tagging only).
+ * @param capacity Channel ring buffer capacity (default: 256).
  * @returns `ClientStreamingPair<Req, Res>`.
  *
- * ### 사용 예시
+ * ### Usage example
  * @code
  * auto pair = grpc_client_streaming_to_channel<UploadChunk, UploadResult>(512);
  *
- * // gRPC 수신 루프에서:
+ * // In the gRPC receive loop:
  * while (has_next_frame()) {
  *     auto chunk = decode_chunk(recv_frame());
  *     co_await pair.feeder(std::move(chunk));
  * }
- * pair.channel->close();  // EOS 알림
+ * pair.channel->close();  // signal EOS
  *
- * // 처리 코루틴에서:
+ * // In the processing coroutine:
  * while (auto chunk = co_await pair.channel->recv()) {
  *     append_to_storage(*chunk);
  * }

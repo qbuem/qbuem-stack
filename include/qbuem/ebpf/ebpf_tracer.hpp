@@ -2,15 +2,15 @@
 
 /**
  * @file qbuem/ebpf/ebpf_tracer.hpp
- * @brief eBPF CO-RE 기반 qbuem-stack 관찰성 — BPF 측정점 및 맵 읽기 인터페이스.
+ * @brief eBPF CO-RE based qbuem-stack observability — BPF probe points and map read interface.
  * @defgroup qbuem_ebpf EBPFTracer
  * @ingroup qbuem_observability
  *
- * ## 개요
- * eBPF CO-RE(Compile Once - Run Everywhere)를 활용해 qbuem-stack의
- * 런타임 이벤트를 kernel-space에서 측정하고 user-space로 전달합니다.
+ * ## Overview
+ * Uses eBPF CO-RE (Compile Once - Run Everywhere) to measure qbuem-stack
+ * runtime events in kernel-space and deliver them to user-space.
  *
- * ## 아키텍처
+ * ## Architecture
  * ```
  * qbuem-stack (user-space)     kernel eBPF programs    user-space consumer
  *  TCP accept ──────────────► kprobe/tracepoint ────► BPF ringbuf ──► EBPFTracer::poll()
@@ -18,18 +18,18 @@
  *  io_uring SQE ───────────► tracepoint/fentry    ──► perf event  ──► EBPFTracer::subscribe()
  * ```
  *
- * ## CO-RE 호환성
- * BTF(BPF Type Format)를 통해 커널 구조체 오프셋을 런타임에 재배치합니다.
- * 한 번 컴파일된 BPF 오브젝트는 커널 5.4+에서 재컴파일 없이 동작합니다.
+ * ## CO-RE compatibility
+ * BTF (BPF Type Format) is used to relocate kernel struct offsets at runtime.
+ * A BPF object compiled once runs on kernel 5.4+ without recompilation.
  *
- * ## 측정점 카탈로그
- * | 측정점 | 타입 | 이벤트 |
- * |--------|------|--------|
- * | `tcp_accept` | kprobe | 새 TCP 연결 수락 |
- * | `http_parse_latency` | uprobe | HTTP 파싱 레이턴시 |
- * | `pipeline_action_enter/exit` | uprobe | 파이프라인 액션 실행 시간 |
- * | `io_uring_submit` | tracepoint | io_uring SQE 제출 |
- * | `shm_channel_send` | uprobe | SHM 채널 메시지 전송 |
+ * ## Probe point catalog
+ * | Probe point                       | Type       | Event                          |
+ * |-----------------------------------|------------|--------------------------------|
+ * | `tcp_accept`                      | kprobe     | New TCP connection accepted     |
+ * | `http_parse_latency`              | uprobe     | HTTP parsing latency           |
+ * | `pipeline_action_enter/exit`      | uprobe     | Pipeline action execution time |
+ * | `io_uring_submit`                 | tracepoint | io_uring SQE submission        |
+ * | `shm_channel_send`                | uprobe     | SHM channel message send       |
  *
  * @{
  */
@@ -46,9 +46,9 @@
 
 namespace qbuem::ebpf {
 
-// ─── 이벤트 타입 ─────────────────────────────────────────────────────────────
+// ─── Event types ──────────────────────────────────────────────────────────────
 
-/** @brief eBPF 측정점에서 수집된 이벤트 종류. */
+/** @brief Kinds of events collected from eBPF probe points. */
 enum class EventType : uint16_t {
     TcpAccept          = 1,
     TcpClose           = 2,
@@ -65,24 +65,24 @@ enum class EventType : uint16_t {
     Custom             = 255,
 };
 
-// ─── 이벤트 레코드 ────────────────────────────────────────────────────────────
+// ─── Event record ─────────────────────────────────────────────────────────────
 
 /**
- * @brief BPF ringbuf에서 user-space로 전달되는 이벤트 레코드.
+ * @brief Event record delivered from the BPF ringbuf to user-space.
  *
- * 크기: 64B (단일 캐시 라인).
+ * Size: 64 bytes (single cache line).
  */
 struct alignas(64) TraceEvent {
-    uint64_t  timestamp_ns{0};  ///< ktime_get_ns() 타임스탬프
-    uint64_t  duration_ns{0};   ///< 소요 시간 (enter/exit 쌍인 경우)
-    uint64_t  tid{0};           ///< 스레드 ID (BPF bpf_get_current_pid_tgid())
-    uint32_t  cpu{0};           ///< 실행된 CPU 번호
+    uint64_t  timestamp_ns{0};  ///< ktime_get_ns() timestamp
+    uint64_t  duration_ns{0};   ///< Elapsed time (for enter/exit pairs)
+    uint64_t  tid{0};           ///< Thread ID (BPF bpf_get_current_pid_tgid())
+    uint32_t  cpu{0};           ///< CPU number the event ran on
     EventType type{EventType::Custom};
-    uint16_t  flags{0};         ///< 이벤트별 플래그
-    uint8_t   label[24]{};      ///< 이벤트 레이블 (null-terminated, 최대 23자)
-    uint64_t  val{0};           ///< 이벤트별 추가 데이터 (e.g. fd, bytes)
+    uint16_t  flags{0};         ///< Per-event flags
+    uint8_t   label[24]{};      ///< Event label (null-terminated, max 23 chars)
+    uint64_t  val{0};           ///< Per-event extra data (e.g. fd, bytes)
 
-    /** @brief 레이블을 안전하게 설정합니다. */
+    /** @brief Safely sets the event label. */
     void set_label(std::string_view s) noexcept {
         size_t n = s.size() < 23 ? s.size() : 23;
         __builtin_memcpy(label, s.data(), n);
@@ -94,51 +94,51 @@ struct alignas(64) TraceEvent {
 };
 static_assert(sizeof(TraceEvent) == 64, "TraceEvent must be exactly 64 bytes (one cache line)");
 
-// ─── BPF 맵 통계 ─────────────────────────────────────────────────────────────
+// ─── BPF map statistics ───────────────────────────────────────────────────────
 
 /**
- * @brief qbuem BPF 프로그램이 집계하는 전역 통계.
+ * @brief Global statistics aggregated by qbuem BPF programs.
  *
- * BPF hashmap/percpu_array에 저장되며 `EBPFTracer::read_stats()`로 조회합니다.
+ * Stored in a BPF hashmap/percpu_array and queried via `EBPFTracer::read_stats()`.
  */
 struct BPFStats {
-    uint64_t tcp_accepts{0};         ///< 총 TCP accept 횟수
-    uint64_t http_requests{0};       ///< 총 HTTP 요청 수
-    uint64_t avg_http_parse_ns{0};   ///< 평균 HTTP 파싱 레이턴시 (ns)
-    uint64_t io_uring_submits{0};    ///< io_uring SQE 제출 횟수
-    uint64_t pipeline_actions{0};    ///< 파이프라인 액션 실행 횟수
-    uint64_t shm_sends{0};          ///< SHM 채널 전송 횟수
-    uint64_t jwt_verifications{0};   ///< JWT 검증 횟수
-    uint64_t rdma_writes{0};        ///< RDMA Write 횟수
+    uint64_t tcp_accepts{0};         ///< Total TCP accept count
+    uint64_t http_requests{0};       ///< Total HTTP request count
+    uint64_t avg_http_parse_ns{0};   ///< Average HTTP parse latency (ns)
+    uint64_t io_uring_submits{0};    ///< io_uring SQE submission count
+    uint64_t pipeline_actions{0};    ///< Pipeline action execution count
+    uint64_t shm_sends{0};          ///< SHM channel send count
+    uint64_t jwt_verifications{0};   ///< JWT verification count
+    uint64_t rdma_writes{0};        ///< RDMA Write count
 };
 
-// ─── 이벤트 콜백 ─────────────────────────────────────────────────────────────
+// ─── Event callback ───────────────────────────────────────────────────────────
 
-/** @brief BPF ringbuf 이벤트 수신 콜백. */
+/** @brief BPF ringbuf event receive callback. */
 using EventCallback = std::function<void(const TraceEvent&)>;
 
 // ─── EBPFTracer ──────────────────────────────────────────────────────────────
 
 /**
- * @brief qbuem-stack eBPF 관찰성 트레이서.
+ * @brief qbuem-stack eBPF observability tracer.
  *
- * ## 라이프사이클
- * 1. `EBPFTracer::create()` — BPF 오브젝트 로드, 맵/프로그램 초기화.
- * 2. `enable()` — 측정점 attach (uprobe/kprobe/tracepoint).
- * 3. `poll()` — BPF ringbuf에서 이벤트 수신.
- * 4. `disable()` — 측정점 detach.
+ * ## Lifecycle
+ * 1. `EBPFTracer::create()` — Load BPF object, initialize maps and programs.
+ * 2. `enable()` — Attach probe points (uprobe/kprobe/tracepoint).
+ * 3. `poll()` — Receive events from the BPF ringbuf.
+ * 4. `disable()` — Detach probe points.
  *
- * ## 권한
- * `CAP_BPF` (Linux 5.8+) 또는 `CAP_SYS_ADMIN`이 필요합니다.
+ * ## Permissions
+ * Requires `CAP_BPF` (Linux 5.8+) or `CAP_SYS_ADMIN`.
  */
 class EBPFTracer {
 public:
     /**
-     * @brief EBPFTracer를 초기화합니다.
+     * @brief Initializes the EBPFTracer.
      *
-     * @param bpf_obj_path BPF 오브젝트 파일 경로 (`.bpf.o`).
-     *                     `""` 이면 내장 skeleton BPF를 사용합니다.
-     * @returns 트레이서 또는 에러.
+     * @param bpf_obj_path Path to the BPF object file (`.bpf.o`).
+     *                     If `""`, the built-in skeleton BPF is used.
+     * @returns Tracer or error.
      */
     static Result<std::unique_ptr<EBPFTracer>> create(
         std::string_view bpf_obj_path = "") noexcept;
@@ -148,111 +148,112 @@ public:
     EBPFTracer& operator=(const EBPFTracer&) = delete;
     virtual ~EBPFTracer() = default;
 
-    // ── 측정점 관리 ────────────────────────────────────────────────────────
+    // ── Probe point management ─────────────────────────────────────────────
 
     /**
-     * @brief 특정 측정점을 활성화합니다.
+     * @brief Activates a specific probe point.
      *
-     * @param event_type 활성화할 이벤트 타입.
-     * @returns 성공 시 `Result<void>`.
+     * @param event_type Event type to activate.
+     * @returns `Result<void>` on success.
      */
     virtual Result<void> enable(EventType event_type) noexcept = 0;
 
     /**
-     * @brief 모든 측정점을 활성화합니다.
+     * @brief Activates all probe points.
      */
     virtual Result<void> enable_all() noexcept = 0;
 
     /**
-     * @brief 특정 측정점을 비활성화합니다.
+     * @brief Deactivates a specific probe point.
      */
     virtual Result<void> disable(EventType event_type) noexcept = 0;
 
     /**
-     * @brief 모든 측정점을 비활성화합니다.
+     * @brief Deactivates all probe points.
      */
     virtual void disable_all() noexcept = 0;
 
-    // ── 이벤트 수신 ────────────────────────────────────────────────────────
+    // ── Event reception ────────────────────────────────────────────────────
 
     /**
-     * @brief BPF ringbuf를 polling하여 이벤트를 수신합니다.
+     * @brief Polls the BPF ringbuf and receives events.
      *
-     * @param out      이벤트를 저장할 배열.
-     * @param timeout_ms polling 타임아웃 (ms). 0이면 논블로킹.
-     * @returns 수신된 이벤트 수.
+     * @param out        Array to store received events.
+     * @param timeout_ms Polling timeout (ms). 0 = non-blocking.
+     * @returns Number of events received.
      */
     virtual size_t poll(std::span<TraceEvent> out,
                          int timeout_ms = 0) noexcept = 0;
 
     /**
-     * @brief 이벤트 콜백을 등록합니다.
+     * @brief Registers an event callback.
      *
-     * `poll()` 대신 콜백 방식을 선호하는 경우 사용합니다.
+     * Use this when a callback-based approach is preferred over `poll()`.
      *
-     * @param cb 이벤트 수신 시 호출될 콜백.
+     * @param cb Callback invoked when an event is received.
      */
     virtual void subscribe(EventCallback cb) noexcept = 0;
 
-    // ── 통계 ───────────────────────────────────────────────────────────────
+    // ── Statistics ─────────────────────────────────────────────────────────
 
     /**
-     * @brief BPF 맵에서 집계 통계를 읽습니다.
+     * @brief Reads aggregated statistics from the BPF map.
      *
-     * @returns 현재 BPFStats 스냅샷.
+     * @returns Current BPFStats snapshot.
      */
     [[nodiscard]] virtual BPFStats read_stats() const noexcept = 0;
 
     /**
-     * @brief BPF 통계 카운터를 초기화합니다.
+     * @brief Resets BPF statistics counters.
      */
     virtual void reset_stats() noexcept = 0;
 
-    // ── BPF 맵 직접 접근 ──────────────────────────────────────────────────
+    // ── Direct BPF map access ──────────────────────────────────────────────
 
     /**
-     * @brief BPF 맵에서 키로 값을 조회합니다.
+     * @brief Looks up a value by key in a BPF map.
      *
-     * @tparam K 키 타입.
-     * @tparam V 값 타입.
-     * @param map_name BPF 맵 이름.
-     * @param key      조회 키.
-     * @returns 값 또는 nullopt (키 없음).
+     * @tparam K Key type.
+     * @tparam V Value type.
+     * @param map_name BPF map name.
+     * @param key      Lookup key.
+     * @returns Value or nullopt (key not found).
      */
     template <typename K, typename V>
     [[nodiscard]] std::optional<V> lookup_map(std::string_view map_name,
                                                const K& key) const noexcept;
 
-    // ── 진단 ───────────────────────────────────────────────────────────────
+    // ── Diagnostics ────────────────────────────────────────────────────────
 
-    /** @brief 로드된 BPF 프로그램 수. */
+    /** @brief Number of loaded BPF programs. */
     [[nodiscard]] virtual size_t program_count() const noexcept = 0;
 
-    /** @brief 로드된 BPF 맵 수. */
+    /** @brief Number of loaded BPF maps. */
     [[nodiscard]] virtual size_t map_count() const noexcept = 0;
 
-    /** @brief BPF ringbuf 드롭 카운트 (버퍼 포화 시). */
+    /** @brief BPF ringbuf drop count (when buffer is saturated). */
     [[nodiscard]] virtual uint64_t ringbuf_drops() const noexcept = 0;
 };
 
-// ─── 경량 측정 매크로 (user-space uprobe 측정점) ──────────────────────────────
+// ─── Lightweight probe macro (user-space uprobe probe points) ─────────────────
 
 /**
- * @brief uprobe 측정점을 정의하는 인라인 no-op 함수.
+ * @brief Inline no-op function that defines a uprobe probe point.
  *
- * BPF 프로그램은 이 함수에 uprobe를 부착합니다.
- * release 빌드에서도 심볼이 제거되지 않도록 `[[gnu::noinline]]`으로 선언합니다.
+ * BPF programs attach a uprobe to this function.
+ * Declared with `[[gnu::noinline]]` to prevent the symbol from being removed
+ * even in release builds.
  *
  * @code
- * // qbuem 내부에서 사용:
+ * // Used internally by qbuem:
  * QBUEM_TRACE_POINT("pipeline.http.parse.begin", fd, 0);
- * // BPF 프로그램: SEC("uprobe/qbuem_trace_point")
+ * // BPF program: SEC("uprobe/qbuem_trace_point")
  * @endcode
  */
 [[gnu::noinline]] inline void qbuem_trace_point(
     const char* label, uint64_t val0, uint64_t val1) noexcept {
-    // 측정점 no-op — BPF uprobe가 부착됩니다.
-    // volatile 키워드로 컴파일러 최적화 제거 방지
+    // Probe point no-op — a BPF uprobe is attached here.
+    // volatile prevents the compiler from optimizing away the arguments.
     volatile const char* l = label;
     volatile uint64_t    v0 = val0;
     volatile uint64_t    v1 = val1;
@@ -260,10 +261,10 @@ public:
 }
 
 /**
- * @brief 편의 매크로 — 측정점 호출.
+ * @brief Convenience macro — invokes a probe point.
  *
- * 릴리스 빌드에서도 측정점은 유지됩니다 (BPF attach 용).
- * 오버헤드는 단일 no-op 함수 호출(≈1ns)입니다.
+ * Probe points are retained even in release builds (for BPF attachment).
+ * Overhead is a single no-op function call (~1 ns).
  */
 #define QBUEM_TRACE(label, val0, val1) \
     ::qbuem::ebpf::qbuem_trace_point((label), (val0), (val1))
