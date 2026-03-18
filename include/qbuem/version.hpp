@@ -2,77 +2,88 @@
 
 /**
  * @file qbuem/version.hpp
- * @brief qbuem-stack 라이브러리의 버전 정보를 정의합니다.
+ * @brief Version constants for the qbuem-stack library.
  * @ingroup qbuem_version
  *
- * 이 헤더는 컴파일 타임 버전 상수와 전처리기 매크로를 모두 제공합니다.
- * - 템플릿/constexpr 코드에서는 `qbuem::Version::major` 등의 상수를 사용하세요.
- * - 전처리기 조건 분기(`#if`)가 필요한 경우에는 매크로(`QBUEM_VERSION_MAJOR`)를 사용하세요.
+ * This header provides both compile-time version constants and preprocessor
+ * macros:
+ * - Use `qbuem::Version::major` (and friends) in templates and constexpr code.
+ * - Use `QBUEM_VERSION_MAJOR` (and friends) in `#if` preprocessor conditions.
  *
- * ### 버전 이력
- * - 0.1.0: 최초 공개 릴리스
- * - 0.2.0: 비동기 로거(AsyncLogger), 코루틴 Task 추가
- * - 0.3.0: AsyncConnect awaiter, FixedPoolResource, 전반적 API 안정화
+ * ### Version history
+ * - 0.1.0: Initial public release.
+ * - 0.2.0: AsyncLogger, coroutine Task<T>.
+ * - 0.3.0: AsyncConnect awaiter, FixedPoolResource, general API stabilization.
  * - 0.4.0: SO_REUSEPORT per-reactor accept, io_uring SQPOLL, AsyncMiddleware
- *           next(), Structured logging, 동적 Rate Limit, HTTP Trailer,
- *           Drain mode 강화
- * - 0.5.0: Reactor::post(), Dispatcher::spawn(), cross-thread wakeup
+ *           next(), structured logging, dynamic rate limiting, HTTP Trailer,
+ *           enhanced drain mode.
+ * - 0.5.0: Reactor::post(), Dispatcher::spawn(), cross-thread wakeup.
  * - 0.6.0: Context, ServiceRegistry, AsyncChannel, Action, StaticPipeline,
- *           TaskGroup, DynamicPipeline, PipelineGraph, MessageBus
+ *           TaskGroup, DynamicPipeline, PipelineGraph, MessageBus.
  * - 0.7.0: SocketAddr, TcpListener, TcpStream, UdpSocket, IOSlice, IOVec<N>,
  *           ReadBuf<N>, WriteBuf, BufferPool, zero_copy::, AsyncFile,
  *           IFrameCodec, LengthPrefixedCodec, LineCodec, Http1Codec,
- *           AcceptLoop, ConnectionPool, TimerWheel, PlainTransport
+ *           AcceptLoop, ConnectionPool, TimerWheel, PlainTransport.
  * - 0.8.0: RetryPolicy, CircuitBreaker, DeadLetterQueue, TraceContext,
  *           Sampler, SpanExporter, PipelineTracer, kTLS, HugeBufferPool,
- *           MmapArena, SENDMSG_ZC, ACCEPT/RECV_MULTISHOT
+ *           MmapArena, SENDMSG_ZC, ACCEPT/RECV_MULTISHOT.
  * - 0.9.0: hot_swap, PriorityChannel, PipelineFactory, SubpipelineAction,
  *           SpscChannel, batch ops, stream operators, DebounceAction,
- *           ThrottleAction, ScatterGatherAction, cpu_hints
+ *           ThrottleAction, ScatterGatherAction, cpu_hints.
  * - 0.9.1: WindowedAction, SagaOrchestrator, IdempotencyFilter,
- *           CheckpointStore, SloConfig, ErrorBudgetTracker, CanaryRouter
+ *           CheckpointStore, SloConfig, ErrorBudgetTracker, CanaryRouter.
  * - 0.9.2: NUMA-aware Dispatcher, PerfCounters, eBPF guide, PGO support,
- *           FUTEX_WAIT/WAKE, PipelineVersion, DlqReprocessor
+ *           FUTEX_WAIT/WAKE, PipelineVersion, DlqReprocessor.
  * - 1.0.0: Http1Handler, Http2Handler (HPACK), WebSocketHandler,
- *           GrpcHandler<Req,Res>, gRPC↔Pipeline integration,
- *           TraceMiddleware, InlineRequestBuffer, COMPONENTS support
- * - 1.1.0: AF_XDP + UMEM, cmake COMPONENTS full support,
- *           reactor forwarding headers, QUIC guide
- * - 1.2.0: TimerWheel::cancel() O(1), Heterogeneous map lookup,
- *           Context::get<T>() inline cache, RadixTree binary search
- * - 1.3.0: Kqueue reactor sophistication (User-space Buffer Ring,
- *           Multi-event Batching, Pointer-direct Dispatch)
- * - 1.4.0: Unified DB Abstraction (IDBDriver, ConnectionPool, Statement,
- *           db::Value, SIMD Protocol Parser),
- *           SHM Messaging (SHMChannel, Futex-uring Sync, Zero-copy DataArena,
- *           Unified SHMBus with SHMSource/SHMSink Pipeline integration)
- * - 1.5.0: Zero-dep Security & TLS
- *           (kTLS sendfile zero-copy encrypted transmission,
- *            SIMDJwtParser AVX2/SSE4.2/NEON/Scalar dot-scan + Base64url validation,
- *            Hardware Entropy: RDRAND/RDSEED inline asm with getrandom fallback,
- *            CPUID runtime detection for has_rdrand()/has_rdseed())
- * - 1.6.0: Embedded & PCIe Integration
- *           (PCIeDevice VFIO userspace PCIe control, BarMapping, DmaBuffer,
- *            MSIXReactor: MSI-X → eventfd → IReactor bridge, VectorStats,
- *            UDS Advanced: SCM_RIGHTS FD passing, PeerCredentials, abstract sockets)
- * - 1.7.0: High-End Connectivity
- *           (RDMAContext/RDMAChannel IBVerbs RC QP RDMA Write/Read/Send/Recv,
- *            EBPFTracer CO-RE BPF ringbuf/uprobe/kprobe observability,
- *            NVMeIOContext io_uring IORING_OP_URING_CMD passthrough, DMABuffer)
- * - 2.0.0: Enhancement (고도화)
- *           (LockFreeConnectionPool LIFO FreeStack O(1) lock-free acquire/release,
- *            FutexSync IORING_OP_FUTEX_WAIT/WAKE + syscall fallback,
- *            FutexMutex cross-process RAII mutex, FutexSemaphore counting semaphore,
- *            JwtAuthAction<Msg> SIMD JWT Pipeline Action with LRU cache + Stats)
+ *           GrpcHandler<Req,Res>, gRPC <-> Pipeline integration,
+ *           TraceMiddleware, InlineRequestBuffer, COMPONENTS support.
+ * - 1.1.0: AF_XDP + UMEM, CMake COMPONENTS full support,
+ *           reactor forwarding headers, QUIC guide.
+ * - 1.2.0: TimerWheel::cancel() O(1), heterogeneous map lookup,
+ *           Context::get<T>() inline cache, RadixTree binary search.
+ * - 1.3.0: kqueue reactor sophistication (user-space buffer ring,
+ *           multi-event batching, pointer-direct dispatch).
+ * - 1.4.0: Unified DB abstraction (IDBDriver, ConnectionPool, Statement,
+ *           db::Value, SIMD protocol parser),
+ *           SHM messaging (SHMChannel, Futex-uring sync, zero-copy DataArena,
+ *           unified SHMBus with SHMSource/SHMSink pipeline integration).
+ * - 1.5.0: Zero-dependency security & TLS
+ *           (kTLS sendfile zero-copy encrypted transmission;
+ *            SIMDJwtParser AVX2/SSE4.2/NEON/Scalar dot-scan + Base64url validation;
+ *            hardware entropy: RDRAND/RDSEED inline asm with getrandom fallback,
+ *            CPUID runtime detection for has_rdrand() / has_rdseed()).
+ * - 1.6.0: Embedded & PCIe integration
+ *           (PCIeDevice VFIO user-space PCIe control, BarMapping, DmaBuffer;
+ *            MSIXReactor: MSI-X -> eventfd -> IReactor bridge, VectorStats;
+ *            UDS advanced: SCM_RIGHTS FD passing, PeerCredentials, abstract sockets).
+ * - 1.7.0: High-end connectivity
+ *           (RDMAContext/RDMAChannel IBVerbs RC QP RDMA Write/Read/Send/Recv;
+ *            EBPFTracer CO-RE BPF ringbuf/uprobe/kprobe observability;
+ *            NVMeIOContext io_uring IORING_OP_URING_CMD passthrough, DMABuffer).
+ * - 2.0.0: Enhancement — lock-free infrastructure & JWT pipeline integration
+ *           (LockFreeConnectionPool LIFO FreeStack O(1) lock-free acquire/release;
+ *            FutexSync IORING_OP_FUTEX_WAIT/WAKE + syscall fallback;
+ *            FutexMutex cross-process RAII mutex; FutexSemaphore counting semaphore;
+ *            JwtAuthAction<Msg> SIMD JWT pipeline action with LRU cache + stats).
+ * - 2.1.0: Pipeline <-> IPC full integration
+ *           (PipelineBuilder::with_source() / with_sink() IPC bridge adapters;
+ *            MessageBusSource<T>, MessageBusSink<T>;
+ *            SHMSource<T>, SHMSink<T>; SHMChannel::unlink()).
+ * - 2.2.0: Monadic HTTP fetch client (curl-free)
+ *           (Result::map/and_then/transform_error/value_or monad operations;
+ *            ParsedUrl RFC 3986 parser; FetchRequest/FetchResponse builder API;
+ *            fetch() JavaScript-style entry point; DnsResolver non-blocking;
+ *            FetchRequest::timeout() + max_redirects(); FetchClient connection pool;
+ *            TlsStream / fetch_tls() kTLS kernel offload for HTTPS).
  */
 
 /**
  * @defgroup qbuem_version Version
- * @brief 라이브러리 버전 식별 심볼 모음.
+ * @brief Library version identification symbols.
  *
- * 런타임 및 컴파일 타임 양쪽에서 버전을 조회할 수 있도록
- * 구조체 상수(constexpr)와 C 매크로 두 가지 형태로 제공됩니다.
- * Semantic Versioning 2.0.0(https://semver.org)을 따릅니다.
+ * Both `constexpr` struct constants and C preprocessor macros are provided
+ * so that the version can be queried at compile time and at the preprocessor
+ * level. Follows Semantic Versioning 2.0.0 (https://semver.org).
  * @{
  */
 
@@ -81,47 +92,47 @@
 namespace qbuem {
 
 /**
- * @brief qbuem-stack 라이브러리 버전 정보를 담는 구조체.
+ * @brief Compile-time version information for qbuem-stack.
  *
- * 모든 멤버는 `constexpr`이므로 컴파일 타임 상수로 사용할 수 있습니다.
- * static_assert나 템플릿 파라미터에서도 활용 가능합니다.
+ * All members are `constexpr` and may be used in `static_assert` expressions
+ * or as template non-type parameters.
  *
- * @note Semantic Versioning 규칙:
- *   - `major`: 하위 호환이 깨지는 API 변경 시 증가
- *   - `minor`: 하위 호환을 유지하면서 기능 추가 시 증가
- *   - `patch`: 버그 수정만 있을 경우 증가
+ * @note Semantic versioning rules:
+ *   - `major`: incremented on backwards-incompatible API changes.
+ *   - `minor`: incremented when new features are added in a backwards-compatible manner.
+ *   - `patch`: incremented for backwards-compatible bug fixes only.
  *
  * @code
- * static_assert(qbuem::Version::major >= 0, "버전 확인");
- * std::cout << qbuem::Version::string << '\n'; // "1.3.0"
+ * static_assert(qbuem::Version::major >= 2, "qbuem-stack 2.x required");
+ * std::cout << qbuem::Version::string << '\n'; // "2.2.0"
  * @endcode
  */
 struct Version {
-  /** @brief Major 버전 번호. API 하위 호환이 깨질 때 증가합니다. */
+  /** @brief Major version number. Incremented on backwards-incompatible API changes. */
   static constexpr int major = 2;
 
-  /** @brief Minor 버전 번호. 하위 호환을 유지하며 새 기능이 추가될 때 증가합니다. */
-  static constexpr int minor = 0;
+  /** @brief Minor version number. Incremented when new backwards-compatible features are added. */
+  static constexpr int minor = 2;
 
-  /** @brief Patch 버전 번호. 버그 수정만 이루어질 때 증가합니다. */
+  /** @brief Patch version number. Incremented for backwards-compatible bug fixes only. */
   static constexpr int patch = 0;
 
-  /** @brief "major.minor.patch" 형식의 버전 문자열 (null-terminated 보장). */
-  static constexpr std::string_view string = "2.0.0";
+  /** @brief Version string in "major.minor.patch" format (null-terminated). */
+  static constexpr std::string_view string = "2.2.0";
 };
 
 } // namespace qbuem
 
-/** @brief Major 버전 번호 (전처리기 조건 분기용). */
+/** @brief Major version number (for use in preprocessor `#if` conditions). */
 #define QBUEM_VERSION_MAJOR 2
 
-/** @brief Minor 버전 번호 (전처리기 조건 분기용). */
-#define QBUEM_VERSION_MINOR 0
+/** @brief Minor version number (for use in preprocessor `#if` conditions). */
+#define QBUEM_VERSION_MINOR 2
 
-/** @brief Patch 버전 번호 (전처리기 조건 분기용). */
+/** @brief Patch version number (for use in preprocessor `#if` conditions). */
 #define QBUEM_VERSION_PATCH 0
 
-/** @brief "major.minor.patch" 형식의 버전 문자열 리터럴 (전처리기 조건 분기용). */
-#define QBUEM_VERSION_STRING "2.0.0"
+/** @brief Version string literal "major.minor.patch" (for use in preprocessor conditions). */
+#define QBUEM_VERSION_STRING "2.2.0"
 
 /** @} */ // end of qbuem_version
