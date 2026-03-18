@@ -165,15 +165,15 @@ private:
 // ---------------------------------------------------------------------------
 
 /**
- * @brief Token bucket 기반 초당 최대 샘플 수 제한 샘플러.
+ * @brief Token-bucket-based sampler that limits the maximum number of samples per second.
  *
- * `max_per_second = 100` → 초당 최대 100개 스팬만 샘플링.
- * 버스트 허용량은 `max_per_second`와 동일합니다.
+ * `max_per_second = 100` → samples at most 100 spans per second.
+ * Burst allowance equals `max_per_second`.
  */
 class RateLimitingSampler final : public Sampler {
 public:
   /**
-   * @param max_per_second 초당 최대 샘플 수. 0이면 NeverSampler와 동일.
+   * @param max_per_second Maximum samples per second. 0 behaves like NeverSampler.
    */
   explicit RateLimitingSampler(double max_per_second)
       : rate_(max_per_second),
@@ -188,7 +188,7 @@ public:
     auto now = clock::now();
     double elapsed = std::chrono::duration<double>(now - last_refill_).count();
 
-    // 토큰 보충
+    // Refill tokens
     tokens_ = std::min(rate_, tokens_ + elapsed * rate_);
     last_refill_ = now;
 
