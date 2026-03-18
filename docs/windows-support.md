@@ -1,79 +1,54 @@
-# Windows Support & IOCP Integration
+# Windows Support & "Elite" RIO Integration
 
 > **Target Version**: v1.8.0-draft
-> **Status**: Planning / Architectural Specification
+> **Status**: High-Performance Specification
 
 ---
 
-## 1. Overview
+## 1. The Windows Performance Tiers
 
-To truly become a **Universal Distributed Operating Environment**, `qbuem-stack` must provide native support for the Windows platform. Following our **Strict Zero-Dependency** principle, this support is implemented directly using the Win32 API and Winsock2, avoiding mid-layer abstractions like `libuv` or `asio`.
+To reach the theoretical limits of Windows, `qbuem-stack` implements two reactor tiers:
 
-The core challenge lies in bridging the **Readiness-based** interface of our `IReactor` (modeled after `epoll`/`kqueue`) with Windows' **Completion-based** (Proactor) `IOCP` model.
+### Tier 1: IOCP (Standard Scalability)
+- **Mechanism**: `GetQueuedCompletionStatusEx`.
+- **Context**: Standard Proactor model.
+- **Benefit**: High connection counts with minimal thread overhead.
 
----
-
-## 2. Technical Architecture: Bridging Readiness and Completion
-
-### 2.1 IOCP (I/O Completion Ports)
-Windows uses `IOCP`, where the kernel performs the operation and notifies the application upon completion.
-
-### 2.2 Bridging via "Zero-Byte Peek"
-To maintain our current `Reactor::register_event(fd, Type, Callback)` contract without a massive rewrite:
-- **Read Readiness**: Issue a `WSARecv` with a 0-byte buffer.
-- **Completion**: When the 0-byte recv completes, the socket is "ready" for a real read.
-- **Dispatch**: Trigger the `read_cb` just like a `kqueue` or `epoll` event.
-
----
-
-## 3. Handle Abstraction
-
-Windows uses `HANDLE` and `SOCKET` types, which are pointers or unsigned integers, unlike POSIX's simple `int`.
-
-### `qbuem::Fd` Type
-We will introduce a cross-platform handle type:
-```cpp
-#ifdef _WIN32
-  using Fd = uintptr_t; // SOCKET/HANDLE
-#else
-  using Fd = int;        // POSIX fd
-#endif
-```
+### Tier 2: RIO (Extreme Performance - Registered I/O)
+- **Mechanism**: `RIOSend`, `RIORecieve`, and `RIODequeueCompletion`.
+- **Strategy**: 
+    - **Pre-registered Buffers**: Memory is locked and registered with the kernel once (via `RIORegisterBuffer`).
+    - **User-mode Completion**: Completions can be polled directly in user-space without system calls (similar to `io_uring` CQ polling).
+- **Benefit**: 
+    - 30-50% higher throughput for small packets.
+    - Zero context-switch overhead in the hot path.
+    - Perfect alignment with `qbuem::Arena` and `BufferPool`.
 
 ---
 
-## 4. Zero-Dependency Foundations
+## 2. Technical Architecture: "The RIO Bridge"
 
-| Component | Windows Implementation |
-| :--- | :--- |
-| **Networking** | `Winsock2.h` (WSAStartup, WSASocket, etc.) |
-| **Event Loop** | `GetQueuedCompletionStatusEx` (IOCP) |
-| **Wakeup** | `PostQueuedCompletionStatus` |
-| **Zero-Copy** | `TransmitFile` (equivalent to `sendfile`) |
-| **Timers** | `CreateTimerQueueTimer` or shared `TimerWheel` |
+### 2.1 Buffer Management
+RIO requires buffers to be part of a `RIO_BUFFERID`. 
+- **qbuem Integration**: Our `FixedPoolResource` will be modified to register its entire memory block with RIO at startup.
+- **Zero-Copy**: Sockets directly DMA into the registered pool.
 
----
-
-## 5. Implementation Roadmap
-
-### Phase 1: Foundation (v1.8.0)
-- Unified `Fd` type and cross-platform socket primitives.
-- `WinReactor` implementation via `GetQueuedCompletionStatusEx`.
-- `IOCPEntry` pool management using `FixedPoolResource`.
-
-### Phase 2: Performance (v1.8.5)
-- Support for `ConnectEx`, `AcceptEx`, and `DisconnectEx`.
-- Integration with Windows Named Pipes for low-latency IPC.
-- Overlapped I/O for `AsyncFile` support.
+### 2.2 RIOCP (RIO + IOCP)
+- For maximum versatility, RIO completion queues can be associated with an IOCP.
+- This allows the `WinReactor` to handle both standard handles (files, pipes) and RIO-optimized sockets in a single event loop.
 
 ---
 
-## 6. Strategic Benefits
+## 3. Implementation Roadmap (Revised)
 
-- **Universal Edge**: Industrial IoT and embedded Windows devices.
-- **Native Performance**: Reaching the theoretical limits of the Windows kernel.
-- **No WSL Required**: Direct development on Windows workstations with full performance.
+| Feature | Technique | Milestone |
+| :--- | :--- | :--- |
+| **Foundation** | Unified `Fd` / `SOCKET` abstraction | v1.8.0 |
+| **I/O Core** | IOCP Proactor Loop | v1.8.0 |
+| **Elite Path** | Windows RIO (Registered I/O) | v1.9.0 |
+| **Zero-Copy** | `TransmitFile` (Windows `sendfile`) | v1.8.5 |
+| **IPC** | Named Pipes (overlapped) | v1.8.5 |
 
 ---
 
-*qbuem-stack — Engineering for total platform universality.*
+*qbuem-stack — Reaching the absolute limits of the Windows NT kernel.*

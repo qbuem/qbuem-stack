@@ -224,8 +224,21 @@ pool.release(e);
 
 ## Review Pass/Fail Criteria
 
-Every code contribution — human or AI — is evaluated against the four pillars below.
+Every code contribution — human or AI — is evaluated against the pillars below.
 **A single violation in a hot path is a review failure and must be fixed before merge.**
+
+### Pillar 0 — Extreme Performance Implementation (v2.3.0+)
+
+> [!IMPORTANT]
+> **RULE #1**: ALL implementation work MUST strictly follow the technical specifications and research findings found in the `docs/` directory. Any deviation from the established high-performance patterns (e.g., using standard heap allocation instead of `Arena` or `FixedPoolResource`) is a critical review failure.
+
+| # | Rule | Requirement |
+|---|------|-------------|
+| E1 | **Reference Design Alignment** | Every implementation MUST follow the specific design guide in `docs/` (e.g., `docs/kqueue-optimization-guide.md`). |
+| E2 | **Platform Reactor Selection** | Linux: `io_uring` Multishot. macOS: `kqueue` udata-dispatch. Windows: `RIO` (Registered IO). |
+| E3 | **Zero-Copy File I/O** | Must use `O_DIRECT` + `io_uring` fixed buffers or Windows RIO registered buffers. |
+| E4 | **Hardware Locality** | MSI-X interrupts must be affine to the reactor CPU core. |
+| E5 | **Distributed Zero-Copy** | Use `NVMe-oF` via RDMA or `copy_file_range` for data migration. |
 
 ---
 

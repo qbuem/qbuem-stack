@@ -1,61 +1,43 @@
 # qbuem-stack
 
-> Zero Latency · Zero Allocation · Zero Dependency — High-performance C++20 infrastructure library for WAS, IPC, and data pipelines. v2.1.0.
+> Zero Latency · Zero Allocation · Zero Dependency — High-performance C++20 infrastructure library for WAS, IPC, and data pipelines. v2.3.0.
 
-`qbuem-stack` is a header-centric C++20 library targeting ultra-low latency server workloads. It provides:
-- **Zero-allocation HTTP/WAS** layer built on `io_uring`/`kqueue` with SIMD parsers
-- **StaticPipeline / DynamicPipeline** — type-safe, compile-time and runtime-configurable data processing chains
-- **SHMChannel<T> / SHMBus** — shared-memory lock-free ring buffers for sub-150 ns inter-process communication
-- **MessageBus** — in-process lock-free topic pub/sub with round-robin fan-out
-- **Resilience triad** — RetryAction + CircuitBreaker + DeadLetterQueue with exponential/jitter backoff
-- **W3C TraceContext / OTLP spans** — distributed tracing without external SDK dependency
+`qbuem-stack` is a header-centric C++20 library targeting ultra-low latency server workloads.
 
-Single umbrella header: `#include <qbuem/qbuem_stack.hpp>`
+## ⚡ Extreme Performance Standards (Baseline)
+- **IPC Latency**: < 200ns (SHM)
+- **THROUGHPUT**: > 40M RPS (HTTP/io_uring/AF_XDP)
+- **P99.9 Network**: < 10μs
+- **Zero-Allocation**: 0 Bytes during Hot-Path
 
 ## Core Documentation
 
-- [README](README.md): Project overview, quick start, feature matrix, benchmarks
-- [Pipeline Master Guide](docs/pipeline-master-guide.md): Complete reference for StaticPipeline, DynamicPipeline, PipelineGraph, IPC adapters (SHMSource, SHMSink, MessageBusSource, MessageBusSink), and all design patterns
-- [SHM Messaging](docs/shm-messaging.md): Sub-microsecond IPC — SHMChannel, SHMBus, producer/consumer patterns, pipeline bridge adapters
-- [Library Strategy](docs/library-strategy.md): 9-level modular CMake build, FetchContent integration, compile-time feature flags
-- [Strategic Evaluation](docs/strategic-evaluation.md): Why qbuem-stack unifies WAS + IPC + ML inference pipelines
-- [Versatility Guide](docs/versatility-guide.md): Use cases — AI/NPU inference, FinTech HFT, Media Streaming, Edge Computing
-- [DB Abstraction](docs/db-abstraction.md): Zero-allocation database driver interface and coroutine session model
-- [IO Architecture](docs/io-architecture.md): io_uring / kqueue event loop internals
-- [Security & TLS](docs/security-tls.md): kTLS offload, SIMD JWT, JwtAuthAction middleware
-- [Windows Support](docs/windows-support.md): IOCP integration and Win32 alignment roadmap
+- [README](README.md): Project overview, quick start, 40M RPS benchmark targets
+- [TODO / Roadmap](TODO.md): v2.3.0 status and upcoming milestones (v2.4.0 Primitives, v3.0.0 Ultimate Stack)
+- [Feature Status & Advancement](docs/feature-status-advancement.md): Detailed audit and competitive analysis
+- [High-Performance Primitives](docs/high-performance-primitives.md): Lock-Free Map, GenerationPool, MicroTicker
+- [Network Optimization (Linux)](docs/network-optimization-guide.md): io_uring fixed buffers, multishot, AF_XDP
+- [kqueue Optimization (macOS)](docs/kqueue-optimization-guide.md): udata O(1) dispatch, changelist batching
+- [Pipeline Master Guide](docs/pipeline-master-guide.md): Complete reference for Static/Dynamic Pipelines and IPC adapters
+- [SHM Messaging](docs/shm-messaging.md): Sub-microsecond IPC — SHMChannel, SHMBus
+- [Usability Refinement](docs/usability-enhancement.md): Fluent Pipelines, C++20 Concepts, Automated DI
+- [Library Strategy](docs/library-strategy.md): 9-level modular CMake build
+
+## Reference Guides (Next-Gen)
+
+- [Fetch Advancement](docs/fetch-advancement.md): Zero-copy streaming, HTTP/2 & HTTP/3 QUIC
+- [UDP Architecture](docs/udp-architecture.md): RUDP, MMSG batching, Native Multicast
+- [Ecosystem Expansion](docs/ecosystem-expansion.md): Advanced WAS, ReliableCast, Template engines
+- [Strategic Evaluation](docs/strategic-evaluation.md): Why qbuem-stack unifies WAS + IPC + ML
+- [DB Abstraction](docs/db-abstraction.md): Zero-allocation database driver interface
+- [Security & TLS](docs/security-tls.md): kTLS offload, SIMD JWT, JwtAuthAction
 
 ## Examples Index
-
-- [Examples Overview](examples/README.md): All 44 examples organized into 11 categories with build instructions and learning paths
-
-### Category Quicklinks
-
-- [01 Foundation](examples/01-foundation/hello_world/README.md): hello_world, async_timer — minimal start
-- [02 Network](examples/02-network/tcp_echo_server/README.md): TCP echo, UDP, Unix socket, WebSocket
-- [03 Memory](examples/03-memory/arena/README.md): Arena allocator, zero-copy, NUMA + huge pages
-- [04 Codec & Security](examples/04-codec-security/codec/README.md): Codecs, HMAC/crypto, JWT middleware
-- [05 Pipeline](examples/05-pipeline/fanout/README.md): Fan-out, hot-swap, hardware batching, sensor fusion, windowed processing
-- [06 IPC & Messaging](examples/06-ipc-messaging/ipc_pipeline/README.md): SHMChannel, flagship IPC pipeline, MessageBus, priority SPSC
-- [07 Resilience](examples/07-resilience/resilience/README.md): Retry+CircuitBreaker+DLQ, Saga, Canary, Checkpoint, SLO
-- [08 Observability](examples/08-observability/tracing/README.md): W3C tracing, TimerWheel, TaskGroup structured concurrency
-- [09 Database](examples/09-database/db_session/README.md): Connection pool, session store, coroutine JSON
-- [10 Hardware](examples/10-hardware/hardware_io/README.md): PCIe VFIO, RDMA, eBPF, NVMe/SPDK, kTLS, kqueue
-- [11 Advanced Apps](examples/11-advanced-apps/trading_platform/README.md): HFT trading platform, autonomous driving, game server, I/O dashboard
+- [Examples Overview](examples/README.md): 44 categorized examples with learning paths
 
 ## API Reference
-
 - [Public Headers](include/qbuem/): All public C++20 headers — umbrella at `qbuem_stack.hpp`
-- [Doxyfile](Doxyfile): Doxygen config — generates HTML to `docs/api/`
 
 ## Build & Test
-
-- [Root CMakeLists.txt](CMakeLists.txt): Top-level build — C++20, optional qbuem-json via FetchContent
-- [Examples CMakeLists.txt](examples/CMakeLists.txt): All 44 example targets with category grouping
-
-## Optional
-
-- [TODO / Roadmap](TODO.md): v2.1.0 status and upcoming milestones (v2.2.0 HTTP/3, v2.3.0 AF_XDP)
-- [IO Deep Dive](docs/io-deep-dive.md): Low-level io_uring / kqueue internals
-- [Embedded PCIe](docs/embedded-pcie.md): PCIe VFIO and SPDK integration details
-- [CONTRIBUTING](CONTRIBUTING.md): Contribution guidelines, code style, PR process
+- [Root CMakeLists.txt](CMakeLists.txt): Top-level build — C++20, optional qbuem-json
+- [CONTRIBUTING](CONTRIBUTING.md): Contribution guidelines and code style

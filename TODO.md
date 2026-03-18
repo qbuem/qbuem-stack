@@ -1,12 +1,26 @@
-# qbuem-stack Roadmap
+## ⚡ Extreme Performance Standards (The Baseline)
 
-**Zero Latency · Zero Allocation · Zero Dependency**
+All modules must adhere to these quantitative benchmarks to be considered part of the `qbuem` elite stack.
 
-> **Current Version: v2.2.0** — Monadic HTTP Fetch Client (curl-free).
->
-> High-performance C++ infrastructure for Web, Messaging, and Data Pipelines.
+| Metric | Target | Industry Benchmark (Software-only) |
+| :--- | :--- | :--- |
+| **IPC Latency (SHM)** | **< 200ns** | Aeron ($5\mu s$), Disruptor ($<100ns$ intra-thread) |
+| **HTTP Throughput** | **> 40M RPS** | TechEmpower Elite ($7M$), AF_XDP Records ($20\sim40M$) |
+| **Network P99.9** | **< 10μs** | High-end HFT Software ($1\sim2\mu s$ tick-to-trade) |
+| **Coroutine Switch** | **< 50ns** | Common Boost.Context ($50\sim100ns$) |
+| **Jitter (Tick)** | **< 1μs** | Real-time Linux (PREEMPT_RT) target range |
+| **Zero Allocation** | **0 Bytes** | Mandatory for safety-critical/HFT systems |
+| **SIMD Parsing** | **> 4GB/s** | `simdjson` peak performance range |
+
+> [!IMPORTANT]
+> **Experimental Target**: While **10M RPS** is the entry-level for our elite stack, we aim for **20M~40M RPS** on 100GbE using `AF_XDP` bypass to define the true experimental frontier.
+
+> [!NOTE]
+> Our targets are set at the **absolute software frontier**. Achieving these requires hardware-level optimization (Mechanical Sympathy) including NUMA pinning, HugePages, and Kernel Bypass (io_uring/XDP).
 
 ---
+
+## ✅ Completed: v2.3.0 — HTTP Client Full Feature Set
 
 ## ✅ Completed: v2.3.0 — HTTP Client Full Feature Set
 
@@ -155,7 +169,90 @@
 
 ---
 
-## ✅ Completed Milestones
+## 🏗 Milestone: v2.4.0 — High-Performance Essential Primitives
+> **Reference Design**: [docs/high-performance-primitives.md](./docs/high-performance-primitives.md) / [docs/storage-optimization-guide.md](./docs/storage-optimization-guide.md) / [docs/epoll-optimization-guide.md](./docs/epoll-optimization-guide.md) / [docs/pcie-optimization-guide.md](./docs/pcie-optimization-guide.md)
+
+- [ ] **`LockFreeHashMap<K, V>`**: MPMC non-blocking hash map with atomic CAS per slot.
+- [ ] **`GenerationPool<T>`**: Lock-free object pool with generation-indexed `Handle<T>` (ABA-safe).
+- [ ] **`IntrusiveList<T>`**: Zero-allocation linked list (objects carry pointers).
+- [ ] **`MicroTicker`**: High-precision Reactor driver (jitter compensation).
+- [ ] **`FileIO (O_DIRECT)`**: Implementation of direct I/O for `FileSink`/`FileSource`.
+- [ ] **`Epoll (Edge-Triggered)`**: Re-implementation of epoll reactor using `EPOLLET`.
+- [ ] **`PCIeDevice (VFIO)`**: Minimal user-space PCIe helper with BAR mapping support.
+
+---
+
+## 🏗 Milestone: v2.5.0 — High-Performance Stream processing (Pipeline+)
+> **Reference Design**: [docs/ecosystem-expansion.md](./docs/ecosystem-expansion.md)
+
+- [ ] **`StatefulWindow`**: Native support for sliding/tumbling window aggregations.
+- [ ] **`DynamicRouter`**: SIMD-accelerated branch predicate evaluation.
+- [ ] **`BackpressureMonitor`**: Real-time stage pressure and latency metrics via atomics.
+
+---
+
+## 🏗 Milestone: v2.6.0 — Advanced WAS & Middleware
+> **Reference Design**: [docs/ecosystem-expansion.md](./docs/ecosystem-expansion.md)
+
+- [ ] **`qbuem-template`**: Zero-copy pre-compiled template engine.
+- [ ] **`ReliableCast<T>`**: Zero-copy 1:N multicast for SHM-based IPC.
+- [ ] **`SIMDValidator`**: Wire-speed JSON Schema/Binary validation using SIMD skip-patterns.
+
+---
+
+## 🏗 Milestone: v2.7.0 — Next-Gen Networking (Fetch+)
+> **Reference Design**: [docs/fetch-advancement.md](./docs/fetch-advancement.md) / [docs/network-optimization-guide.md](./docs/network-optimization-guide.md)
+
+- [ ] **`HTTP/2 & HTTP/3`**: Frame-based multiplexing and UDP-based low-latency transport.
+- [ ] **`Kernel TLS (kTLS)`**: Zero-copy HTTPS integration via kernel-level crypto.
+- [ ] **`Zero-Copy Streaming`**: Processing multi-GB payloads using constant memory via body-bound pipelines.
+
+---
+
+## 🏗 Milestone: v2.8.0 — Low-Latency UDP Infrastructure (UDP+)
+> **Reference Design**: [docs/udp-architecture.md](./docs/udp-architecture.md) / [docs/network-optimization-guide.md](./docs/network-optimization-guide.md)
+
+- [ ] **`MMSG Batching`**: `recvmmsg` and `sendmmsg` integration for high-throughput datagram processing.
+- [ ] **`Reliable UDP (RUDP)`**: Lightweight reliability layer (Sequencing, ACKs) for real-time sync.
+- [ ] **`Native Multicast`**: High-speed 1:N distribution for financial and media feeds.
+
+---
+
+## 🌌 Future Vision: v3.0.0 — The Ultimate Protocol Stack
+> **Reference Design**: [docs/feature-status-advancement.md](./docs/feature-status-advancement.md)
+
+- [ ] **`AF_XDP Bypass`**: Direct user-space networking for sub-microsecond packet processing.
+- [ ] **`Distributed Storage (NVMe-oF)`**: High-speed remote block access via RDMA/TCP.
+- [ ] **`SIMD Erasure Coding`**: Wire-speed data redundancy using AVX-512/ISA-L.
+- [ ] **`Distributed Pipelines`**: Stretching pipelines across hosts via RDMA/InfinityBand.
+- [ ] **`Post-Quantum Security`**: Native C++20 Kyber/Dilithium support for v3 identities.
+- [ ] **`Smart DB Cache`**: SHM-shared and hardware-invalidated query caches.
+
+---
+ 
+ ## 🏗 Milestone: v3.1.0 — Observability & Visual Tooling
+ > **Reference Design**: [docs/observability-suite.md](./docs/observability-suite.md)
+ 
+ - [ ] **`qbuem-tracer`**: Zero-allocation OTLP/SHM tracer with `start_lifecycle()` API.
+- [ ] **`qbuem-logger`**: Trace-aware async logger with lifecycle correlation.
+- [ ] **`qbuem-cli`**: Dual-mode CLI (TUI dashboard + HTML-serve backend).
+ - [ ] **`qbuem-inspector`**: Visual dashboard with "Full Journey" timeline view.
+ - [ ] **`eBPF Bridge`**: Production-grade memory leak & perf analysis integration.
+ - [ ] **`CoroExplorer`**: Coroutine stack-trace and suspension point visualization.
+ 
+ ---
+ 
+ ## 🌌 Milestone: v3.2.0 — Elite Tooling & Chaos Engineering
+ > **Reference Design**: [docs/observability-suite.md](./docs/observability-suite.md)
+ 
+ - [ ] **`Affinity Inspector`**: Real-time Core/NUMA mapping and topology visualization.
+ - [ ] **`Buffer Heatmap`**: Visual lifecycle tracking for zero-copy memory segments.
+ - [ ] **`Chaos-Hardware`**: User-space fault-injection for PCIe/NVMe/RDMA.
+ - [ ] **`Traffic-Twin`**: Deterministic protocol recording and replay tool.
+ 
+ ---
+ 
+ ## ✅ Completed Milestones
 
 <details>
 <summary><b>v2.0.0 — 고도화 (Enhancement)</b></summary>

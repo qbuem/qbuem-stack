@@ -19,17 +19,62 @@
 
 ---
 
+## ⚡ Performance Truth (The "Hard" Targets)
+
+| Metric | Target Value | Verification Method |
+| :--- | :--- | :--- |
+| **IPC Latency** | < 200ns (P99.9) | `bench_shm_latency` |
+| **HTTP Throughput** | > 10M RPS (Native) / > 40M (Bypass) | `wrk2` / `fb-http-bench` |
+| **Event Loop Jitter** | < 5μs | `MicroTicker` built-in metrics |
+| **Heap Allocation** | **Strictly 0 Bytes** in hot-paths | `valgrind --tool=massif` |
+| **Context Switches** | Near Zero (via Batching) | `perf stat -e context-switches` |
+
+---
+
+---
+
 ## Documentation Map
 
-- **[Roadmap & Progress](./TODO.md)**: Current status and future milestones.
+- **[Roadmap & Progress](./TODO.md)**: Current status and 40M RPS / 200ns benchmark targets.
 - **[Strategic Vision](./docs/strategic-evaluation.md)**: Why `qbuem-stack` is a universal platform.
-- **[Pipeline Master Guide](./docs/pipeline-master-guide.md)**: The complete reference for design, patterns, and IPC integration recipes.
-- **[SHM Messaging](./docs/shm-messaging.md)**: Sub-microsecond cross-process IPC with Pipeline bridge adapters.
-- **[Library Strategy](./docs/library-strategy.md)**: Modular 9-level build system.
-- **[Versatility Guide](./docs/versatility-guide.md)**: Application in Media Streaming, AI/NPU, FinTech, and Edge.
-- **[Windows Support](./docs/windows-support.md)**: Native IOCP integration and Win32 alignment.
-- **[DB Abstraction](./docs/db-abstraction.md)**: Zero-allocation database driver interface.
-- **[Examples Guide](./examples/README.md)**: 44 categorized examples with detailed READMEs.
+- **[Feature Status & Advancement](./docs/feature-status-advancement.md)**: Detailed audit and competitive analysis against industry leaders.
+
+### 🚀 Engineering Standards — "Extreme" Definition of Done (DoD)
+
+To maintain world-class performance, every PR must satisfy these quantifiable benchmarks:
+
+### 1. Latency & Throughput Targets
+- **IPC Latency (SHM)**: P99.9 < 200ns.
+- **Reactor Dispatch**: O(1) jump via `udata`/`fixed_files` (No map lookups).
+- **HTTP Throughput**: > 10M RPS (Standard) / > 40M RPS (AF_XDP Bypass).
+
+### 2. Zero-Everything Principle
+- **Zero Allocation**: 0 bytes allocated in the hot loop (Verified via `valgrind --tool=massif` or `jemalloc` stats).
+- **Zero Copy**: Data remains in registered buffers (`io_uring` fixed / RIO registered) from NIC to User-space.
+- **Zero Lock**: No `std::mutex` or `std::shared_ptr` in handlers. Use SPSC RingBuffers and `GenerationPool`.
+
+### 3. Hardware Alignment
+- **NUMA-Aware**: Memory must be allocated on the same NUMA node as the processing core.
+- **L3 Locality**: Hardware interrupts (MSI-X) pinned to reactor cores.
+- **SIMD-First**: All parsing and encryption must use AVX-512 / AES-NI / ISA-L.
+
+---
+
+## 🛠 AI-Ready Implementation Map
+*For AI agents and developers implementing features from the roadmap:*
+
+| Area | Reference Design | Key Techniques |
+| :--- | :--- | :--- |
+| **Observability** | [Observability Suite](./docs/observability-suite.md) | OTLP, eBPF memleak, qbuem-inspector |
+| **Windows** | [Windows Support](./docs/windows-support.md) | IOCP, Registered I/O (RIO), Named Pipes |
+| **Security/TLS** | [Security & TLS](./docs/security-tls.md) | kTLS, Hardware Offload, AES-NI, SIMD JWT |
+| **Hardware/PCIe** | [PCIe Optimization](./docs/pcie-optimization-guide.md) | VFIO, P2PDMA, CXL, MSI-X Affinity |
+| **Storage / File**| [Storage Optimization](./docs/storage-optimization-guide.md) | `O_DIRECT`, `copy_file_range`, SPDK |
+| **Legacy Linux** | [epoll Optimization](./docs/epoll-optimization-guide.md) | `EPOLLET`, `EPOLLONESHOT`, `pwait2` |
+| **Network (Linux)** | [Network Optimization](./docs/network-optimization-guide.md) | `io_uring` Fixed Buffers, Multishot, AF_XDP |
+| **Network (macOS)** | [kqueue Optimization](./docs/kqueue-optimization-guide.md) | `udata` O(1) Dispatch, Changelist Batching |
+| **High-Performance Core** | [Primitives Guide](./docs/high-performance-primitives.md) | Lock-Free Map, GenerationPool, MicroTicker |
+| **Ecosystem & WAS** | [Ecosystem Expansion](./docs/ecosystem-expansion.md) | Zero-copy Templates, ReliableCast |
 
 ---
 
