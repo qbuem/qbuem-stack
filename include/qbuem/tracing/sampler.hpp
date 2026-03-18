@@ -217,17 +217,17 @@ private:
 // ---------------------------------------------------------------------------
 
 /**
- * @brief 부모 스팬의 sampled 플래그를 따르는 샘플러.
+ * @brief Sampler that follows the sampled flag of the parent span.
  *
- * - 부모가 있고 sampled=1 → RECORD_AND_SAMPLE
- * - 부모가 있고 sampled=0 → DROP
- * - 부모 없음 (루트) → `root_sampler`에 위임
+ * - Parent present with sampled=1 → RECORD_AND_SAMPLE
+ * - Parent present with sampled=0 → DROP
+ * - No parent (root) → delegates to `root_sampler`
  */
 class ParentBasedSampler final : public Sampler {
 public:
   /**
-   * @param root_sampler 루트 스팬(부모 없음)에 적용할 샘플러.
-   *                     nullptr이면 AlwaysSampler 사용.
+   * @param root_sampler Sampler to apply to root spans (no parent).
+   *                     If nullptr, uses AlwaysSampler.
    */
   explicit ParentBasedSampler(std::shared_ptr<Sampler> root_sampler = nullptr)
       : root_(root_sampler
