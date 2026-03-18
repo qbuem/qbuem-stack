@@ -2,24 +2,24 @@
 
 /**
  * @file qbuem/pipeline/spsc_channel.hpp
- * @brief 락-프리 SPSC 채널 — SpscChannel
+ * @brief Lock-free SPSC channel — SpscChannel
  * @defgroup qbuem_spsc_channel SpscChannel
  * @ingroup qbuem_pipeline
  *
- * 단일 생산자/단일 소비자(SPSC) 락-프리 링 버퍼 채널입니다.
- * Lamport queue 알고리즘을 기반으로 head_/tail_을 별도 캐시 라인에 배치합니다.
- * 1:1 시나리오에서 MPMC AsyncChannel보다 빠릅니다.
+ * Single-producer/single-consumer (SPSC) lock-free ring-buffer channel.
+ * Based on the Lamport queue algorithm, placing head_/tail_ on separate cache lines.
+ * Faster than the MPMC AsyncChannel in 1:1 scenarios.
  *
- * ## 구현 특성
- * - `head_` (소비자)와 `tail_` (생산자)를 `alignas(64)`로 분리
- * - 용량은 자동으로 2의 거듭제곱으로 올림 처리
- * - 비동기 대기: `Reactor::post`를 통한 크로스-리액터 wake
+ * ## Implementation characteristics
+ * - `head_` (consumer) and `tail_` (producer) are separated with `alignas(64)`
+ * - Capacity is automatically rounded up to the next power of two
+ * - Async waiting: cross-reactor wake via `Reactor::post`
  *
- * ## 사용 예시
+ * ## Usage example
  * @code
  * SpscChannel<int> chan(1024);
- * chan.try_send(42);          // 생산자 스레드
- * auto v = chan.try_recv();   // 소비자 스레드
+ * chan.try_send(42);          // producer thread
+ * auto v = chan.try_recv();   // consumer thread
  * @endcode
  * @{
  */
@@ -38,22 +38,22 @@
 namespace qbuem {
 
 /**
- * @brief 락-프리 SPSC (단일 생산자/단일 소비자) 채널.
+ * @brief Lock-free SPSC (single-producer/single-consumer) channel.
  *
- * 용량은 생성 시 자동으로 2의 거듭제곱으로 올림 처리됩니다.
+ * Capacity is automatically rounded up to the next power of two at construction.
  *
- * @tparam T 전송할 값의 타입 (이동 가능해야 함).
+ * @tparam T Type of values to transmit (must be movable).
  */
 template <typename T>
 class SpscChannel {
 public:
     /**
-     * @brief 지정한 용량으로 채널을 생성합니다.
+     * @brief Constructs a channel with the specified capacity.
      *
-     * 용량은 자동으로 2의 거듭제곱으로 올림 처리됩니다.
-     * (예: 5 → 8, 9 → 16)
+     * Capacity is automatically rounded up to the next power of two.
+     * (e.g., 5 → 8, 9 → 16)
      *
-     * @param capacity 희망 용량 (2의 거듭제곱으로 올림).
+     * @param capacity Desired capacity (rounded up to the next power of two).
      */
     explicit SpscChannel(size_t capacity) {
         size_t cap = next_pow2(std::max(capacity, size_t{2}));
@@ -65,59 +65,59 @@ public:
     SpscChannel& operator=(const SpscChannel&) = delete;
 
     // -------------------------------------------------------------------------
-    // 논블로킹 try_send / try_recv
+    // Non-blocking try_send / try_recv
     // -------------------------------------------------------------------------
 
     /**
-     * @brief 아이템을 채널에 넣으려 시도합니다 (논블로킹, 생산자 스레드).
+     * @brief Attempts to send an item to the channel (non-blocking, producer thread).
      *
-     * @param item 전송할 아이템 (const 참조).
-     * @returns 성공이면 true, 채널이 가득 차거나 닫혔으면 false.
+     * @param item Item to send (const reference).
+     * @returns true on success, false if the channel is full or closed.
      */
     bool try_send(const T& item) {
         return try_send_impl(T(item));
     }
 
     /**
-     * @brief 아이템을 채널에 넣으려 시도합니다 (논블로킹, 생산자 스레드).
+     * @brief Attempts to send an item to the channel (non-blocking, producer thread).
      *
-     * @param item 전송할 아이템 (이동).
-     * @returns 성공이면 true, 채널이 가득 차거나 닫혔으면 false.
+     * @param item Item to send (move).
+     * @returns true on success, false if the channel is full or closed.
      */
     bool try_send(T&& item) {
         return try_send_impl(std::move(item));
     }
 
     /**
-     * @brief 채널에서 아이템을 꺼내려 시도합니다 (논블로킹, 소비자 스레드).
+     * @brief Attempts to receive an item from the channel (non-blocking, consumer thread).
      *
-     * @returns 아이템이 있으면 `std::optional<T>`, 없으면 `std::nullopt`.
+     * @returns `std::optional<T>` if an item is available, `std::nullopt` otherwise.
      */
     std::optional<T> try_recv() {
         size_t head = head_.v.load(std::memory_order_relaxed);
         size_t tail = tail_.v.load(std::memory_order_acquire);
 
         if (head == tail)
-            return std::nullopt; // 비어 있음
+            return std::nullopt; // empty
 
         T item = std::move(buffer_[head & mask_]);
         head_.v.store(head + 1, std::memory_order_release);
 
-        // 대기 중인 생산자를 깨움
+        // Wake any waiting producer
         wake_waiter();
 
         return item;
     }
 
     // -------------------------------------------------------------------------
-    // 비동기 send / recv (코루틴)
+    // Async send / recv (coroutine)
     // -------------------------------------------------------------------------
 
     /**
-     * @brief 아이템을 전송합니다. 채널이 가득 차면 co_await 대기합니다.
+     * @brief Sends an item. co_awaits when the channel is full.
      *
-     * @param item 전송할 아이템.
-     * @returns `Result<void>::ok()` 또는 `errc::broken_pipe` (닫힘).
+     * @param item Item to send.
+     * @returns `Result<void>::ok()` or `errc::broken_pipe` (if closed).
      */
     Task<Result<void>> send(T item) {
         for (;;) {
@@ -128,7 +128,7 @@ public:
                 co_return Result<void>{};
             }
 
-            // 가득 참 — 소비자가 공간을 만들 때까지 대기
+            // Full — wait until the consumer frees space
             co_await SendAwaiter{this};
 
             if (closed_.load(std::memory_order_relaxed))
@@ -137,11 +137,11 @@ public:
     }
 
     /**
-     * @brief 아이템을 수신합니다. 채널이 비어 있으면 co_await 대기합니다.
+     * @brief Receives an item. co_awaits when the channel is empty.
      *
-     * 채널이 닫히고 비면 `std::nullopt` (EOS) 반환.
+     * Returns `std::nullopt` (EOS) when the channel is closed and empty.
      *
-     * @returns 아이템 또는 `std::nullopt` (EOS).
+     * @returns An item or `std::nullopt` (EOS).
      */
     Task<std::optional<T>> recv() {
         for (;;) {
@@ -152,38 +152,38 @@ public:
             if (closed_.load(std::memory_order_acquire))
                 co_return std::nullopt; // EOS
 
-            // 비어 있음 — 생산자가 아이템을 넣을 때까지 대기
+            // Empty — wait until the producer inserts an item
             co_await RecvAwaiter{this};
 
-            // 재확인 (wake 후 다시 루프)
+            // Re-check (loop again after wake)
         }
     }
 
     // -------------------------------------------------------------------------
-    // 수명 주기
+    // Lifecycle
     // -------------------------------------------------------------------------
 
     /**
-     * @brief 채널을 닫습니다 (EOS 전파).
+     * @brief Closes the channel (EOS propagation).
      *
-     * `close()` 후 `send()`는 에러 반환.
-     * `recv()`는 남은 아이템 소진 후 `std::nullopt` 반환.
+     * After `close()`, `send()` returns an error.
+     * `recv()` returns `std::nullopt` after draining remaining items.
      */
     void close() {
         closed_.store(true, std::memory_order_release);
-        // 대기 중인 수신자/송신자 모두 깨움
+        // Wake any waiting receiver or sender
         wake_waiter();
     }
 
     /**
-     * @brief 채널이 닫혔는지 확인합니다.
+     * @brief Returns whether the channel is closed.
      */
     [[nodiscard]] bool is_closed() const noexcept {
         return closed_.load(std::memory_order_relaxed);
     }
 
     /**
-     * @brief 현재 채널의 근사 아이템 수를 반환합니다.
+     * @brief Returns the approximate number of items currently in the channel.
      */
     [[nodiscard]] size_t size_approx() const noexcept {
         size_t head = head_.v.load(std::memory_order_relaxed);
@@ -192,7 +192,7 @@ public:
     }
 
     /**
-     * @brief 채널의 용량을 반환합니다 (항상 2의 거듭제곱).
+     * @brief Returns the channel capacity (always a power of two).
      */
     [[nodiscard]] size_t capacity() const noexcept {
         return mask_ + 1;
@@ -200,14 +200,14 @@ public:
 
 private:
     // -------------------------------------------------------------------------
-    // 캐시 라인 분리 head/tail
+    // Cache-line-separated head/tail
     // -------------------------------------------------------------------------
 
     struct alignas(64) Head { std::atomic<size_t> v{0}; };
     struct alignas(64) Tail { std::atomic<size_t> v{0}; };
 
     // -------------------------------------------------------------------------
-    // 내부 try_send 구현
+    // Internal try_send implementation
     // -------------------------------------------------------------------------
 
     bool try_send_impl(T&& item) {
@@ -217,20 +217,20 @@ private:
         size_t tail = tail_.v.load(std::memory_order_relaxed);
         size_t head = head_.v.load(std::memory_order_acquire);
 
-        // 링 버퍼 가득 참 확인
+        // Check if ring buffer is full
         if (tail - head >= capacity())
             return false;
 
         buffer_[tail & mask_] = std::move(item);
         tail_.v.store(tail + 1, std::memory_order_release);
 
-        // 대기 중인 수신자를 깨움
+        // Wake any waiting receiver
         wake_waiter();
         return true;
     }
 
     // -------------------------------------------------------------------------
-    // Waiter (단일 대기자 — SPSC이므로 동시에 하나만 존재)
+    // Waiter (single waiter — only one can exist at a time in SPSC)
     // -------------------------------------------------------------------------
 
     void wake_waiter() {
@@ -247,7 +247,7 @@ private:
     }
 
     // -------------------------------------------------------------------------
-    // Send awaiter (생산자가 공간 생길 때까지 대기)
+    // Send awaiter (producer waits until space becomes available)
     // -------------------------------------------------------------------------
     struct SendAwaiter {
         SpscChannel<T>* chan;
@@ -280,7 +280,7 @@ private:
     };
 
     // -------------------------------------------------------------------------
-    // Recv awaiter (소비자가 아이템 기다림)
+    // Recv awaiter (consumer waits for an item)
     // -------------------------------------------------------------------------
     struct RecvAwaiter {
         SpscChannel<T>* chan;
@@ -312,7 +312,7 @@ private:
     };
 
     // -------------------------------------------------------------------------
-    // 2의 거듭제곱 올림 유틸리티
+    // Round-up-to-next-power-of-two utility
     // -------------------------------------------------------------------------
     static size_t next_pow2(size_t n) {
         if (n == 0) return 1;
@@ -322,17 +322,17 @@ private:
     }
 
     // -------------------------------------------------------------------------
-    // 데이터 멤버
+    // Data members
     // -------------------------------------------------------------------------
-    size_t        mask_;          ///< capacity - 1 (비트 마스크)
-    std::vector<T> buffer_;       ///< 링 버퍼
+    size_t        mask_;          ///< capacity - 1 (bitmask)
+    std::vector<T> buffer_;       ///< Ring buffer
 
-    Head head_;  ///< 소비자 포인터 (캐시 라인 분리)
-    Tail tail_;  ///< 생산자 포인터 (캐시 라인 분리)
+    Head head_;  ///< Consumer pointer (cache-line separated)
+    Tail tail_;  ///< Producer pointer (cache-line separated)
 
     std::atomic<bool> closed_{false};
 
-    // 단일 대기자 (SPSC — 동시에 하나만 존재)
+    // Single waiter (SPSC — only one can exist at a time)
     std::atomic<std::coroutine_handle<>> waiter_{nullptr};
     std::atomic<Reactor*>                waiter_reactor_{nullptr};
 };

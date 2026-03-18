@@ -221,39 +221,39 @@ private:
         ++pos;
 
         if (value < static_cast<uint32_t>(mask)) {
-            // 접두사 내에 값이 완전히 들어옴
+            // Value fits entirely within the prefix
             return value;
         }
 
-        // 멀티바이트 확장 (RFC 7541 섹션 5.1)
+        // Multi-byte extension (RFC 7541 section 5.1)
         uint32_t shift = 0;
         while (pos < data.size()) {
             uint8_t byte = data[pos++];
             value += static_cast<uint32_t>(byte & 0x7F) << shift;
             shift += 7;
-            if ((byte & 0x80) == 0) break; // MSB == 0: 마지막 바이트
+            if ((byte & 0x80) == 0) break; // MSB == 0: last byte
         }
         return value;
     }
 
     /**
-     * @brief HPACK 문자열 리터럴 디코딩 (RFC 7541 섹션 5.2).
+     * @brief Decodes an HPACK string literal (RFC 7541 section 5.2).
      *
-     * Huffman 인코딩 미지원 — `H` 비트가 설정된 경우 원시 바이트로 반환합니다.
+     * Huffman encoding not supported — if the `H` bit is set, returns raw bytes.
      *
-     * @param data  원본 바이트 스팬.
-     * @param pos   현재 읽기 위치 (in-out).
-     * @returns 디코딩된 문자열.
+     * @param data  Source byte span.
+     * @param pos   Current read position (in-out).
+     * @returns Decoded string.
      */
     static std::string decode_string(std::span<const uint8_t> data, size_t& pos) {
         if (pos >= data.size()) return {};
 
-        // H 비트(최상위 비트): Huffman 인코딩 여부
-        // bool huffman = (data[pos] & 0x80) != 0; // 현재 미지원
+        // H bit (most significant bit): indicates Huffman encoding
+        // bool huffman = (data[pos] & 0x80) != 0; // currently unsupported
         uint32_t str_len = decode_integer(data, pos, 7);
 
         if (pos + str_len > data.size()) {
-            // 버퍼 오버런 방지
+            // Prevent buffer overrun
             str_len = static_cast<uint32_t>(data.size() - pos);
         }
 
@@ -263,19 +263,19 @@ private:
     }
 
     /**
-     * @brief HPACK 정적 테이블 (RFC 7541 부록 A).
+     * @brief HPACK Static Table (RFC 7541 Appendix A).
      *
-     * 인덱스 1~61에 해당하는 62개 항목 (0번은 미사용).
-     * 처음 15개 항목을 포함하여 자주 사용되는 의사-헤더 및 일반 헤더를 정의합니다.
+     * 62 entries corresponding to indices 1~61 (index 0 is unused).
+     * Defines pseudo-headers and commonly used general headers including the first 15 entries.
      */
     static const std::pair<std::string_view, std::string_view> STATIC_TABLE[62];
 };
 
-// HPACK 정적 테이블 정의 (RFC 7541 부록 A 전체 61개 항목)
+// HPACK static table definition (all 61 entries from RFC 7541 Appendix A)
 inline const std::pair<std::string_view, std::string_view> HpackDecoder::STATIC_TABLE[62] = {
-    // 인덱스 0: 미사용 (RFC 7541에서 인덱스는 1부터 시작)
+    // Index 0: unused (RFC 7541 indices start at 1)
     {"", ""},
-    // 인덱스 1~15: 의사-헤더 및 자주 사용되는 헤더
+    // Indices 1~15: pseudo-headers and frequently used headers
     {":authority",                  ""},               //  1
     {":method",                     "GET"},             //  2
     {":method",                     "POST"},            //  3
@@ -291,7 +291,7 @@ inline const std::pair<std::string_view, std::string_view> HpackDecoder::STATIC_
     {":status",                     "404"},             // 13
     {":status",                     "500"},             // 14
     {"accept-charset",              ""},               // 15
-    // 인덱스 16~61: 일반 HTTP 헤더
+    // Indices 16~61: general HTTP headers
     {"accept-encoding",             "gzip, deflate"},  // 16
     {"accept-language",             ""},               // 17
     {"accept-ranges",               ""},               // 18
@@ -343,30 +343,30 @@ inline const std::pair<std::string_view, std::string_view> HpackDecoder::STATIC_
 // ─── HpackEncoder ─────────────────────────────────────────────────────────────
 
 /**
- * @brief HPACK 헤더 블록 인코더 (RFC 7541).
+ * @brief HPACK header block encoder (RFC 7541).
  *
- * 인덱스된 헤더 필드와 리터럴 헤더 필드(인덱싱 없음)를 혼합하여 인코딩합니다.
- * 동적 테이블은 사용하지 않습니다.
+ * Encodes using a mix of indexed header fields and literal header fields (without indexing).
+ * Dynamic table is not used.
  *
- * ### 인코딩 전략
- * 1. 헤더 이름+값이 정적 테이블에 완전히 일치하면 → 인덱스 표현
- * 2. 헤더 이름만 정적 테이블에 일치하면 → 이름 인덱스 + 리터럴 값
- * 3. 그 외 → 리터럴 이름 + 리터럴 값 (인덱싱 없음)
+ * ### Encoding strategy
+ * 1. If both header name+value fully match the static table → indexed representation
+ * 2. If only the header name matches the static table → name index + literal value
+ * 3. Otherwise → literal name + literal value (without indexing)
  */
 class HpackEncoder {
 public:
     /**
-     * @brief 헤더 맵을 HPACK 바이트 시퀀스로 인코딩합니다.
+     * @brief Encodes a header map as an HPACK byte sequence.
      *
-     * @param headers 인코딩할 헤더 이름-값 쌍의 맵.
-     * @returns HPACK으로 인코딩된 헤더 블록 바이트열.
+     * @param headers Map of header name-value pairs to encode.
+     * @returns HPACK-encoded header block byte sequence.
      */
     std::vector<uint8_t> encode(const std::unordered_map<std::string, std::string>& headers) {
         std::vector<uint8_t> result;
-        result.reserve(headers.size() * 32); // 평균 헤더 크기 추정
+        result.reserve(headers.size() * 32); // Estimated average header size
 
         for (const auto& [name, value] : headers) {
-            // ── 1단계: 이름+값 완전 일치 검색 ──────────────────────────────
+            // ── Step 1: search for exact name+value match ────────────────────
             uint32_t full_match_index = 0;
             uint32_t name_match_index = 0;
 
@@ -382,17 +382,17 @@ public:
             }
 
             if (full_match_index > 0) {
-                // ── 인덱스 헤더 필드 표현 (RFC 7541 섹션 6.1) ───────────────
-                // 비트 패턴: 1xxxxxxx, 7비트 접두사
+                // ── Indexed Header Field representation (RFC 7541 section 6.1) ─
+                // Bit pattern: 1xxxxxxx, 7-bit prefix
                 encode_integer(result, full_match_index, 7, 0x80);
             } else if (name_match_index > 0) {
-                // ── 리터럴 헤더 필드 — 인덱싱 없음, 이름 인덱스 참조 ────────
-                // 비트 패턴: 0000xxxx, 4비트 접두사
+                // ── Literal Header Field — Without Indexing, name index reference ─
+                // Bit pattern: 0000xxxx, 4-bit prefix
                 encode_integer(result, name_match_index, 4, 0x00);
                 encode_string(result, value);
             } else {
-                // ── 리터럴 헤더 필드 — 인덱싱 없음, 이름+값 모두 리터럴 ──────
-                // 비트 패턴: 00000000 (이름 인덱스 = 0)
+                // ── Literal Header Field — Without Indexing, both name+value literal ─
+                // Bit pattern: 00000000 (name index = 0)
                 result.push_back(0x00);
                 encode_string(result, name);
                 encode_string(result, value);
@@ -404,12 +404,12 @@ public:
 
 private:
     /**
-     * @brief HPACK 정수 인코딩 (RFC 7541 섹션 5.1).
+     * @brief HPACK integer encoding (RFC 7541 section 5.1).
      *
-     * @param out         출력 바이트 벡터.
-     * @param value       인코딩할 정수값.
-     * @param prefix_bits 접두사 비트 수 (1~8).
-     * @param prefix_byte 접두사 바이트의 상위 비트 패턴 (접두사 비트 외 영역).
+     * @param out         Output byte vector.
+     * @param value       Integer value to encode.
+     * @param prefix_bits Number of prefix bits (1~8).
+     * @param prefix_byte Upper bit pattern of the prefix byte (bits outside the prefix area).
      */
     static void encode_integer(std::vector<uint8_t>& out,
                                 uint32_t value,
@@ -431,13 +431,13 @@ private:
     }
 
     /**
-     * @brief HPACK 문자열 리터럴 인코딩 (RFC 7541 섹션 5.2, Huffman 미사용).
+     * @brief HPACK string literal encoding (RFC 7541 section 5.2, Huffman not used).
      *
-     * @param out  출력 바이트 벡터.
-     * @param str  인코딩할 문자열.
+     * @param out  Output byte vector.
+     * @param str  String to encode.
      */
     static void encode_string(std::vector<uint8_t>& out, std::string_view str) {
-        // H 비트 = 0 (Huffman 미사용), 7비트 접두사로 길이 인코딩
+        // H bit = 0 (Huffman not used), length encoded with 7-bit prefix
         encode_integer(out, static_cast<uint32_t>(str.size()), 7, 0x00);
         out.insert(out.end(),
                    reinterpret_cast<const uint8_t*>(str.data()),
@@ -448,21 +448,21 @@ private:
 // ─── Http2Stream ──────────────────────────────────────────────────────────────
 
 /**
- * @brief HTTP/2 단일 스트림의 상태와 데이터를 관리하는 구조체.
+ * @brief Struct managing the state and data of a single HTTP/2 stream.
  *
- * HTTP/2 연결은 다수의 스트림을 다중화(multiplex)합니다.
- * 각 스트림은 RFC 7540 섹션 5.1에 정의된 상태 머신을 따릅니다.
+ * An HTTP/2 connection multiplexes many streams.
+ * Each stream follows the state machine defined in RFC 7540 section 5.1.
  *
- * ### 스트림 상태 전이
+ * ### Stream state transitions
  * ```
  *            idle
  *              |
- *         HEADERS 수신
+ *         HEADERS received
  *              |
  *            open
  *           /    \
  *  END_STREAM   END_STREAM
- *  (원격에서)   (로컬에서)
+ *  (remote)      (local)
  *      |              |
  * half_closed    half_closed
  *  (remote)       (local)
@@ -473,53 +473,53 @@ private:
  */
 struct Http2Stream {
     /**
-     * @brief 스트림 상태 열거형 (RFC 7540 섹션 5.1).
+     * @brief Stream state enumeration (RFC 7540 section 5.1).
      */
     enum class State {
-        IDLE,              ///< 초기 상태 — 아직 사용되지 않은 스트림
-        OPEN,              ///< 양방향 통신 가능 상태
-        HALF_CLOSED_LOCAL, ///< 로컬에서 END_STREAM 전송 완료 — 원격 수신만 가능
-        HALF_CLOSED_REMOTE,///< 원격에서 END_STREAM 수신 완료 — 로컬 전송만 가능
-        CLOSED,            ///< 스트림 완전 종료
+        IDLE,              ///< Initial state — stream not yet used
+        OPEN,              ///< Bidirectional communication possible
+        HALF_CLOSED_LOCAL, ///< Local END_STREAM sent — can only receive from remote
+        HALF_CLOSED_REMOTE,///< Remote END_STREAM received — can only send locally
+        CLOSED,            ///< Stream fully closed
     };
 
-    uint32_t id{0};                ///< 스트림 식별자 (홀수: 클라이언트 개시, 짝수: 서버 개시)
-    State    state{State::IDLE};   ///< 현재 스트림 상태
+    uint32_t id{0};                ///< Stream identifier (odd: client-initiated, even: server-initiated)
+    State    state{State::IDLE};   ///< Current stream state
 
-    /** @brief 수신된 요청 헤더 맵 (HPACK 디코딩 결과). */
+    /** @brief Received request header map (HPACK decode result). */
     std::unordered_map<std::string, std::string> request_headers;
 
-    /** @brief 수신된 요청 바디 바이트열. */
+    /** @brief Received request body bytes. */
     std::vector<uint8_t> request_body;
 
-    /** @brief 이 스트림에서 전송할 프레임 큐 (outgoing 채널). */
+    /** @brief Frame queue for frames to send on this stream (outgoing channel). */
     std::shared_ptr<AsyncChannel<Http2Frame>> outgoing;
 };
 
 // ─── Http2Handler ─────────────────────────────────────────────────────────────
 
 /**
- * @brief HTTP/2 연결 핸들러 (헤더-온리 구현).
+ * @brief HTTP/2 connection handler (header-only implementation).
  *
- * TLS-ALPN "h2" 협상 이후 HTTP/2 프레임의 수신/전송을 처리하는
- * 핵심 클래스입니다. C++20 코루틴(Task<>)을 사용하여 비동기로 동작합니다.
+ * Core class that handles receiving and sending HTTP/2 frames after
+ * TLS-ALPN "h2" negotiation. Operates asynchronously using C++20 coroutines (Task<>).
  *
- * ### 연결 처리 흐름
- * 1. `send_connection_preface()` — 서버 연결 프리페이스 + 초기 SETTINGS 전송
- * 2. `handle_frame()` — 네트워크에서 수신된 각 프레임을 처리
- *    - SETTINGS: ACK 응답 전송
- *    - PING: ACK 응답 전송
- *    - GOAWAY: 연결 종료 처리
- *    - HEADERS: HPACK 디코딩, 스트림 개시
- *    - DATA: 스트림 바디 수집
- *    - END_STREAM: 요청 핸들러 호출
- * 3. `send_headers()` / `send_data()` — 응답 전송
- * 4. `drain_pending_frames()` — 소켓에 쓸 대기 프레임 수거
+ * ### Connection processing flow
+ * 1. `send_connection_preface()` — Send server connection preface + initial SETTINGS
+ * 2. `handle_frame()` — Process each frame received from the network
+ *    - SETTINGS: Send ACK response
+ *    - PING: Send ACK response
+ *    - GOAWAY: Handle connection closure
+ *    - HEADERS: HPACK decoding, stream initiation
+ *    - DATA: Collect stream body
+ *    - END_STREAM: Invoke request handler
+ * 3. `send_headers()` / `send_data()` — Send response
+ * 4. `drain_pending_frames()` — Collect pending frames to write to socket
  *
- * ### 사용 예시
+ * ### Usage example
  * @code
  * Http2Handler h2([](auto headers, auto body, auto stream) -> Task<void> {
- *     // 요청 처리 후 응답 전송
+ *     // Process request and send response
  *     co_await h2.send_headers(stream->id,
  *         {{":status", "200"}, {"content-type", "text/plain"}});
  *     co_await h2.send_data(stream->id,
@@ -528,7 +528,7 @@ struct Http2Stream {
  * });
  *
  * co_await h2.send_connection_preface();
- * // 네트워크 루프:
+ * // Network loop:
  * while (true) {
  *     Http2Frame frame = co_await read_frame(socket);
  *     co_await h2.handle_frame(std::move(frame));
@@ -540,11 +540,11 @@ struct Http2Stream {
 class Http2Handler {
 public:
     /**
-     * @brief 완성된 HTTP/2 요청을 처리하는 애플리케이션 핸들러 타입.
+     * @brief Application handler type that processes completed HTTP/2 requests.
      *
-     * @param headers  HPACK 디코딩된 요청 헤더 맵.
-     * @param body     요청 바디 바이트열.
-     * @param stream   요청이 속한 스트림 (응답 전송에 사용).
+     * @param headers  HPACK-decoded request header map.
+     * @param body     Request body bytes.
+     * @param stream   Stream the request belongs to (used for sending responses).
      */
     using RequestHandler = std::function<Task<void>(
         std::unordered_map<std::string, std::string> headers,
@@ -552,23 +552,23 @@ public:
         std::shared_ptr<Http2Stream> stream)>;
 
     /**
-     * @brief Http2Handler를 구성합니다.
+     * @brief Constructs an Http2Handler.
      *
-     * @param handler 완성된 HTTP/2 요청이 수신되면 호출될 애플리케이션 핸들러.
+     * @param handler Application handler invoked when a completed HTTP/2 request is received.
      */
     explicit Http2Handler(RequestHandler handler)
         : handler_(std::move(handler)) {}
 
-    // ─── 프레임 수신 처리 ────────────────────────────────────────────────────
+    // ─── Frame receive processing ─────────────────────────────────────────────
 
     /**
-     * @brief 네트워크에서 수신된 원시 HTTP/2 프레임을 처리합니다.
+     * @brief Processes a raw HTTP/2 frame received from the network.
      *
-     * 프레임 타입에 따라 적절한 내부 처리 메서드로 디스패치합니다.
-     * HEADERS+END_STREAM 또는 DATA+END_STREAM 수신 시 `handler_`를 호출합니다.
+     * Dispatches to the appropriate internal processing method based on frame type.
+     * Invokes `handler_` when HEADERS+END_STREAM or DATA+END_STREAM is received.
      *
-     * @param frame 수신된 HTTP/2 프레임.
-     * @returns 처리 결과. 프로토콜 에러 발생 시 에러 코드를 반환합니다.
+     * @param frame Received HTTP/2 frame.
+     * @returns Processing result. Returns an error code on protocol error.
      */
     Task<Result<void>> handle_frame(Http2Frame frame) {
         switch (frame.type) {
@@ -594,35 +594,35 @@ public:
                 co_return co_await handle_rst_stream(frame);
 
             case Http2FrameType::WINDOW_UPDATE:
-                // 흐름 제어 미구현 — 수신 무시
+                // Flow control not implemented — ignore on receipt
                 co_return Result<void>::ok();
 
             case Http2FrameType::PRIORITY:
-                // 우선순위 프레임 미구현 — 수신 무시
+                // Priority frame not implemented — ignore on receipt
                 co_return Result<void>::ok();
 
             case Http2FrameType::PUSH_PROMISE:
-                // 클라이언트는 PUSH_PROMISE를 전송하지 않음 — 무시
+                // Clients do not send PUSH_PROMISE — ignore
                 co_return Result<void>::ok();
 
             default:
-                // 알 수 없는 프레임 타입 — RFC 7540 섹션 4.1: 무시
+                // Unknown frame type — RFC 7540 section 4.1: ignore
                 co_return Result<void>::ok();
         }
     }
 
-    // ─── 응답 전송 ───────────────────────────────────────────────────────────
+    // ─── Response sending ─────────────────────────────────────────────────────
 
     /**
-     * @brief 지정된 스트림에 HEADERS 프레임을 전송합니다.
+     * @brief Sends a HEADERS frame on the specified stream.
      *
-     * 헤더 맵을 HPACK으로 인코딩하여 HEADERS 프레임을 `pending_frames_`에 추가합니다.
+     * HPACK-encodes the header map and adds a HEADERS frame to `pending_frames_`.
      *
-     * @param stream_id  대상 스트림 식별자.
-     * @param headers    전송할 헤더 이름-값 쌍 맵.
-     * @param end_stream HEADERS 프레임에 END_STREAM 플래그 설정 여부.
-     *                   true이면 이 프레임이 스트림의 마지막 프레임입니다.
-     * @returns 처리 결과. 스트림이 존재하지 않으면 에러를 반환합니다.
+     * @param stream_id  Target stream identifier.
+     * @param headers    Map of header name-value pairs to send.
+     * @param end_stream Whether to set the END_STREAM flag on the HEADERS frame.
+     *                   If true, this frame is the last frame on the stream.
+     * @returns Processing result. Returns an error if the stream does not exist.
      */
     Task<Result<void>> send_headers(
             uint32_t stream_id,
@@ -640,7 +640,7 @@ public:
 
         pending_frames_.push_back(std::move(frame));
 
-        // 스트림 상태 갱신
+        // Update stream state
         if (auto it = streams_.find(stream_id); it != streams_.end()) {
             auto& stream = it->second;
             if (end_stream) {
@@ -656,13 +656,13 @@ public:
     }
 
     /**
-     * @brief 지정된 스트림에 DATA 프레임을 전송합니다.
+     * @brief Sends a DATA frame on the specified stream.
      *
-     * @param stream_id  대상 스트림 식별자.
-     * @param data       전송할 바이트 데이터.
-     * @param end_stream DATA 프레임에 END_STREAM 플래그 설정 여부.
-     *                   true이면 이 프레임이 스트림의 마지막 데이터입니다.
-     * @returns 처리 결과.
+     * @param stream_id  Target stream identifier.
+     * @param data       Byte data to send.
+     * @param end_stream Whether to set the END_STREAM flag on the DATA frame.
+     *                   If true, this frame is the last data on the stream.
+     * @returns Processing result.
      */
     Task<Result<void>> send_data(
             uint32_t stream_id,
@@ -677,7 +677,7 @@ public:
 
         pending_frames_.push_back(std::move(frame));
 
-        // 스트림 상태 갱신
+        // Update stream state
         if (end_stream) {
             if (auto it = streams_.find(stream_id); it != streams_.end()) {
                 auto& stream = it->second;
@@ -692,15 +692,15 @@ public:
         co_return Result<void>::ok();
     }
 
-    // ─── 대기 프레임 수거 ────────────────────────────────────────────────────
+    // ─── Pending frame collection ─────────────────────────────────────────────
 
     /**
-     * @brief 소켓에 쓸 대기 프레임을 모두 수거하여 반환합니다.
+     * @brief Collects and returns all pending frames to be written to the socket.
      *
-     * 반환 후 내부 `pending_frames_` 버퍼는 비워집니다.
-     * 호출자는 반환된 프레임들을 직렬화하여 소켓에 써야 합니다.
+     * The internal `pending_frames_` buffer is cleared after returning.
+     * The caller must serialize the returned frames and write them to the socket.
      *
-     * @returns 전송 대기 중인 프레임 벡터. 비어 있을 수 있습니다.
+     * @returns Vector of frames awaiting transmission. May be empty.
      */
     std::vector<Http2Frame> drain_pending_frames() {
         std::vector<Http2Frame> out;
@@ -708,26 +708,26 @@ public:
         return out;
     }
 
-    // ─── 연결 수준 프레임 전송 ───────────────────────────────────────────────
+    // ─── Connection-level frame sending ──────────────────────────────────────
 
     /**
-     * @brief SETTINGS 프레임을 `pending_frames_`에 추가합니다.
+     * @brief Adds a SETTINGS frame to `pending_frames_`.
      *
-     * @param ack true이면 ACK SETTINGS 프레임을 전송합니다 (페이로드 없음).
-     *            false이면 서버 기본 설정 파라미터를 포함한 SETTINGS를 전송합니다.
+     * @param ack If true, sends an ACK SETTINGS frame (no payload).
+     *            If false, sends a SETTINGS frame containing server default parameters.
      */
     Task<void> send_settings(bool ack = false) {
         Http2Frame frame;
         frame.type      = Http2FrameType::SETTINGS;
-        frame.stream_id = 0; // 연결 수준 프레임은 항상 stream_id == 0
+        frame.stream_id = 0; // Connection-level frames always have stream_id == 0
 
         if (ack) {
-            // ACK SETTINGS: 플래그만 설정, 페이로드 없음
+            // ACK SETTINGS: set flag only, no payload
             frame.flags   = HTTP2_FLAG_ACK;
             frame.length  = 0;
         } else {
-            // 서버 초기 SETTINGS 파라미터 전송
-            // 각 파라미터: 2바이트 식별자 + 4바이트 값 = 6바이트
+            // Send server initial SETTINGS parameters
+            // Each parameter: 2-byte identifier + 4-byte value = 6 bytes
             frame.flags = 0;
             auto& p = frame.payload;
 
@@ -751,20 +751,20 @@ public:
     }
 
     /**
-     * @brief PING 프레임을 `pending_frames_`에 추가합니다.
+     * @brief Adds a PING frame to `pending_frames_`.
      *
-     * @param ack          true이면 수신된 PING에 대한 ACK 응답을 전송합니다.
-     * @param opaque_data  PING 페이로드 8바이트 불투명 데이터.
-     *                     ACK 시 수신된 값을 그대로 반환해야 합니다.
+     * @param ack          If true, sends an ACK response to a received PING.
+     * @param opaque_data  8-byte opaque payload of the PING.
+     *                     Must echo the received value back when ACKing.
      */
     Task<void> send_ping(bool ack, uint64_t opaque_data = 0) {
         Http2Frame frame;
         frame.type      = Http2FrameType::PING;
         frame.stream_id = 0;
         frame.flags     = ack ? HTTP2_FLAG_ACK : 0;
-        frame.length    = 8; // PING 페이로드는 항상 8바이트
+        frame.length    = 8; // PING payload is always 8 bytes
 
-        // 8바이트 opaque data (빅 엔디안)
+        // 8-byte opaque data (big-endian)
         frame.payload.resize(8);
         for (int i = 7; i >= 0; --i) {
             frame.payload[static_cast<size_t>(i)] =
