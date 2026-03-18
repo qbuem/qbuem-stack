@@ -2,19 +2,19 @@
 
 /**
  * @file qbuem/io/buffer_pool.hpp
- * @brief 고정 크기 버퍼 풀 — lock-free intrusive free list.
+ * @brief Fixed-size buffer pool — lock-free intrusive free list.
  * @ingroup qbuem_io_buffers
  *
- * `BufferPool<BufSize, Count>`는 컴파일 타임에 크기가 결정된
- * `Count`개의 `BufSize` 바이트 버퍼를 스택(또는 정적 저장소)에 미리 할당합니다.
- * `acquire()`와 `return_buffer()`는 `std::atomic` CAS를 이용한
- * lock-free intrusive free list로 구현됩니다.
+ * `BufferPool<BufSize, Count>` pre-allocates `Count` buffers of `BufSize`
+ * bytes each on the stack (or static storage) at compile time.
+ * `acquire()` and `return_buffer()` are implemented as a lock-free intrusive
+ * free list using `std::atomic` CAS.
  *
- * ### 설계 원칙
- * - 고정 수량 미리 할당 — 런타임 힙 할당 없음 (`acquire()` 포함)
- * - `alignas(64)` 버퍼: false sharing 방지, SIMD 친화적
- * - `Buffer::release()`로 소유 풀에 자동 반납
- * - 풀이 소진되면 `acquire()`가 `nullptr` 반환 (예외 없음)
+ * ### Design Principles
+ * - Fixed count pre-allocation — no runtime heap allocation (including `acquire()`)
+ * - `alignas(64)` buffers: prevent false sharing, SIMD-friendly
+ * - `Buffer::release()` automatically returns the buffer to the owning pool
+ * - When the pool is exhausted, `acquire()` returns `nullptr` (no exceptions)
  * @{
  */
 
@@ -27,65 +27,66 @@
 namespace qbuem {
 
 /**
- * @brief 고정 크기·고정 수량 버퍼 풀.
+ * @brief Fixed-size, fixed-count buffer pool.
  *
- * 각 버퍼는 캐시 라인(64바이트)에 정렬됩니다.
- * `acquire()`로 버퍼를 가져오고, 사용 후 `Buffer::release()`로 반환합니다.
+ * Each buffer is aligned to a cache line (64 bytes).
+ * Use `acquire()` to obtain a buffer and `Buffer::release()` to return it.
  *
- * ### 스레드 안전성
- * `acquire()`와 `return_buffer()`는 ABA 문제를 완화하는 CAS 루프로
- * 멀티스레드에서 안전하게 호출할 수 있습니다.
+ * ### Thread Safety
+ * `acquire()` and `return_buffer()` are safe to call from multiple threads
+ * via a CAS loop that mitigates the ABA problem.
  *
- * ### 사용 예시
+ * ### Usage Example
  * @code
  * BufferPool<4096, 64> pool;
  * auto *buf = pool.acquire();
- * if (!buf) { // 풀 소진 }
- * // ... buf->data 사용 ...
- * buf->release();  // 풀에 반환
+ * if (!buf) { // pool exhausted }
+ * // ... use buf->data ...
+ * buf->release();  // return to pool
  * @endcode
  *
- * @tparam BufSize 각 버퍼의 바이트 크기.
- * @tparam Count   풀에 미리 할당할 버퍼 수.
+ * @tparam BufSize Byte size of each buffer.
+ * @tparam Count   Number of buffers to pre-allocate in the pool.
  */
 template <size_t BufSize, size_t Count>
 class BufferPool {
 public:
   /**
-   * @brief 풀에서 관리하는 단일 버퍼.
+   * @brief A single buffer managed by the pool.
    *
-   * `data`는 사용자가 직접 읽고 쓸 수 있는 영역입니다.
-   * `pool` 포인터를 통해 소유 풀에 자신을 반납합니다.
-   * `next_`는 free list 연결에 사용되며 사용자가 접근하지 않아야 합니다.
+   * `data` is the region directly readable and writable by the user.
+   * The `pool` pointer is used to return the buffer to the owning pool.
+   * `next_` is used for free list linkage and must not be accessed by the user.
    */
   struct Buffer {
     /**
-     * @brief 사용자 데이터 영역.
+     * @brief User data region.
      *
-     * 캐시 라인(64바이트)에 정렬되어 false sharing과 SIMD 패널티를 방지합니다.
+     * Aligned to a cache line (64 bytes) to prevent false sharing and
+     * SIMD load penalties.
      */
     alignas(64) std::byte data[BufSize];
 
-    /** @brief 이 버퍼를 소유한 풀. `release()` 호출 시 사용됩니다. */
+    /** @brief The pool that owns this buffer. Used by `release()`. */
     BufferPool *pool;
 
     /**
-     * @brief 버퍼를 소유 풀에 반납합니다.
+     * @brief Returns the buffer to the owning pool.
      *
-     * `pool->return_buffer(this)`를 호출합니다.
-     * 반납 후 이 포인터를 통한 접근은 정의되지 않은 동작입니다.
+     * Calls `pool->return_buffer(this)`.
+     * Accessing this pointer after release is undefined behavior.
      */
     void release() noexcept { pool->return_buffer(this); }
 
-    /** @brief free list 연결 포인터 (사용자가 접근 금지). */
+    /** @brief Free list linkage pointer (must not be accessed by the user). */
     Buffer *next_ = nullptr;
   };
 
   /**
-   * @brief 모든 버퍼를 free list에 연결하여 풀을 초기화합니다.
+   * @brief Initializes the pool by linking all buffers into the free list.
    */
   BufferPool() noexcept {
-    // 각 버퍼의 pool 포인터를 설정하고 free list를 구성합니다
+    // Set each buffer's pool pointer and build the free list
     for (size_t i = 0; i < Count; ++i) {
       storage_[i].pool  = this;
       storage_[i].next_ = free_list_head_.load(std::memory_order_relaxed);
@@ -94,33 +95,33 @@ public:
     // free_count_ is initialized to Count via in-class initializer.
   }
 
-  /** @brief 복사 생성자 삭제 — 버퍼들이 this 포인터를 보관하므로 이동/복사 불가. */
+  /** @brief Copy constructor deleted — buffers store a `this` pointer, so move/copy is not allowed. */
   BufferPool(const BufferPool &) = delete;
 
-  /** @brief 복사 대입 삭제. */
+  /** @brief Copy assignment deleted. */
   BufferPool &operator=(const BufferPool &) = delete;
 
-  // ─── 획득 / 반납 ──────────────────────────────────────────────────────────
+  // ─── Acquire / Return ─────────────────────────────────────────────────────
 
   /**
-   * @brief 풀에서 버퍼 하나를 획득합니다.
+   * @brief Acquires a buffer from the pool.
    *
-   * lock-free CAS 루프로 free list의 헤드를 pop합니다.
+   * Pops the head of the free list via a lock-free CAS loop.
    *
-   * @returns 사용 가능한 버퍼 포인터. 풀이 소진되면 `nullptr`.
-   * @note 반환된 버퍼의 `data` 내용은 초기화되지 않습니다.
+   * @returns Pointer to an available buffer, or `nullptr` if the pool is exhausted.
+   * @note The `data` contents of the returned buffer are not initialized.
    *
-   * @par ABA 문제 (이론적 한계)
-   * 이 구현은 일반적인 lock-free 스택 ABA 문제에 노출되어 있습니다:
-   * 스레드 T1이 `head`를 읽고 일시 정지된 사이, 다른 스레드가 `head`를 빼고
-   * 반납하면 T1의 CAS는 성공하지만 `head->next_`가 유효하지 않을 수 있습니다.
+   * @par ABA Problem (theoretical limitation)
+   * This implementation is exposed to the classic lock-free stack ABA problem:
+   * if thread T1 reads `head` and is preempted, another thread may pop and
+   * return `head`, causing T1's CAS to succeed with a stale `head->next_`.
    *
-   * **실제 위험도**: BufferPool의 버퍼는 풀 소유이며 풀보다 먼저 해제되지 않으므로
-   * 포인터 자체는 항상 유효합니다.  단, 높은 경합 환경에서는 freed 버퍼가 잘못된
-   * `next_` 링크로 재배치될 수 있습니다.
+   * **Practical risk**: BufferPool buffers are owned by the pool and are never
+   * freed before the pool itself, so the pointer is always valid. Under high
+   * contention, a freed buffer may be re-linked with an incorrect `next_`.
    *
-   * **완화 방법**: 단일 Reactor 스레드에서만 사용하면 ABA 문제가 발생하지 않습니다.
-   * 다중 스레드 환경에서는 tagged pointer 또는 Hazard Pointer를 사용하세요.
+   * **Mitigation**: Use from a single Reactor thread to eliminate ABA.
+   * For multi-threaded use, consider tagged pointers or Hazard Pointers.
    */
   Buffer *acquire() noexcept {
     Buffer *head = free_list_head_.load(std::memory_order_acquire);
@@ -138,11 +139,11 @@ public:
   }
 
   /**
-   * @brief 버퍼를 풀에 반납합니다.
+   * @brief Returns a buffer to the pool.
    *
-   * lock-free CAS 루프로 free list의 헤드에 push합니다.
+   * Pushes to the head of the free list via a lock-free CAS loop.
    *
-   * @param buf 반납할 버퍼. 반드시 이 풀에서 획득한 버퍼여야 합니다.
+   * @param buf Buffer to return. Must have been acquired from this pool.
    */
   void return_buffer(Buffer *buf) noexcept {
     Buffer *head = free_list_head_.load(std::memory_order_acquire);
@@ -155,27 +156,27 @@ public:
     free_count_.fetch_add(1, std::memory_order_relaxed);
   }
 
-  // ─── 상태 ─────────────────────────────────────────────────────────────────
+  // ─── Status ───────────────────────────────────────────────────────────────
 
   /**
-   * @brief 현재 사용 가능한 버퍼 수를 반환합니다.
+   * @brief Returns the number of buffers currently available.
    *
-   * O(1) — 원자 카운터를 읽습니다.
+   * O(1) — reads an atomic counter.
    *
-   * @returns 현재 free list에 남아 있는 버퍼 수.
+   * @returns Number of buffers remaining in the free list.
    */
   [[nodiscard]] size_t available() const noexcept {
     return free_count_.load(std::memory_order_relaxed);
   }
 
 private:
-  /** @brief 미리 할당된 버퍼 저장소. */
+  /** @brief Pre-allocated buffer storage. */
   Buffer storage_[Count];
 
-  /** @brief lock-free free list 헤드 포인터. */
+  /** @brief Lock-free free list head pointer. */
   std::atomic<Buffer *> free_list_head_{nullptr};
 
-  /** @brief free list 내 버퍼 수 — O(1) available() 지원. */
+  /** @brief Number of buffers in the free list — supports O(1) available(). */
   std::atomic<size_t> free_count_{Count};
 };
 

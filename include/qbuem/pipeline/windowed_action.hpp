@@ -2,32 +2,32 @@
 
 /**
  * @file qbuem/pipeline/windowed_action.hpp
- * @brief v0.9.1 윈도잉 및 이벤트 시간 처리 — WindowedAction, TumblingWindow, SlidingWindow, SessionWindow
+ * @brief v0.9.1 Windowing and event-time processing — WindowedAction, TumblingWindow, SlidingWindow, SessionWindow
  * @defgroup qbuem_windowed_action WindowedAction
  * @ingroup qbuem_pipeline
  *
- * ## 포함된 컴포넌트
+ * ## Included Components
  *
  * ### EventTime
- * Context 슬롯 타입으로, 이벤트 원본 발생 시각(system_clock::time_point)을 저장합니다.
- * context.hpp에 이미 선언 및 정의되어 있으며, 이 헤더에서 재사용합니다.
+ * A Context slot type that stores the original event occurrence time (system_clock::time_point).
+ * Already declared and defined in context.hpp and reused in this header.
  *
  * ### Watermark
- * 비순서(out-of-order) 이벤트 처리 진행 상태를 나타내는 값 타입입니다.
- * 워터마크 ts까지의 모든 이벤트가 도착했음을 의미합니다.
+ * A value type representing the progress state of out-of-order event processing.
+ * Indicates that all events up to watermark ts have arrived.
  *
  * ### TumblingWindow
- * 고정 크기 비중첩 윈도우입니다. size_ms마다 새 윈도우가 시작됩니다.
+ * Fixed-size non-overlapping window. A new window starts every size_ms.
  *
  * ### SlidingWindow
- * step_ms마다 슬라이딩하며, 각 윈도우 크기는 size_ms입니다 (step < size).
+ * Slides every step_ms; each window has size size_ms (step < size).
  *
  * ### SessionWindow
- * 이벤트 간 gap_ms 이상 이벤트가 없으면 세션을 종료합니다.
+ * Terminates the session when no events arrive for gap_ms or more between events.
  *
  * ### WindowedAction<T, Key, Acc, Out>
- * 키 기반 시간 윈도우 집계 액션입니다.
- * 워터마크가 윈도우 경계를 넘을 때 결과를 방출합니다.
+ * A key-based time-windowed aggregation action.
+ * Emits results when the watermark crosses a window boundary.
  *
  * @{
  */
@@ -58,13 +58,13 @@ using std::chrono::system_clock;
 // ============================================================================
 
 /**
- * @brief 비순서 이벤트 처리 진행 상태를 나타내는 값 타입.
+ * @brief A value type representing the progress state of out-of-order event processing.
  *
- * `ts` 이전 시각의 모든 이벤트가 이미 도착했음을 보증합니다.
- * 워터마크가 윈도우 경계를 지나면 해당 윈도우의 결과를 방출합니다.
+ * Guarantees that all events before `ts` have already arrived.
+ * When the watermark passes a window boundary, the result of that window is emitted.
  */
 struct Watermark {
-  system_clock::time_point ts; ///< 모든 이벤트가 도착했음이 보증된 기준 시각
+  system_clock::time_point ts; ///< The reference timestamp up to which all events are guaranteed to have arrived
 };
 
 // ============================================================================
@@ -72,26 +72,26 @@ struct Watermark {
 // ============================================================================
 
 /**
- * @brief 윈도우 종류 열거형.
+ * @brief Window type enumeration.
  */
 enum class WindowType {
-  Tumbling, ///< 고정 크기 비중첩 윈도우
-  Sliding,  ///< 슬라이딩 윈도우 (step < size)
-  Session,  ///< 세션 기반 윈도우 (갭 타임아웃)
+  Tumbling, ///< Fixed-size non-overlapping window
+  Sliding,  ///< Sliding window (step < size)
+  Session,  ///< Session-based window (gap timeout)
 };
 
 // ============================================================================
-// 내부 윈도우 디스크립터
+// Internal window descriptor
 // ============================================================================
 
 /**
- * @brief 단일 시간 윈도우를 기술하는 내부 타입.
+ * @brief Internal type describing a single time window.
  *
- * 각 윈도우는 [start, end) 구간을 가집니다.
+ * Each window covers the interval [start, end).
  */
 struct WindowDesc {
-  system_clock::time_point start; ///< 윈도우 시작 시각 (포함)
-  system_clock::time_point end;   ///< 윈도우 종료 시각 (미포함)
+  system_clock::time_point start; ///< Window start time (inclusive)
+  system_clock::time_point end;   ///< Window end time (exclusive)
 };
 
 // ============================================================================
@@ -99,19 +99,19 @@ struct WindowDesc {
 // ============================================================================
 
 /**
- * @brief 고정 크기 비중첩 윈도우 정책.
+ * @brief Fixed-size non-overlapping window policy.
  *
- * 이벤트 시각 `t`에 대해 소속 윈도우 시작 시각을 계산합니다.
- * 윈도우는 [floor(t / size) * size, floor(t / size) * size + size) 입니다.
+ * Computes the window start time for event time `t`.
+ * The window is [floor(t / size) * size, floor(t / size) * size + size).
  */
 struct TumblingWindow {
-  milliseconds size; ///< 윈도우 크기
+  milliseconds size; ///< Window size
 
   /**
-   * @brief 이벤트 시각으로부터 소속 윈도우를 계산합니다.
+   * @brief Computes the window that the given event time belongs to.
    *
-   * @param event_time 이벤트 발생 시각.
-   * @returns 소속 윈도우 디스크립터.
+   * @param event_time The event occurrence time.
+   * @returns The window descriptor for the event.
    */
   [[nodiscard]] WindowDesc window_for(system_clock::time_point event_time) const {
     auto epoch_ms = std::chrono::duration_cast<milliseconds>(
@@ -123,7 +123,7 @@ struct TumblingWindow {
   }
 
   /**
-   * @brief 틱 간격을 반환합니다 (tumbling = size).
+   * @brief Return the tick interval (tumbling = size).
    */
   [[nodiscard]] milliseconds tick_interval() const { return size; }
 };
@@ -133,22 +133,22 @@ struct TumblingWindow {
 // ============================================================================
 
 /**
- * @brief 슬라이딩 윈도우 정책.
+ * @brief Sliding window policy.
  *
- * 이벤트 시각 `t`가 속할 수 있는 모든 윈도우를 열거합니다.
- * 각 윈도우는 step 간격으로 시작하며, 크기는 size입니다.
+ * Enumerates all windows that event time `t` could belong to.
+ * Each window starts at a multiple of step and has width size.
  *
- * 이벤트 `t`는 start가 (t - size, t] 범위의 모든 윈도우에 속합니다.
+ * Event `t` belongs to all windows whose start falls in the range (t - size, t].
  */
 struct SlidingWindow {
-  milliseconds size; ///< 윈도우 크기
-  milliseconds step; ///< 슬라이딩 간격 (step <= size)
+  milliseconds size; ///< Window size
+  milliseconds step; ///< Slide interval (step <= size)
 
   /**
-   * @brief 이벤트 시각이 속하는 모든 윈도우를 반환합니다.
+   * @brief Return all windows that the given event time belongs to.
    *
-   * @param event_time 이벤트 발생 시각.
-   * @returns 이벤트가 속하는 모든 윈도우 목록.
+   * @param event_time Event occurrence time.
+   * @returns List of all windows containing the event.
    */
   [[nodiscard]] std::vector<WindowDesc> windows_for(
       system_clock::time_point event_time) const {
@@ -157,9 +157,9 @@ struct SlidingWindow {
     auto size_ms   = size.count();
     auto step_ms   = step.count();
 
-    // 이 이벤트를 포함할 수 있는 가장 이른 윈도우 시작
+    // Earliest window start that can contain this event:
     // start <= event_time < start + size  =>  event_time - size < start <= event_time
-    // start는 step의 배수로 정렬
+    // start is aligned to a multiple of step
     auto first_bucket = ((epoch_ms - size_ms) / step_ms + 1) * step_ms;
 
     std::vector<WindowDesc> result;
@@ -171,7 +171,7 @@ struct SlidingWindow {
   }
 
   /**
-   * @brief 틱 간격을 반환합니다 (sliding = step).
+   * @brief Return the tick interval (sliding = step).
    */
   [[nodiscard]] milliseconds tick_interval() const { return step; }
 };
@@ -181,16 +181,16 @@ struct SlidingWindow {
 // ============================================================================
 
 /**
- * @brief 세션 기반 윈도우 정책.
+ * @brief Session-based window policy.
  *
- * 이벤트 간 gap_ms 이상 이벤트가 없으면 세션이 종료됩니다.
- * 세션 윈도우는 키 단위로 동적으로 확장됩니다.
+ * A session ends when no events arrive for gap_ms or more.
+ * Session windows are dynamically extended per key.
  */
 struct SessionWindow {
-  milliseconds gap; ///< 세션 갭 타임아웃
+  milliseconds gap; ///< Session gap timeout
 
   /**
-   * @brief 틱 간격을 반환합니다 (session = gap / 2, 최소 1ms).
+   * @brief Return the tick interval (session = gap / 2, minimum 1 ms).
    */
   [[nodiscard]] milliseconds tick_interval() const {
     auto half = gap / 2;
@@ -203,54 +203,55 @@ struct SessionWindow {
 // ============================================================================
 
 /**
- * @brief 키 기반 시간 윈도우 집계 액션.
+ * @brief Key-based time-windowed aggregation action.
  *
- * 이벤트 시각(EventTime 컨텍스트 슬롯)과 워터마크를 기반으로 윈도우를 관리합니다.
- * 워터마크가 윈도우 경계를 넘을 때 해당 윈도우의 집계 결과를 방출합니다.
+ * Manages windows based on event time (EventTime context slot) and watermark.
+ * Emits the aggregation result for a window when the watermark crosses its boundary.
  *
- * ### 윈도우 타입별 동작
- * - **Tumbling**: size_ms마다 새 윈도우, 동시에 하나의 윈도우만 활성
- * - **Sliding**: step_ms마다 슬라이딩, 여러 윈도우가 동시에 활성
- * - **Session**: 이벤트 간 gap_ms 초과 시 세션 종료, 키별 독립 세션 관리
+ * ### Behavior by window type
+ * - **Tumbling**: new window every size_ms; only one window active at a time.
+ * - **Sliding**: slides every step_ms; multiple windows active simultaneously.
+ * - **Session**: session ends when the gap between events exceeds gap_ms;
+ *                independent session management per key.
  *
- * ### 워커 코루틴 구조
- * 1. **input_worker**: 입력 채널에서 아이템을 수신하고 윈도우 상태를 갱신합니다.
- * 2. **ticker**: step_ms(또는 gap/2) 간격으로 워터마크를 진전시키고 완료 윈도우를 방출합니다.
+ * ### Worker coroutine structure
+ * 1. **input_worker**: receives items from the input channel and updates window state.
+ * 2. **ticker**: advances the watermark every step_ms (or gap/2) and emits completed windows.
  *
- * @tparam T   입력 아이템 타입.
- * @tparam Key 파티셔닝 키 타입 (unordered_map 사용 — std::hash<Key> 필요).
- * @tparam Acc 집계 상태 타입.
- * @tparam Out 방출 결과 타입.
+ * @tparam T   Input item type.
+ * @tparam Key Partitioning key type (uses unordered_map — requires std::hash<Key>).
+ * @tparam Acc Aggregation state type.
+ * @tparam Out Emitted result type.
  */
 template <typename T, typename Key, typename Acc, typename Out>
 class WindowedAction {
 public:
-  /** @brief 키 추출 함수 타입: `T → Key`. */
+  /** @brief Key extraction function type: `T → Key`. */
   using KeyFn  = std::function<Key(const T&)>;
-  /** @brief 집계 함수 타입: `(Acc&, T) → void` (아이템을 누적기에 폴드). */
+  /** @brief Accumulation function type: `(Acc&, T) → void` (folds an item into the accumulator). */
   using AccFn  = std::function<void(Acc&, const T&)>;
-  /** @brief 방출 함수 타입: `(Key, Acc, window_start) → Out`. */
+  /** @brief Emit function type: `(Key, Acc, window_start) → Out`. */
   using EmitFn = std::function<Out(Key, Acc, system_clock::time_point)>;
 
   /**
-   * @brief WindowedAction 설정 구조체.
+   * @brief WindowedAction configuration struct.
    */
   struct Config {
-    WindowType   type    = WindowType::Tumbling; ///< 윈도우 종류
-    milliseconds size    = milliseconds{1000};   ///< 윈도우 크기 (Tumbling/Sliding)
-    milliseconds step    = milliseconds{500};    ///< 슬라이딩 간격 (Sliding 전용)
-    milliseconds gap     = milliseconds{5000};   ///< 세션 갭 타임아웃 (Session 전용)
-    KeyFn        key_fn;                         ///< 키 추출 함수
-    AccFn        acc_fn;                         ///< 집계 함수
-    EmitFn       emit_fn;                        ///< 방출 함수
-    Acc          init_acc{};                     ///< 초기 누적기 값
-    size_t       channel_cap = 256;              ///< 입력 채널 용량
+    WindowType   type    = WindowType::Tumbling; ///< Window type
+    milliseconds size    = milliseconds{1000};   ///< Window size (Tumbling/Sliding)
+    milliseconds step    = milliseconds{500};    ///< Slide interval (Sliding only)
+    milliseconds gap     = milliseconds{5000};   ///< Session gap timeout (Session only)
+    KeyFn        key_fn;                         ///< Key extraction function
+    AccFn        acc_fn;                         ///< Accumulation function
+    EmitFn       emit_fn;                        ///< Emit function
+    Acc          init_acc{};                     ///< Initial accumulator value
+    size_t       channel_cap = 256;              ///< Input channel capacity
   };
 
   /**
-   * @brief WindowedAction을 생성합니다.
+   * @brief Construct a WindowedAction.
    *
-   * @param cfg 설정.
+   * @param cfg Configuration.
    */
   explicit WindowedAction(Config cfg)
       : cfg_(std::move(cfg)),
@@ -262,24 +263,24 @@ public:
   WindowedAction& operator=(WindowedAction&&)      = default;
 
   /**
-   * @brief 아이템을 논블로킹으로 입력 채널에 넣으려 시도합니다.
+   * @brief Attempt to push an item into the input channel without blocking.
    *
-   * Context에 EventTime 슬롯이 없으면 현재 시각을 사용합니다.
+   * If the Context has no EventTime slot, the current wall-clock time is used.
    *
-   * @param value 입력 아이템.
-   * @param ctx   아이템 컨텍스트 (EventTime 슬롯 포함 가능).
-   * @returns 성공이면 true, 채널이 가득 찼거나 닫혔으면 false.
+   * @param value Input item.
+   * @param ctx   Item context (may contain an EventTime slot).
+   * @returns true on success, false if the channel is full or closed.
    */
   bool try_push(T value, Context ctx = {}) {
     return input_->try_send(ContextualItem<T>{std::move(value), std::move(ctx)});
   }
 
   /**
-   * @brief 아이템을 입력 채널에 넣습니다 (backpressure).
+   * @brief Push an item into the input channel (with backpressure).
    *
-   * @param value 입력 아이템.
-   * @param ctx   아이템 컨텍스트.
-   * @returns `Result<void>::ok()` 또는 에러.
+   * @param value Input item.
+   * @param ctx   Item context.
+   * @returns `Result<void>::ok()` or an error.
    */
   Task<Result<void>> push(T value, Context ctx = {}) {
     co_return co_await input_->send(
@@ -287,12 +288,12 @@ public:
   }
 
   /**
-   * @brief WindowedAction을 시작합니다.
+   * @brief Start the WindowedAction.
    *
-   * 입력 워커 코루틴과 틱커 코루틴을 Dispatcher에 등록합니다.
+   * Registers the input worker coroutine and ticker coroutine with the Dispatcher.
    *
-   * @param dispatcher 코루틴을 실행할 Dispatcher.
-   * @param out        결과를 방출할 출력 채널.
+   * @param dispatcher Dispatcher that will run the coroutines.
+   * @param out        Output channel to emit results into.
    */
   void start(Dispatcher& dispatcher,
              std::shared_ptr<AsyncChannel<ContextualItem<Out>>> out = nullptr) {
@@ -302,12 +303,12 @@ public:
   }
 
   /**
-   * @brief 워터마크를 수동으로 전진시킵니다.
+   * @brief Manually advance the watermark.
    *
-   * 외부에서 워터마크를 주입할 때 사용합니다.
-   * 워터마크가 현재 값보다 앞서는 경우에만 적용됩니다.
+   * Used to inject a watermark from an external source.
+   * Applied only if the new watermark is ahead of the current value.
    *
-   * @param wm 새 워터마크.
+   * @param wm New watermark.
    */
   void advance_watermark(Watermark wm) {
     std::lock_guard lock(state_mutex_);
@@ -317,7 +318,7 @@ public:
   }
 
   /**
-   * @brief 입력 채널을 닫고 워커가 완료될 때까지 기다립니다.
+   * @brief Close the input channel and wait for all workers to finish.
    */
   Task<void> drain() {
     input_->close();
@@ -341,7 +342,7 @@ public:
   }
 
   /**
-   * @brief 즉시 정지합니다.
+   * @brief Stop immediately.
    */
   void stop() {
     if (stop_src_) stop_src_->request_stop();
@@ -349,14 +350,14 @@ public:
   }
 
   /**
-   * @brief 출력 채널을 반환합니다.
+   * @brief Return the output channel.
    */
   [[nodiscard]] std::shared_ptr<AsyncChannel<ContextualItem<Out>>> output() const {
     return out_;
   }
 
   /**
-   * @brief 입력 채널을 반환합니다.
+   * @brief Return the input channel.
    */
   [[nodiscard]] std::shared_ptr<AsyncChannel<ContextualItem<T>>> input() const {
     return input_;
@@ -364,26 +365,26 @@ public:
 
 private:
   // --------------------------------------------------------------------------
-  // 내부 윈도우 상태
+  // Internal window state
   // --------------------------------------------------------------------------
 
   /**
-   * @brief 단일 윈도우 인스턴스의 상태.
+   * @brief State of a single window instance.
    *
-   * 윈도우 [start, end) 내에서 키별 누적 상태를 관리합니다.
+   * Manages per-key accumulation state within the window [start, end).
    */
   struct WindowState {
-    WindowDesc                       desc;       ///< 윈도우 시간 구간
-    std::unordered_map<Key, Acc>     accs;       ///< 키별 누적기
-    system_clock::time_point         last_event; ///< 세션 갱신용 마지막 이벤트 시각
+    WindowDesc                       desc;       ///< Window time interval
+    std::unordered_map<Key, Acc>     accs;       ///< Per-key accumulators
+    system_clock::time_point         last_event; ///< Last event time for session renewal
   };
 
   // --------------------------------------------------------------------------
-  // 틱 간격 계산
+  // Tick interval computation
   // --------------------------------------------------------------------------
 
   /**
-   * @brief 설정에 따라 틱 간격을 반환합니다.
+   * @brief Return the tick interval based on configuration.
    */
   [[nodiscard]] milliseconds tick_interval() const {
     switch (cfg_.type) {

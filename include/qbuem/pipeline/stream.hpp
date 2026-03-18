@@ -2,15 +2,15 @@
 
 /**
  * @file qbuem/pipeline/stream.hpp
- * @brief 비동기 스트림 — Stream<T>
+ * @brief Asynchronous stream — Stream<T>
  * @defgroup qbuem_stream Stream
  * @ingroup qbuem_pipeline
  *
- * Stream<T>는 AsyncChannel<T>을 소비하는 lazy pull-based 스트림입니다.
- * `co_await stream.next()`로 다음 아이템을 가져오고,
- * 채널이 닫히면 `std::nullopt` (EOS)를 반환합니다.
+ * Stream<T> is a lazy pull-based stream that consumes an AsyncChannel<T>.
+ * Use `co_await stream.next()` to fetch the next item;
+ * returns `std::nullopt` (EOS) when the channel is closed.
  *
- * ## Rx-style 연산자 (operator| 파이프 문법)
+ * ## Rx-style operators (operator| pipe syntax)
  * @code
  * auto result = stream
  *     | stream_map([](int x) -> Task<Result<int>> { co_return x * 2; })
@@ -38,8 +38,8 @@ namespace qbuem {
 // Internal helpers
 // ---------------------------------------------------------------------------
 
-/// Result<T> → T 언래퍼 트레이트.
-/// stream_map 연산자에서 Fn의 반환 타입 Task<Result<U>>로부터 U를 추출할 때 사용.
+/// Result<T> → T unwrapper trait.
+/// Used in the stream_map operator to extract U from Fn's return type Task<Result<U>>.
 template <typename R>
 struct unwrap_result_impl { using type = R; };
 template <typename T>
@@ -47,55 +47,55 @@ struct unwrap_result_impl<Result<T>> { using type = T; };
 template <typename R>
 using unwrap_result_t = typename unwrap_result_impl<R>::type;
 
-/** @brief 스트림 종료 마커. */
+/** @brief Stream end-of-stream marker. */
 struct StreamEnd {};
 
 /**
- * @brief 스트림 아이템: 값 또는 EOS.
+ * @brief Stream item: a value or EOS.
  *
- * @tparam T 값 타입.
+ * @tparam T Value type.
  */
 template <typename T>
 using StreamItem = std::variant<T, StreamEnd>;
 
 /**
- * @brief 비동기 스트림 — AsyncChannel<T> 기반 pull 인터페이스.
+ * @brief Asynchronous stream — AsyncChannel<T>-based pull interface.
  *
- * @tparam T 아이템 타입.
+ * @tparam T Item type.
  */
 template <typename T>
 class Stream {
 public:
   /**
-   * @brief AsyncChannel을 공유 소유로 래핑해 Stream을 생성합니다.
+   * @brief Construct a Stream by wrapping an AsyncChannel with shared ownership.
    */
   explicit Stream(std::shared_ptr<AsyncChannel<T>> channel)
       : channel_(std::move(channel)) {}
 
   /**
-   * @brief 다음 아이템을 가져옵니다.
+   * @brief Fetch the next item.
    *
-   * 채널이 비었으면 대기, EOS면 `std::nullopt`.
+   * Suspends if the channel is empty; returns `std::nullopt` on EOS.
    *
-   * @returns 아이템 또는 `std::nullopt` (EOS).
+   * @returns Item or `std::nullopt` (EOS).
    */
   Task<std::optional<T>> next() {
     co_return co_await channel_->recv();
   }
 
   /**
-   * @brief 스트림을 두 개의 독립 스트림으로 분기합니다 (tee).
+   * @brief Fork the stream into two independent streams (tee).
    *
-   * 내부적으로 원본 채널에서 읽어 두 채널에 복사합니다.
-   * 둘 중 느린 소비자가 백프레셔를 유발할 수 있습니다.
+   * Internally reads from the original channel and copies into two channels.
+   * The slower of the two consumers may cause backpressure.
    *
-   * @param cap 분기 채널 용량.
-   * @returns {Stream<T>, Stream<T>} 쌍.
+   * @param cap Fork channel capacity.
+   * @returns {Stream<T>, Stream<T>} pair.
    */
   std::pair<Stream<T>, Stream<T>> tee(size_t cap = 128);
 
   /**
-   * @brief 기반 채널을 반환합니다.
+   * @brief Return the underlying channel.
    */
   [[nodiscard]] std::shared_ptr<AsyncChannel<T>> channel() const {
     return channel_;
@@ -110,11 +110,11 @@ private:
 // ---------------------------------------------------------------------------
 
 /**
- * @brief 새 채널과 연결된 Stream을 생성합니다.
+ * @brief Create a Stream backed by a new channel.
  *
- * @tparam T  아이템 타입.
- * @param cap 채널 용량.
- * @returns {Stream<T>, shared_ptr<AsyncChannel<T>>} — 스트림(소비자) + 채널(생산자)
+ * @tparam T  Item type.
+ * @param cap Channel capacity.
+ * @returns {Stream<T>, shared_ptr<AsyncChannel<T>>} — stream (consumer) + channel (producer)
  */
 template <typename T>
 auto make_stream(size_t cap = 256) {
@@ -128,9 +128,9 @@ auto make_stream(size_t cap = 256) {
 // ---------------------------------------------------------------------------
 
 /**
- * @brief map — 각 아이템을 변환합니다.
+ * @brief map — transform each item.
  *
- * @param fn `(T) -> Task<Result<U>>` 변환 함수.
+ * @param fn `(T) -> Task<Result<U>>` transformation function.
  */
 template <typename Fn>
 struct StreamMapOp { Fn fn; };
@@ -140,9 +140,9 @@ auto stream_map(Fn fn) { return StreamMapOp<Fn>{std::move(fn)}; }
 
 template <typename T, typename Fn>
 auto operator|(Stream<T> stream, StreamMapOp<Fn> op) {
-  // Fn(T) → Task<Result<U>> 에서 U를 추출:
+  // Extract U from Fn(T) → Task<Result<U>>:
   //   invoke_result_t<Fn, T>         == Task<Result<U>>
-  //   Task<Result<U>>::value_type    == Result<U>   (Task의 coroutine_traits 타입)
+  //   Task<Result<U>>::value_type    == Result<U>   (Task coroutine_traits type)
   //   unwrap_result_t<Result<U>>     == U
   using U = unwrap_result_t<typename std::invoke_result_t<Fn, T>::value_type>;
   auto [out, chan] = make_stream<U>();
@@ -175,9 +175,9 @@ auto operator|(Stream<T> stream, StreamMapOp<Fn> op) {
 }
 
 /**
- * @brief filter — 조건을 만족하는 아이템만 통과시킵니다.
+ * @brief filter — pass only items that satisfy the predicate.
  *
- * @param pred `(const T&) -> bool` 술어 함수.
+ * @param pred `(const T&) -> bool` predicate function.
  */
 template <typename Fn>
 struct StreamFilterOp { Fn fn; };
@@ -211,9 +211,9 @@ Stream<T> operator|(Stream<T> stream, StreamFilterOp<Fn> op) {
 }
 
 /**
- * @brief chunk — N개씩 묶어 vector로 만듭니다.
+ * @brief chunk — collect N items into a vector.
  *
- * BatchAction 입력이나 DB bulk insert에 유용합니다.
+ * Useful for BatchAction input or DB bulk inserts.
  */
 struct StreamChunkOp { size_t n; };
 inline StreamChunkOp stream_chunk(size_t n) { return {n}; }
@@ -253,9 +253,9 @@ Stream<std::vector<T>> operator|(Stream<T> stream, StreamChunkOp op) {
 }
 
 /**
- * @brief take_while — 조건이 거짓이 되면 스트림을 닫습니다.
+ * @brief take_while — close the stream when the predicate becomes false.
  *
- * @param pred `(const T&) -> bool` 종료 조건.
+ * @param pred `(const T&) -> bool` termination condition.
  */
 template <typename Fn>
 struct StreamTakeWhileOp { Fn fn; };
@@ -288,10 +288,10 @@ Stream<T> operator|(Stream<T> stream, StreamTakeWhileOp<Fn> op) {
 }
 
 /**
- * @brief scan — 상태 유지 누적 변환 (std::accumulate의 스트리밍 버전).
+ * @brief scan — stateful accumulation transform (streaming version of std::accumulate).
  *
- * @param init  초기 상태값.
- * @param fn    `(State&, T) -> U` 변환 함수.
+ * @param init  Initial state value.
+ * @param fn    `(State&, T) -> U` transformation function.
  */
 template <typename State, typename Fn>
 struct StreamScanOp { State init; Fn fn; };
@@ -302,11 +302,11 @@ auto stream_scan(State init, Fn fn) {
 }
 
 /**
- * @brief scan operator| — 상태 누적 변환을 스트림에 적용합니다.
+ * @brief scan operator| — apply stateful accumulation transform to a stream.
  *
- * @tparam T     입력 아이템 타입.
- * @tparam State 누적 상태 타입.
- * @tparam Fn    `(State&, T) -> U` 변환 함수 타입.
+ * @tparam T     Input item type.
+ * @tparam State Accumulation state type.
+ * @tparam Fn    `(State&, T) -> U` transformation function type.
  */
 template <typename T, typename State, typename Fn>
 auto operator|(Stream<T> stream, StreamScanOp<State, Fn> op) {
@@ -340,27 +340,27 @@ auto operator|(Stream<T> stream, StreamScanOp<State, Fn> op) {
 // ---------------------------------------------------------------------------
 
 /**
- * @brief 퓨즈된 map+filter 연산자.
+ * @brief Fused map+filter operator.
  *
- * `stream | stream_map(f) | stream_filter(p)` 체인은 두 개의 중간 코루틴 프레임과
- * 채널을 생성합니다.  `stream_map_filter`는 이를 단일 펌프로 합쳐
- * 중간 할당을 제거합니다.
+ * The `stream | stream_map(f) | stream_filter(p)` chain creates two intermediate
+ * coroutine frames and channels.  `stream_map_filter` merges them into a single
+ * pump, eliminating the intermediate allocations.
  *
- * ### 성능 이점
- * - 중간 `AsyncChannel<U>` 제거 → 채널 송수신 오버헤드 없음
- * - 코루틴 프레임 1개 절약
+ * ### Performance benefits
+ * - Eliminates the intermediate `AsyncChannel<U>` → no channel send/recv overhead
+ * - Saves one coroutine frame
  *
- * ### 사용 예시
+ * ### Usage example
  * @code
- * // 이전 (2 중간 채널):
+ * // Before (2 intermediate channels):
  * auto s = stream | stream_map(f) | stream_filter(p);
  *
- * // 퓨즈 (중간 채널 0):
+ * // Fused (0 intermediate channels):
  * auto s = stream | stream_map_filter(f, p);
  * @endcode
  *
- * @param map_fn   `(T) -> Task<Result<U>>` 변환 함수.
- * @param pred     `(const U&) -> bool` 필터 술어.
+ * @param map_fn   `(T) -> Task<Result<U>>` transformation function.
+ * @param pred     `(const U&) -> bool` filter predicate.
  */
 template <typename MapFn, typename FilterFn>
 struct StreamMapFilterOp { MapFn map_fn; FilterFn pred; };
@@ -405,10 +405,10 @@ auto operator|(Stream<T> stream, StreamMapFilterOp<MapFn, FilterFn> op) {
 // ---------------------------------------------------------------------------
 
 /**
- * @brief flat_map — T를 Stream<U>로 변환 후 평탄화합니다.
+ * @brief flat_map — transform each T into a Stream<U> and flatten the results.
  *
- * @param fn `(T) -> Stream<U>` 변환 함수.
- *           각 입력 아이템에 대해 내부 스트림을 생성하고 모든 아이템을 출력합니다.
+ * @param fn `(T) -> Stream<U>` transformation function.
+ *           Creates an inner stream for each input item and emits all of its items.
  */
 template <typename Fn>
 struct StreamFlatMapOp { Fn fn; };
@@ -460,15 +460,15 @@ auto operator|(Stream<T> stream, StreamFlatMapOp<Fn> op) {
 // ---------------------------------------------------------------------------
 
 /**
- * @brief zip — 두 스트림을 쌍(pair)으로 묶습니다.
+ * @brief zip — combine two streams into pairs.
  *
- * 두 스트림 중 하나가 EOS가 되면 출력 스트림도 닫힙니다.
+ * When either stream reaches EOS the output stream is also closed.
  *
- * @tparam T 첫 번째 스트림 아이템 타입.
- * @tparam U 두 번째 스트림 아이템 타입.
- * @param a   첫 번째 스트림.
- * @param b   두 번째 스트림.
- * @param cap 출력 채널 용량.
+ * @tparam T First stream item type.
+ * @tparam U Second stream item type.
+ * @param a   First stream.
+ * @param b   Second stream.
+ * @param cap Output channel capacity.
  * @returns `Stream<std::pair<T, U>>`.
  */
 template <typename T, typename U>
@@ -501,20 +501,20 @@ Stream<std::pair<T, U>> stream_zip(Stream<T> a, Stream<U> b, size_t cap = 256) {
 // ---------------------------------------------------------------------------
 
 /**
- * @brief merge — 여러 스트림을 하나로 병합합니다.
+ * @brief merge — combine multiple streams into one.
  *
- * 모든 입력 스트림이 EOS가 되면 출력 스트림도 닫힙니다.
- * 각 스트림에서 독립적인 펌프 코루틴이 실행되어 먼저 도착한 아이템부터 전달됩니다.
+ * The output stream is closed when all input streams reach EOS.
+ * An independent pump coroutine runs per stream, forwarding items in arrival order.
  *
- * @tparam T 아이템 타입.
- * @param streams 병합할 스트림 목록.
- * @param cap     출력 채널 용량.
- * @returns 병합된 `Stream<T>`.
+ * @tparam T Item type.
+ * @param streams List of streams to merge.
+ * @param cap     Output channel capacity.
+ * @returns Merged `Stream<T>`.
  */
 template <typename T>
 Stream<T> stream_merge(std::vector<Stream<T>> streams, size_t cap = 256) {
   if (streams.empty()) {
-    // 빈 병합: 즉시 닫힌 스트림 반환
+    // Empty merge: return a stream that is immediately closed
     auto [out, chan] = make_stream<T>(2);
     chan->close();
     return out;

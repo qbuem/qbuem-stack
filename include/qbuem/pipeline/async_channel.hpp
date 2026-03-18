@@ -2,34 +2,34 @@
 
 /**
  * @file qbuem/pipeline/async_channel.hpp
- * @brief MPMC 비동기 채널 — Dmitry Vyukov ring buffer
+ * @brief MPMC async channel — Dmitry Vyukov ring buffer
  * @defgroup qbuem_async_channel AsyncChannel
  * @ingroup qbuem_pipeline
  *
- * AsyncChannel<T>는 다중 생산자/다중 소비자 비동기 채널입니다.
+ * AsyncChannel<T> is a multiple-producer/multiple-consumer async channel.
  *
- * ## 구현
- * Dmitry Vyukov의 MPMC ring buffer 알고리즘을 기반으로 합니다.
- * - `head_`/`tail_` cache-line 분리 (`alignas(64)`)
- * - `send()` / `recv()` — backpressure: 포화/비면 co_await 대기
- * - `try_send()` / `try_recv()` — wait-free, 논블로킹
- * - `close()` + EOS 전파
+ * ## Implementation
+ * Based on Dmitry Vyukov's MPMC ring buffer algorithm.
+ * - `head_`/`tail_` cache-line separation (`alignas(64)`)
+ * - `send()` / `recv()` — backpressure: co_await when full/empty
+ * - `try_send()` / `try_recv()` — wait-free, non-blocking
+ * - `close()` + EOS propagation
  * - Cross-reactor wakeup: `waiter.reactor->post([h]{h.resume();})`
  *
- * ## MPMC 메모리 순서 (Dmitry Vyukov 명세)
+ * ## MPMC memory ordering (Dmitry Vyukov specification)
  * - send: `sequence.load(acquire)` → CAS(relaxed,relaxed) → data write
  *         → `sequence.store(tail+1, release)`
  * - recv: `sequence.load(acquire)` → data read
  *         → `sequence.store(head+capacity, release)`
  *
- * ## 사용 예시
+ * ## Usage example
  * @code
  * AsyncChannel<int> chan(1024);
  *
- * // 생산자 (다른 코루틴):
+ * // Producer (another coroutine):
  * co_await chan.send(42);
  *
- * // 소비자:
+ * // Consumer:
  * auto item = co_await chan.recv(); // std::optional<int>
  * if (!item) { // EOS
  * }
@@ -52,17 +52,17 @@
 namespace qbuem {
 
 /**
- * @brief MPMC 비동기 채널.
+ * @brief MPMC async channel.
  *
- * @tparam T 전송할 값의 타입 (이동 가능해야 함).
+ * @tparam T Type of value to transmit (must be movable).
  */
 template <typename T>
 class AsyncChannel {
 public:
   /**
-   * @brief 지정한 용량으로 채널을 생성합니다.
+   * @brief Creates the channel with the specified capacity.
    *
-   * @param capacity 링 버퍼 용량. 2의 거듭제곱 권장 (내부에서 반올림).
+   * @param capacity Ring buffer capacity. Power of two recommended (rounded up internally).
    */
   explicit AsyncChannel(size_t capacity)
       : capacity_(next_pow2(std::max(capacity, size_t{2}))) {
@@ -81,9 +81,9 @@ public:
   // -------------------------------------------------------------------------
 
   /**
-   * @brief 아이템을 채널에 넣으려 시도합니다 (논블로킹).
+   * @brief Attempts to push an item into the channel (non-blocking).
    *
-   * @returns `true`이면 성공, `false`이면 포화(ring full) 또는 닫힘.
+   * @returns `true` on success, `false` if the ring is full or the channel is closed.
    */
   bool try_send(T value) {
     if (closed_.load(std::memory_order_relaxed))
@@ -113,10 +113,10 @@ public:
   }
 
   /**
-   * @brief 채널에서 아이템을 꺼내려 시도합니다 (논블로킹).
+   * @brief Attempts to pop an item from the channel (non-blocking).
    *
-   * @returns 아이템이 있으면 `std::optional<T>`, 없으면 `std::nullopt`.
-   *          닫힌 채널에서 빈 경우 `std::nullopt` (EOS).
+   * @returns `std::optional<T>` if an item is available, `std::nullopt` if empty.
+   *          `std::nullopt` on a closed empty channel (EOS).
    */
   std::optional<T> try_recv() {
     size_t pos = head_.load(std::memory_order_relaxed);
@@ -148,11 +148,11 @@ public:
   // -------------------------------------------------------------------------
 
   /**
-   * @brief 아이템을 전송합니다. 채널이 가득 차면 co_await 대기합니다.
+   * @brief Sends an item. co_awaits if the channel is full.
    *
-   * 채널이 닫혀 있으면 즉시 에러를 반환합니다.
+   * Returns an error immediately if the channel is closed.
    *
-   * @returns `Result<void>::ok()` 또는 `errc::broken_pipe` (채널 닫힘).
+   * @returns `Result<void>::ok()` or `errc::broken_pipe` (channel closed).
    */
   Task<Result<void>> send(T value) {
     for (;;) {
@@ -164,17 +164,17 @@ public:
         co_return Result<void>{};
       }
 
-      // 채널 가득 참 — 소비자 공간 생길 때까지 대기
+      // Channel full — wait until a consumer frees space
       co_await SendAwaiter{this};
     }
   }
 
   /**
-   * @brief 아이템을 수신합니다. 채널이 비면 co_await 대기합니다.
+   * @brief Receives an item. co_awaits if the channel is empty.
    *
-   * 채널이 닫히고 비면 `std::nullopt` (EOS) 반환.
+   * Returns `std::nullopt` (EOS) when the channel is closed and empty.
    *
-   * @returns 아이템 또는 `std::nullopt` (EOS).
+   * @returns An item or `std::nullopt` (EOS).
    */
   Task<std::optional<T>> recv() {
     for (;;) {
@@ -185,7 +185,7 @@ public:
       if (closed_.load(std::memory_order_acquire))
         co_return std::nullopt; // EOS
 
-      // 채널 비어 있음 — 아이템 도착 대기
+      // Channel empty — wait for an item to arrive
       co_await RecvAwaiter{this};
     }
   }
@@ -195,11 +195,11 @@ public:
   // -------------------------------------------------------------------------
 
   /**
-   * @brief 최대 `max_n`개 아이템을 배치로 꺼냅니다 (논블로킹).
+   * @brief Pops up to `max_n` items in a batch (non-blocking).
    *
-   * @param out   결과를 채울 버퍼.
-   * @param max_n 최대 꺼낼 개수 (0이면 out.size()).
-   * @returns 실제로 꺼낸 개수.
+   * @param out   Buffer to fill with results.
+   * @param max_n Maximum number of items to pop (0 means out.size()).
+   * @returns Actual number of items popped.
    */
   size_t try_recv_batch(std::span<T> out, size_t max_n = 0) {
     if (max_n == 0 || max_n > out.size())
@@ -215,10 +215,10 @@ public:
   }
 
   /**
-   * @brief 여러 아이템을 배치로 전송합니다 (논블로킹).
+   * @brief Sends multiple items in a batch (non-blocking).
    *
-   * @param items 전송할 아이템들.
-   * @returns 실제로 전송한 개수.
+   * @param items Items to send.
+   * @returns Actual number of items sent.
    */
   size_t send_batch(std::span<T> items) {
     size_t n = 0;
@@ -235,10 +235,10 @@ public:
   // -------------------------------------------------------------------------
 
   /**
-   * @brief 채널을 닫습니다 (EOS 전파).
+   * @brief Closes the channel (EOS propagation).
    *
-   * `close()` 후 `send()`는 에러 반환.
-   * `recv()`는 남은 아이템 소진 후 `std::nullopt` 반환.
+   * After `close()`, `send()` returns an error.
+   * `recv()` returns `std::nullopt` once remaining items are exhausted.
    */
   void close() {
     closed_.store(true, std::memory_order_release);
@@ -247,21 +247,21 @@ public:
   }
 
   /**
-   * @brief 채널이 닫혔는지 확인합니다.
+   * @brief Returns whether the channel is closed.
    */
   [[nodiscard]] bool is_closed() const noexcept {
     return closed_.load(std::memory_order_relaxed);
   }
 
   /**
-   * @brief 현재 채널 용량을 반환합니다.
+   * @brief Returns the current channel capacity.
    */
   [[nodiscard]] size_t capacity() const noexcept { return capacity_; }
 
   /**
-   * @brief 현재 채널에 있는 아이템 수를 근사적으로 반환합니다.
+   * @brief Returns an approximate count of items currently in the channel.
    *
-   * @note 멀티스레드 환경에서는 반환 즉시 변할 수 있습니다.
+   * @note In a multi-threaded environment this value may change immediately after it is returned.
    */
   [[nodiscard]] size_t size_approx() const noexcept {
     size_t head = head_.load(std::memory_order_relaxed);
@@ -486,7 +486,7 @@ private:
   }
 
   static void resume_waiter(Waiter *w) {
-    // 반드시 owning Reactor 스레드에서 resume — cross-reactor 안전
+    // Must resume on the owning Reactor thread — cross-reactor safe
     if (w->reactor)
       w->reactor->post([h = w->handle]() mutable { h.resume(); });
     else

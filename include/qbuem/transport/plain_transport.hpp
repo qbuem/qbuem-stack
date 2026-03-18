@@ -2,18 +2,18 @@
 
 /**
  * @file qbuem/transport/plain_transport.hpp
- * @brief 평문 TCP 연결을 위한 ITransport 구체 구현.
+ * @brief Concrete ITransport implementation for plain TCP connections.
  * @defgroup qbuem_transport_impl Transport Implementations
  * @ingroup qbuem_transport
  *
- * `PlainTransport`는 TLS 없이 일반 TCP fd를 사용하는
- * `ITransport` 구체 구현체입니다.
+ * `PlainTransport` is a concrete `ITransport` implementation that uses
+ * a plain TCP fd without TLS.
  *
- * ### 설계 원칙
- * - `ITransport` 인터페이스를 완전히 구현
- * - `AsyncRead` / `AsyncWrite` awaiter를 통한 Reactor 기반 비동기 I/O
- * - `handshake()`: 평문 TCP이므로 즉시 ok() 반환 (no-op)
- * - `close()`: `shutdown(SHUT_WR)` 후 fd 닫기
+ * ### Design principles
+ * - Fully implements the `ITransport` interface
+ * - Reactor-based async I/O via `AsyncRead` / `AsyncWrite` awaiters
+ * - `handshake()`: returns ok() immediately since this is plain TCP (no-op)
+ * - `close()`: closes the fd after `shutdown(SHUT_WR)`
  * @{
  */
 
@@ -30,21 +30,21 @@
 namespace qbuem {
 
 /**
- * @brief 평문 TCP 연결을 위한 ITransport 구체 구현.
+ * @brief Concrete ITransport implementation for plain TCP connections.
  *
- * 논블로킹 TCP 소켓 fd를 래핑하고 `ITransport` 인터페이스를 구현합니다.
- * TLS 처리 없이 소켓에 직접 읽기/쓰기를 수행합니다.
+ * Wraps a non-blocking TCP socket fd and implements the `ITransport` interface.
+ * Performs direct reads and writes to the socket without TLS processing.
  *
- * ### 일반적인 사용 패턴
+ * ### Typical usage pattern
  * @code
- * // TcpListener::accept()로 얻은 fd를 PlainTransport에 주입
+ * // Inject the fd obtained from TcpListener::accept() into PlainTransport
  * auto transport = std::make_unique<PlainTransport>(client_fd);
- * // Connection 등에 주입하여 사용
+ * // Inject into Connection, etc., for use
  * @endcode
  *
- * @note 소멸자는 fd를 닫지 않습니다. 명시적으로 `close()`를 호출하거나
- *       fd 소유권이 있는 TcpStream이 소멸할 때 닫힙니다.
- *       fd 수명을 외부에서 관리하는 경우에 이 클래스를 사용하세요.
+ * @note The destructor does not close the fd. Close it by calling `close()` explicitly
+ *       or when the owning TcpStream is destroyed.
+ *       Use this class when fd lifetime is managed externally.
  */
 class PlainTransport : public ITransport {
 public:

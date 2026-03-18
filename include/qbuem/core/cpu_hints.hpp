@@ -2,22 +2,22 @@
 
 /**
  * @file qbuem/core/cpu_hints.hpp
- * @brief CPU 성능 힌트 — Prefetch, Cache-line, 연결 구조체 선제 로드
+ * @brief CPU performance hints — Prefetch, Cache-line, connection struct preload
  * @defgroup qbuem_cpu_hints CPU Hints
  * @ingroup qbuem_core
  *
- * 컴파일러와 CPU에 메모리 접근 패턴을 알려 캐시 미스를 줄입니다.
+ * Informs the compiler and CPU about memory access patterns to reduce cache misses.
  *
- * ## 사용 예시
+ * ## Usage Examples
  * ```cpp
- * // 다음 연결 구조체를 미리 캐시에 로드
+ * // Preload the next connection struct into cache
  * Connection* next = ring.peek_next();
  * qbuem::prefetch_read(next);
  *
- * // 쓰기 목적 prefetch (write buffer 선제 로드)
+ * // Write-purpose prefetch (preload write buffer)
  * qbuem::prefetch_write(output_buf);
  *
- * // cache-line 정렬 구조체
+ * // Cache-line aligned struct
  * struct alignas(qbuem::kCacheLineSize) ReactorState {
  *     std::atomic<int> state;
  * };
@@ -36,10 +36,10 @@ namespace qbuem {
 // ---------------------------------------------------------------------------
 
 /**
- * @brief 일반적인 x86-64 / ARM64 캐시 라인 크기 (64바이트).
+ * @brief Typical x86-64 / ARM64 cache line size (64 bytes).
  *
- * `std::hardware_destructive_interference_size`가 있으면 사용하고,
- * 없으면 64를 기본값으로 사용합니다.
+ * Uses `std::hardware_destructive_interference_size` if available,
+ * otherwise defaults to 64.
  */
 #ifdef __cpp_lib_hardware_interference_size
 #  include <new>
@@ -50,20 +50,20 @@ inline constexpr size_t kCacheLineSize = 64;
 #endif
 
 // ---------------------------------------------------------------------------
-// Prefetch 힌트
+// Prefetch hints
 // ---------------------------------------------------------------------------
 
 /**
- * @brief 읽기 목적 prefetch — 데이터를 캐시로 미리 로드합니다.
+ * @brief Read-purpose prefetch — preloads data into cache.
  *
- * `__builtin_prefetch(ptr, 0, locality)`를 사용합니다.
+ * Uses `__builtin_prefetch(ptr, 0, locality)`.
  *
- * @tparam Locality 캐시 지역성 힌트:
- *   - 0: no temporal locality (캐시에 잠깐만 유지)
+ * @tparam Locality Cache locality hint:
+ *   - 0: no temporal locality (kept in cache only briefly)
  *   - 1: low temporal locality
  *   - 2: moderate temporal locality
- *   - 3: high temporal locality (기본값 — L1에 유지)
- * @param ptr  prefetch할 메모리 주소.
+ *   - 3: high temporal locality (default — kept in L1)
+ * @param ptr  Memory address to prefetch.
  */
 template <int Locality = 3>
 inline void prefetch_read(const void* ptr) noexcept {
@@ -71,12 +71,12 @@ inline void prefetch_read(const void* ptr) noexcept {
 }
 
 /**
- * @brief 쓰기 목적 prefetch — 쓰기 버퍼를 캐시로 미리 로드합니다.
+ * @brief Write-purpose prefetch — preloads write buffer into cache.
  *
- * `__builtin_prefetch(ptr, 1, locality)`를 사용합니다.
+ * Uses `__builtin_prefetch(ptr, 1, locality)`.
  *
- * @tparam Locality 캐시 지역성 힌트 (prefetch_read와 동일).
- * @param ptr  prefetch할 메모리 주소.
+ * @tparam Locality Cache locality hint (same as prefetch_read).
+ * @param ptr  Memory address to prefetch.
  */
 template <int Locality = 3>
 inline void prefetch_write(void* ptr) noexcept {
@@ -84,9 +84,10 @@ inline void prefetch_write(void* ptr) noexcept {
 }
 
 /**
- * @brief 연결 구조체 배열에서 다음 N개 항목을 prefetch합니다.
+ * @brief Prefetches the next N items ahead in a connection struct array.
  *
- * Accept 루프 등에서 다음 연결 구조체를 미리 캐시에 로드할 때 사용합니다.
+ * Used in accept loops and similar patterns to preload upcoming connection
+ * structs into cache before they are needed.
  *
  * ```cpp
  * for (int i = 0; i < n; ++i) {
@@ -95,11 +96,11 @@ inline void prefetch_write(void* ptr) noexcept {
  * }
  * ```
  *
- * @tparam T     연결 구조체 타입.
- * @tparam Ahead 몇 개 앞을 prefetch할지 (기본 4).
- * @param  arr   배열 포인터.
- * @param  cur   현재 인덱스.
- * @param  count 배열 전체 길이.
+ * @tparam T     Connection struct type.
+ * @tparam Ahead Number of elements ahead to prefetch (default 4).
+ * @param  arr   Array pointer.
+ * @param  cur   Current index.
+ * @param  count Total length of the array.
  */
 template <typename T, int Ahead = 4>
 inline void prefetch_ahead(const T* arr, size_t cur, size_t count) noexcept {
@@ -110,35 +111,35 @@ inline void prefetch_ahead(const T* arr, size_t cur, size_t count) noexcept {
 }
 
 // ---------------------------------------------------------------------------
-// 컴파일러 힌트 매크로
+// Compiler hint macros
 // ---------------------------------------------------------------------------
 
 /**
- * @brief 조건이 참일 가능성이 높다고 컴파일러에 알립니다.
+ * @brief Informs the compiler that the condition is likely true.
  */
 #define QBUEM_LIKELY(x)   __builtin_expect(!!(x), 1)
 
 /**
- * @brief 조건이 거짓일 가능성이 높다고 컴파일러에 알립니다.
+ * @brief Informs the compiler that the condition is likely false.
  */
 #define QBUEM_UNLIKELY(x) __builtin_expect(!!(x), 0)
 
 /**
- * @brief 함수가 자주 호출되지 않음을 컴파일러에 알립니다 (cold path).
+ * @brief Informs the compiler that this function is rarely called (cold path).
  */
 #define QBUEM_COLD __attribute__((cold))
 
 /**
- * @brief 함수가 자주 호출됨을 컴파일러에 알립니다 (hot path).
+ * @brief Informs the compiler that this function is frequently called (hot path).
  */
 #define QBUEM_HOT  __attribute__((hot))
 
 // ---------------------------------------------------------------------------
-// Cache-line 정렬 헬퍼
+// Cache-line alignment helper
 // ---------------------------------------------------------------------------
 
 /**
- * @brief 두 원자적 변수를 다른 캐시 라인에 배치하여 false sharing을 방지합니다.
+ * @brief Places two atomic variables on separate cache lines to prevent false sharing.
  *
  * ```cpp
  * struct Counter {
@@ -152,24 +153,24 @@ struct CacheLinePad {
 };
 
 // ---------------------------------------------------------------------------
-// 메모리 배리어
+// Memory barriers
 // ---------------------------------------------------------------------------
 
 /**
- * @brief 컴파일러 메모리 배리어 — 컴파일러 재배열만 방지합니다.
+ * @brief Compiler memory barrier — prevents compiler instruction reordering only.
  *
- * CPU 레벨 재배열은 막지 않습니다. CPU 배리어가 필요하면
- * `std::atomic_thread_fence(std::memory_order_seq_cst)` 사용.
+ * Does not prevent CPU-level reordering. For CPU barriers use
+ * `std::atomic_thread_fence(std::memory_order_seq_cst)`.
  */
 inline void compiler_barrier() noexcept {
   asm volatile("" ::: "memory");
 }
 
 /**
- * @brief CPU pause 명령어 — spin-wait 루프에서 사용합니다.
+ * @brief CPU pause instruction — used in spin-wait loops.
  *
- * x86: `PAUSE`, ARM: `YIELD`, 기타: no-op.
- * 하이퍼스레딩 환경에서 스핀락 경쟁을 줄입니다.
+ * x86: `PAUSE`, ARM: `YIELD`, other: no-op.
+ * Reduces spinlock contention in hyperthreading environments.
  */
 inline void cpu_pause() noexcept {
 #if defined(__x86_64__) || defined(__i386__)

@@ -2,16 +2,16 @@
 
 /**
  * @file qbuem/net/tcp_stream.hpp
- * @brief 비동기 TCP 스트림 연결 타입.
+ * @brief Asynchronous TCP stream connection type.
  * @ingroup qbuem_net
  *
- * `TcpStream`은 논블로킹 TCP 소켓 파일 디스크립터를 RAII로 관리하며,
- * 코루틴 기반의 비동기 읽기/쓰기 인터페이스를 제공합니다.
+ * `TcpStream` manages a non-blocking TCP socket file descriptor via RAII and
+ * provides a coroutine-based asynchronous read/write interface.
  *
- * ### 설계 원칙
- * - Move-only: 복사 불가, 소멸자에서 fd 자동 close
- * - 모든 I/O는 `Reactor::current()`를 통해 비동기로 수행
- * - scatter-gather I/O (`readv`/`writev`) 지원
+ * ### Design Principles
+ * - Move-only: non-copyable, fd is automatically closed in the destructor
+ * - All I/O is performed asynchronously via `Reactor::current()`
+ * - scatter-gather I/O (`readv`/`writev`) supported
  * @{
  */
 
@@ -33,16 +33,16 @@
 namespace qbuem {
 
 /**
- * @brief 비동기 TCP 연결 스트림.
+ * @brief Asynchronous TCP connection stream.
  *
- * 논블로킹 TCP 소켓을 래핑하여 코루틴 기반 읽기/쓰기 인터페이스를 제공합니다.
- * Move-only 타입이며 소멸 시 소켓이 자동으로 닫힙니다.
+ * Wraps a non-blocking TCP socket to provide a coroutine-based read/write
+ * interface. Move-only type; the socket is closed automatically on destruction.
  *
- * ### 사용 예시
+ * ### Usage Example
  * @code
  * auto addr = SocketAddr::from_ipv4("127.0.0.1", 8080);
  * auto stream = co_await TcpStream::connect(*addr);
- * if (!stream) { // 에러 처리 }
+ * if (!stream) { // error handling }
  *
  * std::array<std::byte, 1024> buf{};
  * auto n = co_await stream->read(buf);
@@ -50,34 +50,34 @@ namespace qbuem {
  */
 class TcpStream {
 public:
-  /** @brief 유효하지 않은 fd로 초기화. */
+  /** @brief Initialize with an invalid fd. */
   TcpStream() noexcept : fd_(-1) {}
 
   /**
-   * @brief 이미 연결된 fd로 TcpStream을 구성합니다.
-   * @param fd 논블로킹 TCP 소켓 파일 디스크립터.
+   * @brief Construct a TcpStream from an already-connected fd.
+   * @param fd Non-blocking TCP socket file descriptor.
    */
   explicit TcpStream(int fd) noexcept : fd_(fd) {}
 
-  /** @brief 소멸자: 열린 소켓을 자동으로 닫습니다. */
+  /** @brief Destructor: automatically closes the open socket. */
   ~TcpStream() {
     if (fd_ >= 0) {
       ::close(fd_);
     }
   }
 
-  /** @brief 복사 생성자 삭제 (Move-only). */
+  /** @brief Copy constructor deleted (Move-only). */
   TcpStream(const TcpStream &) = delete;
 
-  /** @brief 복사 대입 삭제 (Move-only). */
+  /** @brief Copy assignment deleted (Move-only). */
   TcpStream &operator=(const TcpStream &) = delete;
 
-  /** @brief 이동 생성자. */
+  /** @brief Move constructor. */
   TcpStream(TcpStream &&other) noexcept : fd_(other.fd_) {
     other.fd_ = -1;
   }
 
-  /** @brief 이동 대입 연산자. */
+  /** @brief Move assignment operator. */
   TcpStream &operator=(TcpStream &&other) noexcept {
     if (this != &other) {
       if (fd_ >= 0) ::close(fd_);
@@ -87,16 +87,16 @@ public:
     return *this;
   }
 
-  // ─── 비동기 연결 ────────────────────────────────────────────────────────
+  // ─── Asynchronous Connect ────────────────────────────────────────────────
 
   /**
-   * @brief 지정된 주소로 비동기 TCP 연결을 수행합니다.
+   * @brief Perform an asynchronous TCP connection to the specified address.
    *
-   * 논블로킹 `connect(2)`를 호출하고 EINPROGRESS 시 Reactor에 쓰기 이벤트를
-   * 등록하여 연결 완료를 대기합니다.
+   * Calls non-blocking `connect(2)` and, on EINPROGRESS, registers a write
+   * event with the Reactor and waits for connection completion.
    *
-   * @param addr 연결할 원격 소켓 주소.
-   * @returns 연결 성공 시 TcpStream, 실패 시 에러 코드.
+   * @param addr Remote socket address to connect to.
+   * @returns TcpStream on success, or an error code on failure.
    */
   static Task<Result<TcpStream>> connect(SocketAddr addr) {
     int fd = ::socket(
@@ -125,7 +125,7 @@ public:
       co_return unexpected(ec);
     }
 
-    // EINPROGRESS: Reactor 쓰기 이벤트 대기
+    // EINPROGRESS: wait for a Reactor write event
     struct ConnectAwaiter {
       int fd_;
       int err_ = 0;
@@ -159,15 +159,15 @@ public:
     co_return TcpStream(fd);
   }
 
-  // ─── 비동기 I/O ─────────────────────────────────────────────────────────
+  // ─── Asynchronous I/O ────────────────────────────────────────────────────
 
   /**
-   * @brief 버퍼에 데이터를 비동기로 읽습니다.
+   * @brief Asynchronously read data into a buffer.
    *
-   * 소켓이 읽기 가능해질 때까지 Reactor 이벤트를 대기합니다.
+   * Waits for a Reactor event until the socket becomes readable.
    *
-   * @param buf 수신 데이터를 저장할 버퍼.
-   * @returns 읽은 바이트 수. EOF면 0. 에러 시 error_code.
+   * @param buf Buffer to store received data.
+   * @returns Number of bytes read. 0 on EOF. error_code on failure.
    */
   Task<Result<size_t>> read(std::span<std::byte> buf) {
     ssize_t n = co_await AsyncRead{fd_, buf.data(), buf.size()};
@@ -178,12 +178,12 @@ public:
   }
 
   /**
-   * @brief 버퍼의 데이터를 비동기로 씁니다.
+   * @brief Asynchronously write data from a buffer.
    *
-   * 소켓이 쓰기 가능해질 때까지 Reactor 이벤트를 대기합니다.
+   * Waits for a Reactor event until the socket becomes writable.
    *
-   * @param buf 전송할 데이터 버퍼.
-   * @returns 전송한 바이트 수. 에러 시 error_code.
+   * @param buf Buffer containing data to send.
+   * @returns Number of bytes sent. error_code on failure.
    */
   Task<Result<size_t>> write(std::span<const std::byte> buf) {
     ssize_t n = co_await AsyncWrite{fd_, buf.data(), buf.size()};
@@ -194,12 +194,12 @@ public:
   }
 
   /**
-   * @brief 다중 버퍼(scatter) 비동기 읽기 (readv).
+   * @brief Asynchronous scatter read from multiple buffers (readv).
    *
-   * 소켓이 읽기 가능해질 때까지 Reactor 이벤트를 대기한 뒤 `readv(2)`를 호출합니다.
+   * Waits for a Reactor read event, then calls `readv(2)`.
    *
-   * @param bufs iovec 배열. 각 원소가 독립적인 버퍼를 가리킵니다.
-   * @returns 읽은 총 바이트 수. EOF면 0. 에러 시 error_code.
+   * @param bufs Array of iovec entries, each pointing to an independent buffer.
+   * @returns Total bytes read. 0 on EOF. error_code on failure.
    */
   Task<Result<size_t>> readv(std::span<iovec> bufs) {
     struct ReadvAwaiter {
@@ -232,12 +232,12 @@ public:
   }
 
   /**
-   * @brief 다중 버퍼(gather) 비동기 쓰기 (writev).
+   * @brief Asynchronous gather write to multiple buffers (writev).
    *
-   * 소켓이 쓰기 가능해질 때까지 Reactor 이벤트를 대기한 뒤 `writev(2)`를 호출합니다.
+   * Waits for a Reactor write event, then calls `writev(2)`.
    *
-   * @param bufs const iovec 배열. 각 원소가 전송할 버퍼를 가리킵니다.
-   * @returns 전송한 총 바이트 수. 에러 시 error_code.
+   * @param bufs Array of const iovec entries, each pointing to a buffer to send.
+   * @returns Total bytes sent. error_code on failure.
    */
   Task<Result<size_t>> writev(std::span<const iovec> bufs) {
     struct WritevAwaiter {
@@ -269,14 +269,15 @@ public:
     co_return static_cast<size_t>(n);
   }
 
-  // ─── 소켓 옵션 ──────────────────────────────────────────────────────────
+  // ─── Socket Options ──────────────────────────────────────────────────────
 
   /**
-   * @brief TCP_NODELAY 옵션을 설정합니다 (Nagle 알고리즘 비활성화).
+   * @brief Set the TCP_NODELAY option (disables Nagle's algorithm).
    *
-   * 지연 없이 소규모 패킷을 즉시 전송해야 하는 저지연 애플리케이션에 유용합니다.
+   * Useful for low-latency applications that need small packets sent immediately
+   * without buffering delay.
    *
-   * @param v true이면 TCP_NODELAY 활성화, false이면 비활성화.
+   * @param v true to enable TCP_NODELAY, false to disable.
    */
   void set_nodelay(bool v) noexcept {
     int flag = v ? 1 : 0;
@@ -284,27 +285,27 @@ public:
   }
 
   /**
-   * @brief SO_KEEPALIVE 옵션을 설정합니다 (TCP keepalive 활성화).
+   * @brief Set the SO_KEEPALIVE option (enables TCP keepalive).
    *
-   * 유휴 연결의 생존 여부를 주기적으로 확인합니다.
+   * Periodically checks whether an idle connection is still alive.
    *
-   * @param v true이면 keepalive 활성화, false이면 비활성화.
+   * @param v true to enable keepalive, false to disable.
    */
   void set_keepalive(bool v) noexcept {
     int flag = v ? 1 : 0;
     ::setsockopt(fd_, SOL_SOCKET, SO_KEEPALIVE, &flag, sizeof(flag));
   }
 
-  // ─── 접근자 ─────────────────────────────────────────────────────────────
+  // ─── Accessors ───────────────────────────────────────────────────────────
 
   /**
-   * @brief 내부 파일 디스크립터를 반환합니다.
-   * @returns 소켓 fd. 유효하지 않으면 -1.
+   * @brief Returns the underlying file descriptor.
+   * @returns Socket fd. -1 if invalid.
    */
   int fd() const noexcept { return fd_; }
 
 private:
-  /** @brief 관리 중인 TCP 소켓 파일 디스크립터. */
+  /** @brief The managed TCP socket file descriptor. */
   int fd_;
 };
 

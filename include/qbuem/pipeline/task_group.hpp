@@ -2,25 +2,27 @@
 
 /**
  * @file qbuem/pipeline/task_group.hpp
- * @brief 구조적 동시성 — TaskGroup (Nursery 패턴)
+ * @brief Structured concurrency — TaskGroup (Nursery pattern)
  * @defgroup qbuem_task_group TaskGroup
  * @ingroup qbuem_pipeline
  *
- * TaskGroup은 자식 코루틴들의 수명을 부모에 묶는 구조적 동시성 프리미티브입니다.
+ * TaskGroup is a structured concurrency primitive that ties child coroutine
+ * lifetimes to the parent.
  *
- * ## 보장사항
- * - 부모 코루틴이 `join()` / `join_all<T>()` 완료 전에 반환하지 않습니다.
- * - 자식 하나가 실패하면 나머지 자식에 취소 신호를 보내고 에러를 전파합니다.
- * - `join()` 완료 후 모든 자식 코루틴 프레임이 소멸됩니다.
+ * ## Guarantees
+ * - The parent coroutine does not return before `join()` / `join_all<T>()` completes.
+ * - If any child fails, a cancellation signal is sent to the remaining children
+ *   and the error is propagated.
+ * - All child coroutine frames are destroyed after `join()` completes.
  *
- * ## 사용 예시
+ * ## Usage example
  * @code
  * TaskGroup tg;
  * tg.spawn(task_a(env));
  * tg.spawn(task_b(env));
- * co_await tg.join();  // 모두 완료 대기
+ * co_await tg.join();  // wait for all to complete
  *
- * // 결과 수집:
+ * // Collect results:
  * TaskGroup tg2;
  * tg2.spawn<int>(compute_a());
  * tg2.spawn<int>(compute_b());
@@ -44,10 +46,10 @@
 namespace qbuem {
 
 /**
- * @brief 구조적 동시성 — 자식 코루틴 그룹 관리.
+ * @brief Structured concurrency — manages a group of child coroutines.
  *
- * TaskGroup은 복사 불가입니다.
- * 스택 또는 힙에 생성하고 `spawn()` 후 `join()`/`join_all()`을 `co_await`합니다.
+ * TaskGroup is non-copyable.
+ * Create it on the stack or heap, call `spawn()`, then `co_await` `join()`/`join_all()`.
  */
 class TaskGroup {
 public:
@@ -64,11 +66,11 @@ public:
   // -------------------------------------------------------------------------
 
   /**
-   * @brief void 코루틴 Task를 그룹에 추가합니다.
+   * @brief Add a void coroutine Task to the group.
    *
-   * Task는 현재 Reactor에서 post()를 통해 실행됩니다.
+   * The Task is executed via post() on the current Reactor.
    *
-   * @param task 실행할 Task<Result<void>>. 소유권이 이전됩니다.
+   * @param task Task<Result<void>> to run. Ownership is transferred.
    */
   void spawn(Task<Result<void>> task) {
     state_->pending.fetch_add(1, std::memory_order_relaxed);
@@ -76,10 +78,10 @@ public:
   }
 
   /**
-   * @brief 결과를 반환하는 코루틴 Task를 그룹에 추가합니다.
+   * @brief Add a result-returning coroutine Task to the group.
    *
-   * @tparam T 결과 타입.
-   * @param task 실행할 Task<Result<T>>.
+   * @tparam T Result type.
+   * @param task Task<Result<T>> to run.
    */
   template <typename T>
   void spawn(Task<Result<T>> task) {
@@ -92,20 +94,21 @@ public:
   // -------------------------------------------------------------------------
 
   /**
-   * @brief 모든 자식 코루틴이 완료될 때까지 대기합니다.
+   * @brief Wait until all child coroutines have completed.
    *
-   * 자식 중 하나라도 실패하면 나머지를 취소하고 첫 에러를 반환합니다.
+   * If any child fails, the remaining children are cancelled and the first
+   * error is returned.
    *
-   * @returns 성공 시 `Result<void>{}`, 실패 시 첫 에러 코드.
+   * @returns `Result<void>{}` on success, or the first error code on failure.
    */
   Task<Result<void>> join() {
     co_return co_await JoinAwaiter{state_, Reactor::current()};
   }
 
   /**
-   * @brief 모든 자식의 결과를 수집합니다.
+   * @brief Collect results from all children.
    *
-   * @tparam T 결과 타입 (spawn<T>() 호출과 일치해야 함).
+   * @tparam T Result type (must match the spawn<T>() calls).
    * @returns `Result<std::vector<T>>`.
    */
   template <typename T>
@@ -123,12 +126,12 @@ public:
   }
 
   /**
-   * @brief 모든 자식에 취소 신호를 보냅니다.
+   * @brief Send a cancellation signal to all children.
    */
   void cancel() { state_->stop_src.request_stop(); }
 
   /**
-   * @brief 자식 취소 신호 토큰을 반환합니다.
+   * @brief Return the child cancellation stop token.
    */
   [[nodiscard]] std::stop_token stop_token() const noexcept {
     return state_->stop_src.get_token();

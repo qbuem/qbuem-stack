@@ -2,30 +2,31 @@
 
 /**
  * @file qbuem/core/huge_pages.hpp
- * @brief mmap(MAP_HUGETLB) 기반 huge page 버퍼 풀 정의.
+ * @brief mmap(MAP_HUGETLB)-based huge page buffer pool.
  * @ingroup qbuem_memory
  *
- * 이 헤더는 huge page를 활용하여 TLB 미스를 최소화하는 고성능 버퍼 풀을 제공합니다.
+ * This header provides a high-performance buffer pool that uses huge pages
+ * to minimize TLB misses.
  *
- * ## 설계 원칙
- * - `MAP_HUGETLB`로 huge page(2 MiB 또는 1 GiB) 매핑을 시도합니다.
- * - `ENOMEM` 또는 `EPERM` 오류 시 일반 `mmap(MAP_ANONYMOUS)`로 자동 폴백합니다.
- * - free-list 방식으로 버퍼를 관리하여 O(1) 획득/반환을 보장합니다.
- * - `std::mutex`로 스레드 안전성을 제공합니다.
+ * ## Design Principles
+ * - Attempts to map huge pages (2 MiB or 1 GiB) via `MAP_HUGETLB`.
+ * - Falls back to ordinary `mmap(MAP_ANONYMOUS)` on `ENOMEM` or `EPERM`.
+ * - Manages buffers with a free-list for O(1) acquire/release.
+ * - Thread safety is provided via `std::mutex`.
  *
- * ## 플랫폼 지원
- * - Linux: `mmap(MAP_HUGETLB)` 또는 `mmap(MAP_ANONYMOUS)` 폴백.
- * - 비Linux: `new std::byte[N * Count]` 폴백.
+ * ## Platform Support
+ * - Linux: `mmap(MAP_HUGETLB)` or `mmap(MAP_ANONYMOUS)` fallback.
+ * - Non-Linux: `new std::byte[N * Count]` fallback.
  *
- * ## 사용 예시
+ * ## Usage Example
  * @code
- * // 2 MiB 버퍼 8개를 가진 풀 생성
+ * // Create a pool of 8 buffers each 2 MiB in size
  * qbuem::HugeBufferPool<2 * 1024 * 1024, 8> pool;
  *
- * auto buf = pool.acquire(); // std::span<std::byte> 반환
+ * auto buf = pool.acquire(); // returns std::span<std::byte>
  * if (!buf.empty()) {
- *     // 버퍼 사용
- *     pool.release(buf);     // 반환
+ *     // use buffer
+ *     pool.release(buf);     // return to pool
  * }
  * @endcode
  *
@@ -45,53 +46,55 @@
 namespace qbuem {
 
 /**
- * @brief mmap(MAP_HUGETLB) 기반 huge page 버퍼 풀.
+ * @brief mmap(MAP_HUGETLB)-based huge page buffer pool.
  *
- * 고정 크기 버퍼 `Count`개를 단일 huge page mmap으로 할당하고
- * free-list로 관리합니다. 버퍼는 `acquire()`로 빌리고 `release()`로 반납합니다.
+ * Allocates `Count` fixed-size buffers in a single huge-page mmap region and
+ * manages them with a free-list. Buffers are borrowed with `acquire()` and
+ * returned with `release()`.
  *
- * ### 메모리 레이아웃
- * 전체 `N * Count` 바이트를 하나의 연속된 mmap 영역으로 할당합니다.
- * 각 버퍼 슬롯은 `N` 바이트 단위로 정렬되어 있습니다:
+ * ### Memory Layout
+ * The entire `N * Count` bytes are allocated as one contiguous mmap region.
+ * Each buffer slot is aligned on `N`-byte boundaries:
  * ```
- * [버퍼 0 | 버퍼 1 | ... | 버퍼 Count-1]
- * ← N bytes →← N bytes →
+ * [buffer 0 | buffer 1 | ... | buffer Count-1]
+ * <- N bytes ->← N bytes ->
  * ```
  *
- * ### Huge Page 폴백 전략
- * 1. `mmap(MAP_HUGETLB)` 시도.
- * 2. `errno == ENOMEM` 또는 `errno == EPERM`이면 일반 `mmap(MAP_ANONYMOUS)` 재시도.
- * 3. Linux 외 플랫폼에서는 `new std::byte[]`로 할당.
+ * ### Huge Page Fallback Strategy
+ * 1. Attempt `mmap(MAP_HUGETLB)`.
+ * 2. If `errno == ENOMEM` or `errno == EPERM`, retry with `mmap(MAP_ANONYMOUS)`.
+ * 3. On non-Linux platforms, allocate with `new std::byte[]`.
  *
- * ### 스레드 안전성
- * `acquire()`와 `release()`는 내부 `std::mutex`로 보호됩니다.
+ * ### Thread Safety
+ * `acquire()` and `release()` are protected by an internal `std::mutex`.
  *
- * @tparam N     버퍼 하나의 크기 (바이트). 0보다 커야 합니다.
- * @tparam Count 버퍼의 총 개수. 0보다 커야 합니다.
+ * @tparam N     Size of one buffer (bytes). Must be > 0.
+ * @tparam Count Total number of buffers. Must be > 0.
  *
- * @note 복사 불가, 이동 불가. 풀은 고정된 수명을 가집니다.
- * @warning `release()`에 풀에서 획득하지 않은 span을 전달하면 정의되지 않은 동작이 발생합니다.
+ * @note Not copyable or movable. The pool has a fixed lifetime.
+ * @warning Passing a span to `release()` that was not obtained from this pool
+ *          results in undefined behavior.
  */
 template <std::size_t N, std::size_t Count>
 class HugeBufferPool {
-  static_assert(N > 0,     "버퍼 크기 N은 0보다 커야 합니다.");
-  static_assert(Count > 0, "버퍼 수 Count는 0보다 커야 합니다.");
+  static_assert(N > 0,     "Buffer size N must be greater than 0.");
+  static_assert(Count > 0, "Buffer count Count must be greater than 0.");
 
 public:
   /**
-   * @brief 풀을 생성하고 mmap으로 메모리를 할당합니다.
+   * @brief Construct the pool and allocate memory via mmap.
    *
-   * Linux에서는 우선 `MAP_HUGETLB`로 huge page 할당을 시도하며,
-   * 실패 시 일반 anonymous mmap으로 폴백합니다.
-   * 비Linux 환경에서는 `new std::byte[]`를 사용합니다.
+   * On Linux, first attempts `MAP_HUGETLB` for huge page allocation;
+   * falls back to ordinary anonymous mmap on failure.
+   * On non-Linux platforms, uses `new std::byte[]`.
    *
-   * 초기화 후 free-list에는 모든 `Count`개의 버퍼가 등록됩니다.
+   * After initialization, all `Count` buffers are registered in the free-list.
    *
-   * @throws std::bad_alloc mmap 또는 new 할당이 완전히 실패한 경우.
+   * @throws std::bad_alloc if mmap or new allocation fails completely.
    */
   HugeBufferPool() {
     base_ = map_memory();
-    // 모든 버퍼 슬롯을 free-list에 추가합니다.
+    // Add all buffer slots to the free-list.
     free_list_.reserve(Count);
     for (std::size_t i = 0; i < Count; ++i) {
       free_list_.push_back(base_ + i * N);
@@ -99,13 +102,13 @@ public:
   }
 
   /**
-   * @brief 풀을 파괴하고 mmap 영역을 해제합니다.
+   * @brief Destroy the pool and release the mmap region.
    *
-   * Linux에서는 `munmap`으로 전체 `N * Count` 바이트를 해제합니다.
-   * 비Linux 환경에서는 `delete[]`로 해제합니다.
+   * On Linux, releases the entire `N * Count` bytes via `munmap`.
+   * On non-Linux platforms, releases via `delete[]`.
    *
-   * @warning 아직 반납되지 않은 버퍼가 있어도 전체 메모리가 해제됩니다.
-   *          소멸자 호출 전에 모든 버퍼를 `release()`하는 것을 권장합니다.
+   * @warning All memory is released even if buffers have not been returned.
+   *          It is recommended to `release()` all buffers before destroying the pool.
    */
   ~HugeBufferPool() noexcept {
     if (base_ == nullptr) return;
@@ -116,32 +119,32 @@ public:
 #endif
   }
 
-  /** @brief 복사 생성 불가 — 풀은 소유권을 독점합니다. */
+  /** @brief Copy construction disabled — pool has exclusive ownership. */
   HugeBufferPool(const HugeBufferPool &) = delete;
-  /** @brief 복사 대입 불가 — 풀은 소유권을 독점합니다. */
+  /** @brief Copy assignment disabled — pool has exclusive ownership. */
   HugeBufferPool &operator=(const HugeBufferPool &) = delete;
-  /** @brief 이동 생성 불가 — mutex와 포인터 상태가 복잡합니다. */
+  /** @brief Move construction disabled — mutex and pointer state are complex. */
   HugeBufferPool(HugeBufferPool &&) = delete;
-  /** @brief 이동 대입 불가 — mutex와 포인터 상태가 복잡합니다. */
+  /** @brief Move assignment disabled — mutex and pointer state are complex. */
   HugeBufferPool &operator=(HugeBufferPool &&) = delete;
 
   /**
-   * @brief 풀에서 버퍼 하나를 획득합니다 (O(1), 스레드 안전).
+   * @brief Acquire one buffer from the pool (O(1), thread-safe).
    *
-   * free-list에서 버퍼 슬롯 하나를 꺼내 `std::span<std::byte>`로 반환합니다.
-   * 풀이 고갈된 경우 빈 span(`empty() == true`)을 반환합니다.
+   * Pops a buffer slot from the free-list and returns it as `std::span<std::byte>`.
+   * Returns an empty span (`empty() == true`) if the pool is exhausted.
    *
-   * @returns `N` 바이트 크기의 `std::span<std::byte>`.
-   *          풀이 고갈된 경우 빈 span.
+   * @returns `std::span<std::byte>` of size `N`.
+   *          Empty span if the pool is exhausted.
    *
-   * @note 반환된 span의 수명은 풀 객체의 수명에 종속됩니다.
-   *       풀이 파괴되면 반환된 span은 무효화됩니다.
-   * @note `[[nodiscard]]` 속성이 있어 반환값을 무시하면 컴파일 경고가 발생합니다.
+   * @note The lifetime of the returned span depends on the pool object's lifetime.
+   *       The span is invalidated when the pool is destroyed.
+   * @note `[[nodiscard]]` — ignoring the return value causes a compile-time warning.
    */
   [[nodiscard]] std::span<std::byte> acquire() noexcept {
     std::lock_guard<std::mutex> lock(mutex_);
     if (free_list_.empty()) {
-      return {}; // 빈 span 반환 — 풀 고갈
+      return {}; // return empty span — pool exhausted
     }
     std::byte *ptr = free_list_.back();
     free_list_.pop_back();
@@ -149,15 +152,15 @@ public:
   }
 
   /**
-   * @brief 획득했던 버퍼를 풀에 반납합니다 (O(1), 스레드 안전).
+   * @brief Return an acquired buffer to the pool (O(1), thread-safe).
    *
-   * `acquire()`로 얻은 span을 free-list에 다시 추가합니다.
-   * 빈 span을 전달하면 아무 동작도 하지 않습니다.
+   * Adds the span obtained from `acquire()` back to the free-list.
+   * Passing an empty span is a no-op.
    *
-   * @param buf `acquire()`로 얻은 `std::span<std::byte>`.
-   *             크기가 `N`이 아닌 span을 전달하면 정의되지 않은 동작이 발생합니다.
+   * @param buf `std::span<std::byte>` obtained from `acquire()`.
+   *             Passing a span whose size is not `N` results in undefined behavior.
    *
-   * @warning 이 풀에서 획득하지 않은 span을 전달하면 정의되지 않은 동작이 발생합니다.
+   * @warning Passing a span not obtained from this pool results in undefined behavior.
    */
   void release(std::span<std::byte> buf) noexcept {
     if (buf.empty()) return;
@@ -166,11 +169,12 @@ public:
   }
 
   /**
-   * @brief 현재 사용 가능한 (free-list에 있는) 버퍼 수를 반환합니다.
+   * @brief Return the number of buffers currently available in the free-list.
    *
-   * 반환값은 호출 시점의 스냅샷이며, 멀티스레드 환경에서는 즉시 무효화될 수 있습니다.
+   * The returned value is a snapshot at the time of the call and may be
+   * immediately stale in a multi-threaded environment.
    *
-   * @returns free-list에 남아 있는 버퍼 수 (0 ~ Count).
+   * @returns Number of buffers remaining in the free-list (0 ~ Count).
    */
   [[nodiscard]] std::size_t available() const noexcept {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -178,9 +182,9 @@ public:
   }
 
   /**
-   * @brief 풀의 총 버퍼 수를 반환합니다.
+   * @brief Return the total number of buffers in the pool.
    *
-   * 생성 시 지정한 템플릿 파라미터 `Count`와 동일합니다.
+   * Equal to the template parameter `Count` specified at construction.
    *
    * @returns `Count`.
    */
@@ -190,19 +194,19 @@ public:
 
 private:
   /**
-   * @brief `N * Count` 바이트의 메모리를 플랫폼에 맞게 할당합니다.
+   * @brief Allocate `N * Count` bytes of memory appropriate for the platform.
    *
-   * Linux: `mmap(MAP_HUGETLB)` → 실패 시 `mmap(MAP_ANONYMOUS)` 순으로 시도.
-   * 비Linux: `new std::byte[N * Count]`.
+   * Linux: attempts `mmap(MAP_HUGETLB)` first, then falls back to `mmap(MAP_ANONYMOUS)`.
+   * Non-Linux: `new std::byte[N * Count]`.
    *
-   * @returns 할당된 메모리의 시작 포인터 (`std::byte*`).
-   * @throws std::bad_alloc 모든 할당 시도가 실패한 경우.
+   * @returns Pointer to the start of the allocated memory (`std::byte*`).
+   * @throws std::bad_alloc if all allocation attempts fail.
    */
   static std::byte *map_memory() {
     static constexpr std::size_t kTotalBytes = N * Count;
 
 #if defined(__linux__)
-    // 1차 시도: MAP_HUGETLB (huge page)
+    // First attempt: MAP_HUGETLB (huge pages)
     void *ptr = ::mmap(
         nullptr,
         kTotalBytes,
@@ -215,7 +219,7 @@ private:
       return static_cast<std::byte *>(ptr);
     }
 
-    // ENOMEM 또는 EPERM이면 일반 anonymous mmap으로 폴백
+    // Fall back to ordinary anonymous mmap on ENOMEM or EPERM
     if (errno == ENOMEM || errno == EPERM) {
       ptr = ::mmap(
           nullptr,
@@ -232,23 +236,23 @@ private:
 
     throw std::bad_alloc{};
 #else
-    // 비Linux: new[] 폴백
+    // Non-Linux: new[] fallback
     return new std::byte[kTotalBytes];
 #endif
   }
 
-  /** @brief mmap(또는 new[])으로 할당한 메모리의 시작 포인터. */
+  /** @brief Start pointer of the memory allocated via mmap (or new[]). */
   std::byte *base_ = nullptr;
 
   /**
-   * @brief 사용 가능한 버퍼 슬롯의 포인터를 담는 free-list.
+   * @brief Free-list holding pointers to available buffer slots.
    *
-   * 각 원소는 `base_ + i * N`을 가리킵니다.
-   * `acquire()`는 마지막 원소를 꺼내고, `release()`는 끝에 추가합니다.
+   * Each element points to `base_ + i * N`.
+   * `acquire()` pops the last element; `release()` appends to the end.
    */
   std::vector<std::byte *> free_list_;
 
-  /** @brief `acquire()`와 `release()` 호출을 보호하는 뮤텍스. */
+  /** @brief Mutex protecting `acquire()` and `release()` calls. */
   mutable std::mutex mutex_;
 };
 

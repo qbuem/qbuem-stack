@@ -2,20 +2,20 @@
 
 /**
  * @file qbuem/protocol/protocol.hpp
- * @brief qbuem-stack 프로토콜 핸들러 umbrella 헤더.
+ * @brief qbuem-stack protocol handler umbrella header.
  * @defgroup qbuem_protocol Protocol Handlers
  * @ingroup qbuem
  *
- * 이 헤더를 하나만 포함하면 모든 프로토콜 핸들러에 접근할 수 있습니다.
+ * Including this single header provides access to all protocol handlers.
  *
  * ```cpp
  * #include <qbuem/protocol/protocol.hpp>
- * // Http1Handler, Http2Handler, WebSocketHandler, GrpcHandler 모두 사용 가능
+ * // Http1Handler, Http2Handler, WebSocketHandler, GrpcHandler all available
  * ```
  *
- * ### 포함되는 핸들러
+ * ### Included handlers
  * - `Http1Handler`        — HTTP/1.1 keep-alive, chunked, Upgrade
- * - `Http2Handler`        — HTTP/2 HPACK + 스트림 멀티플렉싱
+ * - `Http2Handler`        — HTTP/2 HPACK + stream multiplexing
  * - `WebSocketHandler`    — RFC 6455 WebSocket (HTTP Upgrade)
  * - `GrpcHandler<Req,Res>` — gRPC Unary/Server/Client/Bidi streaming
  */

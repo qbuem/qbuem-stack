@@ -2,19 +2,19 @@
 
 /**
  * @file qbuem/pipeline/priority_channel.hpp
- * @brief 우선순위 채널 — PriorityChannel, Priority
+ * @brief Priority channel — PriorityChannel, Priority
  * @defgroup qbuem_priority_channel PriorityChannel
  * @ingroup qbuem_pipeline
  *
- * 3단계 우선순위(High, Normal, Low)를 가진 MPMC 비동기 채널 구현입니다.
- * 각 우선순위 레벨은 별도의 AsyncChannel<T>를 사용하며,
- * 수신 시 High → Normal → Low 순서로 확인합니다.
+ * An MPMC async channel with 3 priority levels (High, Normal, Low).
+ * Each priority level uses a separate AsyncChannel<T>,
+ * and items are dequeued in High -> Normal -> Low order.
  *
- * ## 사용 예시
+ * ## Usage example
  * @code
  * PriorityChannel<int> chan(128);
  * chan.try_send(42, Priority::High);
- * auto item = chan.try_recv(); // High 우선
+ * auto item = chan.try_recv(); // High priority first
  * @endcode
  * @{
  */
@@ -31,29 +31,29 @@
 namespace qbuem {
 
 /**
- * @brief 채널 아이템 우선순위 열거형.
+ * @brief Priority enumeration for channel items.
  *
- * - High   (0): 가장 높은 우선순위 — 항상 먼저 처리됩니다.
- * - Normal (1): 보통 우선순위.
- * - Low    (2): 가장 낮은 우선순위.
+ * - High   (0): Highest priority — always processed first.
+ * - Normal (1): Normal priority.
+ * - Low    (2): Lowest priority.
  */
 enum class Priority { High = 0, Normal = 1, Low = 2 };
 
 /**
- * @brief 3단계 우선순위 MPMC 채널.
+ * @brief MPMC channel with 3 priority levels.
  *
- * 각 우선순위 레벨별로 별도의 `AsyncChannel<T>`를 사용합니다.
- * `try_recv()` / `recv()`는 High → Normal → Low 순서로 확인합니다.
+ * Uses a separate `AsyncChannel<T>` for each priority level.
+ * `try_recv()` / `recv()` check in High -> Normal -> Low order.
  *
- * @tparam T 전송할 값의 타입 (이동 가능해야 함).
+ * @tparam T Type of values to transmit (must be movable).
  */
 template <typename T>
 class PriorityChannel {
 public:
     /**
-     * @brief 각 우선순위 레벨당 지정한 용량으로 채널을 생성합니다.
+     * @brief Construct a channel with the specified capacity per priority level.
      *
-     * @param cap_per_level 각 레벨 채널의 용량 (기본 128).
+     * @param cap_per_level Capacity of each level's channel (default 128).
      */
     explicit PriorityChannel(size_t cap_per_level = 128) {
         for (auto& ch : channels_)
@@ -61,15 +61,15 @@ public:
     }
 
     // -------------------------------------------------------------------------
-    // 논블로킹 send / recv
+    // Non-blocking send / recv
     // -------------------------------------------------------------------------
 
     /**
-     * @brief 지정한 우선순위로 아이템을 전송합니다 (논블로킹).
+     * @brief Send an item with the specified priority (non-blocking).
      *
-     * @param item 전송할 아이템.
-     * @param prio 우선순위 (기본 Normal).
-     * @returns 성공이면 true, 채널이 가득 차거나 닫혔으면 false.
+     * @param item Item to send.
+     * @param prio Priority (default Normal).
+     * @returns true on success; false if the channel is full or closed.
      */
     bool try_send(T item, Priority prio = Priority::Normal) {
         if (closed_.load(std::memory_order_relaxed))
@@ -78,9 +78,9 @@ public:
     }
 
     /**
-     * @brief High → Normal → Low 순서로 아이템을 꺼내려 시도합니다 (논블로킹).
+     * @brief Try to dequeue an item in High -> Normal -> Low order (non-blocking).
      *
-     * @returns 아이템이 있으면 `std::optional<T>`, 없으면 `std::nullopt`.
+     * @returns `std::optional<T>` if an item is available, `std::nullopt` otherwise.
      */
     std::optional<T> try_recv() {
         for (auto& ch : channels_) {
@@ -92,15 +92,15 @@ public:
     }
 
     // -------------------------------------------------------------------------
-    // 비동기 send / recv (코루틴)
+    // Async send / recv (coroutine)
     // -------------------------------------------------------------------------
 
     /**
-     * @brief 지정한 우선순위로 아이템을 전송합니다. 채널이 가득 차면 대기합니다.
+     * @brief Send an item with the specified priority. Waits if the channel is full.
      *
-     * @param item 전송할 아이템.
-     * @param prio 우선순위 (기본 Normal).
-     * @returns `Result<void>::ok()` 또는 에러 (`errc::broken_pipe`).
+     * @param item Item to send.
+     * @param prio Priority (default Normal).
+     * @returns `Result<void>::ok()` or an error (`errc::broken_pipe`).
      */
     Task<Result<void>> send(T item, Priority prio = Priority::Normal) {
         if (closed_.load(std::memory_order_relaxed))
@@ -109,35 +109,35 @@ public:
     }
 
     /**
-     * @brief High → Normal → Low 순서로 아이템을 수신합니다.
+     * @brief Receive an item in High → Normal → Low order.
      *
-     * 모든 레벨이 비어 있으면 High 레벨에서 대기합니다.
-     * 채널이 닫히고 모두 비면 `std::nullopt` (EOS) 반환.
+     * Waits on the High level channel if all levels are empty.
+     * Returns `std::nullopt` (EOS) once the channel is closed and all levels are drained.
      *
-     * @returns 아이템 또는 `std::nullopt` (EOS).
+     * @returns An item or `std::nullopt` (EOS).
      */
     Task<std::optional<T>> recv() {
         for (;;) {
-            // High → Normal → Low 순서로 논블로킹 시도
+            // Non-blocking attempt in High → Normal → Low order
             auto item = try_recv();
             if (item)
                 co_return item;
 
-            // 모두 닫히고 비어 있으면 EOS
+            // All closed and empty — EOS
             if (closed_.load(std::memory_order_acquire)) {
-                // 다시 한 번 확인 (닫기 직전에 들어온 아이템 처리)
+                // Check once more to handle items that arrived just before close
                 item = try_recv();
                 if (item)
                     co_return item;
                 co_return std::nullopt;
             }
 
-            // High 레벨 채널에서 대기 (High 도착 시 즉시 wake)
+            // Wait on the High level channel (wakes immediately when High item arrives)
             auto high_item = co_await channels_[0]->recv();
             if (high_item)
                 co_return high_item;
 
-            // High 채널이 EOS를 반환했다면 나머지 레벨 소진
+            // High channel returned EOS — drain remaining levels
             for (size_t i = 1; i < channels_.size(); ++i) {
                 auto remaining = channels_[i]->try_recv();
                 if (remaining)
@@ -149,11 +149,11 @@ public:
     }
 
     // -------------------------------------------------------------------------
-    // 수명 주기
+    // Lifecycle
     // -------------------------------------------------------------------------
 
     /**
-     * @brief 모든 레벨 채널을 닫습니다 (EOS 전파).
+     * @brief Close all level channels (propagate EOS).
      */
     void close() {
         closed_.store(true, std::memory_order_release);
@@ -162,18 +162,18 @@ public:
     }
 
     /**
-     * @brief 채널이 닫혔는지 확인합니다.
+     * @brief Check whether the channel is closed.
      */
     [[nodiscard]] bool is_closed() const noexcept {
         return closed_.load(std::memory_order_relaxed);
     }
 
     // -------------------------------------------------------------------------
-    // 통계
+    // Statistics
     // -------------------------------------------------------------------------
 
     /**
-     * @brief 모든 레벨에 걸친 근사 아이템 수를 반환합니다.
+     * @brief Return the approximate total item count across all levels.
      */
     [[nodiscard]] size_t size_approx() const noexcept {
         size_t total = 0;
@@ -183,16 +183,16 @@ public:
     }
 
     /**
-     * @brief 특정 우선순위 레벨의 근사 아이템 수를 반환합니다.
+     * @brief Return the approximate item count for a specific priority level.
      *
-     * @param p 우선순위 레벨.
+     * @param p Priority level.
      */
     [[nodiscard]] size_t size_approx(Priority p) const noexcept {
         return channels_[static_cast<size_t>(p)]->size_approx();
     }
 
 private:
-    /// 각 우선순위 레벨의 AsyncChannel (0=High, 1=Normal, 2=Low)
+    /// AsyncChannel for each priority level (0=High, 1=Normal, 2=Low)
     std::array<std::unique_ptr<AsyncChannel<T>>, 3> channels_;
     std::atomic<bool> closed_{false};
 };

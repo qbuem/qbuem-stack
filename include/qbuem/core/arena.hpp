@@ -2,34 +2,36 @@
 
 /**
  * @file qbuem/core/arena.hpp
- * @brief 고성능 메모리 관리용 Arena 할당자 및 FixedPoolResource 정의.
+ * @brief High-performance memory management: Arena allocator and FixedPoolResource.
  * @ingroup qbuem_memory
  *
- * 이 헤더는 qbuem-stack의 두 가지 핵심 메모리 관리 전략을 제공합니다:
+ * This header provides two core memory management strategies for qbuem-stack:
  *
- * 1. **Arena**: 가변 크기 객체를 위한 bump-pointer 할당자.
- *    - 할당: O(1) (포인터 증가만 수행)
- *    - 해제: O(1) (reset() 호출 시 일괄 해제, 개별 해제 없음)
- *    - 사용 사례: HTTP 요청 처리처럼 수명이 명확한 단기 객체들의 일괄 관리.
+ * 1. **Arena**: A bump-pointer allocator for variable-size objects.
+ *    - Allocation: O(1) (pointer increment only)
+ *    - Deallocation: O(1) (bulk release via reset(); no individual frees)
+ *    - Use case: Batch management of short-lived objects with a clear lifetime,
+ *      such as HTTP request processing.
  *
- * 2. **FixedPoolResource**: 고정 크기 객체를 위한 free-list 풀 할당자.
- *    - 할당 및 해제: O(1) (연결 리스트 헤드 포인터 조작만 수행)
- *    - 사용 사례: 동일 크기의 객체(예: Connection, 코루틴 프레임)를 반복 할당/해제.
+ * 2. **FixedPoolResource**: A free-list pool allocator for fixed-size objects.
+ *    - Allocation and deallocation: O(1) (linked-list head pointer manipulation only)
+ *    - Use case: Repeated allocation/deallocation of same-size objects
+ *      (e.g., Connection, coroutine frames).
  *
- * ### 스레드 안전성
- * 두 클래스 모두 **스레드 안전하지 않습니다**. 이는 의도된 설계로,
- * Shared-Nothing 아키텍처에서 각 스레드/코어가 독립적인 할당자를 소유합니다.
- * 스레드 간 공유가 필요하다면 외부에서 동기화를 제공해야 합니다.
+ * ### Thread Safety
+ * Both classes are **not thread-safe**. This is intentional by design:
+ * in a Shared-Nothing architecture each thread/core owns an independent allocator.
+ * External synchronization must be provided if sharing across threads is required.
  */
 
 /**
  * @defgroup qbuem_memory Memory Management
- * @brief Arena 및 고정 크기 풀 할당자.
+ * @brief Arena and fixed-size pool allocators.
  *
- * 전통적인 `new`/`delete` 대신 이 할당자를 사용하면:
- * - malloc의 락 경합을 피할 수 있습니다.
- * - 메모리 단편화를 크게 줄일 수 있습니다.
- * - 수명이 같은 객체들을 O(1)에 일괄 해제할 수 있습니다.
+ * Using these allocators instead of traditional `new`/`delete`:
+ * - Avoids lock contention from malloc.
+ * - Significantly reduces memory fragmentation.
+ * - Enables O(1) bulk deallocation of objects with the same lifetime.
  * @{
  */
 
@@ -41,80 +43,81 @@
 namespace qbuem {
 
 /**
- * @brief 가변 크기 객체를 위한 bump-pointer Arena 할당자.
+ * @brief Bump-pointer Arena allocator for variable-size objects.
  *
- * 내부적으로 고정 크기 블록들의 목록을 관리합니다. 각 블록은
- * bump-pointer 방식으로 순차적으로 채워집니다. 현재 블록이 다 차면
- * 새 블록을 동적 할당합니다.
+ * Internally manages a list of fixed-size blocks. Each block is filled
+ * sequentially using bump-pointer allocation. When the current block is
+ * exhausted a new block is dynamically allocated.
  *
- * ### O(1) 할당 전략
- * 할당 시 포인터 연산만 수행합니다:
- * 1. 정렬 패딩 계산 (비트 연산)
- * 2. `current_ptr_` 포인터 증가
- * 3. 블록 경계 초과 시 새 블록 할당 후 반복
+ * ### O(1) Allocation Strategy
+ * Only pointer arithmetic is performed during allocation:
+ * 1. Compute alignment padding (bitwise operations)
+ * 2. Advance `current_ptr_`
+ * 3. If the block boundary is exceeded, allocate a new block and retry
  *
- * ### 수명 관리
- * Arena 내의 객체들은 소멸자가 호출되지 않습니다.
- * 소멸자가 있는 타입은 직접 호출하거나, 소멸자가 필요 없는 타입에만 사용하세요.
+ * ### Lifetime Management
+ * Destructors of objects in the Arena are not called automatically.
+ * Either call destructors explicitly, or restrict use to types that do not
+ * require destruction.
  *
- * ### 사용 예시
+ * ### Usage Example
  * @code
- * qbuem::Arena arena(64 * 1024); // 64 KiB 초기 블록
+ * qbuem::Arena arena(64 * 1024); // 64 KiB initial block
  *
- * // Arena에서 메모리 할당
+ * // Allocate from the Arena
  * auto *buf = static_cast<uint8_t *>(arena.allocate(1024));
  *
- * // HTTP 요청 처리 완료 후 일괄 해제
- * arena.reset(); // OS에 메모리를 반환하지 않고 포인터만 초기화
+ * // Bulk release after HTTP request processing
+ * arena.reset(); // resets the pointer without returning memory to the OS
  * @endcode
  *
- * @note Arena는 이동(move) 가능하지만 복사(copy)는 불가능합니다.
- *       각 스레드마다 독립적인 Arena를 생성하세요.
- * @warning 개별 객체의 해제(`free`)는 지원하지 않습니다.
- *          Arena 전체를 `reset()`하거나 Arena 객체 자체를 파괴해야 합니다.
+ * @note Arena supports move but not copy.
+ *       Create an independent Arena per thread.
+ * @warning Individual object deallocation (`free`) is not supported.
+ *          Either `reset()` the entire Arena or destroy the Arena object itself.
  */
 class Arena {
 public:
   /**
-   * @brief 지정한 초기 블록 크기로 Arena를 생성합니다.
+   * @brief Construct an Arena with the specified initial block size.
    *
-   * 생성 즉시 첫 번째 블록을 할당합니다. 이후 블록이 부족해지면
-   * 자동으로 새 블록을 추가합니다.
+   * The first block is allocated immediately. Additional blocks are added
+   * automatically when the current block runs out of space.
    *
-   * @param initial_size 첫 번째 블록의 크기 (바이트). 기본값 64 KiB.
+   * @param initial_size Size of the first block (bytes). Default: 64 KiB.
    */
   explicit Arena(size_t initial_size = 64 * 1024)
       : current_block_size_(initial_size) {
     allocate_block(current_block_size_);
   }
 
-  /** @brief 모든 소유 블록을 해제합니다. */
+  /** @brief Release all owned blocks. */
   ~Arena() = default;
 
-  /** @brief 복사 생성 불가 — Arena는 소유권을 독점합니다. */
+  /** @brief Copy construction is disabled — Arena has exclusive ownership. */
   Arena(const Arena &) = delete;
-  /** @brief 복사 대입 불가 — Arena는 소유권을 독점합니다. */
+  /** @brief Copy assignment is disabled — Arena has exclusive ownership. */
   Arena &operator=(const Arena &) = delete;
-  /** @brief 이동 생성 가능. 원본 Arena는 비어있는 상태가 됩니다. */
+  /** @brief Move construction is allowed. The source Arena becomes empty. */
   Arena(Arena &&) = default;
-  /** @brief 이동 대입 가능. 원본 Arena는 비어있는 상태가 됩니다. */
+  /** @brief Move assignment is allowed. The source Arena becomes empty. */
   Arena &operator=(Arena &&) = default;
 
   /**
-   * @brief Arena에서 메모리를 할당합니다 (O(1) 평균).
+   * @brief Allocate memory from the Arena (O(1) amortized).
    *
-   * 현재 블록에 공간이 있으면 포인터를 증가시켜 즉시 반환합니다.
-   * 공간이 부족하면 새 블록을 할당한 후 반환합니다.
+   * If the current block has space, the pointer is advanced and memory is
+   * returned immediately. Otherwise a new block is allocated first.
    *
-   * 정렬은 `alignment` 파라미터에 따라 자동으로 맞춰집니다.
+   * Alignment is satisfied automatically according to the `alignment` parameter.
    *
-   * @param size      요청할 메모리 크기 (바이트).
-   * @param alignment 요청할 메모리 정렬값. 기본값은 플랫폼 최대 정렬값.
-   * @returns 할당된 메모리의 포인터. 절대 nullptr을 반환하지 않습니다.
-   * @throws std::bad_alloc 시스템 메모리가 부족한 경우 (새 블록 할당 실패 시).
+   * @param size      Requested allocation size (bytes).
+   * @param alignment Requested alignment. Default: platform maximum alignment.
+   * @returns Pointer to the allocated memory. Never returns nullptr.
+   * @throws std::bad_alloc if system memory is exhausted (new block allocation fails).
    *
-   * @note 반환된 포인터의 수명은 Arena의 수명에 종속됩니다.
-   *       Arena가 `reset()`되거나 파괴되면 이 포인터는 무효화됩니다.
+   * @note The lifetime of the returned pointer is tied to the Arena.
+   *       The pointer is invalidated when the Arena is `reset()` or destroyed.
    */
   void *allocate(size_t size, size_t alignment = alignof(std::max_align_t)) {
     size_t padding =
@@ -137,16 +140,17 @@ public:
   }
 
   /**
-   * @brief Arena를 초기화하여 모든 메모리를 재사용 가능하게 만듭니다 (O(1)).
+   * @brief Reset the Arena making all memory available for reuse (O(1)).
    *
-   * 실제로 OS에 메모리를 반환하지 않습니다. 내부 bump-pointer만 첫 번째
-   * 블록의 시작으로 재설정합니다. 이전에 할당된 모든 포인터는 무효화됩니다.
+   * Does not return memory to the OS. Only the internal bump-pointer is
+   * reset to the start of the first block. All previously allocated pointers
+   * are invalidated.
    *
-   * HTTP 요청/응답 처리 사이클처럼 반복적인 단기 할당 패턴에서
-   * OS 메모리 반환 비용 없이 메모리를 재활용할 수 있어 효율적입니다.
+   * This is efficient for repetitive short-lived allocation patterns such as
+   * HTTP request/response cycles, recycling memory without OS deallocation cost.
    *
-   * @warning reset() 이후에는 이전에 Arena에서 할당한 모든 포인터가
-   *          사용 불가능해집니다. 댕글링 포인터 사용에 주의하세요.
+   * @warning All pointers previously allocated from this Arena become unusable
+   *          after reset(). Beware of dangling pointer access.
    */
   void reset() {
     if (blocks_.empty())
@@ -162,8 +166,8 @@ public:
 
 private:
   /**
-   * @brief 새 메모리 블록을 할당하고 현재 블록으로 설정합니다.
-   * @param size 새 블록의 크기 (바이트).
+   * @brief Allocate a new memory block and set it as the current block.
+   * @param size Size of the new block (bytes).
    */
   void allocate_block(size_t size) {
     auto block = std::make_unique<uint8_t[]>(size);
@@ -177,8 +181,8 @@ private:
   }
 
   /**
-   * @brief 지정한 인덱스의 블록을 현재 블록으로 설정합니다.
-   * @param index 활성화할 블록의 인덱스 (blocks_ 벡터 기준).
+   * @brief Set the block at the given index as the current block.
+   * @param index Index of the block to activate (relative to blocks_ vector).
    */
   void setup_block(size_t index) {
     current_block_index_ = index;
@@ -186,79 +190,79 @@ private:
     current_block_end_ = block_ends_[index];
   }
 
-  /** @brief 최초 블록 크기 및 새 블록 할당 기준 크기 (바이트). */
+  /** @brief Initial block size and threshold for new block allocation (bytes). */
   size_t current_block_size_;
 
-  /** @brief 소유한 메모리 블록들의 목록. unique_ptr로 수명을 관리합니다. */
+  /** @brief List of owned memory blocks, managed by unique_ptr for lifetime control. */
   std::vector<std::unique_ptr<uint8_t[]>> blocks_;
 
-  /** @brief 각 블록의 끝 포인터. `blocks_`와 1:1 대응합니다. */
+  /** @brief End pointer for each block. Corresponds 1:1 with `blocks_`. */
   std::vector<uint8_t *> block_ends_;
 
-  /** @brief 현재 활성 블록의 인덱스 (blocks_ 기준). */
+  /** @brief Index of the currently active block (relative to blocks_). */
   size_t current_block_index_ = 0;
 
   /**
-   * @brief 현재 블록 내의 bump-pointer.
+   * @brief Bump-pointer within the current block.
    *
-   * 다음 할당이 시작될 위치를 가리킵니다.
-   * 할당할 때마다 이 포인터가 앞으로 이동합니다.
+   * Points to the start position of the next allocation.
+   * Advances forward with each allocation.
    */
   uint8_t *current_ptr_ = nullptr;
 
-  /** @brief 현재 블록의 끝 포인터. 이 이상으로 할당할 수 없습니다. */
+  /** @brief End pointer of the current block. Allocation cannot exceed this. */
   uint8_t *current_block_end_ = nullptr;
 };
 
 // ─── FixedPoolResource ────────────────────────────────────────────────────────
 
 /**
- * @brief 동일 크기 객체를 위한 O(1) 고정 크기 풀 할당자.
+ * @brief O(1) fixed-size pool allocator for same-size objects.
  *
- * 슬롯 내부에 free-list 포인터를 임베드하는 방식으로 구현됩니다.
- * 별도의 메타데이터 저장소 없이 각 미사용 슬롯의 첫 bytes를
- * 다음 자유 슬롯에 대한 포인터로 활용합니다.
+ * Implemented by embedding the free-list pointer inside each slot.
+ * The first bytes of each free slot store a pointer to the next free slot,
+ * with no separate metadata storage.
  *
- * ### 동작 원리
- * 초기화 시:
+ * ### How It Works
+ * On initialization:
  * ```
  * [slot0] -> [slot1] -> [slot2] -> ... -> [slotN-1] -> nullptr
  * free_list_ = slot0
  * ```
- * allocate() 시: `free_list_`에서 헤드를 꺼냄 (O(1))
- * deallocate() 시: 반환된 슬롯을 `free_list_` 헤드에 추가 (O(1))
+ * allocate(): pops the head from `free_list_` (O(1))
+ * deallocate(): prepends the returned slot to the `free_list_` head (O(1))
  *
- * ### 사용 예시
+ * ### Usage Example
  * @code
- * // sizeof(MyCtx) 크기의 슬롯 256개를 가진 풀 생성
+ * // Create a pool with 256 slots of sizeof(MyCtx) each
  * qbuem::FixedPoolResource<sizeof(MyCtx), alignof(MyCtx)> pool(256);
  *
- * void *slot = pool.allocate();   // O(1), 풀이 고갈되면 nullptr 반환
+ * void *slot = pool.allocate();   // O(1); returns nullptr if exhausted
  * if (slot) {
  *     auto *ctx = new (slot) MyCtx(...); // placement new
- *     // ... 사용 ...
- *     ctx->~MyCtx();              // 소멸자 명시적 호출
+ *     // ... use ...
+ *     ctx->~MyCtx();              // explicit destructor call
  *     pool.deallocate(slot);      // O(1)
  * }
  * @endcode
  *
- * @tparam ObjectSize  각 슬롯의 오브젝트 크기 (바이트).
- *                     내부적으로 Alignment에 맞게 올림(round up)됩니다.
- * @tparam Alignment   슬롯의 메모리 정렬값. 기본값은 플랫폼 최대 정렬값.
+ * @tparam ObjectSize  Size of each slot in bytes.
+ *                     Rounded up internally to satisfy Alignment.
+ * @tparam Alignment   Memory alignment for each slot. Default: platform maximum.
  *
- * @note `ObjectSize`는 `sizeof(void*)`보다 커야 합니다.
- *       슬롯 내부에 free-list 포인터를 저장하기 때문입니다.
- * @note 스레드 안전하지 않습니다. 각 스레드마다 독립적인 풀을 사용하거나
- *       외부에서 동기화를 제공하세요.
- * @warning `deallocate()`에 풀에서 할당받지 않은 포인터를 전달하면
- *          정의되지 않은 동작(UB)이 발생합니다.
+ * @note `ObjectSize` must be at least `sizeof(void*)` because the free-list
+ *       pointer is stored inside each slot.
+ * @note Not thread-safe. Use an independent pool per thread or provide
+ *       external synchronization.
+ * @warning Passing a pointer to `deallocate()` that was not obtained from this
+ *          pool results in undefined behavior.
  */
 template <size_t ObjectSize, size_t Alignment = alignof(std::max_align_t)>
 class FixedPoolResource {
   /**
-   * @brief 실제 슬롯 크기 (Alignment에 맞게 올림).
+   * @brief Actual slot size rounded up to Alignment.
    *
-   * 비트 마스킹으로 계산됩니다: `(ObjectSize + Alignment - 1) & ~(Alignment - 1)`
+   * Computed via bit masking: `(ObjectSize + Alignment - 1) & ~(Alignment - 1)`
    */
   static constexpr size_t kSlotSize =
       (ObjectSize + Alignment - 1) & ~(Alignment - 1);
@@ -267,10 +271,10 @@ class FixedPoolResource {
                 "ObjectSize must be >= sizeof(void*) to embed the free-list ptr");
 
   /**
-   * @brief aligned new[]로 할당한 메모리의 커스텀 해제자.
+   * @brief Custom deleter for memory allocated with aligned new[].
    *
-   * `std::align_val_t`로 할당한 메모리는 반드시 동일한 방식으로 해제해야
-   * 정의되지 않은 동작을 피할 수 있습니다.
+   * Memory allocated with `std::align_val_t` must be released the same way
+   * to avoid undefined behavior.
    */
   struct AlignedDeleter {
     void operator()(uint8_t *p) const noexcept {
@@ -280,12 +284,12 @@ class FixedPoolResource {
 
 public:
   /**
-   * @brief 지정한 용량으로 풀을 생성하고 free-list를 초기화합니다.
+   * @brief Construct the pool with the given capacity and initialize the free-list.
    *
-   * 생성 시 `capacity * kSlotSize` 바이트를 한 번에 할당하고,
-   * 각 슬롯을 연결 리스트로 구성합니다.
+   * Allocates `capacity * kSlotSize` bytes in one shot on construction and
+   * links the slots into a free-list.
    *
-   * @param capacity 풀의 최대 슬롯 수. 이 수를 초과하면 `allocate()`가 nullptr을 반환합니다.
+   * @param capacity Maximum number of slots. `allocate()` returns nullptr when exceeded.
    */
   explicit FixedPoolResource(size_t capacity)
       : capacity_(capacity),
@@ -302,27 +306,26 @@ public:
     free_list_ = storage_.get();
   }
 
-  /** @brief 모든 소유 메모리를 해제합니다. 이미 할당된 슬롯의 소멸자는 호출하지 않습니다. */
+  /** @brief Release all owned memory. Destructors of already-allocated slots are not called. */
   ~FixedPoolResource() = default;
 
-  /** @brief 복사 생성 불가 — 풀은 소유권을 독점합니다. */
+  /** @brief Copy construction is disabled — pool has exclusive ownership. */
   FixedPoolResource(const FixedPoolResource &) = delete;
-  /** @brief 복사 대입 불가 — 풀은 소유권을 독점합니다. */
+  /** @brief Copy assignment is disabled — pool has exclusive ownership. */
   FixedPoolResource &operator=(const FixedPoolResource &) = delete;
-  /** @brief 이동 생성 가능. 원본 풀은 비어있는 상태가 됩니다. */
+  /** @brief Move construction is allowed. The source pool becomes empty. */
   FixedPoolResource(FixedPoolResource &&) = default;
-  /** @brief 이동 대입 가능. 원본 풀은 비어있는 상태가 됩니다. */
+  /** @brief Move assignment is allowed. The source pool becomes empty. */
   FixedPoolResource &operator=(FixedPoolResource &&) = default;
 
   /**
-   * @brief 풀에서 슬롯 하나를 할당합니다 (O(1)).
+   * @brief Allocate one slot from the pool (O(1)).
    *
-   * free-list의 헤드에서 슬롯을 꺼내어 반환합니다.
-   * 반환된 슬롯은 초기화되지 않은 상태이므로 placement new 등으로
-   * 직접 초기화해야 합니다.
+   * Pops the head slot from the free-list and returns it.
+   * The returned slot is uninitialized; initialize it with placement new or equivalent.
    *
-   * @returns 할당된 슬롯의 포인터. 풀이 고갈된 경우 nullptr 반환.
-   * @note `[[nodiscard]]` 속성이 있어 반환값을 무시하면 컴파일 경고가 발생합니다.
+   * @returns Pointer to the allocated slot. Returns nullptr if the pool is exhausted.
+   * @note `[[nodiscard]]` — ignoring the return value triggers a compile-time warning.
    */
   [[nodiscard]] void *allocate() noexcept {
     if (!free_list_) [[unlikely]]
@@ -334,14 +337,14 @@ public:
   }
 
   /**
-   * @brief 슬롯을 풀에 반환합니다 (O(1)).
+   * @brief Return a slot to the pool (O(1)).
    *
-   * 반환된 슬롯을 free-list의 헤드에 추가합니다.
-   * 이 함수를 호출하기 전에 슬롯 내의 객체 소멸자를 명시적으로 호출해야 합니다.
+   * Prepends the returned slot to the free-list head.
+   * The object destructor must be called explicitly before this function.
    *
-   * @param ptr `allocate()`로 얻은 슬롯 포인터.
-   * @warning 풀에서 할당받지 않은 포인터를 전달하면 정의되지 않은 동작이 발생합니다.
-   * @warning nullptr 전달 시 정의되지 않은 동작이 발생합니다.
+   * @param ptr Slot pointer obtained from `allocate()`.
+   * @warning Passing a pointer not obtained from this pool results in undefined behavior.
+   * @warning Passing nullptr results in undefined behavior.
    */
   void deallocate(void *ptr) noexcept {
     *reinterpret_cast<void **>(ptr) = free_list_;
@@ -350,39 +353,39 @@ public:
   }
 
   /**
-   * @brief 풀의 총 슬롯 수를 반환합니다.
-   * @returns 생성 시 지정한 capacity 값.
+   * @brief Return the total number of slots in the pool.
+   * @returns The capacity value specified at construction.
    */
   size_t capacity()  const noexcept { return capacity_; }
 
   /**
-   * @brief 현재 할당 중인 슬롯 수를 반환합니다.
-   * @returns 현재 사용 중인 슬롯 수.
+   * @brief Return the number of currently allocated slots.
+   * @returns Number of slots currently in use.
    */
   size_t used()      const noexcept { return used_; }
 
   /**
-   * @brief 현재 사용 가능한 슬롯 수를 반환합니다.
+   * @brief Return the number of currently available slots.
    * @returns `capacity() - used()`.
    */
   size_t available() const noexcept { return capacity_ - used_; }
 
 private:
-  /** @brief 풀의 총 슬롯 수. */
+  /** @brief Total number of slots in the pool. */
   size_t   capacity_;
 
-  /** @brief 현재 할당 중인 슬롯 수. */
+  /** @brief Number of slots currently allocated. */
   size_t   used_ = 0;
 
   /**
-   * @brief free-list의 헤드 포인터.
+   * @brief Head pointer of the free-list.
    *
-   * 각 자유 슬롯의 첫 bytes는 다음 자유 슬롯을 가리키는 포인터를 담습니다.
-   * 마지막 자유 슬롯은 nullptr을 저장합니다.
+   * The first bytes of each free slot contain a pointer to the next free slot.
+   * The last free slot stores nullptr.
    */
   void    *free_list_ = nullptr;
 
-  /** @brief 정렬된 연속 메모리 블록. `capacity * kSlotSize` 바이트를 소유합니다. */
+  /** @brief Aligned contiguous memory block. Owns `capacity * kSlotSize` bytes. */
   std::unique_ptr<uint8_t[], AlignedDeleter> storage_;
 };
 

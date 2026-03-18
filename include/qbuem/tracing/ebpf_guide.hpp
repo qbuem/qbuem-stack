@@ -2,33 +2,33 @@
 
 /**
  * @file qbuem/tracing/ebpf_guide.hpp
- * @brief eBPF 트레이싱 가이드 — io_uring tracepoints, tcp_sendmsg kprobe
+ * @brief eBPF tracing guide — io_uring tracepoints, tcp_sendmsg kprobe
  * @defgroup qbuem_ebpf eBPF Tracing Guide
  * @ingroup qbuem_tracing
  *
- * @note 이 헤더는 구현 코드 없이 eBPF 트레이싱 접근법을 문서화합니다.
- *       실제 eBPF 프로그램은 bpftrace(1) 또는 libbpf를 사용해 별도 실행합니다.
+ * @note This header documents eBPF tracing approaches without implementation code.
+ *       Actual eBPF programs are run separately using bpftrace(1) or libbpf.
  *
- * ## eBPF 트레이싱 개요
+ * ## eBPF Tracing Overview
  *
- * qbuem-stack 성능 분석을 위한 두 가지 주요 eBPF 접근법:
+ * Two main eBPF approaches for qbuem-stack performance analysis:
  *
  * ### 1. io_uring Tracepoints
  *
- * Linux 커널 5.0+에서 io_uring은 다음 tracepoint를 제공합니다:
+ * On Linux kernel 5.0+, io_uring provides the following tracepoints:
  * ```
- * io_uring:io_uring_create         — io_uring 초기화
- * io_uring:io_uring_submit_sqe     — SQE 제출
- * io_uring:io_uring_complete       — CQE 완료
- * io_uring:io_uring_queue_async_work — 커널 비동기 워크 큐 진입
- * io_uring:io_uring_poll_arm        — POLL_ADD SQE 등록
- * io_uring:io_uring_task_work_run   — task_work 실행 (completion)
+ * io_uring:io_uring_create         — io_uring initialization
+ * io_uring:io_uring_submit_sqe     — SQE submission
+ * io_uring:io_uring_complete       — CQE completion
+ * io_uring:io_uring_queue_async_work — kernel async work queue entry
+ * io_uring:io_uring_poll_arm        — POLL_ADD SQE registration
+ * io_uring:io_uring_task_work_run   — task_work execution (completion)
  * ```
  *
- * #### bpftrace 예시: SQE/CQE 레이턴시 측정
+ * #### bpftrace example: SQE/CQE latency measurement
  * ```bpftrace
  * #!/usr/bin/env bpftrace
- * // io_uring SQE 제출 → CQE 완료 레이턴시
+ * // io_uring SQE submission → CQE completion latency
  * tracepoint:io_uring:io_uring_submit_sqe {
  *     @submit_time[args->user_data] = nsecs;
  * }
@@ -40,7 +40,7 @@
  * }
  * ```
  *
- * #### bpftrace 예시: 초당 SQE 처리량
+ * #### bpftrace example: SQE throughput per second
  * ```bpftrace
  * tracepoint:io_uring:io_uring_complete { @cqe_per_sec = count(); }
  * interval:s:1 { print(@cqe_per_sec); clear(@cqe_per_sec); }
@@ -48,7 +48,7 @@
  *
  * ### 2. tcp_sendmsg kprobe
  *
- * TCP 송신 레이턴시 및 바이트 수 측정:
+ * Measuring TCP send latency and byte count:
  * ```bpftrace
  * #!/usr/bin/env bpftrace
  * kprobe:tcp_sendmsg {
@@ -62,46 +62,46 @@
  * }
  * ```
  *
- * ### 3. MSG_ZEROCOPY 완료 추적
+ * ### 3. MSG_ZEROCOPY completion tracking
  *
- * `send(..., MSG_ZEROCOPY)` 완료는 errqueue에서 확인하는데,
- * eBPF로 errqueue 반환 시점을 추적할 수 있습니다:
+ * `send(..., MSG_ZEROCOPY)` completion is confirmed via errqueue;
+ * eBPF can track the point when errqueue returns:
  * ```bpftrace
  * kprobe:skb_copy_ubufs / kprobe:skb_zcopy_clear {
  *     @zerocopy_completions = count();
  * }
  * ```
  *
- * ### 4. 실행 방법
+ * ### 4. How to run
  *
  * ```bash
- * # bpftrace 설치 (Ubuntu)
+ * # Install bpftrace (Ubuntu)
  * sudo apt install bpftrace
  *
- * # io_uring 레이턴시 프로파일 (qbuem 프로세스 대상)
+ * # io_uring latency profile (targeting qbuem process)
  * sudo bpftrace -p $(pgrep qbuem_server) /path/to/iouring_latency.bt
  *
- * # 또는 시스템 전체
+ * # Or system-wide
  * sudo bpftrace /path/to/iouring_latency.bt
  *
- * # perf로 io_uring tracepoint 확인
+ * # Check io_uring tracepoints with perf
  * sudo perf list | grep io_uring
  * sudo perf stat -e 'io_uring:*' -p $(pgrep qbuem_server)
  * ```
  *
- * ### 5. PerfCounters와 결합
+ * ### 5. Combining with PerfCounters
  *
- * qbuem의 `PerfCounters` (core/numa.hpp)와 eBPF를 결합하면:
- * 1. `PerfCounters::start()` → 처리 시작
- * 2. 실제 처리
- * 3. `PerfCounters::stop()` → cycles, IPC, LLC-miss 측정
- * 4. eBPF → 커널 레벨 io_uring 지연 측정
- * 5. 두 소스를 결합해 전체 레이턴시 분해(breakdown) 가능
+ * Combining qbuem's `PerfCounters` (core/numa.hpp) with eBPF:
+ * 1. `PerfCounters::start()` → processing begins
+ * 2. Actual processing
+ * 3. `PerfCounters::stop()` → measure cycles, IPC, LLC-miss
+ * 4. eBPF → measure kernel-level io_uring latency
+ * 5. Combine both sources to achieve full latency breakdown
  *
  * @{
  */
 
-// 이 헤더는 구현 코드 없이 가이드 문서만 포함합니다.
-// 실제 eBPF 프로그램은 별도 .bt 또는 BPF C 파일로 관리하세요.
+// This header contains guide documentation only, without implementation code.
+// Manage actual eBPF programs as separate .bt or BPF C files.
 
 /** @} */

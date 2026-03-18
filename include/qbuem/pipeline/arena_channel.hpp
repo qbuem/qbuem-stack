@@ -2,26 +2,26 @@
 
 /**
  * @file qbuem/pipeline/arena_channel.hpp
- * @brief Reactor-local zero-alloc 채널 — ArenaChannel<T>
+ * @brief Reactor-local zero-alloc channel — ArenaChannel<T>
  * @defgroup qbuem_arena_channel ArenaChannel
  * @ingroup qbuem_pipeline
  *
- * ArenaChannel<T>는 동일 reactor 내부의 producer/consumer 간 zero-copy,
- * zero-heap-alloc 메시지 전달을 위한 채널입니다.
+ * ArenaChannel<T> is a channel for zero-copy, zero-heap-alloc message passing
+ * between producers and consumers within the same reactor.
  *
- * ## 설계 원칙
+ * ## Design principles
  *
- * AsyncChannel<T>은 new/delete 기반 힙 슬롯을 사용합니다. reactor-local
- * 통신(같은 스레드 내 coroutine 간)에서는 이 할당이 불필요합니다.
- * ArenaChannel은 FixedPoolResource를 통해 슬롯 할당/해제를 O(1) free-list
- * 연산으로 교체하고 malloc 캐시 미스를 제거합니다.
+ * AsyncChannel<T> uses heap slots based on new/delete. For reactor-local
+ * communication (between coroutines on the same thread), this allocation is
+ * unnecessary. ArenaChannel replaces slot allocation/deallocation with O(1)
+ * free-list operations via FixedPoolResource, eliminating malloc cache misses.
  *
- * ### 사용 조건
- * - **같은 reactor(스레드) 내** producer와 consumer 사이에서만 안전합니다.
- * - 크로스-reactor 접근 시 외부에서 동기화를 제공해야 합니다.
- *   (크로스-reactor 용도라면 AsyncChannel<T>을 사용하세요.)
+ * ### Usage requirements
+ * - Safe only between producers and consumers **within the same reactor (thread)**.
+ * - Cross-reactor access requires external synchronization.
+ *   (For cross-reactor use, use AsyncChannel<T> instead.)
  *
- * ### 메모리 모델
+ * ### Memory model
  * ```
  * FixedPoolResource<sizeof(Node)>  ←──────────────────────┐
  *        │  allocate() O(1)                                │ deallocate()
@@ -31,26 +31,26 @@
  *   push: placement new into pool slot      pop: call ~T, return slot
  * ```
  *
- * ## 사용 예시
+ * ## Usage example
  * ```cpp
- * ArenaChannel<int> chan(256); // 최대 256 슬롯 (heap 1회만 할당)
+ * ArenaChannel<int> chan(256); // up to 256 slots (heap allocated only once)
  *
- * // 같은 reactor 내 producer:
+ * // Producer within the same reactor:
  * chan.push(42);          // true → success, false → full
  *
- * // 같은 reactor 내 consumer:
+ * // Consumer within the same reactor:
  * auto v = chan.pop();    // std::optional<int>
  * if (v) process(*v);
  * ```
  *
- * ## AsyncChannel 과의 비교
- * | 특성              | AsyncChannel<T>    | ArenaChannel<T>         |
+ * ## Comparison with AsyncChannel
+ * | Property          | AsyncChannel<T>    | ArenaChannel<T>         |
  * |-------------------|--------------------|-------------------------|
- * | 할당 방식         | new/delete (힙)    | FixedPoolResource (풀)  |
- * | 스레드 안전성     | MPMC (atomic CAS)  | 단일 reactor (no lock)  |
- * | co_await 지원     | ✅                 | ❌ (sync only)          |
- * | 용도              | 크로스-reactor     | 동일 reactor 내         |
- * | 할당 비용         | O(1) amortized     | O(1) 항상               |
+ * | Allocation        | new/delete (heap)  | FixedPoolResource (pool)|
+ * | Thread safety     | MPMC (atomic CAS)  | single reactor (no lock)|
+ * | co_await support  | ✅                 | ❌ (sync only)          |
+ * | Use case          | cross-reactor      | within same reactor     |
+ * | Allocation cost   | O(1) amortized     | O(1) always             |
  *
  * @{
  */
@@ -65,13 +65,13 @@
 namespace qbuem {
 
 /**
- * @brief Reactor-local zero-alloc SPSC/SPMC 채널.
+ * @brief Reactor-local zero-alloc SPSC/SPMC channel.
  *
- * 내부적으로 FixedPoolResource 위에 intrusive linked list 큐를 구성합니다.
- * 모든 연산은 lock-free이며 단일 reactor 내에서만 안전합니다.
+ * Internally builds an intrusive linked-list queue on top of FixedPoolResource.
+ * All operations are lock-free and safe only within a single reactor.
  *
- * @tparam T 전송할 값의 타입. 이동 가능(MoveConstructible)해야 합니다.
- * @tparam Alignment 슬롯 정렬 (기본 64 — cache-line boundary).
+ * @tparam T Type of value to transmit. Must be MoveConstructible.
+ * @tparam Alignment Slot alignment (default 64 — cache-line boundary).
  */
 template <typename T, size_t Alignment = 64>
 class ArenaChannel {
@@ -91,12 +91,12 @@ class ArenaChannel {
 
 public:
   /**
-   * @brief 지정한 슬롯 수로 채널을 생성합니다.
+   * @brief Creates the channel with the specified number of slots.
    *
-   * 이 시점에 `capacity * sizeof(Node)` 바이트를 **1회** 힙 할당합니다.
-   * 이후 push/pop은 추가 힙 할당 없이 free-list에서 O(1) 처리됩니다.
+   * At this point, `capacity * sizeof(Node)` bytes are heap-allocated **once**.
+   * Subsequent push/pop operations are O(1) from the free-list with no additional heap allocation.
    *
-   * @param capacity 동시에 보관 가능한 최대 메시지 수.
+   * @param capacity Maximum number of messages that can be held simultaneously.
    */
   explicit ArenaChannel(size_t capacity)
       : pool_(capacity) {}
@@ -121,11 +121,11 @@ public:
   // -------------------------------------------------------------------------
 
   /**
-   * @brief 값을 채널에 넣습니다 (O(1), zero-heap-alloc).
+   * @brief Pushes a value into the channel (O(1), zero-heap-alloc).
    *
-   * @param value 전송할 값 (이동됩니다).
-   * @returns true  — 성공.
-   * @returns false — 풀이 가득 찬 경우 (backpressure).
+   * @param value Value to transmit (moved in).
+   * @returns true  — success.
+   * @returns false — pool is full (backpressure).
    */
   bool push(T value) {
     void *slot = pool_.allocate();
@@ -143,12 +143,12 @@ public:
   }
 
   /**
-   * @brief 값을 in-place 생성하여 채널에 넣습니다 (O(1)).
+   * @brief Constructs a value in-place and pushes it into the channel (O(1)).
    *
-   * @tparam Args T 생성자 인수 타입.
-   * @param  args T 생성자에 전달할 인수.
-   * @returns true  — 성공.
-   * @returns false — 풀이 가득 찬 경우.
+   * @tparam Args Constructor argument types for T.
+   * @param  args Arguments to forward to T's constructor.
+   * @returns true  — success.
+   * @returns false — pool is full.
    */
   template <typename... Args>
   bool emplace(Args&&... args) {
@@ -171,9 +171,9 @@ public:
   // -------------------------------------------------------------------------
 
   /**
-   * @brief 채널에서 값 하나를 꺼냅니다 (O(1)).
+   * @brief Pops one value from the channel (O(1)).
    *
-   * @returns 값이 있으면 `std::optional<T>`, 비어 있으면 `std::nullopt`.
+   * @returns `std::optional<T>` if a value is available, `std::nullopt` if empty.
    */
   std::optional<T> pop() {
     if (!head_) [[unlikely]] return std::nullopt;
@@ -190,11 +190,11 @@ public:
   }
 
   /**
-   * @brief 채널에서 최대 max_n개 값을 꺼내 out에 저장합니다 (배치 dequeue).
+   * @brief Pops up to max_n values from the channel into out (batch dequeue).
    *
-   * @param out   결과를 저장할 버퍼 (push_back 지원).
-   * @param max_n 최대 꺼낼 수 (0 = 제한 없음).
-   * @returns 실제 꺼낸 수.
+   * @param out   Buffer to store results (must support push_back).
+   * @param max_n Maximum number of values to pop (0 = unlimited).
+   * @returns Actual number of values popped.
    */
   template <typename Container>
   size_t pop_batch(Container &out, size_t max_n = 0) {
@@ -217,16 +217,16 @@ public:
   // Introspection
   // -------------------------------------------------------------------------
 
-  /// @brief 채널이 비어 있으면 true.
+  /// @brief Returns true if the channel is empty.
   [[nodiscard]] bool empty() const noexcept { return size_ == 0; }
 
-  /// @brief 현재 대기 중인 아이템 수.
+  /// @brief Returns the number of items currently waiting.
   [[nodiscard]] size_t size() const noexcept { return size_; }
 
-  /// @brief 풀의 남은 슬롯 수.
+  /// @brief Returns the number of remaining slots in the pool.
   [[nodiscard]] size_t available() const noexcept { return pool_.available(); }
 
-  /// @brief 풀의 총 용량.
+  /// @brief Returns the total capacity of the pool.
   [[nodiscard]] size_t capacity() const noexcept { return pool_.capacity(); }
 
 private:

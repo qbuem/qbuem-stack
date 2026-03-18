@@ -2,17 +2,17 @@
 
 /**
  * @file qbuem/pipeline/checkpoint.hpp
- * @brief DynamicPipeline 체크포인트 / 스냅샷 지원
+ * @brief DynamicPipeline checkpoint / snapshot support
  * @defgroup qbuem_checkpoint Checkpoint
  * @ingroup qbuem_pipeline
  *
- * 이 헤더는 DynamicPipeline의 오프셋과 메타데이터를 저장·복원하는
- * 체크포인트 인프라를 제공합니다:
+ * This header provides the checkpoint infrastructure for saving and restoring
+ * DynamicPipeline offsets and metadata:
  *
- * - `CheckpointData`         : 체크포인트 레코드 (오프셋 + 메타데이터 JSON + 저장 시각)
- * - `ICheckpointStore`       : 저장소 추상 인터페이스
- * - `InMemoryCheckpointStore`: 인메모리 참조 구현
- * - `CheckpointedPipeline<T>`: DynamicPipeline<T>를 래핑하는 체크포인트 지원 파이프라인
+ * - `CheckpointData`         : Checkpoint record (offset + metadata JSON + saved timestamp)
+ * - `ICheckpointStore`       : Abstract storage interface
+ * - `InMemoryCheckpointStore`: In-memory reference implementation
+ * - `CheckpointedPipeline<T>`: Checkpoint-aware pipeline wrapping DynamicPipeline<T>
  *
  * @{
  */
@@ -37,54 +37,54 @@ using std::chrono::system_clock;
 // ─── CheckpointData ───────────────────────────────────────────────────────────
 
 /**
- * @brief 단일 체크포인트 레코드.
+ * @brief A single checkpoint record.
  *
- * 파이프라인이 처리한 아이템 오프셋, 사용자 정의 메타데이터 JSON,
- * 그리고 저장 시각을 담습니다.
+ * Holds the cumulative offset of items processed by the pipeline,
+ * user-defined metadata JSON, and the timestamp at which the checkpoint was saved.
  */
 struct CheckpointData {
-  /** @brief 저장 시점까지 처리된 아이템의 누적 오프셋. */
+  /** @brief Cumulative offset of items processed up to the save point. */
   uint64_t offset{0};
 
-  /** @brief 사용자 정의 직렬화 메타데이터 (JSON 문자열). */
+  /** @brief User-defined serialized metadata (JSON string). */
   std::string metadata_json;
 
-  /** @brief 체크포인트가 저장된 시각. */
+  /** @brief Timestamp at which the checkpoint was saved. */
   system_clock::time_point saved_at;
 };
 
 // ─── ICheckpointStore ─────────────────────────────────────────────────────────
 
 /**
- * @brief 체크포인트 저장소 추상 인터페이스.
+ * @brief Abstract interface for checkpoint storage.
  *
- * 파이프라인 이름을 키로 사용해 `CheckpointData`를 저장하고 불러옵니다.
- * 구현체는 인메모리, 파일 시스템, 원격 KV 스토어 등 다양할 수 있습니다.
+ * Saves and loads `CheckpointData` using the pipeline name as a key.
+ * Implementations may target in-memory storage, the filesystem, a remote KV store, etc.
  *
- * ### 스레드 안전성
- * 구현체는 `save`와 `load`를 동시에 안전하게 호출할 수 있어야 합니다.
+ * ### Thread safety
+ * Implementations must support concurrent calls to `save` and `load`.
  */
 class ICheckpointStore {
 public:
   virtual ~ICheckpointStore() = default;
 
   /**
-   * @brief 체크포인트를 저장합니다.
+   * @brief Save a checkpoint.
    *
-   * @param pipeline_name  파이프라인 식별자.
-   * @param offset         처리된 아이템 누적 오프셋.
-   * @param metadata_json  사용자 정의 메타데이터 JSON 문자열.
-   * @returns 저장 성공 시 `Result<void>::ok()`, 실패 시 에러.
+   * @param pipeline_name  Pipeline identifier.
+   * @param offset         Cumulative offset of processed items.
+   * @param metadata_json  User-defined metadata JSON string.
+   * @returns `Result<void>::ok()` on success, or an error.
    */
   virtual Task<Result<void>> save(std::string_view pipeline_name,
                                    uint64_t offset,
                                    std::string_view metadata_json) = 0;
 
   /**
-   * @brief 저장된 체크포인트를 불러옵니다.
+   * @brief Load a saved checkpoint.
    *
-   * @param pipeline_name 파이프라인 식별자.
-   * @returns 성공 시 `CheckpointData`, 데이터가 없거나 실패 시 에러.
+   * @param pipeline_name Pipeline identifier.
+   * @returns `CheckpointData` on success, or an error if no data exists or loading fails.
    */
   virtual Task<Result<CheckpointData>> load(std::string_view pipeline_name) = 0;
 };
@@ -92,22 +92,22 @@ public:
 // ─── InMemoryCheckpointStore ──────────────────────────────────────────────────
 
 /**
- * @brief 인메모리 체크포인트 저장소.
+ * @brief In-memory checkpoint store.
  *
- * 프로세스 재시작 시 데이터는 소실됩니다.
- * 테스트 및 단위 개발 목적에 적합합니다.
+ * Data is lost on process restart.
+ * Suitable for testing and unit development.
  *
- * 내부적으로 `std::mutex`로 보호되는 해시맵을 사용하므로 스레드 안전합니다.
+ * Thread-safe; uses a hash map protected by `std::mutex`.
  */
 class InMemoryCheckpointStore : public ICheckpointStore {
 public:
   /**
-   * @brief 체크포인트를 메모리에 저장합니다.
+   * @brief Save a checkpoint to memory.
    *
-   * @param pipeline_name  파이프라인 식별자.
-   * @param offset         처리된 아이템 누적 오프셋.
-   * @param metadata_json  사용자 정의 메타데이터 JSON 문자열.
-   * @returns 항상 `Result<void>::ok()`.
+   * @param pipeline_name  Pipeline identifier.
+   * @param offset         Cumulative offset of processed items.
+   * @param metadata_json  User-defined metadata JSON string.
+   * @returns Always `Result<void>::ok()`.
    */
   Task<Result<void>> save(std::string_view pipeline_name,
                            uint64_t offset,
@@ -125,10 +125,10 @@ public:
   }
 
   /**
-   * @brief 메모리에서 체크포인트를 불러옵니다.
+   * @brief Load a checkpoint from memory.
    *
-   * @param pipeline_name 파이프라인 식별자.
-   * @returns 저장된 `CheckpointData`, 없으면 `errc::no_such_file_or_directory` 에러.
+   * @param pipeline_name Pipeline identifier.
+   * @returns The stored `CheckpointData`, or `errc::no_such_file_or_directory` if not found.
    */
   Task<Result<CheckpointData>> load(std::string_view pipeline_name) override {
     std::lock_guard lock(mutex_);
@@ -141,8 +141,8 @@ public:
   }
 
   /**
-   * @brief 저장된 체크포인트 수를 반환합니다.
-   * @returns 저장소 내 항목 수.
+   * @brief Return the number of stored checkpoints.
+   * @returns Number of entries in the store.
    */
   [[nodiscard]] size_t size() const {
     std::lock_guard lock(mutex_);
@@ -150,7 +150,7 @@ public:
   }
 
   /**
-   * @brief 모든 체크포인트를 삭제합니다.
+   * @brief Delete all stored checkpoints.
    */
   void clear() {
     std::lock_guard lock(mutex_);
@@ -165,12 +165,12 @@ private:
 // ─── CheckpointedPipeline<T> ──────────────────────────────────────────────────
 
 /**
- * @brief 체크포인트 기능을 갖춘 DynamicPipeline 래퍼.
+ * @brief DynamicPipeline wrapper with checkpoint support.
  *
- * `DynamicPipeline<T>`를 내부에 보유하며, 아이템 처리 수를 추적하고
- * 주기적 또는 수동 체크포인트 저장·복원을 지원합니다.
+ * Holds a `DynamicPipeline<T>` internally, tracks the number of processed items,
+ * and supports periodic or manual checkpoint save and restore.
  *
- * ### 사용 예시
+ * ### Usage example
  * ```cpp
  * auto store = std::make_shared<InMemoryCheckpointStore>();
  * CheckpointedPipeline<int> cp("my_pipeline", store);
@@ -180,24 +180,24 @@ private:
  * cp.enable_checkpoint(std::chrono::seconds{30}, 500);
  * cp.pipeline().start(dispatcher);
  *
- * // 체크포인트 수동 저장
+ * // Manually save checkpoint
  * co_await cp.save_checkpoint();
  *
- * // 이전 체크포인트에서 재개 (오프셋을 복원해 외부 소스에서 재전송 시작점 결정)
+ * // Resume from previous checkpoint (restore offset to determine retransmit start point from external source)
  * co_await cp.resume_from_checkpoint();
  * ```
  *
- * @tparam T 파이프라인을 흐르는 메시지 타입.
+ * @tparam T Message type flowing through the pipeline.
  */
 template <typename T>
 class CheckpointedPipeline {
 public:
   /**
-   * @brief CheckpointedPipeline을 생성합니다.
+   * @brief Construct a CheckpointedPipeline.
    *
-   * @param name  파이프라인 이름 (체크포인트 저장소 키로 사용됨).
-   * @param store 체크포인트 저장소 (공유 소유권).
-   * @param cfg   내부 DynamicPipeline 설정 (선택적).
+   * @param name  Pipeline name (used as the checkpoint store key).
+   * @param store Checkpoint store (shared ownership).
+   * @param cfg   Internal DynamicPipeline configuration (optional).
    */
   CheckpointedPipeline(std::string name,
                         std::shared_ptr<ICheckpointStore> store,
@@ -211,37 +211,37 @@ public:
   CheckpointedPipeline(CheckpointedPipeline&&) = default;
   CheckpointedPipeline& operator=(CheckpointedPipeline&&) = default;
 
-  // ─── 내부 파이프라인 접근 ───────────────────────────────────────────────────
+  // ─── Internal pipeline access ─────────────────────────────────────────────
 
   /**
-   * @brief 내부 `DynamicPipeline<T>`에 대한 참조를 반환합니다.
+   * @brief Return a reference to the internal `DynamicPipeline<T>`.
    *
-   * 스테이지 추가, 시작/정지 등 파이프라인 조작에 사용합니다.
-   * @returns 내부 파이프라인 참조.
+   * Used for pipeline operations such as adding stages, starting, and stopping.
+   * @returns Reference to the internal pipeline.
    */
   [[nodiscard]] DynamicPipeline<T>& pipeline() noexcept {
     return pipeline_;
   }
 
   /**
-   * @brief 내부 `DynamicPipeline<T>`에 대한 const 참조를 반환합니다.
-   * @returns 내부 파이프라인 const 참조.
+   * @brief Return a const reference to the internal `DynamicPipeline<T>`.
+   * @returns Const reference to the internal pipeline.
    */
   [[nodiscard]] const DynamicPipeline<T>& pipeline() const noexcept {
     return pipeline_;
   }
 
-  // ─── 체크포인트 설정 ────────────────────────────────────────────────────────
+  // ─── Checkpoint configuration ─────────────────────────────────────────────
 
   /**
-   * @brief 자동 체크포인트 정책을 설정합니다.
+   * @brief Configure the automatic checkpoint policy.
    *
-   * 시간 간격(`every_t`)과 아이템 수(`every_n`) 중 먼저 충족되는 조건에서
-   * 체크포인트를 저장합니다. `push_counted()`를 통해 아이템을 전달할 때
-   * 자동 트리거 여부를 확인합니다.
+   * A checkpoint is saved when either the time interval (`every_t`) or
+   * the item count (`every_n`) threshold is reached first.
+   * The automatic trigger is checked when items are submitted via `push_counted()`.
    *
-   * @param every_t 체크포인트 저장 주기 (기본 60초).
-   * @param every_n 체크포인트 저장 아이템 수 간격 (기본 1000개).
+   * @param every_t Checkpoint save interval (default 60 seconds).
+   * @param every_n Item count interval for checkpoint saves (default 1000 items).
    */
   void enable_checkpoint(std::chrono::seconds every_t = std::chrono::seconds{60},
                           size_t every_n = 1000) {
@@ -251,18 +251,18 @@ public:
     last_checkpoint_time_  = system_clock::now();
   }
 
-  // ─── 아이템 전송 (카운터 포함) ──────────────────────────────────────────────
+  // ─── Item submission (with counter) ───────────────────────────────────────
 
   /**
-   * @brief 아이템을 파이프라인에 전달하고 처리 카운터를 증가시킵니다.
+   * @brief Submit an item to the pipeline and increment the processing counter.
    *
-   * 체크포인트가 활성화된 경우, 아이템 수 또는 시간 조건이 충족되면
-   * 자동으로 `save_checkpoint()`를 호출합니다.
+   * If checkpointing is enabled and either the item count or time condition is met,
+   * `save_checkpoint()` is called automatically.
    *
-   * @param item 전달할 아이템.
-   * @param ctx  아이템 컨텍스트 (기본: 빈 Context).
-   * @param metadata_json 체크포인트 메타데이터 JSON (기본: 빈 문자열).
-   * @returns `Result<void>::ok()` 또는 push/checkpoint 에러.
+   * @param item          Item to submit.
+   * @param ctx           Item context (default: empty Context).
+   * @param metadata_json Checkpoint metadata JSON (default: empty string).
+   * @returns `Result<void>::ok()` or a push/checkpoint error.
    */
   Task<Result<void>> push_counted(T item,
                                    Context ctx = {},
@@ -295,13 +295,13 @@ public:
     co_return Result<void>::ok();
   }
 
-  // ─── 수동 체크포인트 조작 ───────────────────────────────────────────────────
+  // ─── Manual checkpoint operations ────────────────────────────────────────
 
   /**
-   * @brief 현재 오프셋과 메타데이터를 즉시 저장소에 저장합니다.
+   * @brief Immediately save the current offset and metadata to the store.
    *
-   * @param metadata_json 저장할 사용자 메타데이터 JSON 문자열 (기본: 빈 문자열).
-   * @returns 저장 성공 시 `Result<void>::ok()`, 실패 시 에러.
+   * @param metadata_json User metadata JSON string to save (default: empty string).
+   * @returns `Result<void>::ok()` on success, or an error.
    */
   Task<Result<void>> save_checkpoint(std::string_view metadata_json = "") {
     uint64_t offset = items_processed_.load(std::memory_order_acquire);
@@ -309,13 +309,12 @@ public:
   }
 
   /**
-   * @brief 저장소에서 최근 체크포인트를 불러와 오프셋을 복원합니다.
+   * @brief Load the most recent checkpoint from the store and restore the offset.
    *
-   * 복원된 오프셋은 `items_processed()`로 조회할 수 있으며,
-   * 외부 소스(예: Kafka, 파일)에서 해당 오프셋부터 재전송을 시작하는
-   * 기준점으로 활용합니다.
+   * The restored offset can be queried via `items_processed()` and used as the
+   * starting point for retransmission from an external source (e.g., Kafka, file).
    *
-   * @returns 복원 성공 시 `Result<void>::ok()`, 저장된 데이터 없음 또는 실패 시 에러.
+   * @returns `Result<void>::ok()` on success, or an error if no data exists or loading fails.
    */
   Task<Result<void>> resume_from_checkpoint() {
     auto result = co_await store_->load(name_);
@@ -326,27 +325,27 @@ public:
     co_return Result<void>::ok();
   }
 
-  // ─── 조회 ──────────────────────────────────────────────────────────────────
+  // ─── Queries ──────────────────────────────────────────────────────────────
 
   /**
-   * @brief `push_counted()`를 통해 처리된 총 아이템 수를 반환합니다.
-   * @returns 누적 처리 아이템 수.
+   * @brief Return the total number of items processed via `push_counted()`.
+   * @returns Cumulative processed item count.
    */
   [[nodiscard]] uint64_t items_processed() const noexcept {
     return items_processed_.load(std::memory_order_relaxed);
   }
 
   /**
-   * @brief 파이프라인 이름을 반환합니다.
-   * @returns 파이프라인 이름 문자열 참조.
+   * @brief Return the pipeline name.
+   * @returns Reference to the pipeline name string.
    */
   [[nodiscard]] const std::string& name() const noexcept {
     return name_;
   }
 
   /**
-   * @brief 자동 체크포인트가 활성화되어 있는지 확인합니다.
-   * @returns 활성화 여부.
+   * @brief Check whether automatic checkpointing is enabled.
+   * @returns true if enabled, false otherwise.
    */
   [[nodiscard]] bool checkpoint_enabled() const noexcept {
     return checkpoint_enabled_;

@@ -1,7 +1,7 @@
 #pragma once
 /**
  * @file qbuem/pipeline/observer.hpp
- * @brief 파이프라인 관찰 가능성 — ActionMetrics, PipelineMetrics, PipelineObserver
+ * @brief Pipeline observability — ActionMetrics, PipelineMetrics, PipelineObserver
  * @defgroup qbuem_observer Observer
  * @ingroup qbuem_pipeline
  * @{
@@ -19,16 +19,16 @@
 namespace qbuem {
 
 /**
- * @brief 액션 단위 메트릭 — cache-line 정렬
+ * @brief Per-action metrics — cache-line aligned
  */
 struct ActionMetrics {
   alignas(64)
-  std::atomic<uint64_t> items_processed{0};  ///< 처리된 아이템 수
-  std::atomic<uint64_t> errors{0};           ///< 에러 수
-  std::atomic<uint64_t> retried{0};          ///< 재시도 수
-  std::atomic<uint64_t> dlq{0};             ///< DLQ로 전송된 수
+  std::atomic<uint64_t> items_processed{0};  ///< Number of items processed
+  std::atomic<uint64_t> errors{0};           ///< Number of errors
+  std::atomic<uint64_t> retried{0};          ///< Number of retries
+  std::atomic<uint64_t> dlq{0};             ///< Number of items sent to DLQ
 
-  // 레이턴시 버킷 (4구간: <1ms, <10ms, <100ms, >=100ms)
+  // Latency buckets (4 ranges: <1ms, <10ms, <100ms, >=100ms)
   std::atomic<uint64_t> latency_lt1ms{0};
   std::atomic<uint64_t> latency_lt10ms{0};
   std::atomic<uint64_t> latency_lt100ms{0};
@@ -44,21 +44,21 @@ struct ActionMetrics {
 };
 
 /**
- * @brief 파이프라인 단위 집계 메트릭
+ * @brief Per-pipeline aggregate metrics
  */
 struct PipelineMetrics {
   std::string_view name;
-  uint64_t items_in  = 0;   ///< 입력 아이템 총 수
-  uint64_t items_out = 0;   ///< 출력 아이템 총 수
-  uint64_t errors    = 0;   ///< 총 에러 수
-  uint64_t dlq       = 0;   ///< DLQ 총 수
+  uint64_t items_in  = 0;   ///< Total number of input items
+  uint64_t items_out = 0;   ///< Total number of output items
+  uint64_t errors    = 0;   ///< Total number of errors
+  uint64_t dlq       = 0;   ///< Total number of DLQ items
 };
 
 // Forward declarations for observer hooks
 template <typename In, typename Out> class Action;
 
 /**
- * @brief PipelineObserver — 파이프라인 이벤트 훅 인터페이스
+ * @brief PipelineObserver — pipeline event hook interface
  */
 class PipelineObserver {
 public:
@@ -80,7 +80,7 @@ public:
 };
 
 /**
- * @brief LoggingObserver — 기본 로깅 구현
+ * @brief LoggingObserver — default logging implementation
  */
 class LoggingObserver : public PipelineObserver {
 public:

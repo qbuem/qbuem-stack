@@ -2,30 +2,30 @@
 
 /**
  * @file qbuem/pipeline/migration.hpp
- * @brief 파이프라인 타입 마이그레이션 — MigrationFn, DlqReprocessor
+ * @brief Pipeline type migration — MigrationFn, DlqReprocessor
  * @defgroup qbuem_migration Pipeline Migration
  * @ingroup qbuem_pipeline
  *
- * 파이프라인 스키마(메시지 타입)를 점진적으로 변경할 때 사용합니다.
+ * Used when incrementally changing the pipeline schema (message type).
  *
- * ## 점진적 타입 변경 가이드
+ * ## Incremental type change guide
  * ```
- * 1. MigrationAction<OldT, NewT> 삽입
- *    → 기존 old-format 메시지를 new-format으로 변환하며 병렬 운영
- * 2. 프로덕션 트래픽이 전부 new-format으로 전환되면 MigrationAction 제거
- * 3. DLQ 내 old-format 메시지는 DlqReprocessor로 재처리
+ * 1. Insert MigrationAction<OldT, NewT>
+ *    → Converts existing old-format messages to new-format while running in parallel
+ * 2. Once all production traffic has switched to new-format, remove MigrationAction
+ * 3. Reprocess old-format messages in the DLQ using DlqReprocessor
  * ```
  *
- * ## 사용 예시
+ * ## Usage example
  * ```cpp
- * // OldMsg → NewMsg 변환 함수 등록
+ * // Register OldMsg → NewMsg conversion function
  * DlqReprocessor<OldMsg> reprocessor;
  * reprocessor.register_migration<NewMsg>(
- *   "v1→v2",
+ *   "v1->v2",
  *   [](OldMsg old) -> NewMsg { return NewMsg{old.id, old.value * 2}; }
  * );
  *
- * // DLQ 재처리
+ * // Reprocess DLQ
  * co_await reprocessor.reprocess(dlq, new_pipeline);
  * ```
  * @{
@@ -51,13 +51,13 @@ namespace qbuem {
 // ---------------------------------------------------------------------------
 
 /**
- * @brief 타입 마이그레이션 함수 타입.
+ * @brief Type migration function type.
  *
- * `OldT` 값을 받아 `NewT` 값을 반환하는 순수 함수입니다.
- * 실패 시 `Result<NewT>` 에러를 통해 전파합니다.
+ * A pure function that takes an `OldT` value and returns a `NewT` value.
+ * On failure, propagates via `Result<NewT>` error.
  *
- * @tparam OldT 이전 메시지 타입.
- * @tparam NewT 새 메시지 타입.
+ * @tparam OldT Previous message type.
+ * @tparam NewT New message type.
  */
 template <typename OldT, typename NewT>
 using MigrationFn = std::function<Result<NewT>(OldT)>;
@@ -67,21 +67,21 @@ using MigrationFn = std::function<Result<NewT>(OldT)>;
 // ---------------------------------------------------------------------------
 
 /**
- * @brief 파이프라인 내 인라인 타입 변환 액션.
+ * @brief Inline type conversion action within a pipeline.
  *
- * 스테이지 사이에 삽입하여 OldT → NewT 변환을 수행합니다.
- * 마이그레이션 완료 후 제거합니다.
+ * Inserted between stages to perform OldT -> NewT conversion.
+ * Remove after migration is complete.
  *
- * @tparam OldT 입력 메시지 타입 (이전 형식).
- * @tparam NewT 출력 메시지 타입 (새 형식).
+ * @tparam OldT Input message type (old format).
+ * @tparam NewT Output message type (new format).
  */
 template <typename OldT, typename NewT>
 class MigrationAction {
 public:
   /**
-   * @brief 마이그레이션 함수로 액션을 생성합니다.
-   * @param name     마이그레이션 이름 (예: "v1→v2").
-   * @param migrate  변환 함수.
+   * @brief Construct an action with a migration function.
+   * @param name     Migration name (e.g., "v1->v2").
+   * @param migrate  Conversion function.
    */
   explicit MigrationAction(std::string name, MigrationFn<OldT, NewT> migrate)
       : name_(std::move(name)), migrate_(std::move(migrate)) {}
@@ -89,9 +89,9 @@ public:
   [[nodiscard]] std::string_view name() const noexcept { return name_; }
 
   /**
-   * @brief 단일 아이템을 변환합니다.
-   * @param old_item 이전 형식 아이템.
-   * @returns 변환된 새 형식 아이템 또는 에러.
+   * @brief Convert a single item.
+   * @param old_item Item in the old format.
+   * @returns Converted item in the new format, or an error.
    */
   [[nodiscard]] Task<Result<NewT>> process(OldT old_item) {
     co_return migrate_(std::move(old_item));
@@ -107,40 +107,40 @@ private:
 // ---------------------------------------------------------------------------
 
 /**
- * @brief DLQ(Dead Letter Queue) 내 메시지 재처리기.
+ * @brief Reprocessor for messages stored in the Dead Letter Queue (DLQ).
  *
- * DLQ에 쌓인 old-format 메시지를 마이그레이션 함수로 변환하여
- * 새 파이프라인으로 재주입합니다.
+ * Converts old-format messages accumulated in the DLQ using a migration
+ * function, then re-injects them into the new pipeline.
  *
- * ### 워크플로우
+ * ### Workflow
  * ```
- * DLQ[OldT] → MigrationFn<OldT,NewT> → new pipeline.push(NewT)
+ * DLQ[OldT] -> MigrationFn<OldT,NewT> -> new pipeline.push(NewT)
  * ```
  *
- * @tparam T DLQ에 저장된 메시지 타입 (이전 형식).
+ * @tparam T Message type stored in the DLQ (old format).
  */
 template <typename T>
 class DlqReprocessor {
 public:
-  /// @brief 재처리 결과 요약.
+  /// @brief Summary of reprocessing results.
   struct ReprocessResult {
-    size_t migrated{0};   ///< 성공적으로 마이그레이션된 수
-    size_t failed{0};     ///< 마이그레이션 실패 수
-    size_t skipped{0};    ///< 대상 마이그레이션 없어서 스킵된 수
+    size_t migrated{0};   ///< Number of items successfully migrated
+    size_t failed{0};     ///< Number of migration failures
+    size_t skipped{0};    ///< Number of items skipped (no matching migration)
   };
 
   // -------------------------------------------------------------------------
-  // 마이그레이션 등록
+  // Migration registration
   // -------------------------------------------------------------------------
 
   /**
-   * @brief DLQ 재처리 시 사용할 마이그레이션 함수를 등록합니다.
+   * @brief Register a migration function to be used during DLQ reprocessing.
    *
-   * @tparam NewT   변환 목표 타입.
-   * @param  name   마이그레이션 이름 (예: "v1→v2").
-   * @param  fn     변환 함수 `T → NewT`.
-   * @param  push   변환된 아이템을 새 파이프라인에 주입하는 함수.
-   * @returns *this (체이닝 지원).
+   * @tparam NewT   Target conversion type.
+   * @param  name   Migration name (e.g., "v1->v2").
+   * @param  fn     Conversion function `T -> NewT`.
+   * @param  push   Function that injects the converted item into the new pipeline.
+   * @returns *this (supports chaining).
    */
   template <typename NewT>
   DlqReprocessor &register_migration(
@@ -161,17 +161,17 @@ public:
   }
 
   // -------------------------------------------------------------------------
-  // 재처리 실행
+  // Reprocess execution
   // -------------------------------------------------------------------------
 
   /**
-   * @brief DeadLetterQueue의 모든 항목을 재처리합니다.
+   * @brief Reprocess all entries in the DeadLetterQueue.
    *
-   * 각 아이템에 대해 등록된 마이그레이션을 첫 번째 것부터 시도합니다.
-   * 성공하면 다음 아이템으로 넘어갑니다.
+   * For each item, the registered migrations are tried starting from the first.
+   * On success, moves on to the next item.
    *
-   * @param dlq 재처리할 DeadLetterQueue<T>.
-   * @returns 재처리 결과 요약.
+   * @param dlq The DeadLetterQueue<T> to reprocess.
+   * @returns Summary of reprocessing results.
    */
   template <typename DlqT>
   [[nodiscard]] Task<ReprocessResult> reprocess(DlqT &dlq) {
@@ -189,7 +189,7 @@ public:
           break;
         }
         if (!r) {
-          // 변환 실패 — 다음 migration 시도
+          // Conversion failed — try the next migration
         }
       }
 
@@ -204,7 +204,7 @@ public:
     co_return result;
   }
 
-  /// @brief 등록된 마이그레이션 수를 반환합니다.
+  /// @brief Return the number of registered migrations.
   [[nodiscard]] size_t migration_count() const noexcept { return entries_.size(); }
 
 private:

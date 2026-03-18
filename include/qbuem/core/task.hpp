@@ -2,13 +2,14 @@
 
 /**
  * @file qbuem/core/task.hpp
- * @brief C++20 코루틴 Task 타입 — 대칭 전송(symmetric transfer) 지원
+ * @brief C++20 coroutine Task type — symmetric transfer support
  * @defgroup qbuem_task Task Coroutine
  * @ingroup qbuem_core
  *
- * Task<T>는 단일-연속(single-continuation) 코루틴 타입.
- * co_await로 중단/재개, detach()로 fire-and-forget 지원.
- * 수명 규칙: Task 소멸자가 프레임 파괴, detach() 후에는 자기 파괴.
+ * Task<T> is a single-continuation coroutine type.
+ * Supports suspend/resume via co_await, and fire-and-forget via detach().
+ * Lifetime rules: the Task destructor destroys the frame; after detach() the
+ * frame is self-managing.
  * @{
  */
 
@@ -21,22 +22,24 @@
 namespace qbuem {
 
 /**
- * @brief 코루틴 미처리 예외 전역 핸들러.
+ * @brief Global handler for unhandled coroutine exceptions.
  *
- * 기본값: nullptr (std::terminate() 호출).
- * `set_unhandled_exception_handler()`로 변경하면 terminate 대신 핸들러를 호출합니다.
+ * Default: nullptr (calls std::terminate()).
+ * Set via `set_unhandled_exception_handler()` to invoke the handler instead
+ * of terminating.
  *
- * ### 스레드 안전성
- * 애플리케이션 시작 시 한 번만 설정하세요. 핸들러 교체는 스레드 안전하지 않습니다.
+ * ### Thread Safety
+ * Set this once at application startup. Replacing the handler is not thread-safe.
  */
 inline std::function<void(std::exception_ptr)> g_unhandled_exception_handler;
 
 /**
- * @brief 코루틴 미처리 예외 핸들러를 설정합니다.
+ * @brief Set the global handler for unhandled coroutine exceptions.
  *
- * @param handler 예외를 받을 함수. nullptr이면 std::terminate()로 복귀.
+ * @param handler Function to receive the exception. Pass nullptr to revert
+ *                to std::terminate() behavior.
  *
- * 예시:
+ * Example:
  * @code
  * qbuem::set_unhandled_exception_handler([](std::exception_ptr ep) {
  *   try { std::rethrow_exception(ep); }

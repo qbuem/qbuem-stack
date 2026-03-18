@@ -2,23 +2,24 @@
 
 /**
  * @file qbuem/io/async_file.hpp
- * @brief 비동기 파일 I/O — pread/pwrite 기반 코루틴 래퍼.
+ * @brief Asynchronous file I/O — coroutine wrapper based on pread/pwrite.
  * @ingroup qbuem_io_buffers
  *
- * `AsyncFile`은 파일 디스크립터를 RAII로 관리하며
- * `read_at()` / `write_at()` 을 코루틴 Task로 제공합니다.
+ * `AsyncFile` manages a file descriptor with RAII and exposes
+ * `read_at()` / `write_at()` as coroutine Tasks.
  *
- * ### 현재 구현
- * - `open()`: 일반 파일 open(2), O_NONBLOCK 설정
- * - `read_at()`: `pread(2)` — 오프셋 기반 읽기, 파일 위치 포인터 불변
- * - `write_at()`: `pwrite(2)` — 오프셋 기반 쓰기, 파일 위치 포인터 불변
+ * ### Current implementation
+ * - `open()`: standard file open(2), sets O_NONBLOCK
+ * - `read_at()`: `pread(2)` — offset-based read, file position pointer unchanged
+ * - `write_at()`: `pwrite(2)` — offset-based write, file position pointer unchanged
  *
- * ### 미래 확장
- * - io_uring IORING_OP_READ / IORING_OP_WRITE로 교체 가능
- * - `io_uring_reactor`가 활성화된 환경에서는 zero-syscall-overhead 경로 사용
+ * ### Future extensions
+ * - Replaceable with io_uring IORING_OP_READ / IORING_OP_WRITE
+ * - When `io_uring_reactor` is active, uses the zero-syscall-overhead path
  *
- * @note 현재 pread/pwrite는 블로킹 syscall입니다.
- *       고성능 환경에서는 io_uring 구현체 또는 스레드 풀 오프로드를 권장합니다.
+ * @note Currently pread/pwrite are blocking syscalls.
+ *       For high-performance environments, an io_uring implementation or
+ *       thread-pool offload is recommended.
  * @{
  */
 
@@ -36,34 +37,34 @@
 namespace qbuem {
 
 /**
- * @brief 비동기 파일 I/O 래퍼.
+ * @brief Asynchronous file I/O wrapper.
  *
- * 파일 디스크립터를 RAII로 소유하며 `pread`/`pwrite` 기반의
- * 코루틴 인터페이스를 제공합니다.
- * Move-only 타입이며 소멸 시 파일이 자동으로 닫힙니다.
+ * Owns a file descriptor with RAII and provides a coroutine interface
+ * based on `pread`/`pwrite`.
+ * Move-only type; the file is closed automatically upon destruction.
  *
- * ### 사용 예시
+ * ### Usage example
  * @code
  * auto file = co_await AsyncFile::open("data.bin", O_RDONLY);
- * if (!file) { // 에러 처리 }
+ * if (!file) { // error handling }
  *
  * std::array<std::byte, 512> buf{};
  * auto n = co_await file->read_at(buf, 0);
- * if (!n) { // 에러 처리 }
+ * if (!n) { // error handling }
  * @endcode
  */
 class AsyncFile {
 public:
-  /** @brief 유효하지 않은 fd로 초기화. */
+  /** @brief Initializes with an invalid fd. */
   AsyncFile() noexcept : fd_(-1) {}
 
   /**
-   * @brief 기존 fd로 AsyncFile을 구성합니다.
-   * @param fd 열려 있는 파일 디스크립터.
+   * @brief Constructs an AsyncFile from an existing fd.
+   * @param fd An open file descriptor.
    */
   explicit AsyncFile(int fd) noexcept : fd_(fd) {}
 
-  /** @brief 소멸자: 열려 있는 파일을 자동으로 닫습니다. */
+  /** @brief Destructor: automatically closes the open file. */
   ~AsyncFile() {
     if (fd_ >= 0)
       ::close(fd_);

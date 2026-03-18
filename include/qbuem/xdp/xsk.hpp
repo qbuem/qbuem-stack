@@ -2,21 +2,21 @@
 
 /**
  * @file qbuem/xdp/xsk.hpp
- * @brief AF_XDP 소켓 (XSK) 추상화 — zero-copy 패킷 송수신.
+ * @brief AF_XDP socket (XSK) abstraction — zero-copy packet send/receive.
  * @ingroup qbuem_xdp
  *
- * `XskSocket`은 AF_XDP 소켓을 감싸는 RAII 래퍼입니다.
- * UMEM과 결합하여 NIC ↔ 유저스페이스 간 커널 네트워크 스택을 완전히 우회하는
- * 제로 카피 패킷 I/O를 제공합니다.
+ * `XskSocket` is a RAII wrapper around an AF_XDP socket.
+ * Combined with UMEM, it provides zero-copy packet I/O that completely bypasses
+ * the kernel network stack between NIC and user space.
  *
- * ### 전제 조건
+ * ### Prerequisites
  * - Linux 4.18+ (`AF_XDP`)
- * - Linux 5.4+ (`XSK_LIBBPF_FLAGS__INHIBIT_PROG_LOAD` 없이도 동작)
- * - libbpf 활성화: `cmake -DQBUEM_XDP_LIBBPF=ON ..`
- * - CAP_NET_ADMIN 또는 루트 권한
- * - NIC 드라이버의 XDP 지원 (native mode: i40e, mlx5, ixgbe 등)
+ * - Linux 5.4+ (works without `XSK_LIBBPF_FLAGS__INHIBIT_PROG_LOAD`)
+ * - libbpf enabled: `cmake -DQBUEM_XDP_LIBBPF=ON ..`
+ * - CAP_NET_ADMIN or root privileges
+ * - XDP support in the NIC driver (native mode: i40e, mlx5, ixgbe, etc.)
  *
- * ### 동작 방식
+ * ### How it works
  * ```
  *  NIC (native XDP)
  *      │ zero-copy DMA
@@ -27,24 +27,24 @@
  *  │  XskSocket               │
  *  │  Rx Ring → recv()        │
  *  │  Tx Ring ← send()        │
- *  │  Fill Ring → 커널에 빈 프레임 공급
- *  │  Completion Ring ← TX 완료
+ *  │  Fill Ring → supply empty frames to kernel
+ *  │  Completion Ring ← TX complete
  *  └──────────────────────────┘
  * ```
  *
- * ### 사용 예시
+ * ### Usage example
  * @code
- * // 1. UMEM 생성
+ * // 1. Create UMEM
  * auto umem = qbuem::xdp::Umem::create({.frame_count = 4096});
  *
- * // 2. XSK 소켓 생성
+ * // 2. Create XSK socket
  * auto xsk = qbuem::xdp::XskSocket::create("eth0", 0, *umem, {});
- * if (!xsk) { /* 에러 처리 */ }
+ * if (!xsk) { /* handle error */ }
  *
- * // 3. Fill Ring 준비
+ * // 3. Prepare Fill Ring
  * umem->fill_frames(2048);
  *
- * // 4. 수신 루프
+ * // 4. Receive loop
  * while (true) {
  *     qbuem::xdp::UmemFrame frames[64];
  *     uint32_t n = xsk->recv(frames, 64);
@@ -52,7 +52,7 @@
  *         auto* pkt = umem->data(frames[i]);
  *         process_packet(pkt, frames[i].len);
  *     }
- *     umem->fill_frames(n); // 소비한 만큼 재공급
+ *     umem->fill_frames(n); // replenish consumed frames
  * }
  * @endcode
  *
@@ -81,45 +81,45 @@ namespace qbuem::xdp {
 // ─── XskConfig ────────────────────────────────────────────────────────────
 
 /**
- * @brief XSK 소켓 생성 설정.
+ * @brief XSK socket creation configuration.
  */
 struct XskConfig {
-    /** @brief Rx Ring 크기 (2^n). */
+    /** @brief Rx Ring size (2^n). */
     uint32_t rx_size = kDefaultRingSize;
 
-    /** @brief Tx Ring 크기 (2^n). */
+    /** @brief Tx Ring size (2^n). */
     uint32_t tx_size = kDefaultRingSize;
 
-    /** @brief XDP 로드 모드. */
+    /** @brief XDP load mode. */
     enum class Mode : uint8_t {
-        Native  = 0, ///< Native mode (NIC 드라이버 내 XDP hook, 최고 성능)
-        Skb     = 1, ///< SKB mode (generic fallback, 모든 NIC 지원)
-        Offload = 2, ///< Offload mode (NIC 하드웨어에서 XDP 실행)
+        Native  = 0, ///< Native mode (XDP hook inside NIC driver, highest performance)
+        Skb     = 1, ///< SKB mode (generic fallback, supported by all NICs)
+        Offload = 2, ///< Offload mode (XDP executed on NIC hardware)
     } mode = Mode::Native;
 
-    /** @brief NEED_WAKEUP 플래그 사용 (Linux 5.3+, 불필요한 syscall 감소). */
+    /** @brief Use NEED_WAKEUP flag (Linux 5.3+, reduces unnecessary syscalls). */
     bool need_wakeup = true;
 
-    /** @brief Zero-copy 모드 강제 활성화 (Native mode + 드라이버 지원 필수). */
+    /** @brief Force zero-copy mode (requires Native mode + driver support). */
     bool force_zerocopy = false;
 
-    /** @brief Shared UMEM (동일 UMEM을 여러 큐에서 공유). */
+    /** @brief Shared UMEM (share the same UMEM across multiple queues). */
     bool shared_umem = false;
 };
 
 // ─── XskSocket ────────────────────────────────────────────────────────────
 
 /**
- * @brief AF_XDP 소켓 — 커널 네트워크 스택 우회 zero-copy I/O.
+ * @brief AF_XDP socket — zero-copy I/O bypassing the kernel network stack.
  *
- * Move-only RAII 래퍼. 소멸 시 소켓과 XDP 프로그램이 자동으로 해제됩니다.
+ * Move-only RAII wrapper. The socket and XDP program are automatically released on destruction.
  *
- * ### 성능 특성
- * | 모드              | 대역폭       | CPU 사용률 | 비고                    |
- * |-------------------|-------------|-----------|-------------------------|
- * | Native XDP        | ~100 Gbps   | 매우 낮음  | 드라이버 지원 필수       |
- * | SKB (generic)     | ~20 Gbps    | 낮음       | 모든 NIC 동작            |
- * | Offload           | 선 속도      | ~0%        | 일부 SmartNIC 전용       |
+ * ### Performance characteristics
+ * | Mode              | Bandwidth    | CPU usage  | Notes                      |
+ * |-------------------|-------------|-----------|----------------------------|
+ * | Native XDP        | ~100 Gbps   | Very low   | Requires driver support    |
+ * | SKB (generic)     | ~20 Gbps    | Low        | Works on all NICs          |
+ * | Offload           | Line rate   | ~0%        | Select SmartNICs only      |
  */
 class XskSocket {
 public:
@@ -144,16 +144,16 @@ public:
 
     ~XskSocket() { destroy(); }
 
-    // ── 팩토리 ──────────────────────────────────────────────────────────
+    // ── Factory ──────────────────────────────────────────────────────────
 
     /**
-     * @brief XSK 소켓을 생성하고 인터페이스/큐에 바인딩합니다.
+     * @brief Creates an XSK socket and binds it to an interface/queue.
      *
-     * @param ifname   네트워크 인터페이스 이름 (예: "eth0").
-     * @param queue_id NIC 수신 큐 번호 (0부터 시작). 멀티큐: 큐당 1개 소켓.
-     * @param umem     연결할 UMEM 인스턴스 (참조, 수명 관리 사용자 책임).
-     * @param cfg      소켓 설정.
-     * @returns 성공 시 XskSocket, 실패 시 error_code.
+     * @param ifname   Network interface name (e.g. "eth0").
+     * @param queue_id NIC receive queue number (0-based). Multi-queue: one socket per queue.
+     * @param umem     UMEM instance to attach (reference; lifetime managed by caller).
+     * @param cfg      Socket configuration.
+     * @returns XskSocket on success, error_code on failure.
      */
     static Result<XskSocket> create(std::string_view ifname,
                                     uint32_t         queue_id,
@@ -181,7 +181,7 @@ public:
         if (cfg.force_zerocopy) {
             xsk_cfg.bind_flags = XDP_ZEROCOPY;
         } else {
-            xsk_cfg.bind_flags = XDP_COPY; // 폴백 허용
+            xsk_cfg.bind_flags = XDP_COPY; // allow copy fallback
         }
         if (cfg.need_wakeup) {
             xsk_cfg.bind_flags |= XDP_USE_NEED_WAKEUP;
@@ -215,17 +215,17 @@ public:
 #endif
     }
 
-    // ── 수신 ────────────────────────────────────────────────────────────
+    // ── Receive ──────────────────────────────────────────────────────────
 
     /**
-     * @brief Rx Ring에서 패킷을 최대 `max_n`개 폴링합니다 (non-blocking).
+     * @brief Polls up to `max_n` packets from the Rx Ring (non-blocking).
      *
-     * `recv()` 후 소비한 프레임 수만큼 `Umem::fill_frames()`를 호출해
-     * Fill Ring을 보충해야 합니다.
+     * After `recv()`, `Umem::fill_frames()` must be called with the number
+     * of consumed frames to replenish the Fill Ring.
      *
-     * @param[out] frames  수신된 프레임 정보 배열.
-     * @param      max_n   최대 수신 개수.
-     * @returns 실제로 수신한 프레임 수.
+     * @param[out] frames  Array to store received frame information.
+     * @param      max_n   Maximum number of frames to receive.
+     * @returns Actual number of frames received.
      */
     uint32_t recv(UmemFrame* frames, uint32_t max_n) noexcept {
 #ifdef QBUEM_XDP_LIBBPF
@@ -245,14 +245,14 @@ public:
 #endif
     }
 
-    // ── 송신 ────────────────────────────────────────────────────────────
+    // ── Transmit ─────────────────────────────────────────────────────────
 
     /**
-     * @brief Tx Ring에 `n`개 프레임을 큐잉하고 커널에 전송을 요청합니다.
+     * @brief Queues `n` frames into the Tx Ring and requests transmission from the kernel.
      *
-     * @param frames  전송할 프레임 배열 (addr + len 설정 필수).
-     * @param n       전송할 프레임 수.
-     * @returns 실제로 큐잉된 프레임 수. Tx Ring 포화 시 n보다 적을 수 있음.
+     * @param frames  Array of frames to transmit (addr + len must be set).
+     * @param n       Number of frames to transmit.
+     * @returns Actual number of frames queued. May be less than n if the Tx Ring is full.
      */
     uint32_t send(const UmemFrame* frames, uint32_t n) noexcept {
 #ifdef QBUEM_XDP_LIBBPF
@@ -266,7 +266,7 @@ public:
         }
         xsk_ring_prod__submit(&tx_, reserved);
 
-        // NEED_WAKEUP: 커널 wakeup 필요 시에만 sendto() 호출
+        // NEED_WAKEUP: call sendto() only when kernel wakeup is needed
         if (xsk_ring_prod__needs_wakeup(&tx_)) {
             ::sendto(fd_, nullptr, 0, MSG_DONTWAIT, nullptr, 0);
         }
@@ -277,34 +277,34 @@ public:
 #endif
     }
 
-    // ── 팩토리 (런타임 감지) ──────────────────────────────────────────
+    // ── Runtime detection factory ─────────────────────────────────────
 
     /**
-     * @brief 이 커널/플랫폼에서 AF_XDP가 지원되는지 런타임에 감지합니다.
+     * @brief Detects at runtime whether AF_XDP is supported on this kernel/platform.
      *
-     * `socket(AF_XDP, SOCK_RAW, 0)`을 시험 생성하여 지원 여부를 확인합니다.
-     * 소켓은 즉시 닫힙니다 (부작용 없음).
+     * Probes by attempting to create `socket(AF_XDP, SOCK_RAW, 0)`.
+     * The socket is closed immediately (no side effects).
      *
-     * ### 반환값
-     * - `true`  : AF_XDP 소켓 생성 가능 (Linux 4.18+, AF_XDP 활성화)
-     * - `false` : 미지원 커널, 빌드 플래그 누락, 또는 권한 부족
+     * ### Return value
+     * - `true`  : AF_XDP socket can be created (Linux 4.18+, AF_XDP enabled)
+     * - `false` : Unsupported kernel, missing build flag, or insufficient privileges
      *
      * @code
      * if (!qbuem::xdp::XskSocket::is_supported()) {
-     *     // AF_XDP 미지원 — UdpSocket 폴백 사용
+     *     // AF_XDP not supported — use UdpSocket fallback
      * }
      * @endcode
      */
     [[nodiscard]] static bool is_supported() noexcept {
 #ifdef QBUEM_HAS_XDP
 #  ifdef QBUEM_XDP_LIBBPF
-      // libbpf 빌드: AF_XDP 소켓 직접 감지
+      // libbpf build: detect AF_XDP socket directly
       int fd = ::socket(AF_XDP, SOCK_RAW, 0);
       if (fd < 0) return false;
       ::close(fd);
       return true;
 #  else
-      // 스텁 빌드: libbpf 없이 컴파일됐으므로 런타임 지원 불가
+      // stub build: compiled without libbpf, runtime support unavailable
       return false;
 #  endif
 #else
@@ -312,12 +312,12 @@ public:
 #endif
     }
 
-    // ── 접근자 ──────────────────────────────────────────────────────────
+    // ── Accessors ────────────────────────────────────────────────────────
 
-    /** @brief 소켓 파일 디스크립터. epoll 등록에 사용. */
+    /** @brief Socket file descriptor. Used for epoll registration. */
     [[nodiscard]] int fd() const noexcept { return fd_; }
 
-    /** @brief 소켓이 유효한지 확인. */
+    /** @brief Check whether the socket is valid. */
     [[nodiscard]] bool is_valid() const noexcept { return fd_ >= 0; }
 
 private:

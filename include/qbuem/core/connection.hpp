@@ -2,12 +2,13 @@
 
 /**
  * @file qbuem/core/connection.hpp
- * @brief 단일 TCP 클라이언트 연결을 나타내는 RAII 클래스
+ * @brief RAII class representing a single TCP client connection
  * @defgroup qbuem_connection Connection
  * @ingroup qbuem_core
  *
- * Connection은 fd와 Reactor를 소유하며, 소멸 시 이벤트 해제 및 close(fd) 수행.
- * 연결당 Arena를 내장하여 요청 처리 동안 zero-heap 할당을 지원.
+ * Connection owns a fd and a Reactor, and on destruction unregisters events
+ * and calls close(fd). Embeds a per-connection Arena to support zero-heap
+ * allocation during request processing.
  * @{
  */
 

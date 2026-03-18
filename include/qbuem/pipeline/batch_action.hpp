@@ -2,21 +2,21 @@
 
 /**
  * @file qbuem/pipeline/batch_action.hpp
- * @brief 배치 처리 액션 — BatchAction<In, Out>
+ * @brief Batch processing action — BatchAction<In, Out>
  * @defgroup qbuem_batch_action BatchAction
  * @ingroup qbuem_pipeline
  *
- * BatchAction은 최대 N개 아이템을 한 번에 모아 배치로 처리하는 파이프라인 단계입니다.
- * 워커는 `max_batch_size`에 도달하거나 `max_wait_ms` 타임아웃이 만료될 때까지
- * 아이템을 수집한 뒤 처리 함수를 호출합니다.
+ * BatchAction is a pipeline stage that collects up to N items at a time and processes them as a batch.
+ * Workers accumulate items until `max_batch_size` is reached or the `max_wait_ms` timeout expires,
+ * then invoke the processing function.
  *
- * ## 함수 서명
+ * ## Function signature
  * ```cpp
  * Task<Result<std::vector<Out>>>(std::vector<In> batch, ActionEnv env)
  * ```
  *
- * ## 컨텍스트 전파
- * 출력 아이템 각각에는 배치의 **첫 번째** 아이템 컨텍스트가 부여됩니다.
+ * ## Context propagation
+ * Each output item is assigned the context of the **first** item in the batch.
  *
  * @{
  */
@@ -40,36 +40,36 @@
 namespace qbuem {
 
 /**
- * @brief 배치 처리 액션 — 최대 N개씩 묶어 처리 함수 호출.
+ * @brief Batch processing action — calls the processing function with up to N items at a time.
  *
- * @tparam In  입력 아이템 타입.
- * @tparam Out 출력 아이템 타입.
+ * @tparam In  Input item type.
+ * @tparam Out Output item type.
  */
 template <typename In, typename Out>
 class BatchAction {
 public:
-  /** @brief 정규화된 배치 처리 함수 타입. */
+  /** @brief Normalized batch processing function type. */
   using Fn = std::function<Task<Result<std::vector<Out>>>(std::vector<In>, ActionEnv)>;
 
   /**
-   * @brief BatchAction 설정 구조체.
+   * @brief BatchAction configuration struct.
    */
   struct Config {
-    size_t max_batch_size = 64;    ///< 배치 최대 크기
-    size_t max_wait_ms    = 10;    ///< 배치 수집 최대 대기 시간 (ms)
-    size_t workers        = 1;     ///< 워커 수
-    size_t channel_cap    = 1024;  ///< 입력 채널 용량
-    ServiceRegistry* registry = nullptr; ///< 파이프라인 ServiceRegistry
+    size_t max_batch_size = 64;    ///< Maximum batch size
+    size_t max_wait_ms    = 10;    ///< Maximum wait time for batch collection (ms)
+    size_t workers        = 1;     ///< Number of workers
+    size_t channel_cap    = 1024;  ///< Input channel capacity
+    ServiceRegistry* registry = nullptr; ///< Pipeline ServiceRegistry
   };
 
   /**
-   * @brief BatchAction을 생성합니다.
+   * @brief Creates a BatchAction.
    *
-   * 처리 함수 서명: `Task<Result<std::vector<Out>>>(std::vector<In>, ActionEnv)`
+   * Processing function signature: `Task<Result<std::vector<Out>>>(std::vector<In>, ActionEnv)`
    *
-   * @tparam FnT 처리 함수 타입.
-   * @param fn   배치 처리 함수.
-   * @param cfg  설정.
+   * @tparam FnT Processing function type.
+   * @param fn   Batch processing function.
+   * @param cfg  Configuration.
    */
   template <typename FnT>
     requires requires(FnT f, std::vector<In> v, ActionEnv e) {
@@ -86,14 +86,14 @@ public:
   BatchAction& operator=(BatchAction&&) = default;
 
   // -------------------------------------------------------------------------
-  // 아이템 전송
+  // Item submission
   // -------------------------------------------------------------------------
 
   /**
-   * @brief 아이템을 입력 채널에 넣습니다 (backpressure).
+   * @brief Pushes an item into the input channel (backpressure).
    *
-   * @param item 처리할 아이템.
-   * @param ctx  아이템 컨텍스트.
+   * @param item Item to process.
+   * @param ctx  Item context.
    */
   Task<Result<void>> push(In item, Context ctx = {}) {
     co_return co_await in_channel_->send(
@@ -101,9 +101,9 @@ public:
   }
 
   /**
-   * @brief 아이템을 논블로킹으로 넣으려 시도합니다.
+   * @brief Attempts to push an item non-blocking.
    *
-   * @returns 성공 시 true, 채널 포화 시 false.
+   * @returns true on success, false if the channel is full.
    */
   bool try_push(In item, Context ctx = {}) {
     return in_channel_->try_send(
@@ -111,14 +111,14 @@ public:
   }
 
   // -------------------------------------------------------------------------
-  // 라이프사이클
+  // Lifecycle
   // -------------------------------------------------------------------------
 
   /**
-   * @brief BatchAction을 시작합니다 — 워커 코루틴을 Dispatcher에 spawn.
+   * @brief Starts the BatchAction — spawns worker coroutines on the Dispatcher.
    *
-   * @param dispatcher 코루틴을 실행할 Dispatcher.
-   * @param out        출력 채널 (nullptr이면 결과를 버림).
+   * @param dispatcher Dispatcher to run coroutines on.
+   * @param out        Output channel (results are discarded if nullptr).
    */
   void start(Dispatcher& dispatcher,
              std::shared_ptr<AsyncChannel<ContextualItem<Out>>> out = nullptr) {
@@ -132,9 +132,9 @@ public:
   }
 
   /**
-   * @brief 입력 채널을 닫고 모든 워커가 완료될 때까지 기다립니다.
+   * @brief Closes the input channel and waits until all workers have completed.
    *
-   * drain() 후 출력 채널도 자동으로 닫힙니다.
+   * The output channel is automatically closed after drain() returns.
    */
   Task<void> drain() {
     in_channel_->close();
@@ -157,7 +157,7 @@ public:
   }
 
   /**
-   * @brief BatchAction을 즉시 정지합니다 (취소 신호 전송).
+   * @brief Stops the BatchAction immediately (sends a cancellation signal).
    */
   void stop() {
     if (stop_src_) stop_src_->request_stop();
@@ -165,14 +165,14 @@ public:
   }
 
   /**
-   * @brief 출력 채널을 반환합니다.
+   * @brief Returns the output channel.
    */
   [[nodiscard]] std::shared_ptr<AsyncChannel<ContextualItem<Out>>> output() const {
     return out_channel_;
   }
 
   /**
-   * @brief 입력 채널을 반환합니다.
+   * @brief Returns the input channel.
    */
   [[nodiscard]] std::shared_ptr<AsyncChannel<ContextualItem<In>>> input() const {
     return in_channel_;
@@ -184,12 +184,12 @@ private:
   // -------------------------------------------------------------------------
 
   /**
-   * @brief 배치 수집 및 처리 워커 루프.
+   * @brief Batch collection and processing worker loop.
    *
-   * 배치 수집 전략:
-   * 1. 블로킹 recv()로 첫 번째 아이템 대기 (EOS이면 종료).
-   * 2. deadline(max_wait_ms) 이내에 try_recv()로 추가 아이템 수집.
-   * 3. max_batch_size 충족 또는 deadline 도달 시 즉시 처리.
+   * Batch collection strategy:
+   * 1. Wait for the first item via blocking recv() (exit on EOS).
+   * 2. Collect additional items via try_recv() within deadline(max_wait_ms).
+   * 3. Process immediately when max_batch_size is reached or deadline expires.
    */
   Task<void> worker_loop(size_t worker_idx) {
     auto stop_token = stop_src_ ? stop_src_->get_token() : std::stop_token{};
@@ -197,16 +197,16 @@ private:
     for (;;) {
       if (stop_token.stop_requested()) break;
 
-      // --- 배치 수집 ---
+      // --- Collect batch ---
       std::vector<ContextualItem<In>> batch_items;
       batch_items.reserve(cfg_.max_batch_size);
 
-      // 첫 번째 아이템: 블로킹 recv로 대기 (EOS 감지)
+      // First item: wait via blocking recv (detects EOS)
       auto first = co_await in_channel_->recv();
       if (!first) break; // EOS
       batch_items.push_back(std::move(*first));
 
-      // 나머지: max_wait_ms 이내 논블로킹 수집
+      // Remaining items: collect non-blocking within max_wait_ms
       auto deadline = std::chrono::steady_clock::now() +
                       std::chrono::milliseconds(cfg_.max_wait_ms);
 
@@ -217,13 +217,13 @@ private:
           continue;
         }
 
-        // 채널 닫힘 → 현재까지 수집된 배치로 처리
+        // Channel closed — process what has been collected so far
         if (in_channel_->is_closed()) break;
 
-        // 타임아웃 → 즉시 처리
+        // Timeout — process immediately
         if (std::chrono::steady_clock::now() >= deadline) break;
 
-        // Reactor에 제어권 반환: 다른 코루틴이 아이템을 생산할 기회
+        // Yield control to the reactor: give other coroutines a chance to produce items
         struct Yield {
           bool await_ready() noexcept { return false; }
           void await_suspend(std::coroutine_handle<> h) noexcept {
@@ -239,14 +239,14 @@ private:
         if (std::chrono::steady_clock::now() >= deadline) break;
       }
 
-      // --- 배치 분리: 값 벡터 + 첫 번째 컨텍스트 ---
+      // --- Split batch: value vector + first context ---
       Context first_ctx = batch_items.front().ctx;
       std::vector<In> values;
       values.reserve(batch_items.size());
       for (auto& ci : batch_items)
         values.push_back(std::move(ci.value));
 
-      // --- ActionEnv 구성 ---
+      // --- Build ActionEnv ---
       ActionEnv env{
           .ctx        = first_ctx,
           .stop       = stop_token,
@@ -254,20 +254,20 @@ private:
           .registry   = cfg_.registry ? cfg_.registry : &global_registry(),
       };
 
-      // --- 처리 함수 호출 ---
+      // --- Invoke processing function ---
       auto result = co_await fn_(std::move(values), env);
 
-      // --- 결과를 출력 채널에 전달 ---
-      // 모든 출력 아이템에 첫 번째 입력 아이템의 컨텍스트를 부여
+      // --- Forward results to the output channel ---
+      // Assign the context of the first input item to all output items
       if (result.has_value() && out_channel_) {
         for (auto& out_item : *result) {
           auto send_r = co_await out_channel_->send(
               ContextualItem<Out>{std::move(out_item), first_ctx});
           if (!send_r.has_value())
-            break; // 채널 닫힘 — 전송 중단
+            break; // Channel closed — stop sending
         }
       }
-      // 에러 시 배치 드롭 (DLQ는 미래 버전에서 지원 예정)
+      // On error the batch is dropped (DLQ support planned for a future version)
     }
 
     size_t remaining = worker_count_.fetch_sub(1, std::memory_order_acq_rel) - 1;

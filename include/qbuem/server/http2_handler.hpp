@@ -2,23 +2,23 @@
 
 /**
  * @file qbuem/server/http2_handler.hpp
- * @brief HTTP/2 연결 핸들러 — 프레임 처리, HPACK, 스트림 상태 관리
+ * @brief HTTP/2 connection handler — frame processing, HPACK, stream state management
  * @defgroup qbuem_http2_handler HTTP/2 Handler
  * @ingroup qbuem_server
  *
- * 이 헤더는 HTTP/2 프로토콜의 핵심 연결 관리를 헤더-온리로 구현합니다.
+ * This header implements the core connection management of the HTTP/2 protocol as a header-only library.
  *
- * ### 주요 기능
- * - **HTTP/2 프레임 파싱/직렬화**: DATA, HEADERS, SETTINGS, PING, GOAWAY 등
- * - **HPACK 디코더/인코더**: 정적 테이블(Static Table) 기반 헤더 압축 (RFC 7541)
- * - **스트림 상태 머신**: IDLE → OPEN → HALF_CLOSED → CLOSED 전이 관리
- * - **연결 프리페이스**: TLS 핸드셰이크 후 "h2" ALPN 협상 시 사용
- * - **코루틴 기반 비동기 처리**: C++20 Task<> 및 co_return 사용
+ * ### Key Features
+ * - **HTTP/2 frame parsing/serialization**: DATA, HEADERS, SETTINGS, PING, GOAWAY, etc.
+ * - **HPACK decoder/encoder**: Header compression based on Static Table (RFC 7541)
+ * - **Stream state machine**: IDLE → OPEN → HALF_CLOSED → CLOSED transition management
+ * - **Connection preface**: Used after TLS handshake when "h2" ALPN negotiation succeeds
+ * - **Coroutine-based async processing**: Uses C++20 Task<> and co_return
  *
- * ### 제한 사항 (최소 구현)
- * - HPACK 동적 테이블 미지원 (정적 테이블 62개 항목 + 리터럴 인코딩만 지원)
- * - PRIORITY, PUSH_PROMISE 프레임은 수신 시 무시
- * - 흐름 제어 (Flow Control) 미구현
+ * ### Limitations (minimal implementation)
+ * - HPACK dynamic table not supported (only static table 62 entries + literal encoding)
+ * - PRIORITY and PUSH_PROMISE frames are silently ignored on receipt
+ * - Flow Control not implemented
  *
  * @{
  */
@@ -44,29 +44,29 @@ namespace qbuem {
 // ─── Http2FrameType ───────────────────────────────────────────────────────────
 
 /**
- * @brief HTTP/2 프레임 타입 열거형 (RFC 7540 섹션 6).
+ * @brief HTTP/2 frame type enumeration (RFC 7540 section 6).
  *
- * 각 값은 HTTP/2 프레임 헤더의 `Type` 필드(1바이트)에 해당합니다.
+ * Each value corresponds to the `Type` field (1 byte) of an HTTP/2 frame header.
  */
 enum class Http2FrameType : uint8_t {
-    DATA          = 0x0, ///< 스트림 데이터 전달 프레임
-    HEADERS       = 0x1, ///< 헤더 블록 + 스트림 우선순위 프레임
-    PRIORITY      = 0x2, ///< 스트림 우선순위 지정 프레임
-    RST_STREAM    = 0x3, ///< 스트림 강제 종료 프레임
-    SETTINGS      = 0x4, ///< 연결 설정 파라미터 교환 프레임
-    PUSH_PROMISE  = 0x5, ///< 서버 푸시 예고 프레임
-    PING          = 0x6, ///< 연결 생존 확인 및 RTT 측정 프레임
-    GOAWAY        = 0x7, ///< 연결 종료 통보 프레임
-    WINDOW_UPDATE = 0x8, ///< 흐름 제어 윈도우 크기 갱신 프레임
-    CONTINUATION  = 0x9, ///< HEADERS/PUSH_PROMISE 연속 블록 프레임
+    DATA          = 0x0, ///< Stream data delivery frame
+    HEADERS       = 0x1, ///< Header block + stream priority frame
+    PRIORITY      = 0x2, ///< Stream priority assignment frame
+    RST_STREAM    = 0x3, ///< Stream forced termination frame
+    SETTINGS      = 0x4, ///< Connection settings parameter exchange frame
+    PUSH_PROMISE  = 0x5, ///< Server push announcement frame
+    PING          = 0x6, ///< Connection liveness check and RTT measurement frame
+    GOAWAY        = 0x7, ///< Connection termination notification frame
+    WINDOW_UPDATE = 0x8, ///< Flow control window size update frame
+    CONTINUATION  = 0x9, ///< HEADERS/PUSH_PROMISE continuation block frame
 };
 
 // ─── Http2Frame ───────────────────────────────────────────────────────────────
 
 /**
- * @brief HTTP/2 단일 프레임을 표현하는 구조체.
+ * @brief Structure representing a single HTTP/2 frame.
  *
- * RFC 7540 섹션 4.1에 정의된 프레임 포맷을 반영합니다.
+ * Reflects the frame format defined in RFC 7540 section 4.1.
  *
  * ```
  * +-----------------------------------------------+
@@ -80,15 +80,15 @@ enum class Http2FrameType : uint8_t {
  * +---------------------------------------------------------------+
  * ```
  *
- * @note `length` 필드는 24비트이지만 uint32_t로 저장합니다 (상위 8비트 무시).
- * @note `stream_id`는 31비트 (MSB는 예약 비트, 항상 0).
+ * @note The `length` field is 24-bit but stored as uint32_t (upper 8 bits ignored).
+ * @note `stream_id` is 31-bit (MSB is reserved bit, always 0).
  */
 struct Http2Frame {
-    uint32_t              length{0};    ///< 페이로드 바이트 수 (24비트 유효값)
-    Http2FrameType        type{Http2FrameType::DATA}; ///< 프레임 타입
-    uint8_t               flags{0};     ///< 타입별 플래그 비트필드
-    uint32_t              stream_id{0}; ///< 스트림 식별자 (31비트, MSB 예약)
-    std::vector<uint8_t>  payload;      ///< 프레임 페이로드 바이트열
+    uint32_t              length{0};    ///< Payload byte count (24-bit valid value)
+    Http2FrameType        type{Http2FrameType::DATA}; ///< Frame type
+    uint8_t               flags{0};     ///< Type-specific flag bitfield
+    uint32_t              stream_id{0}; ///< Stream identifier (31-bit, MSB reserved)
+    std::vector<uint8_t>  payload;      ///< Frame payload bytes
 };
 
 // ─── HPACK 정적 테이블 플래그 상수 ─────────────────────────────────────────

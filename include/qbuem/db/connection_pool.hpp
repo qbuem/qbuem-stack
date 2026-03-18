@@ -2,32 +2,32 @@
 
 /**
  * @file qbuem/db/connection_pool.hpp
- * @brief LockFreeConnectionPool — O(1) lock-free 연결 풀 구현.
+ * @brief LockFreeConnectionPool — O(1) lock-free connection pool implementation.
  * @defgroup qbuem_db_pool LockFreeConnectionPool
  * @ingroup qbuem_db
  *
- * ## 개요
- * `IConnectionPool`의 구체 구현입니다.
- * Dmitry Vyukov의 MPMC 링 버퍼를 응용한 **lock-free** 연결 슬롯 인덱싱으로
- * O(1) `acquire()` / `release()`를 보장합니다.
+ * ## Overview
+ * A concrete implementation of `IConnectionPool`.
+ * Uses **lock-free** connection slot indexing based on Dmitry Vyukov's MPMC ring buffer
+ * to guarantee O(1) `acquire()` / `release()`.
  *
- * ## 설계
+ * ## Design
  * ```
- * [free_ring_] ─── 사용 가능한 슬롯 인덱스 링 버퍼
+ * [free_ring_] ─── ring buffer of available slot indices
  *     │
  *     ▼
- * [slots_[N]] ─── 각 슬롯: IConnection* + 상태 원자값
+ * [slots_[N]] ─── each slot: IConnection* + state atomic
  * ```
  *
- * ## acquire() 알고리즘
- * 1. `free_ring_.try_pop()` → 슬롯 인덱스 획득 (O(1) lock-free).
- * 2. 연결이 살아 있으면 반환, 아니면 `reconnect()`.
- * 3. 연결 없으면 AsyncChannel waiter에 등록 → 반환 시 wake.
+ * ## acquire() Algorithm
+ * 1. `free_ring_.try_pop()` → acquire slot index (O(1) lock-free).
+ * 2. If connection is alive, return it; otherwise call `reconnect()`.
+ * 3. If no slot available, register in AsyncChannel waiter → wake on return.
  *
- * ## 연결 수명 관리
- * - `min_size` 연결은 항상 유지 (idle timeout 면제).
- * - `max_size` 이상은 생성하지 않음 — backpressure.
- * - idle 연결은 `idle_timeout_ms` 후 자동 해제.
+ * ## Connection Lifetime Management
+ * - `min_size` connections are always kept alive (exempt from idle timeout).
+ * - No connections are created beyond `max_size` — backpressure.
+ * - Idle connections are automatically released after `idle_timeout_ms`.
  *
  * @{
  */
@@ -46,52 +46,53 @@
 
 namespace qbuem::db {
 
-// ─── 슬롯 상태 ───────────────────────────────────────────────────────────────
+// ─── Slot State ──────────────────────────────────────────────────────────────
 
 /**
- * @brief 연결 슬롯 내부 상태.
+ * @brief Internal state of a connection slot.
  */
 enum class SlotState : uint8_t {
-    Free      = 0,  ///< 풀에서 사용 가능
-    Active    = 1,  ///< 호출자가 사용 중
-    Recycling = 2,  ///< idle timeout 처리 중
-    Dead      = 3,  ///< 연결 실패 / 종료됨
+    Free      = 0,  ///< Available in the pool
+    Active    = 1,  ///< In use by a caller
+    Recycling = 2,  ///< Being processed for idle timeout
+    Dead      = 3,  ///< Connection failed / terminated
 };
 
 // ─── LockFreeConnectionPool ──────────────────────────────────────────────────
 
 /**
- * @brief Lock-free O(1) DB 연결 풀.
+ * @brief Lock-free O(1) DB connection pool.
  *
- * `IConnectionPool` 인터페이스 구현체입니다.
- * 구체 드라이버는 생성자에 `factory` 콜백으로 주입합니다.
+ * A concrete implementation of the `IConnectionPool` interface.
+ * The concrete driver is injected via the `factory` callback in the constructor.
  *
- * @note 이 클래스는 `IDBDriver::pool()`에서 반환되는 것이 아니라
- *       드라이버 없이 직접 연결 팩토리를 주입할 수 있는 범용 풀입니다.
+ * @note This class is a general-purpose pool that accepts a connection factory
+ *       directly rather than being returned from `IDBDriver::pool()`.
  */
 class LockFreeConnectionPool final : public IConnectionPool {
 public:
-    /** @brief 연결 생성 팩토리 함수 타입. */
+    /** @brief Factory function type for creating connections. */
     using ConnFactory = std::function<Task<Result<std::unique_ptr<IConnection>>>()>;
 
     /**
-     * @brief LockFreeConnectionPool을 생성합니다.
+     * @brief Constructs a LockFreeConnectionPool.
      *
-     * @param factory  새 연결을 생성하는 비동기 팩토리.
-     * @param config   풀 설정.
+     * @param factory  Async factory that creates new connections.
+     * @param config   Pool configuration.
      */
     explicit LockFreeConnectionPool(ConnFactory factory,
                                      PoolConfig  config = {}) noexcept;
     ~LockFreeConnectionPool() override;
 
-    // ── IConnectionPool 구현 ─────────────────────────────────────────────
+    // ── IConnectionPool implementation ───────────────────────────────────
 
     /**
-     * @brief O(1) lock-free 연결 획득.
+     * @brief O(1) lock-free connection acquisition.
      *
-     * free_ring에서 슬롯 인덱스를 pop한 후, 연결 상태를 확인합니다.
-     * 연결이 유효하지 않으면 재연결 후 반환합니다.
-     * 슬롯이 없으면 max_size 미만이면 새 연결 생성, 아니면 waiter 큐 대기.
+     * Pops a slot index from free_ring, then checks the connection state.
+     * If the connection is invalid, reconnects before returning.
+     * If no slot is available and below max_size, creates a new connection;
+     * otherwise waits in the waiter queue.
      */
     Task<Result<std::unique_ptr<IConnection>>> acquire() override;
 
@@ -109,30 +110,30 @@ public:
 
     Task<void> drain() override;
 
-    // ── 초기화 ───────────────────────────────────────────────────────────
+    // ── Initialization ───────────────────────────────────────────────────
 
     /**
-     * @brief 최소 연결(`min_size`)을 미리 생성합니다.
+     * @brief Pre-creates the minimum number of connections (`min_size`).
      *
-     * 서버 시작 시 풀을 워밍업하여 첫 요청의 레이턴시를 줄입니다.
+     * Warms up the pool at server startup to reduce first-request latency.
      */
     Task<Result<void>> warmup() noexcept;
 
 private:
-    // ─── 내부 슬롯 구조 ──────────────────────────────────────────────────
+    // ─── Internal slot structure ─────────────────────────────────────────
     struct alignas(64) Slot {
         std::unique_ptr<IConnection> conn;
         std::atomic<SlotState>       state{SlotState::Free};
-        uint64_t                     last_used_ms{0}; ///< 마지막 사용 시각
-        uint32_t                     index{0};        ///< 슬롯 인덱스 (자기 참조)
+        uint64_t                     last_used_ms{0}; ///< Timestamp of last use
+        uint32_t                     index{0};        ///< Slot index (self-reference)
         uint8_t                      _pad[64 - sizeof(void*)
                                               - sizeof(std::atomic<SlotState>)
                                               - sizeof(uint64_t)
                                               - sizeof(uint32_t)]{};
     };
 
-    // ─── lock-free 스택 기반 free slot 관리 ─────────────────────────────
-    // Vyukov MPMC 대신 단순 LIFO 스택 (연결 풀은 순서 무관)
+    // ─── Lock-free stack-based free slot management ──────────────────────
+    // Simple LIFO stack instead of Vyukov MPMC (connection pool is order-agnostic)
     struct FreeStack {
         static constexpr size_t kMaxSlots = 256;
 
@@ -144,7 +145,7 @@ private:
         bool push(uint32_t idx) noexcept {
             size_t t = top_.load(std::memory_order_relaxed);
             if (t >= kMaxSlots) return false;
-            // CAS 기반 push
+            // CAS-based push
             while (!top_.compare_exchange_weak(t, t + 1,
                        std::memory_order_release, std::memory_order_relaxed)) {
                 if (t >= kMaxSlots) return false;
@@ -169,29 +170,29 @@ private:
         }
     };
 
-    // ─── waiter 리스트 ───────────────────────────────────────────────────
+    // ─── Waiter list ─────────────────────────────────────────────────────
     struct Waiter {
         std::coroutine_handle<> handle;
         Reactor*                reactor;
-        uint32_t                slot_idx; ///< 할당된 슬롯 인덱스 (wake 후 설정)
+        uint32_t                slot_idx; ///< Allocated slot index (set after wake)
         Waiter*                 next{nullptr};
     };
 
     void enqueue_waiter(Waiter* w) noexcept;
     void wake_one_waiter(uint32_t slot_idx) noexcept;
 
-    // ─── 연결 재활용 ────────────────────────────────────────────────────
+    // ─── Connection recycling ────────────────────────────────────────────
     Task<bool> validate_or_reconnect(Slot& slot) noexcept;
     void       release_slot(uint32_t slot_idx) noexcept;
 
-    // ─── idle timeout 정리 ──────────────────────────────────────────────
+    // ─── Idle timeout cleanup ────────────────────────────────────────────
     void schedule_idle_cleanup() noexcept;
 
-    // ─── 데이터 멤버 ────────────────────────────────────────────────────
+    // ─── Data members ────────────────────────────────────────────────────
     ConnFactory  factory_;
     PoolConfig   config_;
 
-    // 슬롯 배열 (고정 크기, max_size 기준)
+    // Slot array (fixed size, based on max_size)
     std::vector<Slot>     slots_;
     FreeStack             free_stack_;
 
@@ -199,33 +200,33 @@ private:
     std::atomic<size_t>   active_count_{0};
     std::atomic<size_t>   idle_count_{0};
 
-    // waiter 리스트
+    // Waiter list
     std::mutex            waiter_mutex_;
     Waiter*               waiter_head_{nullptr};
     std::atomic<uint32_t> waiter_count_{0};
 
     std::atomic<bool>     draining_{false};
 
-    // ─── 유휴 연결 큐 (return_connection 용) ────────────────────────────
+    // ─── Idle connection queue (for return_connection) ───────────────────
     std::vector<std::unique_ptr<IConnection>> idle_conns_;
 
 public:
-    /** @brief IConnectionPool::return_connection — PooledConnection 소멸 시 호출됩니다. */
+    /** @brief IConnectionPool::return_connection — Called when a PooledConnection is destroyed. */
     void return_connection(std::unique_ptr<IConnection> conn) noexcept override;
 };
 
-// ─── RAII 연결 가드 ──────────────────────────────────────────────────────────
+// ─── RAII connection guard ───────────────────────────────────────────────────
 
 /**
- * @brief 풀에서 획득한 연결을 RAII로 관리하는 가드.
+ * @brief RAII guard that manages a connection acquired from a pool.
  *
- * 소멸 시 자동으로 풀에 반환됩니다.
+ * Automatically returns the connection to the pool upon destruction.
  *
  * @code
  * auto guard = co_await PooledConnection::acquire(pool);
  * auto& conn = guard.get();
  * auto stmt = co_await conn.prepare("SELECT 1");
- * // guard 소멸 → 자동 반환
+ * // guard destroyed → automatically returned to pool
  * @endcode
  */
 class PooledConnection {
@@ -252,7 +253,7 @@ public:
     [[nodiscard]] bool valid() const noexcept { return conn_ != nullptr; }
 
     /**
-     * @brief 풀에서 연결을 획득하는 팩토리 함수.
+     * @brief Factory function to acquire a connection from the pool.
      */
     static Task<Result<PooledConnection>> acquire(IConnectionPool& pool) {
         auto r = co_await pool.acquire();

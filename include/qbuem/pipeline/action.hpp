@@ -2,31 +2,31 @@
 
 /**
  * @file qbuem/pipeline/action.hpp
- * @brief 파이프라인 액션 — Action<In, Out>
+ * @brief Pipeline action — Action<In, Out>
  * @defgroup qbuem_action Action
  * @ingroup qbuem_pipeline
  *
- * Action은 파이프라인의 처리 단계입니다.
- * 워커 코루틴 풀을 관리하고 입력 채널에서 아이템을 꺼내
- * 처리 함수를 적용한 결과를 출력 채널에 넣습니다.
+ * Action is a processing stage in a pipeline.
+ * It manages a pool of worker coroutines, dequeues items from the input channel,
+ * applies the processing function, and puts results into the output channel.
  *
- * ## Action 함수 형태
+ * ## Action function signatures
  * ```cpp
- * // Full: 컨텍스트 + 취소 신호 + 워커 인덱스
+ * // Full: context + cancellation token + worker index
  * Task<Result<Out>>(In item, ActionEnv env)
  *
- * // Simple: 취소 신호만
+ * // Simple: cancellation token only
  * Task<Result<Out>>(In item, std::stop_token stop)
  *
- * // Plain: 최소
+ * // Plain: minimal
  * Task<Result<Out>>(In item)
  * ```
  *
- * ## 상태 패턴
- * - **Stateless**: 람다 캡처 없음
- * - **Immutable**: `const shared_ptr<T>` 캡처
+ * ## State patterns
+ * - **Stateless**: no lambda captures
+ * - **Immutable**: `const shared_ptr<T>` capture
  * - **Mutable(WorkerLocal)**: `WorkerLocal<T>` + `env.worker_idx`
- * - **External**: `ServiceRegistry` 통해 접근
+ * - **External**: accessed via `ServiceRegistry`
  *
  * @{
  */
@@ -50,34 +50,34 @@
 namespace qbuem {
 
 /**
- * @brief 파이프라인 액션 — 코루틴 워커 풀 기반 처리 단계.
+ * @brief Pipeline action — coroutine worker pool based processing stage.
  *
- * @tparam In  입력 타입.
- * @tparam Out 출력 타입.
+ * @tparam In  Input type.
+ * @tparam Out Output type.
  */
 template <typename In, typename Out>
 class Action {
 public:
-  /** @brief 정규화된 Action 처리 함수 타입 (Full 서명). */
+  /** @brief Normalized Action processing function type (Full signature). */
   using Fn = std::function<Task<Result<Out>>(In, ActionEnv)>;
 
   /**
-   * @brief Action 설정 구조체.
+   * @brief Action configuration struct.
    */
   struct Config {
-    size_t min_workers   = 1;    ///< 최소 워커 수
-    size_t max_workers   = 4;    ///< 최대 워커 수
-    size_t channel_cap   = 256;  ///< 입력 채널 용량
-    bool   auto_scale    = true; ///< 부하 기반 자동 스케일링
-    bool   keyed_ordering = false; ///< 동일 키 순서 보장 (순서 중요한 경우)
-    ServiceRegistry *registry = nullptr; ///< 파이프라인 ServiceRegistry
+    size_t min_workers   = 1;    ///< Minimum number of workers
+    size_t max_workers   = 4;    ///< Maximum number of workers
+    size_t channel_cap   = 256;  ///< Input channel capacity
+    bool   auto_scale    = true; ///< Load-based automatic scaling
+    bool   keyed_ordering = false; ///< Guarantee ordering for the same key (when order matters)
+    ServiceRegistry *registry = nullptr; ///< Pipeline ServiceRegistry
     /**
-     * @brief SLO (Service Level Objective) 설정.
+     * @brief SLO (Service Level Objective) configuration.
      *
-     * 설정 시 이 액션의 레이턴시 및 에러율 SLO를 추적합니다.
-     * `std::nullopt`이면 SLO 추적 비활성화 (기본값).
+     * When set, tracks latency and error rate SLOs for this action.
+     * `std::nullopt` disables SLO tracking (default).
      *
-     * 예시:
+     * Example:
      * @code
      * Action<int,int> a{fn, {.slo = qbuem::SloConfig{
      *     .p99_target_us  = 5000,   // 5ms p99
@@ -86,15 +86,15 @@ public:
      * }}};
      * @endcode
      */
-    std::optional<SloConfig> slo; ///< SLO 설정 (없으면 추적 비활성)
+    std::optional<SloConfig> slo; ///< SLO configuration (disabled when absent)
   };
 
   /**
-   * @brief Action을 생성합니다.
+   * @brief Construct an Action.
    *
-   * @tparam FnT ActionFn<FnT, In, Out> concept을 만족하는 함수 타입.
-   * @param fn   처리 함수 (Full/Simple/Plain 서명 모두 허용).
-   * @param cfg  Action 설정.
+   * @tparam FnT Function type satisfying the ActionFn<FnT, In, Out> concept.
+   * @param fn   Processing function (Full/Simple/Plain signatures all accepted).
+   * @param cfg  Action configuration.
    */
   template <typename FnT>
     requires ActionFn<FnT, In, Out>
@@ -109,14 +109,14 @@ public:
   Action &operator=(Action &&) = default;
 
   // -------------------------------------------------------------------------
-  // 아이템 전송
+  // Item submission
   // -------------------------------------------------------------------------
 
   /**
-   * @brief 아이템을 Action의 입력 채널에 넣습니다 (backpressure).
+   * @brief Push an item into the Action's input channel (with backpressure).
    *
-   * @param item 처리할 아이템.
-   * @param ctx  아이템 컨텍스트 (기본: 빈 Context).
+   * @param item Item to process.
+   * @param ctx  Item context (default: empty Context).
    */
   Task<Result<void>> push(In item, Context ctx = {}) {
     co_return co_await in_channel_->send(
@@ -124,9 +124,9 @@ public:
   }
 
   /**
-   * @brief 아이템을 논블로킹으로 넣으려 시도합니다.
+   * @brief Attempt to push an item without blocking.
    *
-   * @returns 성공 시 `true`, 채널 포화 시 `false`.
+   * @returns `true` on success, `false` when the channel is full.
    */
   bool try_push(In item, Context ctx = {}) {
     return in_channel_->try_send(
@@ -134,14 +134,14 @@ public:
   }
 
   // -------------------------------------------------------------------------
-  // 라이프사이클
+  // Lifecycle
   // -------------------------------------------------------------------------
 
   /**
-   * @brief Action을 시작합니다 — `min_workers`개 코루틴을 Dispatcher에 spawn.
+   * @brief Start the Action — spawn `min_workers` coroutines on the Dispatcher.
    *
-   * @param dispatcher 코루틴을 실행할 Dispatcher.
-   * @param out        출력 채널 (nullptr이면 결과를 버림).
+   * @param dispatcher Dispatcher that runs the coroutines.
+   * @param out        Output channel (nullptr discards results).
    */
   void start(Dispatcher &dispatcher,
              std::shared_ptr<AsyncChannel<ContextualItem<Out>>> out = nullptr) {
@@ -155,9 +155,9 @@ public:
   }
 
   /**
-   * @brief 입력 채널을 닫고 모든 워커가 완료될 때까지 기다립니다.
+   * @brief Close the input channel and wait for all workers to finish.
    *
-   * `drain()` 후 출력 채널도 자동으로 닫힙니다.
+   * The output channel is closed automatically after `drain()` completes.
    */
   Task<void> drain() {
     in_channel_->close();
@@ -181,7 +181,7 @@ public:
   }
 
   /**
-   * @brief Action을 즉시 정지합니다 (취소 신호 전송).
+   * @brief Immediately stop the Action (send cancellation signal).
    */
   void stop() {
     if (stop_src_) stop_src_->request_stop();
@@ -189,10 +189,10 @@ public:
   }
 
   /**
-   * @brief 워커 수를 `n`으로 조정합니다.
+   * @brief Adjust the worker count to `n`.
    *
-   * @param n 새 목표 워커 수.
-   * @param dispatcher 새 워커를 spawn할 Dispatcher.
+   * @param n New target worker count.
+   * @param dispatcher Dispatcher used to spawn new workers.
    */
   void scale_to(size_t n, Dispatcher &dispatcher) {
     size_t current = worker_count_.load(std::memory_order_relaxed);
@@ -217,14 +217,14 @@ public:
   }
 
   /**
-   * @brief 출력 채널을 반환합니다.
+   * @brief Return the output channel.
    */
   [[nodiscard]] std::shared_ptr<AsyncChannel<ContextualItem<Out>>> output() const {
     return out_channel_;
   }
 
   /**
-   * @brief 입력 채널을 반환합니다.
+   * @brief Return the input channel.
    */
   [[nodiscard]] std::shared_ptr<AsyncChannel<ContextualItem<In>>> input() const {
     return in_channel_;

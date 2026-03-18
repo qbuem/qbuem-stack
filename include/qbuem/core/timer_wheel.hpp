@@ -2,40 +2,41 @@
 
 /**
  * @file qbuem/core/timer_wheel.hpp
- * @brief 4단계 계층형 타이밍 휠 — O(1) 스케줄/취소
+ * @brief 4-level hierarchical timing wheel — O(1) schedule/cancel
  * @defgroup qbuem_timer TimerWheel
  * @ingroup qbuem_core
  *
- * 4단계 × 256슬롯 계층형 타이밍 휠 구현입니다.
+ * A 4-level × 256-slot hierarchical timing wheel implementation.
  *
- * ## 슬롯 해상도
- * - 레벨 0: 1ms 단위  (최대 256ms)
- * - 레벨 1: 256ms 단위 (최대 65.536초)
- * - 레벨 2: 65.536초 단위 (최대 ~4.7시간)
- * - 레벨 3: ~4.7시간 단위 (최대 ~49.7일)
+ * ## Slot Resolution
+ * - Level 0: 1 ms granularity  (max 256 ms)
+ * - Level 1: 256 ms granularity (max 65.536 s)
+ * - Level 2: 65.536 s granularity (max ~4.7 hours)
+ * - Level 3: ~4.7 hour granularity (max ~49.7 days)
  *
- * ## 복잡도
+ * ## Complexity
  * - schedule(): O(1)
- * - cancel():   O(슬롯 내 항목 수) 최악의 경우, 실용적으로 O(1) 수준
+ * - cancel():   O(entries in slot) worst case, practically O(1)
  * - tick():     O(fired_count)
  *
- * ## 스레드 안전성
- * TimerWheel은 **단일 스레드 전용**입니다. `schedule()`, `cancel()`, `tick()`,
- * `next_expiry_ms()` 모두 동일한 스레드(Reactor 이벤트 루프)에서 호출해야 합니다.
- * 여러 스레드에서 동시에 접근하면 TSan 데이터 레이스가 발생합니다.
+ * ## Thread Safety
+ * TimerWheel is **single-threaded only**. `schedule()`, `cancel()`, `tick()`,
+ * and `next_expiry_ms()` must all be called from the same thread (the Reactor
+ * event loop). Concurrent access from multiple threads causes TSan data races.
  *
- * ## FixedPoolResource 연동
- * 내부 `Entry` 객체는 `<qbuem/core/arena.hpp>`의 `FixedPoolResource`를 사용하여
- * 힙 단편화 없는 O(1) 할당/해제를 달성합니다.
- * 풀 크기는 생성자에 `pool_capacity` 인자로 지정합니다.
+ * ## FixedPoolResource Integration
+ * Internal `Entry` objects are allocated from `FixedPoolResource` defined in
+ * `<qbuem/core/arena.hpp>`, achieving O(1) allocation/deallocation without
+ * heap fragmentation. The pool size is specified via the `pool_capacity`
+ * constructor argument.
  *
- * ## Reactor 통합
- * `Reactor::register_timer()`를 대체하는 고성능 타이머 백엔드로 사용합니다.
- * Reactor 구현체는 `poll()` 루프에서 `tick(elapsed_ms)`를 호출하고,
- * `next_expiry_ms()`를 poll 타임아웃으로 전달합니다.
+ * ## Reactor Integration
+ * Used as a high-performance timer backend replacing `Reactor::register_timer()`.
+ * Reactor implementations call `tick(elapsed_ms)` in the `poll()` loop and
+ * pass `next_expiry_ms()` as the poll timeout.
  *
  * @code
- * // Reactor 이벤트 루프에서의 통합 패턴:
+ * // Integration pattern in the Reactor event loop:
  * TimerWheel wheel;
  * while (running) {
  *     uint64_t timeout = wheel.next_expiry_ms();
@@ -43,7 +44,7 @@
  *     uint64_t now = monotonic_ms();
  *     wheel.tick(now - last_tick_ms);
  *     last_tick_ms = now;
- *     // fd 이벤트 처리 ...
+ *     // process fd events ...
  * }
  * @endcode
  * @{
@@ -61,63 +62,63 @@
 namespace qbuem {
 
 /**
- * @brief 4단계 계층형 타이밍 휠.
+ * @brief 4-level hierarchical timing wheel.
  *
- * 힙 단편화 없는 O(1) 스케줄/취소를 지원하는 타이머 구조체입니다.
- * 내부적으로 `FixedPoolResource`를 사용하여 Entry 객체를 풀에서 할당합니다.
- * Reactor 이벤트 루프와 통합하여 타임아웃 처리에 사용합니다.
+ * A timer structure supporting O(1) schedule/cancel without heap fragmentation.
+ * Internally uses `FixedPoolResource` to allocate Entry objects from a pool.
+ * Integrated with the Reactor event loop for timeout handling.
  *
- * ### 사용 예시
+ * ### Usage Example
  * @code
  * TimerWheel wheel;
- * auto id = wheel.schedule(100, []{ std::puts("100ms 경과"); });
- * wheel.tick(50);   // 50ms 경과
- * wheel.tick(50);   // 100ms 경과 — 콜백 호출됨
- * wheel.cancel(id); // 이미 실행됐으므로 false 반환
+ * auto id = wheel.schedule(100, []{ std::puts("100 ms elapsed"); });
+ * wheel.tick(50);   // 50 ms elapsed
+ * wheel.tick(50);   // 100 ms elapsed — callback fired
+ * wheel.cancel(id); // already fired, returns false
  * @endcode
  */
 class TimerWheel {
 public:
-  /** @brief 타이머 콜백 타입. */
+  /** @brief Timer callback type. */
   using Callback = std::function<void()>;
-  /** @brief 타이머 식별자 타입. */
+  /** @brief Timer identifier type. */
   using TimerId = uint64_t;
 
-  /** @brief 타이밍 휠 레벨 수. */
+  /** @brief Number of timing wheel levels. */
   static constexpr size_t LEVELS = 4;
-  /** @brief 레벨당 슬롯 수. */
+  /** @brief Number of slots per level. */
   static constexpr size_t SLOTS_PER_LEVEL = 256;
-  /** @brief 유효하지 않은 타이머 ID. */
+  /** @brief Invalid timer ID sentinel. */
   static constexpr TimerId kInvalid = 0;
 
   /**
-   * @brief 타이머 휠을 초기화합니다.
+   * @brief Initialize the timer wheel.
    *
-   * @param pool_capacity FixedPoolResource 풀의 최대 Entry 수.
-   *                      동시 활성 타이머 최대 수보다 크게 설정하세요.
-   *                      기본값 4096.
+   * @param pool_capacity Maximum number of Entry objects in the FixedPoolResource pool.
+   *                      Set this higher than the maximum number of simultaneously
+   *                      active timers. Default: 4096.
    */
   explicit TimerWheel(size_t pool_capacity = 4096)
       : pool_(pool_capacity) { index_.reserve(pool_capacity); }
 
-  // 복사/이동 금지 (포인터 기반 내부 링크 구조)
+  // Copy and move are disabled (pointer-based internal link structure).
   TimerWheel(const TimerWheel &) = delete;
   TimerWheel &operator=(const TimerWheel &) = delete;
   TimerWheel(TimerWheel &&) = delete;
   TimerWheel &operator=(TimerWheel &&) = delete;
 
-  /** @brief 소멸자: 모든 미만료 타이머 항목을 풀에 반환합니다. */
+  /** @brief Destructor: returns all unexpired timer entries to the pool. */
   ~TimerWheel() { clear(); }
 
   /**
-   * @brief 지정 지연(ms) 후 콜백을 실행하도록 스케줄합니다.
+   * @brief Schedule a callback to fire after the specified delay (ms).
    *
-   * FixedPoolResource에서 Entry를 O(1)로 할당합니다.
-   * 풀이 고갈된 경우 kInvalid를 반환합니다.
+   * Allocates an Entry from FixedPoolResource in O(1).
+   * Returns kInvalid if the pool is exhausted.
    *
-   * @param delay_ms 지연 시간 (밀리초). 0이면 다음 tick에서 즉시 실행.
-   * @param fn       만료 시 호출할 콜백.
-   * @returns 취소에 사용할 TimerId. 풀 고갈 시 kInvalid.
+   * @param delay_ms Delay in milliseconds. 0 fires on the next tick.
+   * @param fn       Callback to invoke on expiry.
+   * @returns TimerId for use with cancel(). Returns kInvalid on pool exhaustion.
    */
   [[nodiscard]] TimerId schedule(uint64_t delay_ms, Callback fn) {
     void *raw = pool_.allocate();
@@ -137,12 +138,13 @@ public:
   }
 
   /**
-   * @brief 타이머를 취소합니다.
+   * @brief Cancel a timer.
    *
-   * TimerId → Entry* 인덱스를 이용해 O(1)로 직접 제거합니다.
+   * Uses the TimerId → Entry* index to remove the entry directly in O(1).
    *
-   * @param id schedule()이 반환한 TimerId.
-   * @returns 만료 전 취소 성공 시 true, 이미 실행됐거나 없으면 false.
+   * @param id TimerId returned by schedule().
+   * @returns true if the timer was cancelled before expiry; false if already
+   *          fired or not found.
    */
   bool cancel(TimerId id) {
     if (id == kInvalid) return false;
@@ -158,12 +160,12 @@ public:
   }
 
   /**
-   * @brief elapsed_ms 만큼 시계를 진행하고 만료된 콜백을 실행합니다.
+   * @brief Advance the clock by elapsed_ms and fire all expired callbacks.
    *
-   * 레벨 0를 매 ms마다 처리하고, 상위 레벨은 캐스케이드 조건에 따라 처리합니다.
+   * Processes level 0 every ms; higher levels are processed on cascade conditions.
    *
-   * @param elapsed_ms 마지막 tick 이후 경과 시간 (밀리초).
-   * @returns 실행된 콜백 수.
+   * @param elapsed_ms Time elapsed since the last tick (milliseconds).
+   * @returns Number of callbacks fired.
    */
   size_t tick(uint64_t elapsed_ms) {
     uint64_t target = current_ms_ + elapsed_ms;
@@ -171,11 +173,11 @@ public:
 
     while (current_ms_ < target) {
       ++current_ms_;
-      // 레벨 0 슬롯 처리
+      // Process level 0 slot
       size_t slot0 = static_cast<size_t>(current_ms_ & (SLOTS_PER_LEVEL - 1));
       fired += fire_slot(0, slot0);
 
-      // 레벨 캐스케이드: 상위 레벨을 하위로 재분배
+      // Level cascade: redistribute entries from upper levels to lower ones
       for (size_t lv = 1; lv < LEVELS; ++lv) {
         uint64_t divisor = kSlotMs[lv];
         if ((current_ms_ % divisor) == 0) {
@@ -190,15 +192,15 @@ public:
   }
 
   /**
-   * @brief 다음 만료까지 남은 시간(ms)을 반환합니다 (poll 타임아웃용).
+   * @brief Return the time remaining until the next expiry (ms), for use as a poll timeout.
    *
-   * Reactor의 `poll()` 호출 시 타임아웃 값으로 사용합니다:
+   * Use as the timeout value in the Reactor `poll()` call:
    * @code
    * uint64_t timeout = wheel.next_expiry_ms();
    * epoll_wait(epfd, events, N, (int)std::min(timeout, (uint64_t)INT_MAX));
    * @endcode
    *
-   * @returns 대기 중 타이머가 없으면 `UINT64_MAX`, 있으면 남은 ms (최소 0).
+   * @returns `UINT64_MAX` if no timers are pending; otherwise remaining ms (minimum 0).
    *
    * @warning **Thread safety**: TimerWheel is NOT thread-safe. This method
    *   iterates `index_` without a lock. It MUST be called from the same
@@ -219,21 +221,21 @@ public:
   }
 
   /**
-   * @brief 현재 가상 시계 값(ms)을 반환합니다.
+   * @brief Return the current virtual clock value (ms).
    *
-   * 생성 시점을 기준으로 tick()이 누적한 경과 시간입니다.
-   * @returns 구성 이후 경과한 밀리초.
+   * Accumulated elapsed time since construction via tick() calls.
+   * @returns Milliseconds elapsed since construction.
    */
   [[nodiscard]] uint64_t now_ms() const noexcept { return current_ms_; }
 
-  /** @brief 대기 중인 타이머 수를 반환합니다. */
+  /** @brief Return the number of pending timers. */
   [[nodiscard]] size_t count() const noexcept { return count_; }
 
 private:
   /**
-   * @brief 타이머 항목 — 이중 연결 리스트 노드.
+   * @brief Timer entry — doubly linked list node.
    *
-   * FixedPoolResource에서 placement new로 생성합니다.
+   * Created via placement new from FixedPoolResource.
    */
   struct Entry {
     Callback  fn;
@@ -241,18 +243,18 @@ private:
     uint64_t  expiry_ms = 0;
     Entry    *next      = nullptr;
     Entry    *prev      = nullptr;
-    uint8_t   level_    = 0;   ///< 현재 위치한 레벨 (O(1) 취소용)
-    uint8_t   slot_     = 0;   ///< 현재 위치한 슬롯 (O(1) 취소용)
+    uint8_t   level_    = 0;   ///< Current level (for O(1) cancel)
+    uint8_t   slot_     = 0;   ///< Current slot  (for O(1) cancel)
   };
 
-  /** @brief 각 레벨의 슬롯 해상도 (ms): 1ms, 256ms, 65536ms, 16777216ms. */
+  /** @brief Slot resolution per level (ms): 1 ms, 256 ms, 65536 ms, 16777216 ms. */
   static constexpr uint64_t kSlotMs[LEVELS] = {1, 256, 65536, 16777216};
 
   /**
-   * @brief 항목을 적절한 레벨/슬롯에 삽입합니다.
+   * @brief Insert an entry into the appropriate level/slot.
    *
-   * expiry_ms와 current_ms_의 차이에 따라 레벨을 결정합니다.
-   * @param e 삽입할 Entry 포인터.
+   * Determines the level based on the difference between expiry_ms and current_ms_.
+   * @param e Entry pointer to insert.
    */
   void insert(Entry *e) {
     uint64_t delta = (e->expiry_ms > current_ms_) ? (e->expiry_ms - current_ms_) : 0;
@@ -272,12 +274,12 @@ private:
       sl = static_cast<size_t>((e->expiry_ms / kSlotMs[lv]) & (SLOTS_PER_LEVEL - 1));
     }
 
-    // 위치 기록 (O(1) 취소용)
+    // Record position for O(1) cancel
     e->level_ = static_cast<uint8_t>(lv);
     e->slot_  = static_cast<uint8_t>(sl);
     index_[e->id] = e;
 
-    // 헤드에 삽입
+    // Insert at head
     e->next = slots_[lv][sl];
     e->prev = nullptr;
     if (slots_[lv][sl])
@@ -286,17 +288,17 @@ private:
   }
 
   /**
-   * @brief 특정 레벨/슬롯에서 Entry를 제거합니다 (이중 연결 리스트 기반 O(1)).
+   * @brief Remove an Entry from a specific level/slot (O(1) via doubly linked list).
    *
-   * @param lv  항목이 속한 레벨.
-   * @param sl  항목이 속한 슬롯 인덱스.
-   * @param e   제거할 Entry 포인터.
+   * @param lv  Level the entry belongs to.
+   * @param sl  Slot index the entry belongs to.
+   * @param e   Entry pointer to remove.
    */
   void unlink(size_t lv, size_t sl, Entry *e) noexcept {
     if (e->prev)
       e->prev->next = e->next;
     else
-      slots_[lv][sl] = e->next; // 헤드 갱신
+      slots_[lv][sl] = e->next; // update head
     if (e->next)
       e->next->prev = e->prev;
     e->next = nullptr;
@@ -304,13 +306,13 @@ private:
   }
 
   /**
-   * @brief 슬롯의 모든 만료 항목을 실행하고 개수를 반환합니다.
+   * @brief Fire all expired entries in a slot and return the count.
    *
-   * 만료되지 않은 항목은 올바른 슬롯에 재삽입됩니다.
+   * Non-expired entries are re-inserted into the correct slot.
    *
-   * @param level 처리할 레벨.
-   * @param slot  처리할 슬롯 인덱스.
-   * @returns 실행된 콜백 수.
+   * @param level Level to process.
+   * @param slot  Slot index to process.
+   * @returns Number of callbacks fired.
    */
   size_t fire_slot(size_t level, size_t slot) {
     size_t fired = 0;
@@ -323,7 +325,7 @@ private:
       e->prev = nullptr;
 
       if (e->expiry_ms <= current_ms_) {
-        // 만료 — 인덱스에서 제거 후 콜백 실행, 풀 반환
+        // Expired — remove from index, fire callback, return to pool
         index_.erase(e->id);
         if (e->fn) e->fn();
         e->~Entry();
@@ -331,7 +333,7 @@ private:
         --count_;
         ++fired;
       } else {
-        // 아직 만료 안 됨 — 올바른 슬롯에 재삽입 (insert가 index_ 갱신)
+        // Not yet expired — re-insert into the correct slot (insert updates index_)
         insert(e);
       }
       e = nxt;
@@ -340,13 +342,13 @@ private:
   }
 
   /**
-   * @brief 상위 레벨 슬롯을 하위 레벨로 캐스케이드합니다.
+   * @brief Cascade entries from an upper level slot down to lower levels.
    *
-   * 타이밍 휠 레벨 전환 시 상위 레벨 슬롯의 항목을
-   * 하위 레벨의 올바른 슬롯으로 재배치합니다.
+   * Redistributes entries from the upper level slot into the correct lower-level
+   * slots when the timing wheel level transitions.
    *
-   * @param level 캐스케이드할 레벨 (1 이상).
-   * @param slot  캐스케이드할 슬롯 인덱스.
+   * @param level Level to cascade from (must be >= 1).
+   * @param slot  Slot index to cascade.
    */
   void cascade(size_t level, size_t slot) {
     Entry *e = slots_[level][slot];
@@ -356,13 +358,13 @@ private:
       Entry *nxt = e->next;
       e->next = nullptr;
       e->prev = nullptr;
-      insert(e); // 하위 레벨에 재삽입
+      insert(e); // re-insert into lower level
       e = nxt;
     }
   }
 
   /**
-   * @brief 모든 항목을 풀에 반환합니다 (소멸자용).
+   * @brief Return all entries to the pool (used by the destructor).
    */
   void clear() noexcept {
     for (size_t lv = 0; lv < LEVELS; ++lv) {
@@ -382,39 +384,39 @@ private:
   }
 
   /**
-   * @brief Entry 객체 풀 — FixedPoolResource 기반 O(1) 할당/해제.
+   * @brief Entry object pool — O(1) allocation/deallocation backed by FixedPoolResource.
    *
-   * `sizeof(Entry)` 크기의 슬롯을 `pool_capacity`개 미리 확보합니다.
-   * 힙 단편화 없이 타이머 항목을 재활용합니다.
+   * Pre-allocates `pool_capacity` slots of `sizeof(Entry)` bytes.
+   * Timer entries are recycled without heap fragmentation.
    */
   FixedPoolResource<sizeof(Entry), alignof(Entry)> pool_;
 
-  /** @brief 슬롯 배열 [레벨][슬롯] → 이중 연결 리스트 헤드. */
+  /** @brief Slot array [level][slot] → doubly linked list head. */
   Entry   *slots_[LEVELS][SLOTS_PER_LEVEL] = {};
 
-  /** @brief TimerId → Entry* 인덱스 — O(1) cancel() 및 next_expiry_ms() 지원. */
+  /** @brief TimerId → Entry* index — supports O(1) cancel() and next_expiry_ms(). */
   std::unordered_map<TimerId, Entry *> index_;
 
-  /** @brief 생성 이후 누적된 가상 시계 (ms). */
+  /** @brief Virtual clock accumulated since construction (ms). */
   uint64_t current_ms_ = 0;
 
-  /** @brief 다음에 발급할 타이머 ID. kInvalid(0)는 건너뜁니다. */
+  /** @brief Next timer ID to issue. kInvalid (0) is skipped. */
   TimerId  next_id_ = 1;
 
-  /** @brief 현재 슬롯에 등록된 타이머 총 수. */
+  /** @brief Total number of timers currently registered in slots. */
   size_t   count_ = 0;
 
   /**
-   * @brief 각 레벨의 슬롯 이동에 필요한 비트 시프트 값을 계산합니다.
+   * @brief Compute the bit-shift value for slot advancement at each level.
    *
-   * 레벨 `l`은 `2^(l*8)` ms 단위를 커버합니다.
-   * 이 정적 함수는 슬롯 배치 문서화용으로 제공됩니다.
+   * Level `l` covers `2^(l*8)` ms units.
+   * This static function is provided for documentation purposes.
    *
-   * @param level 레벨 인덱스 (0 ~ LEVELS-1).
-   * @returns 해당 레벨의 비트 시프트 값.
+   * @param level Level index (0 ~ LEVELS-1).
+   * @returns Bit shift value for the given level.
    */
   static constexpr uint64_t level_shift(size_t level) noexcept {
-    return level * 8; // 각 레벨은 2^8=256 슬롯을 커버
+    return level * 8; // each level covers 2^8=256 slots
   }
 };
 

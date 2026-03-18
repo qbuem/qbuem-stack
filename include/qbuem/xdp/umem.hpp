@@ -2,29 +2,30 @@
 
 /**
  * @file qbuem/xdp/umem.hpp
- * @brief AF_XDP UMEM (User Memory) 버퍼 풀.
+ * @brief AF_XDP UMEM (User Memory) buffer pool.
  * @defgroup qbuem_xdp AF_XDP eXpress Data Path
  * @ingroup qbuem_xdp
  *
- * UMEM은 커널과 유저스페이스가 공유하는 메모리 영역입니다.
- * `mmap()`으로 할당한 연속 메모리를 `xsk_umem__create()`로 커널에 등록하면
- * 패킷 데이터가 이 영역에 직접 쓰여집니다 — 커널 → 유저 복사 없음.
+ * UMEM is a memory region shared between the kernel and user space.
+ * Contiguous memory allocated via `mmap()` is registered with the kernel using
+ * `xsk_umem__create()`, allowing packet data to be written directly into this
+ * region — no kernel-to-user copy.
  *
- * ### 의존성
- * - Linux 4.18+ (`AF_XDP` 소켓 지원)
- * - Linux 5.4+ (xsk_socket__create_shared, NEED_WAKEUP 플래그)
- * - libbpf (선택적: `QBUEM_XDP_LIBBPF=ON` CMake 옵션 활성화 시)
+ * ### Dependencies
+ * - Linux 4.18+ (`AF_XDP` socket support)
+ * - Linux 5.4+ (xsk_socket__create_shared, NEED_WAKEUP flag)
+ * - libbpf (optional: enabled when `QBUEM_XDP_LIBBPF=ON` CMake option is set)
  *
- * ### CMake 사용법
+ * ### CMake Usage
  * ```cmake
  * find_package(qbuem-stack REQUIRED COMPONENTS xdp)
  * target_link_libraries(myapp PRIVATE qbuem-stack::xdp)
  * ```
  *
- * ### 주의사항
- * - UMEM 청크 크기는 반드시 2의 거듭제곱 (기본: 4096바이트)
- * - `O_DIRECT` 파일 I/O처럼 4096 바이트 정렬 필수
- * - RLIMIT_MEMLOCK 제한 상향 필요 (`ulimit -l unlimited`)
+ * ### Notes
+ * - UMEM chunk size must be a power of two (default: 4096 bytes)
+ * - 4096-byte alignment is required, similar to `O_DIRECT` file I/O
+ * - RLIMIT_MEMLOCK limit must be raised (`ulimit -l unlimited`)
  *
  * @{
  */
@@ -39,72 +40,72 @@
 #include <cstdint>
 #include <sys/mman.h>
 
-// libbpf AF_XDP 헤더 (QBUEM_XDP_LIBBPF=ON 일 때만 사용)
+// libbpf AF_XDP header (used only when QBUEM_XDP_LIBBPF=ON)
 #ifdef QBUEM_XDP_LIBBPF
 #  include <xdp/xsk.h>
 #endif
 
 namespace qbuem::xdp {
 
-// ─── 상수 ─────────────────────────────────────────────────────────────────
+// ─── Constants ────────────────────────────────────────────────────────────
 
-/** @brief UMEM 기본 프레임 크기 (4 KiB). */
+/** @brief Default UMEM frame size (4 KiB). */
 inline constexpr size_t kDefaultFrameSize = 4096;
 
-/** @brief Fill Ring / Completion Ring 기본 크기. */
+/** @brief Default Fill Ring / Completion Ring size. */
 inline constexpr uint32_t kDefaultRingSize = 2048;
 
 // ─── UmemConfig ───────────────────────────────────────────────────────────
 
 /**
- * @brief UMEM 생성 설정.
+ * @brief UMEM creation configuration.
  */
 struct UmemConfig {
-    /** @brief 전체 프레임 수. 메모리 = frame_count × frame_size. */
+    /** @brief Total number of frames. Memory = frame_count × frame_size. */
     uint32_t frame_count  = 4096;
 
-    /** @brief 프레임 당 바이트 수. 반드시 2^n. */
+    /** @brief Bytes per frame. Must be a power of 2. */
     uint32_t frame_size   = kDefaultFrameSize;
 
-    /** @brief Fill Ring 크기 (2^n). */
+    /** @brief Fill Ring size (power of 2). */
     uint32_t fill_size    = kDefaultRingSize;
 
-    /** @brief Completion Ring 크기 (2^n). */
+    /** @brief Completion Ring size (power of 2). */
     uint32_t comp_size    = kDefaultRingSize;
 
-    /** @brief Huge Pages 사용 여부 (TLB miss 감소). */
+    /** @brief Whether to use Huge Pages (reduces TLB misses). */
     bool     use_hugepages = false;
 };
 
 // ─── UmemFrame ────────────────────────────────────────────────────────────
 
 /**
- * @brief UMEM 내 단일 패킷 프레임 참조.
+ * @brief Reference to a single packet frame within UMEM.
  *
- * UMEM 메모리 기준 오프셋(`addr`)과 데이터 길이(`len`)로 구성됩니다.
- * 실제 데이터 포인터는 `Umem::data(frame)` 으로 얻습니다.
+ * Consists of an offset from the UMEM base (`addr`) and the data length (`len`).
+ * The actual data pointer is obtained via `Umem::data(frame)`.
  */
 struct UmemFrame {
-    /** @brief UMEM 기준 오프셋 (바이트). */
+    /** @brief Offset from the UMEM base (bytes). */
     uint64_t addr;
 
-    /** @brief 유효 데이터 길이 (바이트). */
+    /** @brief Valid data length (bytes). */
     uint32_t len;
 
-    /** @brief XDP 옵션 플래그 (XDP_OPTIONS_ZEROCOPY 등). */
+    /** @brief XDP option flags (XDP_OPTIONS_ZEROCOPY, etc.). */
     uint32_t options;
 };
 
 // ─── Umem ─────────────────────────────────────────────────────────────────
 
 /**
- * @brief AF_XDP UMEM 버퍼 풀.
+ * @brief AF_XDP UMEM buffer pool.
  *
- * `mmap()`으로 연속 메모리를 할당하고 커널에 UMEM으로 등록합니다.
- * 패킷 수신 시 커널이 이 메모리에 직접 데이터를 기록하므로
- * 커널 → 유저 복사가 완전히 제거됩니다.
+ * Allocates contiguous memory via `mmap()` and registers it with the kernel as UMEM.
+ * On packet reception the kernel writes data directly into this memory,
+ * eliminating all kernel-to-user copies.
  *
- * ### 사용 예시
+ * ### Usage Example
  * @code
  * qbuem::xdp::UmemConfig cfg{
  *     .frame_count  = 4096,
@@ -114,9 +115,9 @@ struct UmemFrame {
  *     .use_hugepages = true,
  * };
  * auto umem = qbuem::xdp::Umem::create(cfg);
- * if (!umem) { /* 에러 처리 */ }
+ * if (!umem) { /* handle error */ }
  *
- * // Fill Ring에 프레임 등록 (커널이 이 주소에 패킷 기록)
+ * // Register frames in the Fill Ring (kernel writes packets to these addresses)
  * umem->fill_frames(batch_size);
  * @endcode
  */
@@ -145,18 +146,18 @@ public:
 
     ~Umem() { destroy(); }
 
-    // ── 팩토리 ──────────────────────────────────────────────────────────
+    // ── Factory ──────────────────────────────────────────────────────────
 
     /**
-     * @brief UMEM을 생성하고 커널에 등록합니다.
+     * @brief Creates a UMEM and registers it with the kernel.
      *
-     * @param cfg  UMEM 설정.
-     * @returns 성공 시 Umem, 실패 시 error_code.
+     * @param cfg  UMEM configuration.
+     * @returns Umem on success, error_code on failure.
      */
     static Result<Umem> create(const UmemConfig& cfg) {
         Umem u(cfg);
 
-        // 1. mmap으로 정렬된 연속 메모리 할당
+        // 1. Allocate aligned contiguous memory via mmap
         // Integer overflow guard: frame_count * frame_size must not wrap.
         if (cfg.frame_count > 0 &&
             static_cast<size_t>(cfg.frame_size) > SIZE_MAX / static_cast<size_t>(cfg.frame_count)) {
@@ -177,7 +178,7 @@ public:
         u.mem_size_ = total;
 
 #ifdef QBUEM_XDP_LIBBPF
-        // 2. libbpf로 커널에 UMEM 등록
+        // 2. Register UMEM with the kernel via libbpf
         xsk_umem_config xsk_cfg{};
         xsk_cfg.fill_size      = cfg.fill_size;
         xsk_cfg.comp_size      = cfg.comp_size;
@@ -196,12 +197,12 @@ public:
         return u;
     }
 
-    // ── 접근자 ──────────────────────────────────────────────────────────
+    // ── Accessors ──────────────────────────────────────────────────────────
 
     /**
-     * @brief 프레임 오프셋에 해당하는 실제 데이터 포인터를 반환합니다.
-     * @param frame UmemFrame (addr 필드 사용).
-     * @returns UMEM 내 데이터 포인터.
+     * @brief Returns the actual data pointer for the given frame offset.
+     * @param frame UmemFrame (uses the addr field).
+     * @returns Data pointer within UMEM.
      */
     [[nodiscard]] uint8_t* data(const UmemFrame& frame) noexcept {
         return mem_ + frame.addr;
@@ -212,21 +213,21 @@ public:
         return mem_ + frame.addr;
     }
 
-    /** @brief 총 할당된 메모리 크기 (바이트). */
+    /** @brief Total allocated memory size (bytes). */
     [[nodiscard]] size_t mem_size() const noexcept { return mem_size_; }
 
-    /** @brief 설정을 반환합니다. */
+    /** @brief Returns the configuration. */
     [[nodiscard]] const UmemConfig& config() const noexcept { return cfg_; }
 
-    // ── Fill Ring 관리 ───────────────────────────────────────────────────
+    // ── Fill Ring management ─────────────────────────────────────────────
 
     /**
-     * @brief Fill Ring에 `n`개 프레임을 채워 커널에 수신 준비를 알립니다.
+     * @brief Fills `n` frames into the Fill Ring to notify the kernel of receive readiness.
      *
-     * 커널은 등록된 주소에 패킷을 기록하고 Rx Ring에 완료를 통보합니다.
+     * The kernel writes packets to the registered addresses and notifies completion via the Rx Ring.
      *
-     * @param n 채울 프레임 수. 가용 프레임보다 많으면 가용 수만큼 채웁니다.
-     * @returns 실제로 채운 프레임 수.
+     * @param n Number of frames to fill. If more than available frames, fills up to the available count.
+     * @returns Actual number of frames filled.
      */
     uint32_t fill_frames(uint32_t n) noexcept {
 #ifdef QBUEM_XDP_LIBBPF
@@ -236,7 +237,7 @@ public:
             *xsk_ring_prod__fill_addr(&fill_ring_, idx++) =
                 static_cast<uint64_t>(next_free_frame_++) * cfg_.frame_size;
             if (next_free_frame_ >= cfg_.frame_count) {
-                next_free_frame_ = 0; // 순환
+                next_free_frame_ = 0; // wrap around
             }
         }
         xsk_ring_prod__submit(&fill_ring_, reserved);
@@ -248,14 +249,14 @@ public:
     }
 
     /**
-     * @brief Completion Ring에서 전송 완료된 프레임을 회수합니다.
+     * @brief Reclaims transmission-completed frames from the Completion Ring.
      *
-     * `send()` 후 커널이 전송을 완료하면 이 링에 프레임 주소를 기록합니다.
-     * 회수한 프레임은 재사용할 수 있습니다.
+     * After `send()`, when the kernel completes transmission it records frame addresses in this ring.
+     * Reclaimed frames can be reused.
      *
-     * @param frames  회수된 프레임 주소를 저장할 배열.
-     * @param max_n   최대 회수 개수.
-     * @returns 실제로 회수한 프레임 수.
+     * @param frames  Array to store the reclaimed frame addresses.
+     * @param max_n   Maximum number of frames to reclaim.
+     * @returns Actual number of frames reclaimed.
      */
     uint32_t reclaim_tx(uint64_t* frames, uint32_t max_n) noexcept {
 #ifdef QBUEM_XDP_LIBBPF
@@ -273,13 +274,13 @@ public:
     }
 
 #ifdef QBUEM_XDP_LIBBPF
-    /** @brief 내부 xsk_umem* 핸들 (libbpf API 직접 사용 시). */
+    /** @brief Internal xsk_umem* handle (for direct libbpf API usage). */
     [[nodiscard]] xsk_umem* handle() noexcept { return umem_; }
 
-    /** @brief Fill Ring (xsk_ring_prod*) 참조. */
+    /** @brief Fill Ring (xsk_ring_prod*) reference. */
     [[nodiscard]] xsk_ring_prod* fill_ring() noexcept { return &fill_ring_; }
 
-    /** @brief Completion Ring (xsk_ring_cons*) 참조. */
+    /** @brief Completion Ring (xsk_ring_cons*) reference. */
     [[nodiscard]] xsk_ring_cons* comp_ring() noexcept { return &comp_ring_; }
 #endif
 

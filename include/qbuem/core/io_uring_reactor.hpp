@@ -27,10 +27,10 @@ public:
   static constexpr unsigned QUEUE_DEPTH = 256;
 
   /**
-   * @brief SQPOLL 모드 활성화 여부를 반환합니다.
+   * @brief Returns whether SQPOLL mode is active.
    *
-   * 커널이 IORING_SETUP_SQPOLL을 수락하면 true.
-   * 권한 부족 등으로 일반 모드로 폴백된 경우 false.
+   * true if the kernel accepted IORING_SETUP_SQPOLL.
+   * false if fallen back to normal mode (e.g., insufficient permissions).
    */
   bool is_sqpoll() const noexcept;
 
@@ -55,112 +55,115 @@ public:
   void post(std::function<void()> fn) override;
 
   // -------------------------------------------------------------------------
-  // Fixed Buffer API  (io_uring_register_buffers — DMA 직접 쓰기)
+  // Fixed Buffer API  (io_uring_register_buffers — direct DMA writes)
   // -------------------------------------------------------------------------
 
   /**
-   * @brief `iovec` 배열을 커널에 고정 버퍼로 등록합니다.
+   * @brief Register an `iovec` array as fixed buffers with the kernel.
    *
-   * 등록된 버퍼는 페이지 테이블에 고정(pinned)되어 DMA 연산 시
-   * 복사 없이 직접 사용 가능합니다. `read_fixed()` / `write_fixed()`
-   * 호출 시 버퍼 인덱스로 참조합니다.
+   * Registered buffers are pinned in the page table, allowing DMA operations
+   * to use them directly without copying. Reference them by buffer index in
+   * `read_fixed()` / `write_fixed()` calls.
    *
-   * @param iovecs 등록할 iovec 배열. 수명은 `unregister_fixed_buffers()`
-   *               호출 시까지 유지해야 합니다.
-   * @returns `ok()` 또는 에러 코드.
+   * @param iovecs iovec array to register. Must remain valid until
+   *               `unregister_fixed_buffers()` is called.
+   * @returns `ok()` or an error code.
    *
-   * @note 이미 등록된 경우 먼저 `unregister_fixed_buffers()`를 호출하세요.
+   * @note If buffers are already registered, call `unregister_fixed_buffers()` first.
    */
   Result<void> register_fixed_buffers(std::span<const iovec> iovecs);
 
   /**
-   * @brief 등록된 고정 버퍼를 모두 해제합니다.
+   * @brief Unregister all currently registered fixed buffers.
    */
   void unregister_fixed_buffers() noexcept;
 
   /**
-   * @brief 현재 등록된 고정 버퍼 수를 반환합니다.
+   * @brief Return the number of currently registered fixed buffers.
    */
   size_t fixed_buffer_count() const noexcept;
 
   /**
-   * @brief `IORING_OP_READ_FIXED` — 고정 버퍼로 비동기 읽기.
+   * @brief `IORING_OP_READ_FIXED` — asynchronous read into a fixed buffer.
    *
-   * 일반 read()와 달리 커널이 버퍼를 이미 알고 있어 복사가 없습니다.
+   * Unlike a regular read(), the kernel already knows the buffer, so no copy occurs.
    *
-   * @param fd        읽을 파일 디스크립터.
-   * @param buf_idx   `register_fixed_buffers()` 시 지정한 버퍼 인덱스.
-   * @param buf       버퍼 인덱스 내 슬라이스 (주소 + 길이가 등록 범위 내여야 함).
-   * @param file_offset 스트리밍 fd이면 -1; 파일이면 실제 오프셋.
-   * @param callback  완료 시 호출. 양수=읽은 바이트, 음수=errno.
+   * @param fd          File descriptor to read from.
+   * @param buf_idx     Buffer index specified at `register_fixed_buffers()` time.
+   * @param buf         Slice within the buffer (address + length must be within
+   *                    the registered range).
+   * @param file_offset -1 for streaming fds; actual offset for file fds.
+   * @param callback    Called on completion. Positive = bytes read, negative = errno.
    */
   Result<void> read_fixed(int fd, int buf_idx, std::span<std::byte> buf,
                           int64_t file_offset,
                           std::function<void(int)> callback);
 
   /**
-   * @brief `IORING_OP_WRITE_FIXED` — 고정 버퍼로 비동기 쓰기.
+   * @brief `IORING_OP_WRITE_FIXED` — asynchronous write from a fixed buffer.
    *
-   * @param fd        쓸 파일 디스크립터.
-   * @param buf_idx   등록된 버퍼 인덱스.
-   * @param buf       버퍼 슬라이스.
-   * @param file_offset 스트리밍 fd이면 -1.
-   * @param callback  완료 시 호출. 양수=쓴 바이트, 음수=errno.
+   * @param fd          File descriptor to write to.
+   * @param buf_idx     Registered buffer index.
+   * @param buf         Buffer slice.
+   * @param file_offset -1 for streaming fds.
+   * @param callback    Called on completion. Positive = bytes written, negative = errno.
    */
   Result<void> write_fixed(int fd, int buf_idx, std::span<const std::byte> buf,
                            int64_t file_offset,
                            std::function<void(int)> callback);
 
   // -------------------------------------------------------------------------
-  // Buffer Ring API  (IORING_OP_PROVIDE_BUFFERS — 커널 버퍼 자동 선택)
+  // Buffer Ring API  (IORING_OP_PROVIDE_BUFFERS — kernel automatic buffer selection)
   // -------------------------------------------------------------------------
 
   /**
-   * @brief 커널이 recv 시 버퍼를 자동 선택하는 Buffer Ring을 등록합니다.
+   * @brief Register a Buffer Ring that lets the kernel automatically select
+   *        recv buffers.
    *
-   * `IORING_OP_PROVIDE_BUFFERS`로 버퍼 풀을 커널에 전달합니다.
-   * `recv_buffered()` 호출 시 커널이 적절한 버퍼를 선택하고
-   * CQE flags에 선택된 버퍼 ID를 포함합니다.
+   * Passes a buffer pool to the kernel via `IORING_OP_PROVIDE_BUFFERS`.
+   * On `recv_buffered()` calls the kernel picks an available buffer and
+   * includes the chosen buffer ID in the CQE flags.
    *
-   * @param bgid         버퍼 그룹 ID (0~65535). 같은 ring에서 유일해야 함.
-   * @param buf_size     개별 버퍼 크기 (바이트).
-   * @param buf_count    버퍼 개수. 2의 거듭제곱 권장.
-   * @returns `ok()` 또는 에러 코드.
+   * @param bgid         Buffer group ID (0~65535). Must be unique within the ring.
+   * @param buf_size     Size of each individual buffer (bytes).
+   * @param buf_count    Number of buffers. Powers of two are recommended.
+   * @returns `ok()` or an error code.
    *
-   * @note Linux 5.19+ / liburing 2.2+ 필요.
+   * @note Requires Linux 5.19+ / liburing 2.2+.
    */
   Result<void> register_buf_ring(uint16_t bgid, size_t buf_size,
                                  size_t buf_count);
 
   /**
-   * @brief Buffer Ring을 해제합니다.
+   * @brief Unregister a Buffer Ring.
    *
-   * @param bgid `register_buf_ring()`에서 지정한 그룹 ID.
+   * @param bgid Group ID specified at `register_buf_ring()` time.
    */
   void unregister_buf_ring(uint16_t bgid) noexcept;
 
   /**
-   * @brief Buffer Ring을 사용한 비동기 recv.
+   * @brief Asynchronous recv using a Buffer Ring.
    *
-   * 커널이 `bgid` 그룹에서 빈 버퍼를 자동 선택하여 데이터를 채웁니다.
-   * 완료 시 `callback(bytes_received, buf_id, buf_ptr)` 형태로 호출됩니다.
-   * 콜백 내에서 버퍼를 소비한 후 `return_buf_to_ring(bgid, buf_id)` 필수.
+   * The kernel automatically selects a free buffer from the `bgid` group and
+   * fills it with received data. On completion, invokes
+   * `callback(bytes_received, buf_id, buf_ptr)`. After consuming the buffer
+   * inside the callback, `return_buf_to_ring(bgid, buf_id)` must be called.
    *
-   * @param fd       recv할 소켓.
-   * @param bgid     버퍼 그룹 ID.
-   * @param callback 완료 콜백. bytes<0 이면 에러, buf_ptr=nullptr.
+   * @param fd       Socket to receive from.
+   * @param bgid     Buffer group ID.
+   * @param callback Completion callback. bytes < 0 indicates error; buf_ptr == nullptr.
    */
   Result<void> recv_buffered(int fd, uint16_t bgid,
                              std::function<void(int, uint16_t, void *)> callback);
 
   /**
-   * @brief 사용 완료된 버퍼를 Buffer Ring에 반환합니다.
+   * @brief Return a consumed buffer back to the Buffer Ring.
    *
-   * `recv_buffered()` 콜백 내에서 버퍼 처리 후 반드시 호출해야 합니다.
-   * 반환하지 않으면 해당 버퍼가 재사용되지 않아 풀이 고갈됩니다.
+   * Must be called after processing the buffer inside a `recv_buffered()` callback.
+   * Failure to return a buffer exhausts the pool and prevents reuse.
    *
-   * @param bgid   버퍼 그룹 ID.
-   * @param buf_id 반환할 버퍼 ID (recv 콜백에서 전달됨).
+   * @param bgid   Buffer group ID.
+   * @param buf_id Buffer ID to return (passed to the recv callback).
    */
   void return_buf_to_ring(uint16_t bgid, uint16_t buf_id) noexcept;
 

@@ -2,16 +2,16 @@
 
 /**
  * @file qbuem/net/udp_socket.hpp
- * @brief 비동기 UDP 소켓 타입.
+ * @brief Asynchronous UDP socket type.
  * @ingroup qbuem_net
  *
- * `UdpSocket`은 논블로킹 UDP 소켓을 RAII로 관리하며,
- * 코루틴 기반의 비동기 송수신 인터페이스를 제공합니다.
+ * `UdpSocket` manages a non-blocking UDP socket via RAII and provides
+ * a coroutine-based asynchronous send/receive interface.
  *
- * ### 설계 원칙
- * - Move-only: 복사 불가, 소멸자에서 fd 자동 close
- * - `send_to`: 목적지 주소 지정 송신
- * - `recv_from`: 수신 데이터 및 발신자 주소 반환
+ * ### Design Principles
+ * - Move-only: non-copyable, fd is automatically closed in the destructor
+ * - `send_to`: send to a specified destination address
+ * - `recv_from`: receive data and return the sender's address
  * @{
  */
 
@@ -31,16 +31,16 @@
 namespace qbuem {
 
 /**
- * @brief 비동기 UDP 소켓.
+ * @brief Asynchronous UDP socket.
  *
- * 논블로킹 UDP 소켓을 래핑하여 코루틴 기반 송수신 인터페이스를 제공합니다.
- * Move-only 타입이며 소멸 시 소켓이 자동으로 닫힙니다.
+ * Wraps a non-blocking UDP socket to provide a coroutine-based send/receive
+ * interface. Move-only type; the socket is closed automatically on destruction.
  *
- * ### 사용 예시
+ * ### Usage Example
  * @code
  * auto addr = SocketAddr::from_ipv4("0.0.0.0", 9000);
  * auto sock = UdpSocket::bind(*addr);
- * if (!sock) { // 에러 처리 }
+ * if (!sock) { // error handling }
  *
  * std::array<std::byte, 1500> buf{};
  * auto [n, from] = co_await sock->recv_from(buf);
@@ -48,34 +48,34 @@ namespace qbuem {
  */
 class UdpSocket {
 public:
-  /** @brief 유효하지 않은 fd로 초기화. */
+  /** @brief Initialize with an invalid fd. */
   UdpSocket() noexcept : fd_(-1) {}
 
   /**
-   * @brief 이미 바인딩된 fd로 UdpSocket을 구성합니다.
-   * @param fd 논블로킹 UDP 소켓 파일 디스크립터.
+   * @brief Construct a UdpSocket from an already-bound fd.
+   * @param fd Non-blocking UDP socket file descriptor.
    */
   explicit UdpSocket(int fd) noexcept : fd_(fd) {}
 
-  /** @brief 소멸자: 열린 소켓을 자동으로 닫습니다. */
+  /** @brief Destructor: automatically closes the open socket. */
   ~UdpSocket() {
     if (fd_ >= 0) {
       ::close(fd_);
     }
   }
 
-  /** @brief 복사 생성자 삭제 (Move-only). */
+  /** @brief Copy constructor deleted (Move-only). */
   UdpSocket(const UdpSocket &) = delete;
 
-  /** @brief 복사 대입 삭제 (Move-only). */
+  /** @brief Copy assignment deleted (Move-only). */
   UdpSocket &operator=(const UdpSocket &) = delete;
 
-  /** @brief 이동 생성자. */
+  /** @brief Move constructor. */
   UdpSocket(UdpSocket &&other) noexcept : fd_(other.fd_) {
     other.fd_ = -1;
   }
 
-  /** @brief 이동 대입 연산자. */
+  /** @brief Move assignment operator. */
   UdpSocket &operator=(UdpSocket &&other) noexcept {
     if (this != &other) {
       if (fd_ >= 0) ::close(fd_);
@@ -85,13 +85,13 @@ public:
     return *this;
   }
 
-  // ─── 팩토리 메서드 ──────────────────────────────────────────────────────
+  // ─── Factory Methods ─────────────────────────────────────────────────────
 
   /**
-   * @brief 지정된 주소에 바인딩하는 UDP 소켓을 생성합니다.
+   * @brief Create a UDP socket bound to the specified address.
    *
-   * @param addr 바인딩할 로컬 주소. IPv4/IPv6 모두 지원.
-   * @returns 성공 시 UdpSocket, 실패 시 에러 코드.
+   * @param addr Local address to bind to. Both IPv4 and IPv6 are supported.
+   * @returns UdpSocket on success, or an error code on failure.
    */
   static Result<UdpSocket> bind(SocketAddr addr) noexcept {
     int domain = (addr.family() == SocketAddr::Family::IPv6) ? AF_INET6 : AF_INET;
@@ -99,7 +99,7 @@ public:
     if (fd < 0)
       return unexpected(std::error_code(errno, std::system_category()));
 
-    // SO_REUSEPORT: 멀티 워커 포트 공유 허용
+    // SO_REUSEPORT: allow multiple workers to share the same port
     {
       int opt = 1;
       ::setsockopt(fd, SOL_SOCKET, SO_REUSEPORT, &opt, sizeof(opt));
@@ -122,16 +122,16 @@ public:
     return UdpSocket(fd);
   }
 
-  // ─── 비동기 I/O ─────────────────────────────────────────────────────────
+  // ─── Asynchronous I/O ────────────────────────────────────────────────────
 
   /**
-   * @brief 지정된 목적지 주소로 데이터그램을 비동기로 전송합니다.
+   * @brief Asynchronously send a datagram to the specified destination address.
    *
-   * 소켓이 쓰기 가능해질 때까지 Reactor 이벤트를 대기합니다.
+   * Waits for a Reactor event until the socket becomes writable.
    *
-   * @param buf  전송할 데이터 버퍼.
-   * @param dest 목적지 소켓 주소.
-   * @returns 전송한 바이트 수. 에러 시 error_code.
+   * @param buf  Buffer containing data to send.
+   * @param dest Destination socket address.
+   * @returns Number of bytes sent. error_code on failure.
    */
   Task<Result<size_t>> send_to(std::span<const std::byte> buf,
                                SocketAddr dest) {
@@ -178,12 +178,12 @@ public:
   }
 
   /**
-   * @brief 데이터그램을 비동기로 수신하고 발신자 주소를 함께 반환합니다.
+   * @brief Asynchronously receive a datagram and return the sender's address.
    *
-   * 소켓이 읽기 가능해질 때까지 Reactor 이벤트를 대기합니다.
+   * Waits for a Reactor event until the socket becomes readable.
    *
-   * @param buf 수신 데이터를 저장할 버퍼.
-   * @returns 수신한 바이트 수와 발신자 SocketAddr 쌍. 에러 시 error_code.
+   * @param buf Buffer to store received data.
+   * @returns Pair of (bytes received, sender SocketAddr). error_code on failure.
    */
   Task<Result<std::pair<size_t, SocketAddr>>> recv_from(
       std::span<std::byte> buf) {
@@ -220,7 +220,7 @@ public:
       co_return unexpected(std::error_code(aw.err_, std::system_category()));
     }
 
-    // sockaddr_storage → SocketAddr 변환
+    // Convert sockaddr_storage to SocketAddr
     SocketAddr from_addr;
     if (aw.from_.ss_family == AF_INET) {
       const auto *sa = reinterpret_cast<const sockaddr_in *>(&aw.from_);
@@ -237,16 +237,16 @@ public:
     co_return std::make_pair(static_cast<size_t>(aw.result_), from_addr);
   }
 
-  // ─── 접근자 ─────────────────────────────────────────────────────────────
+  // ─── Accessors ───────────────────────────────────────────────────────────
 
   /**
-   * @brief 내부 파일 디스크립터를 반환합니다.
-   * @returns 소켓 fd. 유효하지 않으면 -1.
+   * @brief Returns the underlying file descriptor.
+   * @returns Socket fd. -1 if invalid.
    */
   int fd() const noexcept { return fd_; }
 
 private:
-  /** @brief 관리 중인 UDP 소켓 파일 디스크립터. */
+  /** @brief The managed UDP socket file descriptor. */
   int fd_;
 };
 

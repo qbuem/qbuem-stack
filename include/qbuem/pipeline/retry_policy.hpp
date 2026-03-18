@@ -2,14 +2,14 @@
 
 /**
  * @file qbuem/pipeline/retry_policy.hpp
- * @brief 재시도 정책 — RetryAction, RetryConfig, BackoffStrategy
+ * @brief Retry policy — RetryAction, RetryConfig, BackoffStrategy
  * @defgroup qbuem_retry RetryPolicy
  * @ingroup qbuem_pipeline
  *
- * RetryAction은 액션 함수를 재시도 로직으로 감쌉니다.
- * 지수 백오프, 고정 지연, 지터(jitter) 전략을 지원합니다.
+ * RetryAction wraps an action function with retry logic.
+ * Supports exponential backoff, fixed delay, and jitter strategies.
  *
- * ## 사용 예시
+ * ## Usage example
  * @code
  * RetryConfig cfg{.max_attempts=5, .strategy=BackoffStrategy::Jitter};
  * auto retry_fn = make_retry_action<int, int>(my_fn, cfg);
@@ -32,45 +32,45 @@
 namespace qbuem {
 
 /**
- * @brief 백오프 전략 열거형.
+ * @brief Backoff strategy enumeration.
  *
- * - Fixed:       모든 재시도에 동일한 지연 적용.
- * - Exponential: 지연 = base * 2^attempt (max_delay 상한).
- * - Jitter:      지연 = base * 2^attempt + random(0, base * 2^attempt * 0.1).
+ * - Fixed:       Applies the same delay to every retry.
+ * - Exponential: delay = base * 2^attempt (capped at max_delay).
+ * - Jitter:      delay = base * 2^attempt + random(0, base * 2^attempt * 0.1).
  */
 enum class BackoffStrategy { Fixed, Exponential, Jitter };
 
 /**
- * @brief 재시도 정책 설정 구조체.
+ * @brief Retry policy configuration structure.
  */
 struct RetryConfig {
-    size_t max_attempts                              = 3;       ///< 최대 시도 횟수
-    std::chrono::milliseconds base_delay{100};                  ///< 기본 지연
-    std::chrono::milliseconds max_delay{30000};                 ///< 최대 지연 상한
-    BackoffStrategy strategy                         = BackoffStrategy::Exponential; ///< 백오프 전략
-    /// 재시도 가능 여부 판단 함수 (기본: 모든 에러 재시도)
+    size_t max_attempts                              = 3;       ///< Maximum number of attempts
+    std::chrono::milliseconds base_delay{100};                  ///< Base delay
+    std::chrono::milliseconds max_delay{30000};                 ///< Maximum delay cap
+    BackoffStrategy strategy                         = BackoffStrategy::Exponential; ///< Backoff strategy
+    /// Function to determine whether an error is retriable (default: retry all errors)
     std::function<bool(const std::error_code&)> is_retriable = [](const std::error_code&) { return true; };
 };
 
 /**
- * @brief 재시도 래퍼 액션.
+ * @brief Retry wrapper action.
  *
- * 내부 액션 함수를 감싸 RetryConfig에 따라 실패 시 재시도합니다.
- * 최종 실패 시 마지막 에러를 반환합니다.
+ * Wraps an inner action function and retries on failure according to RetryConfig.
+ * Returns the last error on final failure.
  *
- * @tparam In  입력 타입.
- * @tparam Out 출력 타입.
+ * @tparam In  Input type.
+ * @tparam Out Output type.
  */
 template <typename In, typename Out>
 class RetryAction {
 public:
-    /** @brief 내부 액션 함수 타입. */
+    /** @brief Inner action function type. */
     using InnerFn = std::function<Task<Result<Out>>(In, ActionEnv)>;
 
     /**
-     * @brief RetryAction을 생성합니다.
-     * @param fn  감쌀 액션 함수.
-     * @param cfg 재시도 정책 설정.
+     * @brief Constructs a RetryAction.
+     * @param fn  Action function to wrap.
+     * @param cfg Retry policy configuration.
      */
     RetryAction(InnerFn fn, RetryConfig cfg = {})
         : fn_(std::move(fn)), cfg_(std::move(cfg)) {}

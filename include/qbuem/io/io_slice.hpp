@@ -2,19 +2,19 @@
 
 /**
  * @file qbuem/io/io_slice.hpp
- * @brief 힙 할당 없는 I/O 버퍼 슬라이스 기본 타입.
+ * @brief Zero-heap-allocation I/O buffer slice primitive types.
  * @defgroup qbuem_io_buffers IO Buffer Primitives
  * @ingroup qbuem_io
  *
- * `IOSlice`와 `MutableIOSlice`는 연속된 바이트 영역을 가리키는 팻 포인터입니다.
- * 스택에 위치하며 힙 할당이 전혀 발생하지 않습니다.
+ * `IOSlice` and `MutableIOSlice` are fat pointers referencing a contiguous
+ * byte region. They live on the stack and incur no heap allocation.
  *
- * - `IOSlice`       : 읽기 전용 바이트 슬라이스 (BufferView / iovec 변환 지원)
- * - `MutableIOSlice`: 쓰기 가능 바이트 슬라이스 (MutableBufferView / iovec 변환 지원)
+ * - `IOSlice`       : Read-only byte slice (supports conversion to BufferView / iovec)
+ * - `MutableIOSlice`: Writable byte slice (supports conversion to MutableBufferView / iovec)
  *
- * ### 설계 원칙
- * - zero-alloc: 힙 할당 없음, 스택 값 타입
- * - BufferView / iovec 양방향 변환으로 기존 API와 자연스럽게 연동
+ * ### Design Principles
+ * - zero-alloc: no heap allocation, stack value type
+ * - Bidirectional conversion to BufferView / iovec for seamless integration with existing APIs
  * @{
  */
 
@@ -28,12 +28,12 @@ namespace qbuem {
 // ─── IOSlice ──────────────────────────────────────────────────────────────────
 
 /**
- * @brief 읽기 전용 연속 바이트 영역을 가리키는 팻 포인터 (zero-alloc).
+ * @brief Fat pointer referencing a read-only contiguous byte region (zero-alloc).
  *
- * 소유권을 갖지 않습니다. 슬라이스가 가리키는 버퍼의 수명이
- * 슬라이스보다 길어야 합니다.
+ * Does not own the data. The lifetime of the buffer pointed to by this slice
+ * must outlive the slice itself.
  *
- * ### 사용 예시
+ * ### Usage Example
  * @code
  * std::array<std::byte, 64> data{};
  * IOSlice slice{data.data(), data.size()};
@@ -42,29 +42,30 @@ namespace qbuem {
  * @endcode
  */
 struct IOSlice {
-  /** @brief 버퍼의 첫 번째 바이트를 가리키는 포인터. */
+  /** @brief Pointer to the first byte of the buffer. */
   const std::byte *data;
 
-  /** @brief 버퍼의 바이트 수. */
+  /** @brief Number of bytes in the buffer. */
   size_t size;
 
   /**
-   * @brief 읽기 전용 `BufferView`로 변환합니다.
+   * @brief Converts to a read-only `BufferView`.
    *
-   * @returns `std::span<const uint8_t>`로 표현한 동일한 바이트 영역.
-   * @note 포인터 타입만 재해석됩니다 — 복사는 없습니다.
+   * @returns The same byte region represented as `std::span<const uint8_t>`.
+   * @note Only the pointer type is reinterpreted — no copy occurs.
    */
   [[nodiscard]] BufferView to_buffer_view() const noexcept {
     return {reinterpret_cast<const uint8_t *>(data), size};
   }
 
   /**
-   * @brief POSIX `iovec` 구조체로 변환합니다.
+   * @brief Converts to a POSIX `iovec` struct.
    *
-   * `readv(2)` / `writev(2)` 등 scatter-gather syscall에 직접 전달할 수 있습니다.
-   * `iov_base`는 `const_cast`로 비-const 포인터로 변환됩니다 (POSIX 요구사항).
+   * Suitable for direct use with scatter-gather syscalls such as
+   * `readv(2)` / `writev(2)`.
+   * `iov_base` is cast to a non-const pointer via `const_cast` (required by POSIX).
    *
-   * @returns 동일한 바이트 영역을 가리키는 `iovec`.
+   * @returns An `iovec` pointing to the same byte region.
    */
   [[nodiscard]] iovec to_iovec() const noexcept {
     return {const_cast<std::byte *>(data), size};
@@ -74,12 +75,12 @@ struct IOSlice {
 // ─── MutableIOSlice ───────────────────────────────────────────────────────────
 
 /**
- * @brief 쓰기 가능한 연속 바이트 영역을 가리키는 팻 포인터 (zero-alloc).
+ * @brief Fat pointer referencing a writable contiguous byte region (zero-alloc).
  *
- * 소유권을 갖지 않습니다. 슬라이스가 가리키는 버퍼의 수명이
- * 슬라이스보다 길어야 합니다.
+ * Does not own the data. The lifetime of the buffer pointed to by this slice
+ * must outlive the slice itself.
  *
- * ### 사용 예시
+ * ### Usage Example
  * @code
  * alignas(64) std::byte recv_buf[4096];
  * MutableIOSlice slice{recv_buf, sizeof(recv_buf)};
@@ -88,35 +89,35 @@ struct IOSlice {
  * @endcode
  */
 struct MutableIOSlice {
-  /** @brief 버퍼의 첫 번째 바이트를 가리키는 쓰기 가능 포인터. */
+  /** @brief Writable pointer to the first byte of the buffer. */
   std::byte *data;
 
-  /** @brief 버퍼의 바이트 수. */
+  /** @brief Number of bytes in the buffer. */
   size_t size;
 
   /**
-   * @brief 쓰기 가능한 `MutableBufferView`로 변환합니다.
+   * @brief Converts to a writable `MutableBufferView`.
    *
-   * @returns `std::span<uint8_t>`로 표현한 동일한 바이트 영역.
-   * @note 포인터 타입만 재해석됩니다 — 복사는 없습니다.
+   * @returns The same byte region represented as `std::span<uint8_t>`.
+   * @note Only the pointer type is reinterpreted — no copy occurs.
    */
   [[nodiscard]] MutableBufferView to_buffer_view() const noexcept {
     return {reinterpret_cast<uint8_t *>(data), size};
   }
 
   /**
-   * @brief POSIX `iovec` 구조체로 변환합니다.
+   * @brief Converts to a POSIX `iovec` struct.
    *
-   * @returns 동일한 바이트 영역을 가리키는 `iovec`.
+   * @returns An `iovec` pointing to the same byte region.
    */
   [[nodiscard]] iovec to_iovec() const noexcept {
     return {data, size};
   }
 
   /**
-   * @brief 읽기 전용 `IOSlice`로 변환합니다.
+   * @brief Converts to a read-only `IOSlice`.
    *
-   * @returns 동일한 바이트 영역을 가리키는 읽기 전용 슬라이스.
+   * @returns A read-only slice pointing to the same byte region.
    */
   [[nodiscard]] IOSlice as_const() const noexcept {
     return {data, size};

@@ -2,27 +2,27 @@
 
 /**
  * @file qbuem/http/trace_middleware.hpp
- * @brief HTTP traceparent 헤더 자동 파싱 및 traceresponse 주입 미들웨어
+ * @brief HTTP traceparent header automatic parsing and traceresponse injection middleware
  * @defgroup qbuem_trace_middleware HTTP Trace Middleware
  * @ingroup qbuem_http
  *
- * W3C Trace Context Level 1 표준(https://www.w3.org/TR/trace-context/)에 따라:
- * - 인바운드 `traceparent` 헤더를 파싱하여 `TraceContext` 생성
- * - 자식 스팬을 생성하고 `Context`에 `TraceContextSlot`으로 저장
- * - 아웃바운드 응답에 `traceresponse` 헤더 추가
+ * According to the W3C Trace Context Level 1 standard (https://www.w3.org/TR/trace-context/):
+ * - Parse the inbound `traceparent` header and create a `TraceContext`
+ * - Create a child span and store it in `Context` as a `TraceContextSlot`
+ * - Add the `traceresponse` header to the outbound response
  *
- * ## Router에 등록하는 예시
+ * ## Example: registering with a Router
  * ```cpp
  * qbuem::http::Router router;
  * router.use_async(qbuem::http::make_trace_middleware());
  * ```
  *
- * ## Pipeline에서 TraceContext 접근
+ * ## Accessing TraceContext in a Pipeline
  * ```cpp
- * // Action::push() 내부에서
+ * // Inside Action::push()
  * if (auto slot = env.ctx.get<qbuem::TraceContextSlot>()) {
  *     auto child = slot->value.child_span();
- *     // child.to_traceparent() — 다음 서비스로 전파
+ *     // child.to_traceparent() — propagate to the next service
  * }
  * ```
  * @{
@@ -46,16 +46,16 @@ namespace qbuem::http {
 // ---------------------------------------------------------------------------
 
 /**
- * @brief trace_middleware 설정.
+ * @brief Configuration for trace_middleware.
  */
 struct TraceMiddlewareConfig {
-  /// 샘플러 — nullptr이면 AlwaysSampler 사용.
+  /// Sampler — uses AlwaysSampler when nullptr.
   std::shared_ptr<tracing::Sampler> sampler;
 
-  /// traceresponse 헤더 추가 여부 (기본 true).
+  /// Whether to add the traceresponse header (default: true).
   bool add_traceresponse{true};
 
-  /// `X-B3-TraceId` 등 레거시 헤더도 fallback으로 파싱할지 여부.
+  /// Whether to also parse legacy headers such as `X-B3-TraceId` as a fallback.
   bool parse_b3_fallback{false};
 };
 
@@ -64,17 +64,17 @@ struct TraceMiddlewareConfig {
 // ---------------------------------------------------------------------------
 
 /**
- * @brief W3C traceparent 파싱 + traceresponse 주입 비동기 미들웨어 팩토리.
+ * @brief Factory for the W3C traceparent parsing + traceresponse injection async middleware.
  *
- * 생성된 미들웨어는 `Router::use_async()`에 등록합니다.
+ * Register the returned middleware via `Router::use_async()`.
  *
- * @param cfg 설정 (기본값으로 AlwaysSampler + traceresponse 활성화).
- * @returns AsyncMiddleware 함수 객체.
+ * @param cfg Configuration (defaults to AlwaysSampler + traceresponse enabled).
+ * @returns AsyncMiddleware function object.
  */
 [[nodiscard]] inline AsyncMiddleware make_trace_middleware(
     TraceMiddlewareConfig cfg = {}) {
 
-  // 기본 샘플러 설정
+  // Set default sampler
   if (!cfg.sampler) {
     cfg.sampler = std::make_shared<tracing::AlwaysSampler>();
   }
@@ -84,18 +84,18 @@ struct TraceMiddlewareConfig {
     tracing::TraceContext trace_ctx;
     bool has_parent = false;
 
-    // ── 1. traceparent 파싱 ─────────────────────────────────────────────────
+    // ── 1. Parse traceparent ─────────────────────────────────────────────────
     std::string_view traceparent = req.header("traceparent");
     if (!traceparent.empty()) {
       auto result = tracing::TraceContext::from_traceparent(traceparent);
       if (result) {
-        // 부모 스팬에서 자식 스팬 생성
+        // Create a child span from the parent span
         trace_ctx = result->child_span();
         has_parent = true;
       }
     }
 
-    // ── 2. B3 헤더 fallback (선택적) ────────────────────────────────────────
+    // ── 2. B3 header fallback (optional) ────────────────────────────────────
     if (!has_parent && cfg.parse_b3_fallback) {
       std::string_view b3_traceid = req.header("X-B3-TraceId");
       std::string_view b3_spanid  = req.header("X-B3-SpanId");
@@ -130,44 +130,44 @@ struct TraceMiddlewareConfig {
         }
 
         trace_ctx.flags = (b3_sampled == "1") ? 0x01 : 0x00;
-        // 새 span_id 생성 (child span처럼)
+        // Generate a new span_id (as a child span)
         trace_ctx = trace_ctx.child_span();
         has_parent = true;
       }
     }
 
-    // ── 3. 루트 스팬 생성 (traceparent 없는 경우) ───────────────────────────
+    // ── 3. Create root span (when no traceparent is present) ───────────────────────────
     if (!has_parent) {
       trace_ctx = tracing::TraceContext::generate();
     }
 
-    // ── 4. 샘플링 결정 ─────────────────────────────────────────────────────
+    // ── 4. Sampling decision ─────────────────────────────────────────────────────
     tracing::SamplingContext sample_ctx{
         .pipeline_name = "http",
         .action_name   = "request",
         .span_name     = req.path(),
-        .parent        = has_parent ? nullptr : nullptr,  // 부모는 이미 반영됨
+        .parent        = has_parent ? nullptr : nullptr,  // parent is already reflected
     };
     auto decision = cfg.sampler->should_sample(sample_ctx);
     if (decision == tracing::SamplingDecision::DROP) {
-      trace_ctx.flags &= ~0x01u;  // sampled bit 클리어
+      trace_ctx.flags &= ~0x01u;  // clear sampled bit
     } else {
-      trace_ctx.flags |= 0x01u;   // sampled bit 설정
+      trace_ctx.flags |= 0x01u;   // set sampled bit
     }
 
-    // ── 5. PipelineTracer에 스팬 시작 기록 ─────────────────────────────────
+    // ── 5. Record span start in PipelineTracer ─────────────────────────────────
     tracing::PipelineTracer::global().start_span(
         "http", "request", req.path());
 
-    // ── 6. 다음 핸들러 실행 ────────────────────────────────────────────────
+    // ── 6. Execute next handler ────────────────────────────────────────────
     bool result = co_await next();
 
-    // ── 7. 스팬 종료 ───────────────────────────────────────────────────────
+    // ── 7. End span ────────────────────────────────────────────────────────
     tracing::PipelineTracer::global().end_span("http", "request", req.path());
 
-    // ── 8. traceresponse 헤더 추가 ─────────────────────────────────────────
+    // ── 8. Add traceresponse header ─────────────────────────────────────────
     if (cfg.add_traceresponse) {
-      // W3C traceresponse: 동일 traceparent 형식
+      // W3C traceresponse: same traceparent format
       res.header("traceresponse", trace_ctx.to_traceparent());
     }
 
