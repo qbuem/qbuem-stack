@@ -2,20 +2,20 @@
 
 /**
  * @file qbuem/core/numa.hpp
- * @brief NUMA-aware 스케줄링 및 CPU 친화성 유틸리티
+ * @brief NUMA-aware scheduling and CPU affinity utilities
  * @defgroup qbuem_numa NUMA Scheduling
  * @ingroup qbuem_core
  *
- * `Dispatcher`의 워커 스레드를 특정 CPU 코어 또는 NUMA 노드에 고정합니다.
+ * Pins worker threads of a `Dispatcher` to specific CPU cores or NUMA nodes.
  *
- * ## 설계
+ * ## Design
  * - `pin_reactor_to_cpu(dispatcher, idx, cpu_id)` — pthread_setaffinity_np
- * - `auto_numa_bind(dispatcher)` — NUMA 노드별 reactor 그룹 자동 배치
- * - `NearestNumaAllocator` — mbind(2) 기반 NUMA-local 메모리 할당
+ * - `auto_numa_bind(dispatcher)` — automatically places reactor groups per NUMA node
+ * - `NearestNumaAllocator` — NUMA-local memory allocation via mbind(2)
  *
- * ## 플랫폼 지원
+ * ## Platform Support
  * - Linux: `pthread_setaffinity_np`, `mbind(2)`, `/sys/devices/system/node`
- * - 비Linux: 모든 함수가 no-op (graceful fallback)
+ * - Non-Linux: all functions are no-ops (graceful fallback)
  *
  * @{
  */
@@ -38,19 +38,21 @@
 namespace qbuem {
 
 // ---------------------------------------------------------------------------
-// CPU 친화성
+// CPU affinity
 // ---------------------------------------------------------------------------
 
 /**
- * @brief 특정 Reactor 워커 스레드를 지정한 CPU 코어에 고정합니다.
+ * @brief Pin a specific Reactor worker thread to the given CPU core.
  *
- * `pthread_setaffinity_np`를 사용하여 `reactor_idx` 번 워커를 `cpu_id` 코어에
- * 고정합니다. 이후 OS 스케줄러가 해당 스레드를 다른 코어로 이동시키지 않습니다.
+ * Uses `pthread_setaffinity_np` to bind the worker at `reactor_idx` to
+ * `cpu_id`. After this call the OS scheduler will not migrate that thread to
+ * another core.
  *
- * @param dispatcher  대상 Dispatcher.
- * @param reactor_idx 고정할 워커 인덱스 (0 ~ thread_count()-1).
- * @param cpu_id      목표 CPU 코어 번호 (0-based, logical CPU).
- * @returns 성공 시 true. 범위 초과 또는 비Linux 플랫폼에서는 false.
+ * @param dispatcher  Target Dispatcher.
+ * @param reactor_idx Index of the worker to pin (0 ~ thread_count()-1).
+ * @param cpu_id      Target CPU core number (0-based, logical CPU).
+ * @returns true on success. false if the index is out of range or on
+ *          non-Linux platforms.
  */
 inline bool pin_reactor_to_cpu(Dispatcher &dispatcher,
                                 size_t reactor_idx,
@@ -58,9 +60,8 @@ inline bool pin_reactor_to_cpu(Dispatcher &dispatcher,
 #if defined(__linux__)
   if (reactor_idx >= dispatcher.thread_count()) return false;
 
-  // Dispatcher는 내부 스레드 핸들을 노출하지 않으므로
-  // 현재 스레드가 해당 reactor라면 self-affinity를 설정합니다.
-  // 런타임 바인딩: 워커가 자신의 CPU를 설정하도록 post() 사용.
+  // Dispatcher does not expose internal thread handles, so we use post()
+  // to let each worker set its own affinity from within its own thread.
   dispatcher.post_to(reactor_idx, [cpu_id]() {
     cpu_set_t cpuset;
     CPU_ZERO(&cpuset);
@@ -75,16 +76,16 @@ inline bool pin_reactor_to_cpu(Dispatcher &dispatcher,
 }
 
 // ---------------------------------------------------------------------------
-// NUMA 노드 감지
+// NUMA node detection
 // ---------------------------------------------------------------------------
 
 /**
- * @brief 시스템의 NUMA 노드 수를 반환합니다.
+ * @brief Return the number of NUMA nodes in the system.
  *
- * Linux: `/sys/devices/system/node/online` 파싱.
- * 비Linux: 항상 1 반환.
+ * Linux: parses `/sys/devices/system/node/online`.
+ * Non-Linux: always returns 1.
  *
- * @returns NUMA 노드 수 (최소 1).
+ * @returns Number of NUMA nodes (minimum 1).
  */
 inline int numa_node_count() noexcept {
 #if defined(__linux__)
@@ -93,7 +94,7 @@ inline int numa_node_count() noexcept {
 
   std::string line;
   std::getline(f, line);
-  // 형식 예: "0-3" 또는 "0,2" 또는 "0"
+  // Format examples: "0-3", "0,2", or "0"
   int max_node = 0;
   size_t pos = 0;
   while (pos < line.size()) {
@@ -121,12 +122,12 @@ inline int numa_node_count() noexcept {
 }
 
 /**
- * @brief CPU ID → NUMA 노드 매핑을 반환합니다.
+ * @brief Return a mapping from CPU ID to NUMA node.
  *
- * Linux: `/sys/devices/system/node/nodeN/cpulist` 파싱.
+ * Linux: parses `/sys/devices/system/node/nodeN/cpulist`.
  *
- * @returns cpu_to_node 벡터 (인덱스 = logical CPU, 값 = NUMA 노드 번호).
- *          비Linux에서는 모두 0인 벡터 반환.
+ * @returns cpu_to_node vector (index = logical CPU, value = NUMA node number).
+ *          On non-Linux platforms, returns a vector of all zeros.
  */
 inline std::vector<int> cpu_to_numa_map() {
   int num_cpus = static_cast<int>(std::thread::hardware_concurrency());
@@ -142,7 +143,7 @@ inline std::vector<int> cpu_to_numa_map() {
 
     std::string line;
     std::getline(f, line);
-    // 간단한 파싱: "0-3,8-11" 형식
+    // Simple parsing for "0-3,8-11" format
     std::istringstream ss(line);
     std::string token;
     while (std::getline(ss, token, ',')) {
@@ -163,21 +164,21 @@ inline std::vector<int> cpu_to_numa_map() {
 }
 
 // ---------------------------------------------------------------------------
-// NUMA 자동 바인딩
+// Automatic NUMA binding
 // ---------------------------------------------------------------------------
 
 /**
- * @brief NUMA 노드별로 Reactor 워커를 균등하게 배치합니다.
+ * @brief Evenly distribute Reactor workers across NUMA nodes.
  *
- * `thread_count()`개의 워커를 NUMA 노드 수에 맞게 나눠
- * 각 워커를 해당 노드의 첫 번째 CPU에 고정합니다.
+ * Divides `thread_count()` workers across the available NUMA nodes and pins
+ * each worker to the first CPU of its assigned node.
  *
- * 예시 (4워커, 2 NUMA 노드):
- * - 워커 0,1 → NUMA 노드 0의 CPU들
- * - 워커 2,3 → NUMA 노드 1의 CPU들
+ * Example (4 workers, 2 NUMA nodes):
+ * - Workers 0, 1 → CPUs on NUMA node 0
+ * - Workers 2, 3 → CPUs on NUMA node 1
  *
- * @param dispatcher 바인딩할 Dispatcher.
- * @returns 실제로 바인딩된 워커 수. 비Linux에서는 0.
+ * @param dispatcher Dispatcher to bind.
+ * @returns Number of workers actually bound. 0 on non-Linux platforms.
  */
 inline size_t auto_numa_bind(Dispatcher &dispatcher) {
 #if defined(__linux__)
@@ -185,7 +186,7 @@ inline size_t auto_numa_bind(Dispatcher &dispatcher) {
   int num_cpus = static_cast<int>(std::thread::hardware_concurrency());
   auto node_map = cpu_to_numa_map();
 
-  // 노드별 CPU 목록 수집
+  // Collect the list of CPUs per node
   std::vector<std::vector<int>> node_cpus(static_cast<size_t>(nodes));
   for (int cpu = 0; cpu < num_cpus; ++cpu)
     node_cpus[static_cast<size_t>(node_map[static_cast<size_t>(cpu)])].push_back(cpu);
@@ -208,19 +209,20 @@ inline size_t auto_numa_bind(Dispatcher &dispatcher) {
 }
 
 // ---------------------------------------------------------------------------
-// PerfCounters — PMU 이벤트 (Linux perf_event_open)
+// PerfCounters — PMU events (Linux perf_event_open)
 // ---------------------------------------------------------------------------
 
 /**
- * @brief CPU 하드웨어 성능 카운터 (PMU) 래퍼.
+ * @brief CPU hardware performance counter (PMU) wrapper.
  *
- * Linux `perf_event_open(2)`을 사용하여 다음 이벤트를 측정합니다:
- * - cycles        — CPU 클럭 사이클
- * - instructions  — 실행된 명령어 수
- * - llc_misses    — L3 캐시 미스
- * - branch_misses — 분기 예측 실패
+ * Uses Linux `perf_event_open(2)` to measure the following events:
+ * - cycles        — CPU clock cycles
+ * - instructions  — instructions retired
+ * - llc_misses    — L3 cache misses
+ * - branch_misses — branch mispredictions
  *
- * 권한이 없거나 비Linux 환경에서는 graceful degradation (값 = 0).
+ * Degrades gracefully (values = 0) when permissions are insufficient or on
+ * non-Linux platforms.
  */
 class PerfCounters {
 public:
@@ -243,7 +245,7 @@ public:
   PerfCounters(const PerfCounters &) = delete;
   PerfCounters &operator=(const PerfCounters &) = delete;
 
-  /// @brief 카운터를 활성화합니다.
+  /// @brief Enable the counters.
   void start() noexcept {
 #if defined(__linux__) && defined(PERF_TYPE_HARDWARE)
     for (int fd : fds_) {
@@ -253,7 +255,7 @@ public:
 #endif
   }
 
-  /// @brief 카운터를 멈추고 현재 값의 스냅샷을 반환합니다.
+  /// @brief Disable the counters and return a snapshot of the current values.
   [[nodiscard]] Snapshot stop() noexcept {
     Snapshot s;
 #if defined(__linux__) && defined(PERF_TYPE_HARDWARE)
@@ -274,7 +276,7 @@ public:
     return s;
   }
 
-  /// @brief PMU 카운터가 열려 있는지 확인합니다.
+  /// @brief Returns true if PMU counters were successfully opened.
   [[nodiscard]] bool available() const noexcept {
 #if defined(__linux__) && defined(PERF_TYPE_HARDWARE)
     return !fds_.empty() && fds_[0] >= 0;
@@ -288,7 +290,7 @@ private:
 
   void open() noexcept {
 #if defined(__linux__) && defined(PERF_TYPE_HARDWARE)
-    // perf_event_open이 사용 가능한지 헤더로 확인
+    // Confirm perf_event_open availability via header inclusion
 #  include <linux/perf_event.h>
 #  include <sys/ioctl.h>
 #  include <sys/syscall.h>

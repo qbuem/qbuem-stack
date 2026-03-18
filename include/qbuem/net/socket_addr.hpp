@@ -2,16 +2,17 @@
 
 /**
  * @file qbuem/net/socket_addr.hpp
- * @brief 플랫폼 독립적인 소켓 주소 값 타입 정의.
+ * @brief Platform-independent socket address value type definition.
  * @defgroup qbuem_net Network Primitives
  * @ingroup qbuem_net
  *
- * IPv4, IPv6, Unix 도메인 소켓 주소를 힙 할당 없이 표현하는 값 타입을 제공합니다.
+ * Provides a value type that represents IPv4, IPv6, and Unix domain socket
+ * addresses without heap allocation.
  *
- * ### 설계 목표
- * - 힙 할당 없음 (스택 값 타입)
- * - 플랫폼 sockaddr 구조체 직접 변환 지원
- * - 문자열 표현은 고정 버퍼에 zero-alloc으로 생성
+ * ### Design Goals
+ * - No heap allocation (stack value type)
+ * - Direct conversion to/from platform sockaddr structures
+ * - String representation generated in a fixed buffer with zero allocation
  * @{
  */
 
@@ -28,12 +29,12 @@
 namespace qbuem {
 
 /**
- * @brief IPv4/IPv6/Unix 도메인 소켓 주소를 표현하는 값 타입.
+ * @brief Value type representing an IPv4, IPv6, or Unix domain socket address.
  *
- * 세 가지 주소 패밀리를 하나의 구조체로 표현합니다.
- * 모든 저장소는 스택에 위치하며 힙 할당이 발생하지 않습니다.
+ * Encodes three address families in a single struct.
+ * All storage lives on the stack; no heap allocation occurs.
  *
- * ### 사용 예시
+ * ### Usage Example
  * @code
  * auto addr4 = SocketAddr::from_ipv4("127.0.0.1", 8080);
  * auto addr6 = SocketAddr::from_ipv6("::1", 8080);
@@ -46,35 +47,35 @@ namespace qbuem {
  */
 struct SocketAddr {
   /**
-   * @brief 소켓 주소 패밀리 열거형.
+   * @brief Socket address family enumeration.
    */
   enum class Family {
     IPv4, ///< AF_INET (IPv4)
     IPv6, ///< AF_INET6 (IPv6)
-    Unix  ///< AF_UNIX (Unix 도메인)
+    Unix  ///< AF_UNIX (Unix domain)
   };
 
-  /** @brief 저장된 주소 패밀리. */
+  /** @brief Stored address family. */
   Family family_ = Family::IPv4;
 
-  /** @brief 포트 번호 (Unix 도메인의 경우 미사용, 0으로 설정). */
+  /** @brief Port number (unused for Unix domain, set to 0). */
   uint16_t port_ = 0;
 
-  /** @brief 주소 저장 유니온. */
+  /** @brief Address storage union. */
   union {
-    in_addr  ipv4_;         ///< IPv4 주소 저장소
-    in6_addr ipv6_;         ///< IPv6 주소 저장소
-    char     unix_[108];    ///< Unix 도메인 소켓 경로 (sun_path 최대 크기)
+    in_addr  ipv4_;         ///< IPv4 address storage
+    in6_addr ipv6_;         ///< IPv6 address storage
+    char     unix_[108];    ///< Unix domain socket path (max sun_path size)
   } addr_{};
 
-  // ─── 팩토리 메서드 ──────────────────────────────────────────────────────
+  // ─── Factory Methods ────────────────────────────────────────────────────────
 
   /**
-   * @brief IPv4 주소와 포트로 SocketAddr를 생성합니다.
+   * @brief Create a SocketAddr from an IPv4 address and port.
    *
-   * @param ip   점-십진 표기법 IPv4 주소 문자열 (예: "127.0.0.1").
-   * @param port 포트 번호 (호스트 바이트 순서).
-   * @returns 파싱 성공 시 SocketAddr, 실패 시 에러 코드.
+   * @param ip   Dotted-decimal IPv4 address string (e.g., "127.0.0.1").
+   * @param port Port number in host byte order.
+   * @returns SocketAddr on successful parsing, or an error code on failure.
    */
   static Result<SocketAddr> from_ipv4(const char *ip, uint16_t port) noexcept {
     SocketAddr a;
@@ -87,11 +88,11 @@ struct SocketAddr {
   }
 
   /**
-   * @brief IPv6 주소와 포트로 SocketAddr를 생성합니다.
+   * @brief Create a SocketAddr from an IPv6 address and port.
    *
-   * @param ip   콜론 표기법 IPv6 주소 문자열 (예: "::1").
-   * @param port 포트 번호 (호스트 바이트 순서).
-   * @returns 파싱 성공 시 SocketAddr, 실패 시 에러 코드.
+   * @param ip   Colon-notation IPv6 address string (e.g., "::1").
+   * @param port Port number in host byte order.
+   * @returns SocketAddr on successful parsing, or an error code on failure.
    */
   static Result<SocketAddr> from_ipv6(const char *ip, uint16_t port) noexcept {
     SocketAddr a;
@@ -104,10 +105,10 @@ struct SocketAddr {
   }
 
   /**
-   * @brief Unix 도메인 소켓 경로로 SocketAddr를 생성합니다.
+   * @brief Create a SocketAddr from a Unix domain socket path.
    *
-   * @param path 소켓 파일 경로. 길이는 107바이트 이하여야 합니다.
-   * @returns 생성 성공 시 SocketAddr, 경로가 너무 길면 에러 코드.
+   * @param path Socket file path. Must be 107 bytes or fewer.
+   * @returns SocketAddr on success, or an error code if the path is too long.
    */
   static Result<SocketAddr> from_unix(const char *path) noexcept {
     SocketAddr a;
@@ -156,16 +157,17 @@ struct SocketAddr {
     return a;
   }
 
-  // ─── 플랫폼 sockaddr 변환 ───────────────────────────────────────────────
+  // ─── Platform sockaddr Conversion ──────────────────────────────────────────
 
   /**
-   * @brief 플랫폼 sockaddr_storage 구조체를 채웁니다.
+   * @brief Fill a platform sockaddr_storage structure.
    *
-   * `connect()`, `bind()` 등의 syscall에 전달할 sockaddr를 생성합니다.
+   * Produces a sockaddr suitable for passing to syscalls such as
+   * `connect()` and `bind()`.
    *
-   * @param[out] out 채워질 sockaddr_storage 구조체.
-   * @param[out] len 실제 사용된 구조체의 크기.
-   * @returns 성공 시 `Result<void>::ok()`, 실패 시 에러 코드.
+   * @param[out] out sockaddr_storage structure to fill.
+   * @param[out] len Actual size of the filled structure.
+   * @returns `Result<void>::ok()` on success, or an error code on failure.
    */
   Result<void> to_sockaddr(sockaddr_storage &out, socklen_t &len) const noexcept {
     __builtin_memset(&out, 0, sizeof(out));
@@ -198,18 +200,18 @@ struct SocketAddr {
     return unexpected(std::make_error_code(std::errc::address_family_not_supported));
   }
 
-  // ─── 문자열 변환 (zero-alloc) ───────────────────────────────────────────
+  // ─── String Conversion (zero-alloc) ────────────────────────────────────────
 
   /**
-   * @brief 주소를 사람이 읽을 수 있는 문자열로 변환합니다 (힙 할당 없음).
+   * @brief Convert the address to a human-readable string without heap allocation.
    *
    * - IPv4: `"127.0.0.1:8080"`
    * - IPv6: `"[::1]:8080"`
    * - Unix: `"unix:/tmp/my.sock"`
    *
-   * @param buf  결과를 저장할 버퍼.
-   * @param n    버퍼 크기 (최소 INET6_ADDRSTRLEN + 10 권장).
-   * @returns 저장된 문자 수 (null 종결자 제외). 버퍼 부족이면 -1.
+   * @param buf  Buffer to store the result.
+   * @param n    Buffer size (at least INET6_ADDRSTRLEN + 10 recommended).
+   * @returns Number of characters written (excluding null terminator). -1 if buffer too small.
    */
   int to_chars(char *buf, size_t n) const noexcept {
     switch (family_) {
@@ -230,14 +232,14 @@ struct SocketAddr {
     return -1;
   }
 
-  // ─── 접근자 ─────────────────────────────────────────────────────────────
+  // ─── Accessors ──────────────────────────────────────────────────────────────
 
-  /** @brief 소켓 주소 패밀리를 반환합니다. */
+  /** @brief Returns the socket address family. */
   Family family() const noexcept { return family_; }
 
   /**
-   * @brief 포트 번호를 반환합니다 (호스트 바이트 순서).
-   * @returns IPv4/IPv6는 포트 번호, Unix 도메인은 0.
+   * @brief Returns the port number in host byte order.
+   * @returns Port number for IPv4/IPv6, 0 for Unix domain.
    */
   uint16_t port() const noexcept { return port_; }
 };
