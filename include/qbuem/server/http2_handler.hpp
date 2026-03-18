@@ -777,11 +777,11 @@ public:
     }
 
     /**
-     * @brief GOAWAY 프레임을 `pending_frames_`에 추가하고 연결 종료를 알립니다.
+     * @brief Adds a GOAWAY frame to `pending_frames_` and signals connection closure.
      *
-     * @param last_stream_id 서버가 성공적으로 처리한 마지막 스트림 ID.
-     * @param error_code     종료 원인 에러 코드 (RFC 7540 섹션 7).
-     * @param message        추가 디버그 메시지 (선택적).
+     * @param last_stream_id Last stream ID successfully processed by the server.
+     * @param error_code     Error code indicating the reason for closure (RFC 7540 section 7).
+     * @param message        Optional additional debug message.
      */
     Task<void> send_goaway(uint32_t last_stream_id,
                             uint32_t error_code,
@@ -791,8 +791,8 @@ public:
         frame.stream_id = 0;
         frame.flags     = 0;
 
-        // 페이로드: Last-Stream-ID(4바이트) + Error Code(4바이트) + 추가 데이터
-        append_uint32(frame.payload, last_stream_id & 0x7FFFFFFF); // MSB 예약
+        // Payload: Last-Stream-ID(4 bytes) + Error Code(4 bytes) + additional data
+        append_uint32(frame.payload, last_stream_id & 0x7FFFFFFF); // MSB reserved
         append_uint32(frame.payload, error_code);
         if (!message.empty()) {
             frame.payload.insert(frame.payload.end(),
@@ -805,19 +805,19 @@ public:
         co_return;
     }
 
-    // ─── 연결 프리페이스 ─────────────────────────────────────────────────────
+    // ─── Connection preface ───────────────────────────────────────────────────
 
     /**
-     * @brief HTTP/2 서버 연결 프리페이스를 전송합니다.
+     * @brief Sends the HTTP/2 server connection preface.
      *
-     * TLS 핸드셰이크 및 ALPN "h2" 협상 완료 후 즉시 호출해야 합니다.
-     * 클라이언트는 "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n" 프리페이스를 전송하고,
-     * 서버는 초기 SETTINGS 프레임으로 응답합니다 (RFC 7540 섹션 3.5).
+     * Must be called immediately after TLS handshake and ALPN "h2" negotiation complete.
+     * The client sends the "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n" preface, and
+     * the server responds with an initial SETTINGS frame (RFC 7540 section 3.5).
      *
-     * @returns 처리 결과. 항상 성공을 반환합니다.
+     * @returns Processing result. Always returns success.
      */
     Task<Result<void>> send_connection_preface() {
-        // 서버 연결 프리페이스: 초기 SETTINGS 프레임 전송
+        // Server connection preface: send initial SETTINGS frame
         co_await send_settings(false);
         co_return Result<void>::ok();
     }
