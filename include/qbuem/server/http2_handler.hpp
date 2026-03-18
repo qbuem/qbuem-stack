@@ -125,11 +125,11 @@ static constexpr uint8_t HTTP2_FLAG_PRIORITY    = 0x20;
 class HpackDecoder {
 public:
     /**
-     * @brief 헤더 블록 프래그먼트를 디코딩하여 헤더 맵을 반환합니다.
+     * @brief Decodes a header block fragment and returns a header map.
      *
-     * @param data HPACK으로 인코딩된 헤더 블록 프래그먼트.
-     * @returns 디코딩된 헤더 이름-값 쌍의 맵.
-     *          동일한 이름의 헤더가 여러 개면 마지막 값만 보존됩니다.
+     * @param data HPACK-encoded header block fragment.
+     * @returns Map of decoded header name-value pairs.
+     *          If multiple headers share the same name, only the last value is preserved.
      */
     std::unordered_map<std::string, std::string> decode(std::span<const uint8_t> data) {
         std::unordered_map<std::string, std::string> headers;

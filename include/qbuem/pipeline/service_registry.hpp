@@ -115,32 +115,32 @@ public:
   }
 
   /**
-   * @brief 서비스를 조회합니다 — **강한 의존성**.
+   * @brief Looks up a service — **strong dependency**.
    *
-   * 없으면 `std::terminate()`를 호출합니다. 필수 서비스에 사용합니다.
-   * 파이프라인 시작 전 등록 여부를 보장해야 합니다.
+   * Calls `std::terminate()` if not found. Use for required services.
+   * Registration must be guaranteed before the pipeline starts.
    *
-   * @tparam T 조회할 서비스 타입.
-   * @returns 서비스 포인터.
-   * @note 반환값은 절대 nullptr이 아닙니다.
+   * @tparam T Service type to look up.
+   * @returns Service pointer.
+   * @note The return value is never nullptr.
    */
   template <typename T>
   [[nodiscard]] std::shared_ptr<T> require() const {
     auto ptr = get<T>();
     if (!ptr) {
-      // fail-fast: 프로그래밍 오류로 간주, 스택 트레이스를 위해 terminate 사용
+      // fail-fast: treated as a programming error; use terminate for a stack trace
       std::terminate();
     }
     return ptr;
   }
 
   /**
-   * @brief 서비스를 조회하거나, 없으면 기본 생성자로 생성해 등록합니다.
+   * @brief Looks up a service, or constructs and registers one with the default constructor if not found.
    *
-   * T는 기본 생성 가능해야 합니다. 스레드 안전합니다.
+   * T must be default-constructible. Thread-safe.
    *
-   * @tparam T 서비스 타입.
-   * @returns 서비스 참조 (항상 유효).
+   * @tparam T Service type.
+   * @returns Service reference (always valid).
    */
   template <typename T>
   [[nodiscard]] T& get_or_create() {
@@ -153,7 +153,7 @@ public:
   }
 
   /**
-   * @brief 부모 레지스트리를 반환합니다.
+   * @brief Returns the parent registry.
    */
   [[nodiscard]] ServiceRegistry *parent() const noexcept { return parent_; }
 
