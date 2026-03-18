@@ -2,28 +2,28 @@
 
 /**
  * @file qbuem/tracing/trace_context.hpp
- * @brief W3C Trace Context 표준 — TraceId, SpanId, TraceContext 정의.
+ * @brief W3C Trace Context standard — TraceId, SpanId, TraceContext definitions.
  * @defgroup qbuem_tracing_trace_context TraceContext
  * @ingroup qbuem_tracing
  *
- * W3C Trace Context Level 1 (https://www.w3.org/TR/trace-context/)을
- * 준수하는 분산 추적 식별자 및 컨텍스트 타입을 정의합니다.
+ * Defines distributed tracing identifiers and context types conforming to
+ * W3C Trace Context Level 1 (https://www.w3.org/TR/trace-context/).
  *
- * ## 포함 타입
- * - `TraceId`      : 128-bit 전역 추적 식별자 (16바이트)
- * - `SpanId`       : 64-bit 스팬 식별자 (8바이트)
- * - `TraceContext` : traceparent 헤더 파싱/생성 및 child span 생성
+ * ## Included types
+ * - `TraceId`      : 128-bit global trace identifier (16 bytes)
+ * - `SpanId`       : 64-bit span identifier (8 bytes)
+ * - `TraceContext` : traceparent header parsing/generation and child span creation
  *
- * ## 사용 예시
+ * ## Usage example
  * @code
- * // 루트 스팬 컨텍스트 생성
+ * // Create a root span context
  * auto ctx = qbuem::tracing::TraceContext::generate();
  *
- * // traceparent 헤더로 직렬화
+ * // Serialize to traceparent header
  * std::string header = ctx.to_traceparent();
  * // e.g. "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
  *
- * // 헤더에서 파싱
+ * // Parse from header
  * auto result = qbuem::tracing::TraceContext::from_traceparent(header);
  * if (result) {
  *     auto child = result->child_span();
@@ -45,23 +45,23 @@ namespace qbuem::tracing {
 // ─── TraceId ──────────────────────────────────────────────────────────────────
 
 /**
- * @brief 128-bit 전역 추적 식별자.
+ * @brief 128-bit global trace identifier.
  *
- * W3C Trace Context 표준에서 하나의 분산 추적 트랜잭션 전체를 식별합니다.
- * 모든 스팬은 동일한 TraceId를 공유합니다.
+ * Identifies an entire distributed trace transaction in the W3C Trace Context standard.
+ * All spans within the same trace share the same TraceId.
  *
- * ### 유효성
- * 16바이트가 모두 0x00이면 유효하지 않습니다 (W3C 규격).
+ * ### Validity
+ * All 16 bytes being 0x00 indicates an invalid identifier (per W3C spec).
  */
 struct TraceId {
-  /** @brief 128-bit 추적 ID 원시 바이트. */
+  /** @brief Raw bytes of the 128-bit trace ID. */
   uint8_t bytes[16]{};
 
   /**
-   * @brief 암호학적으로 안전한 난수로 새 TraceId를 생성합니다.
+   * @brief Generates a new TraceId using a cryptographically secure random number.
    *
-   * 내부적으로 `qbuem::random_bytes()`를 사용합니다.
-   * @returns 유효한 새 TraceId.
+   * Uses `qbuem::random_bytes()` internally.
+   * @returns A new, valid TraceId.
    */
   static TraceId generate() {
     TraceId id;
@@ -71,10 +71,10 @@ struct TraceId {
   }
 
   /**
-   * @brief 이 TraceId가 유효한지 확인합니다.
+   * @brief Checks whether this TraceId is valid.
    *
-   * W3C 규격에 따라 모든 바이트가 0x00이면 유효하지 않습니다.
-   * @returns 유효하면 true, 모두 0이면 false.
+   * Per the W3C spec, all bytes being 0x00 indicates an invalid identifier.
+   * @returns true if valid, false if all bytes are zero.
    */
   bool is_valid() const noexcept {
     for (uint8_t b : bytes) {
@@ -84,13 +84,13 @@ struct TraceId {
   }
 
   /**
-   * @brief 소문자 16진수 문자열로 변환합니다 (32자).
+   * @brief Converts to a lowercase hex string (32 characters).
    *
-   * 예: `"4bf92f3577b34da6a3ce929d0e0e4736"`
+   * Example: `"4bf92f3577b34da6a3ce929d0e0e4736"`
    *
-   * @param buf  출력 버퍼 포인터.
-   * @param n    버퍼 크기 (최소 33 — 32자 + null terminator).
-   * @returns 기록된 문자 수 (null 제외). 버퍼 부족 시 0.
+   * @param buf  Output buffer pointer.
+   * @param n    Buffer size (minimum 33 — 32 chars + null terminator).
+   * @returns Number of characters written (excluding null). 0 if buffer is too small.
    */
   size_t to_chars(char* buf, size_t n) const {
     if (n < 33) return 0;
