@@ -85,13 +85,13 @@ public:
   }
 
   /**
-   * @brief 팩토리 함수를 등록합니다 (요청 시 생성 — lazy).
+   * @brief Registers a factory function (lazy creation on demand).
    *
-   * 첫 `get<T>()` / `require<T>()` 호출 시 팩토리가 실행됩니다.
-   * 이후 결과가 캐시되어 싱글톤처럼 동작합니다.
+   * The factory is executed on the first call to `get<T>()` / `require<T>()`.
+   * The result is cached afterward, behaving like a singleton.
    *
-   * @tparam T 서비스 타입.
-   * @param  factory 인스턴스를 생성하는 함수.
+   * @tparam T Service type.
+   * @param  factory Function that creates the instance.
    */
   template <typename T>
   void register_factory(std::function<std::shared_ptr<T>()> factory) {
@@ -102,12 +102,12 @@ public:
   }
 
   /**
-   * @brief 서비스를 조회합니다 — **약한 의존성**.
+   * @brief Looks up a service — **weak dependency**.
    *
-   * 없으면 nullptr을 반환합니다. 선택적 기능(optional feature)에 사용합니다.
+   * Returns nullptr if not found. Use for optional features.
    *
-   * @tparam T 조회할 서비스 타입.
-   * @returns 서비스 포인터, 없으면 nullptr.
+   * @tparam T Service type to look up.
+   * @returns Service pointer, or nullptr if not found.
    */
   template <typename T>
   [[nodiscard]] std::shared_ptr<T> get() const {

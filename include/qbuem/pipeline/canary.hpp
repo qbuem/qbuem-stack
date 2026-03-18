@@ -205,7 +205,7 @@ public:
     for (uint32_t step_pct : cfg_.steps) {
       if (!rollout_active_.load()) co_return;  // manually rolled back
 
-      // 현재 단계 비율 적용
+      // Apply the current step percentage
       set_canary_percent(step_pct);
       stable_metrics_.reset();
       canary_metrics_.reset();

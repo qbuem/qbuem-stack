@@ -107,20 +107,20 @@ static constexpr uint8_t HTTP2_FLAG_PRIORITY    = 0x20;
 // ─── HpackDecoder ─────────────────────────────────────────────────────────────
 
 /**
- * @brief HPACK 헤더 블록 디코더 (RFC 7541).
+ * @brief HPACK header block decoder (RFC 7541).
  *
- * 정적 테이블(Static Table, 인덱스 1~61)만 지원하는 최소 구현입니다.
- * 동적 테이블(Dynamic Table)은 지원하지 않습니다.
+ * Minimal implementation supporting only the Static Table (indices 1~61).
+ * Dynamic Table is not supported.
  *
- * ### 지원하는 표현 형식
- * - **인덱스 헤더 필드** (RFC 7541 섹션 6.1): 비트 패턴 `1xxxxxxx`
- * - **리터럴 헤더 필드 — 인덱싱 없음** (RFC 7541 섹션 6.2.2):
- *   - 이름이 인덱스로 참조되는 경우: 비트 패턴 `0000xxxx` (상위 4비트 0)
- *   - 이름이 리터럴 문자열인 경우: 인덱스 == 0
- * - **리터럴 헤더 필드 — 증분 인덱싱** (RFC 7541 섹션 6.2.1):
- *   비트 패턴 `01xxxxxx` (부분 지원, 동적 테이블 갱신은 무시)
+ * ### Supported representation formats
+ * - **Indexed Header Field** (RFC 7541 section 6.1): bit pattern `1xxxxxxx`
+ * - **Literal Header Field — Without Indexing** (RFC 7541 section 6.2.2):
+ *   - Name referenced by index: bit pattern `0000xxxx` (upper 4 bits 0)
+ *   - Name as literal string: index == 0
+ * - **Literal Header Field — Incremental Indexing** (RFC 7541 section 6.2.1):
+ *   bit pattern `01xxxxxx` (partially supported; dynamic table updates are ignored)
  *
- * @warning Huffman 인코딩 미지원. 리터럴 문자열은 원시 바이트로만 처리합니다.
+ * @warning Huffman encoding is not supported. Literal strings are processed as raw bytes only.
  */
 class HpackDecoder {
 public:
