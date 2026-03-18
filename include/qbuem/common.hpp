@@ -7,17 +7,16 @@
  *
  * This header defines the core types used throughout the library:
  *
- * - `unexpected<E>` : Tag type for explicit error representation (mirrors C++23 std::unexpected)
- * - `Result<T>`     : Sum type holding a success value or `std::error_code` (replaces C++23 std::expected)
+ * - `unexpected<E>` : Alias for `std::unexpected<E>` (C++23 <expected>)
+ * - `Result<T>`     : Sum type holding a success value or `std::error_code`
  * - `Result<void>`  : Specialisation expressing success/failure without a return value
  * - `BufferView`    : Read-only byte view (zero-copy, std::span-based)
  * - `MutableBufferView` : Writable byte view
  *
- * ### C++20 vs C++23 context
- * qbuem-stack targets C++20. `std::expected<T, E>` and `std::unexpected<E>` were
- * standardised in C++23 and are therefore unavailable here. This header provides
- * equivalent implementations. When the project migrates to C++23 these types can
- * be replaced by the standard ones.
+ * ### C++23
+ * qbuem-stack targets C++23. `std::unexpected<E>` from `<expected>` is used directly.
+ * `Result<T>` wraps `std::error_code` as the error type and provides monadic
+ * operations compatible with `std::expected` conventions.
  */
 
 /**
@@ -30,6 +29,7 @@
  */
 
 #include <cstdint>
+#include <expected>
 #include <memory>
 #include <span>
 #include <string_view>
@@ -43,12 +43,10 @@ namespace qbuem {
 // ─── unexpected<E> ───────────────────────────────────────────────────────────
 
 /**
- * @brief Tag type for explicit error values.
+ * @brief Alias for C++23 `std::unexpected<E>`.
  *
- * Mirrors C++23 `std::unexpected<E>` in a C++20 environment.
  * Used to unambiguously construct the error path of a `Result<T>`.
  *
- * Prefer the factory pattern over constructing this directly:
  * @code
  * Result<int> read_byte(int fd) {
  *     if (fd < 0)
@@ -60,34 +58,15 @@ namespace qbuem {
  * @tparam E Error value type. Usually `std::error_code`.
  */
 template <typename E>
-struct unexpected {
-  /** @brief The wrapped error value. */
-  E value;
-
-  /**
-   * @brief Construct an unexpected from an error value.
-   * @param e Error value to wrap (moved).
-   */
-  explicit unexpected(E e) : value(std::move(e)) {}
-};
-
-/**
- * @brief Deduction guide for `unexpected<E>`.
- *
- * Allows template argument omission:
- * @code
- * auto u = unexpected(std::make_error_code(std::errc::timed_out)); // E deduced
- * @endcode
- */
-template <typename E> unexpected(E) -> unexpected<E>;
+using unexpected = std::unexpected<E>;
 
 // ─── Result<T> ───────────────────────────────────────────────────────────────
 
 /**
  * @brief Sum type holding either a success value `T` or a `std::error_code`.
  *
- * Fills the role of C++23 `std::expected<T, std::error_code>` in C++20.
- * Supports value-based error propagation without exceptions.
+ * Equivalent to `std::expected<T, std::error_code>` with additional monadic
+ * helpers. Supports value-based error propagation without exceptions.
  *
  * ### States
  * - Success: holds a `T` value. `has_value()` == true, `operator bool()` == true.
@@ -162,9 +141,9 @@ public:
   template <typename E>
   Result(unexpected<E> u) : data_(std::in_place_index<2>) {      // NOLINT
     if constexpr (std::is_same_v<E, std::error_code>) {
-      std::get<2>(data_) = u.value;
+      std::get<2>(data_) = u.error();
     } else {
-      std::get<2>(data_) = std::make_error_code(u.value);
+      std::get<2>(data_) = std::make_error_code(u.error());
     }
   }
 
@@ -368,9 +347,9 @@ public:
   template <typename E>
   Result(unexpected<E> u) : ok_(false) {                         // NOLINT
     if constexpr (std::is_same_v<E, std::error_code>) {
-      ec_ = u.value;
+      ec_ = u.error();
     } else {
-      ec_ = std::make_error_code(u.value);
+      ec_ = std::make_error_code(u.error());
     }
   }
 

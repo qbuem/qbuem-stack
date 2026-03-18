@@ -169,16 +169,17 @@ All modules must adhere to these quantitative benchmarks to be considered part o
 
 ---
 
-## 🏗 Milestone: v2.4.0 — High-Performance Essential Primitives
+## ✅ Completed: v2.4.0 — High-Performance Essential Primitives
 > **Reference Design**: [docs/high-performance-primitives.md](./docs/high-performance-primitives.md) / [docs/storage-optimization-guide.md](./docs/storage-optimization-guide.md) / [docs/epoll-optimization-guide.md](./docs/epoll-optimization-guide.md) / [docs/pcie-optimization-guide.md](./docs/pcie-optimization-guide.md)
 
-- [ ] **`LockFreeHashMap<K, V>`**: MPMC non-blocking hash map with atomic CAS per slot.
-- [ ] **`GenerationPool<T>`**: Lock-free object pool with generation-indexed `Handle<T>` (ABA-safe).
-- [ ] **`IntrusiveList<T>`**: Zero-allocation linked list (objects carry pointers).
-- [ ] **`MicroTicker`**: High-precision Reactor driver (jitter compensation).
-- [ ] **`FileIO (O_DIRECT)`**: Implementation of direct I/O for `FileSink`/`FileSource`.
-- [ ] **`Epoll (Edge-Triggered)`**: Re-implementation of epoll reactor using `EPOLLET`.
-- [ ] **`PCIeDevice (VFIO)`**: Minimal user-space PCIe helper with BAR mapping support.
+- [x] **`LockFreeHashMap<K, V>`**: MPMC non-blocking hash map with atomic CAS per slot. (`include/qbuem/buf/lock_free_hash_map.hpp`)
+- [x] **`GenerationPool<T>`**: Lock-free object pool with generation-indexed `Handle<T>` (ABA-safe). (`include/qbuem/buf/generation_pool.hpp`)
+- [x] **`IntrusiveList<T>`**: Zero-allocation linked list (objects carry pointers). (`include/qbuem/buf/intrusive_list.hpp`)
+- [x] **`MicroTicker`**: High-precision Reactor driver — nanosleep + busy-spin hybrid, <5µs jitter, drift compensation. (`include/qbuem/reactor/micro_ticker.hpp`)
+- [x] **`FileIO (O_DIRECT)`**: `DirectFile`, `FileSink<T>`, `FileSource<T>` — page-cache bypass with 512-byte aligned I/O. (`include/qbuem/io/direct_file.hpp`)
+- [x] **`Epoll (Edge-Triggered)`**: `EpollReactor` updated to `EPOLLET | EPOLLONESHOT` with automatic post-callback re-arming. (`src/core/epoll_reactor.cpp`)
+- [x] **`PCIeDevice (VFIO)`**: Full VFIO implementation — `open()`, `map_bar()`, `alloc_dma_buffer()`, MMIO read/write. (`src/pcie/pcie_device.cpp`)
+- [x] **C++23 Migration**: `CMAKE_CXX_STANDARD 23`, `std::unexpected` (via `<expected>`) replaces custom type, `std::println` from `<print>` in examples.
 
 ---
 

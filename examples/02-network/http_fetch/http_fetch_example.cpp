@@ -23,27 +23,13 @@
 #include <qbuem/core/task.hpp>
 
 #include <chrono>
-#include <cstdio>
-#include <format>
+#include <print>
 #include <stop_token>
 #include <string_view>
 
-// std::println polyfill for C++20 (requires C++23 <print>)
-namespace {
-template<typename... Args>
-void println(std::format_string<Args...> fmt, Args&&... args) {
-    auto s = std::format(fmt, std::forward<Args>(args)...);
-    s += '\n';
-    std::fputs(s.c_str(), stdout);
-}
-inline void println(std::string_view s) {
-    std::fwrite(s.data(), 1, s.size(), stdout);
-    std::fputc('\n', stdout);
-}
-} // namespace
-
 using namespace qbuem;
 using namespace std::chrono_literals;
+using std::println;
 
 // ─── Example 1: Basic GET ─────────────────────────────────────────────────────
 

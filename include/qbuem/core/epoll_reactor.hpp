@@ -10,7 +10,22 @@
 namespace qbuem {
 
 /**
- * @brief Linux-specific Reactor implementation using epoll + timerfd.
+ * @brief Linux-specific Reactor implementation using epoll (edge-triggered) + timerfd.
+ *
+ * ## Edge-Triggered Mode (v2.4.0)
+ * All I/O file descriptors are registered with `EPOLLET | EPOLLONESHOT`:
+ * - `EPOLLET`: The kernel delivers exactly one event per readable/writable
+ *   transition. Callbacks **must** drain data until `EAGAIN` to avoid
+ *   missing subsequent data (no re-notification until new data arrives).
+ * - `EPOLLONESHOT`: After each event fires, the fd is automatically disarmed.
+ *   The reactor re-arms it with `EPOLL_CTL_MOD` after invoking the callback,
+ *   ensuring at most one thread processes a given fd at a time (safe for
+ *   multi-threaded `Dispatcher` configurations).
+ *
+ * ## Scalability
+ * - Use `SO_REUSEPORT` on listening sockets to distribute new connections
+ *   across multiple `EpollReactor` instances (one per CPU core) without a
+ *   thundering-herd at `accept()`.
  *
  * Timers are implemented via timerfd_create(2) and registered as ordinary
  * epoll file-descriptor events, so the poll loop is a single epoll_wait call.
