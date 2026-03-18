@@ -1,28 +1,28 @@
 /**
  * @file security_middleware_example.cpp
- * @brief 보안 미들웨어 + 인증 + 정적 파일 서빙 예제.
+ * @brief Security middleware + authentication + static file serving example.
  *
- * ## 커버리지 — middleware/security.hpp
- * - hsts()                     — Strict-Transport-Security 헤더
- * - csp()                      — Content-Security-Policy 헤더
- * - x_frame_options()          — X-Frame-Options 헤더
- * - x_content_type_options()   — X-Content-Type-Options 헤더
- * - referrer_policy()          — Referrer-Policy 헤더
- * - permissions_policy()       — Permissions-Policy 헤더
- * - secure_headers()           — 모든 보안 헤더 일괄 적용
+ * ## Coverage — middleware/security.hpp
+ * - hsts()                     — Strict-Transport-Security header
+ * - csp()                      — Content-Security-Policy header
+ * - x_frame_options()          — X-Frame-Options header
+ * - x_content_type_options()   — X-Content-Type-Options header
+ * - referrer_policy()          — Referrer-Policy header
+ * - permissions_policy()       — Permissions-Policy header
+ * - secure_headers()           — apply all security headers at once
  *
- * ## 커버리지 — middleware/token_auth.hpp (jwt.hpp shim 포함)
- * - ITokenVerifier             — 토큰 검증 인터페이스
- * - bearer_auth()              — Bearer 토큰 미들웨어
+ * ## Coverage — middleware/token_auth.hpp (jwt.hpp shim included)
+ * - ITokenVerifier             — token verification interface
+ * - bearer_auth()              — Bearer token middleware
  *
- * ## 커버리지 — middleware/static_files.hpp
- * - mime_type()                — 확장자 → MIME 타입 매핑
- * - serve_file()               — 파일 응답 생성
+ * ## Coverage — middleware/static_files.hpp
+ * - mime_type()                — extension → MIME type mapping
+ * - serve_file()               — build file response
  *
- * ## 커버리지 — middleware/body_encoder.hpp (compress.hpp shim 포함)
- * - IBodyEncoder               — 바디 인코더 인터페이스
- * - compress()                 — 인코더 적용 미들웨어
- * - compress_response()        — 핸들러 내에서 응답 바디 인코딩
+ * ## Coverage — middleware/body_encoder.hpp (compress.hpp shim included)
+ * - IBodyEncoder               — body encoder interface
+ * - compress()                 — apply encoder middleware
+ * - compress_response()        — encode response body inside a handler
  */
 
 #include <qbuem/http/request.hpp>
@@ -35,26 +35,28 @@
 #include <qbuem/middleware/static_files.hpp>
 #include <qbuem/middleware/token_auth.hpp>
 
-#include <cstdio>
 #include <string>
 #include <string_view>
 #include <unordered_set>
 #include <vector>
+#include <qbuem/compat/print.hpp>
 
 using namespace qbuem;
 using namespace qbuem::middleware;
+using std::println;
+using std::print;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// §1  보안 헤더
+// §1  Security headers
 // ─────────────────────────────────────────────────────────────────────────────
 
 static void demo_security_headers() {
-    std::printf("── §1  보안 헤더 미들웨어 ──\n");
+    println("── §1  Security Header Middleware ──");
 
     Request  req;
     Response res;
 
-    // 개별 보안 헤더 적용
+    // Apply individual security headers
     hsts(31536000, true, false)(req, res);
     csp("default-src 'self'; img-src *")(req, res);
     x_frame_options("DENY")(req, res);
@@ -62,35 +64,35 @@ static void demo_security_headers() {
     referrer_policy("strict-origin-when-cross-origin")(req, res);
     permissions_policy("camera=(), microphone=()")(req, res);
 
-    std::printf("  HSTS:     %s\n",
-                std::string(res.get_header("Strict-Transport-Security")).c_str());
-    std::printf("  CSP:      %s\n",
-                std::string(res.get_header("Content-Security-Policy")).c_str());
-    std::printf("  X-Frame:  %s\n",
-                std::string(res.get_header("X-Frame-Options")).c_str());
-    std::printf("  X-CTO:    %s\n",
-                std::string(res.get_header("X-Content-Type-Options")).c_str());
-    std::printf("  Referrer: %s\n",
-                std::string(res.get_header("Referrer-Policy")).c_str());
-    std::printf("  Perms:    %s\n",
-                std::string(res.get_header("Permissions-Policy")).c_str());
+    println("  HSTS:     {}",
+                std::string(res.get_header("Strict-Transport-Security")));
+    println("  CSP:      {}",
+                std::string(res.get_header("Content-Security-Policy")));
+    println("  X-Frame:  {}",
+                std::string(res.get_header("X-Frame-Options")));
+    println("  X-CTO:    {}",
+                std::string(res.get_header("X-Content-Type-Options")));
+    println("  Referrer: {}",
+                std::string(res.get_header("Referrer-Policy")));
+    println("  Perms:    {}",
+                std::string(res.get_header("Permissions-Policy")));
 
-    // 통합 secure_headers() — 모든 보안 헤더 일괄 적용
+    // Combined secure_headers() — apply all security headers at once
     Response res2;
     secure_headers()(req, res2);
     bool has_hsts = !res2.get_header("Strict-Transport-Security").empty();
-    std::printf("  secure_headers(): HSTS 포함 = %s\n\n",
+    println("  secure_headers(): includes HSTS = {}\n",
                 has_hsts ? "yes" : "no");
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// §2  Bearer 토큰 인증 (token_auth.hpp / jwt.hpp shim)
+// §2  Bearer token authentication (token_auth.hpp / jwt.hpp shim)
 // ─────────────────────────────────────────────────────────────────────────────
 
 static void demo_bearer_auth() {
-    std::printf("── §2  Bearer 토큰 인증 ──\n");
+    println("── §2  Bearer Token Authentication ──");
 
-    // 커스텀 토큰 검증기 구현
+    // Custom token verifier implementation.
     // ITokenVerifier::verify() must be noexcept.
     // TokenClaims fields: subject, issuer, audience, exp, nbf, custom.
     struct MockVerifier : ITokenVerifier {
@@ -108,7 +110,7 @@ static void demo_bearer_auth() {
     auto verifier = std::make_shared<MockVerifier>();
     auto auth_mw  = bearer_auth(verifier);
 
-    // 유효한 토큰
+    // Valid token
     // On success, bearer_auth() forwards claims into res headers:
     //   X-Auth-Sub  → claims.subject
     {
@@ -116,32 +118,32 @@ static void demo_bearer_auth() {
         req.add_header("Authorization", "Bearer valid-token-abc123");
         Response res;
         bool ok = auth_mw(req, res);
-        std::printf("  유효 토큰: %s (sub=%s)\n",
-                    ok ? "통과" : "차단",
-                    ok ? std::string(res.get_header("X-Auth-Sub")).c_str() : "-");
+        println("  Valid token: {} (sub={})",
+                    ok ? "pass" : "blocked",
+                    ok ? std::string(res.get_header("X-Auth-Sub")) : "-");
     }
 
-    // 무효 토큰
+    // Invalid token
     {
         Request req;
         req.add_header("Authorization", "Bearer wrong-token");
         Response res;
         bool ok = auth_mw(req, res);
-        std::printf("  무효 토큰: %s (status=%d)\n",
-                    ok ? "통과" : "차단", res.status_code());
+        println("  Invalid token: {} (status={})",
+                    ok ? "pass" : "blocked", res.status_code());
     }
 
-    // 헤더 없음
+    // No header
     {
         Request req;
         Response res;
         bool ok = auth_mw(req, res);
-        std::printf("  헤더 없음: %s\n\n", ok ? "통과" : "차단");
+        println("  No header: {}\n", ok ? "pass" : "blocked");
     }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// §3  API Key 인증
+// §3  API Key authentication
 // ApiKeyAuth is not provided by token_auth.hpp; implement inline here.
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -167,9 +169,9 @@ private:
 };
 
 static void demo_api_key() {
-    std::printf("── §3  API Key 인증 ──\n");
+    println("── §3  API Key Authentication ──");
 
-    // 허용된 API 키 집합
+    // Set of allowed API keys
     ApiKeyAuth api_auth({"key-prod-001", "key-prod-002", "key-dev-999"});
     auto mw = api_auth.middleware("X-API-Key");
 
@@ -186,21 +188,21 @@ static void demo_api_key() {
         Response res;
         if (tc.key[0]) req.add_header("X-API-Key", tc.key);
         bool ok = mw(req, res);
-        std::printf("  key='%s': %s %s\n",
-                    tc.key, ok ? "통과" : "차단",
+        println("  key='{}': {} {}",
+                    tc.key, ok ? "pass" : "blocked",
                     (ok == tc.expect_pass) ? "OK" : "FAIL");
     }
-    std::printf("\n");
+    println("");
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// §4  정적 파일 서빙 유틸리티
+// §4  Static file serving utilities
 // ─────────────────────────────────────────────────────────────────────────────
 
 static void demo_static_files() {
-    std::printf("── §4  정적 파일 유틸리티 ──\n");
+    println("── §4  Static File Utilities ──");
 
-    // MIME 타입 감지
+    // MIME type detection
     struct MimeCase { const char* ext; };
     std::vector<MimeCase> mimes = {
         {".html"}, {".css"}, {".js"}, {".json"},
@@ -208,16 +210,16 @@ static void demo_static_files() {
     };
 
     for (auto& m : mimes) {
-        std::printf("  mime_type(\"%s\") = %s\n",
-                    m.ext, std::string(mime_type(m.ext)).c_str());
+        println("  mime_type(\"{}\") = {}",
+                    m.ext, std::string(mime_type(m.ext)));
     }
 
-    // serve_file(): 파일 존재 여부에 따라 응답 생성
+    // serve_file(): build response based on whether the file exists
     // Signature: serve_file(string_view fs_path, Response& res) -> void
     Response res;
-    // 존재하지 않는 파일 경로 → 404 응답 기대
+    // Non-existent path → expect 404 response
     serve_file("/tmp/nonexistent_file_qbuem.html", res);
-    std::printf("  serve_file(없는파일): status=%d\n\n", res.status_code());
+    println("  serve_file(missing file): status={}\n", res.status_code());
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -239,17 +241,17 @@ public:
 };
 
 static void demo_body_encoder() {
-    std::printf("── §5  Body Encoder ──\n");
+    println("── §5  Body Encoder ──");
 
-    // IdentityEncoder — 변환 없는 패스스루
+    // IdentityEncoder — passthrough without transformation
     IdentityEncoder identity;
     std::string body = "Hello, qbuem body encoder!";
     std::string encoded;
     bool ok = identity.encode(body, encoded);
-    std::printf("  IdentityEncoder: in=%zu out=%zu same=%s\n",
+    println("  IdentityEncoder: in={} out={} same={}",
                 body.size(), encoded.size(),
                 (ok && body == encoded) ? "yes" : "no");
-    std::printf("  content-encoding: %s\n", identity.encoding_name().data());
+    println("  content-encoding: {}", identity.encoding_name());
 
     // compress() middleware: returned Middleware always returns true (pre-handler stub).
     // compress_response() is the in-handler post-processing helper.
@@ -259,7 +261,7 @@ static void demo_body_encoder() {
     Response res;
     res.body(body);
     mw(req, res);
-    std::printf("  compress() 미들웨어 적용 후 body 크기: %zu\n\n",
+    println("  body size after compress() middleware: {}\n",
                 res.get_body().size());
 }
 
@@ -268,7 +270,7 @@ static void demo_body_encoder() {
 // ─────────────────────────────────────────────────────────────────────────────
 
 int main() {
-    std::printf("=== qbuem 보안 미들웨어 예제 ===\n\n");
+    println("=== qbuem Security Middleware Example ===\n");
 
     demo_security_headers();
     demo_bearer_auth();
@@ -276,6 +278,6 @@ int main() {
     demo_static_files();
     demo_body_encoder();
 
-    std::printf("=== 완료 ===\n");
+    println("=== Done ===");
     return 0;
 }

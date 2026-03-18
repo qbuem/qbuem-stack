@@ -1,23 +1,23 @@
 /**
  * @file numa_hugepages_example.cpp
- * @brief NUMA 스케줄링 + Huge Pages + CPU 힌트 + I/O 슬라이스 예제.
+ * @brief NUMA scheduling + Huge Pages + CPU hints + I/O slice example.
  *
- * ## 커버리지
- * - pin_reactor_to_cpu()        — Reactor를 특정 CPU에 고정
- * - auto_numa_bind()            — NUMA 노드별 Reactor 자동 배치
- * - numa_node_count()           — NUMA 노드 수 감지
- * - cpu_to_numa_map()           — CPU → NUMA 노드 매핑
- * - PerfCounters                — PMU 하드웨어 성능 카운터
- * - HugeBufferPool<N, Count>    — huge page mmap 버퍼 풀 (acquire/release)
- * - prefetch_read<Locality>()   — 읽기 prefetch
- * - prefetch_write<Locality>()  — 쓰기 prefetch
- * - prefetch_ahead<T, Ahead>()  — 연결 구조체 배열 prefetch
- * - kCacheLineSize              — 캐시 라인 크기 상수
- * - compiler_barrier()          — 컴파일러 메모리 배리어
- * - cpu_pause()                 — spin-wait pause 힌트
- * - IOSlice                     — 읽기 전용 scatter-gather 슬라이스
- * - MutableIOSlice              — 쓰기 가능 scatter-gather 슬라이스
- * - BufferPool<BufSize, Count>  — lock-free 범용 버퍼 풀
+ * ## Coverage
+ * - pin_reactor_to_cpu()        — Pin Reactor to a specific CPU
+ * - auto_numa_bind()            — Auto-assign Reactors per NUMA node
+ * - numa_node_count()           — Detect number of NUMA nodes
+ * - cpu_to_numa_map()           — CPU → NUMA node mapping
+ * - PerfCounters                — PMU hardware performance counters
+ * - HugeBufferPool<N, Count>    — huge page mmap buffer pool (acquire/release)
+ * - prefetch_read<Locality>()   — read prefetch
+ * - prefetch_write<Locality>()  — write prefetch
+ * - prefetch_ahead<T, Ahead>()  — prefetch ahead on array of structs
+ * - kCacheLineSize              — cache line size constant
+ * - compiler_barrier()          — compiler memory barrier
+ * - cpu_pause()                 — spin-wait pause hint
+ * - IOSlice                     — read-only scatter-gather slice
+ * - MutableIOSlice              — writable scatter-gather slice
+ * - BufferPool<BufSize, Count>  — lock-free general-purpose buffer pool
  */
 
 #include <qbuem/core/cpu_hints.hpp>
@@ -29,43 +29,45 @@
 #include <qbuem/io/io_slice.hpp>
 
 #include <cassert>
-#include <cstdio>
 #include <cstring>
 #include <thread>
 #include <vector>
+#include <qbuem/compat/print.hpp>
 
 using namespace qbuem;
 using namespace std::chrono_literals;
+using std::println;
+using std::print;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// §1  CPU 힌트 — Prefetch & Cache-line
+// §1  CPU hints — Prefetch & Cache-line
 // ─────────────────────────────────────────────────────────────────────────────
 
 struct alignas(kCacheLineSize) ReactorState {
     std::atomic<uint64_t> processed{0};
     std::atomic<uint64_t> errors{0};
-    // 패딩: 다음 캐시라인과 false sharing 방지
+    // Padding: prevent false sharing with the next cache line
     char _pad[kCacheLineSize - 2 * sizeof(std::atomic<uint64_t>)];
 };
 
 static void demo_cpu_hints() {
-    std::printf("── §1  CPU 힌트 ──\n");
-    std::printf("  캐시 라인 크기: %zu 바이트\n", kCacheLineSize);
-    std::printf("  ReactorState 크기: %zu 바이트 (캐시라인 정렬)\n",
+    println("── §1  CPU Hints ──");
+    println("  cache line size: {} bytes", kCacheLineSize);
+    println("  ReactorState size: {} bytes (cache-line aligned)",
                 sizeof(ReactorState));
 
-    // 큰 배열의 순차 접근 시 prefetch로 TLB/캐시 미스 감소
+    // Prefetch reduces TLB/cache misses when sequentially accessing a large array
     constexpr size_t N = 1024;
     std::vector<int> data(N, 0);
 
     for (size_t i = 0; i < N; ++i) {
-        // 다음 접근 위치를 미리 캐시에 로드
+        // Pre-load the next access location into cache
         if (i + 8 < N)
             prefetch_read<3>(&data[i + 8]);
         data[i] = static_cast<int>(i * 2);
     }
 
-    // 쓰기 prefetch: 출력 버퍼 준비
+    // Write prefetch: prepare output buffer
     std::vector<int> out(N);
     for (size_t i = 0; i < N; ++i) {
         if (i + 4 < N)
@@ -73,108 +75,108 @@ static void demo_cpu_hints() {
         out[i] = data[i] + 1;
     }
 
-    // prefetch_ahead: 연결 구조체 배열에서 N개 앞 prefetch
+    // prefetch_ahead: prefetch N elements ahead on an array of structs
     prefetch_ahead(data.data(), 0, N);
-    std::printf("  prefetch_ahead() 완료\n");
+    println("  prefetch_ahead() done");
 
-    // 컴파일러 배리어 & CPU pause
+    // Compiler barrier & CPU pause
     compiler_barrier();
     cpu_pause();
-    std::printf("  compiler_barrier(), cpu_pause() 완료\n");
+    println("  compiler_barrier(), cpu_pause() done");
 
-    std::printf("  prefetch 완료: data[0]=%d, out[0]=%d\n\n", data[0], out[0]);
+    println("  prefetch done: data[0]={}, out[0]={}\n", data[0], out[0]);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// §2  Huge Pages 버퍼 풀
+// §2  Huge Pages buffer pool
 // ─────────────────────────────────────────────────────────────────────────────
 
 static void demo_huge_pages() {
-    std::printf("── §2  Huge Pages 버퍼 풀 ──\n");
+    println("── §2  Huge Pages Buffer Pool ──");
 
-    // 2 MiB 버퍼 4개를 가진 풀 (MAP_HUGETLB 시도, 실패 시 MAP_ANONYMOUS 폴백)
+    // Pool of 4 × 2 MiB buffers (tries MAP_HUGETLB, falls back to MAP_ANONYMOUS)
     HugeBufferPool<2 * 1024 * 1024, 4> pool;
 
-    // 버퍼 1: 획득 + 사용 + 반납
+    // Buffer 1: acquire + use + release
     auto buf1 = pool.acquire();
     if (!buf1.empty()) {
-        std::printf("  버퍼 1 획득: %zu 바이트\n", buf1.size());
-        std::memset(buf1.data(), 0xAB, 64);  // 앞 64바이트 초기화
-        std::printf("  버퍼 1 [0]=%02x (기대: ab)\n",
+        println("  buffer 1 acquired: {} bytes", buf1.size());
+        std::memset(buf1.data(), 0xAB, 64);  // initialize first 64 bytes
+        println("  buffer 1 [0]=0x{:02x} (expected: ab)",
                     static_cast<unsigned char>(buf1[0]));
     } else {
-        std::printf("  버퍼 1 획득 실패 (풀 고갈)\n");
+        println("  buffer 1 acquire failed (pool exhausted)");
     }
 
-    // 버퍼 2: 획득
+    // Buffer 2: acquire
     auto buf2 = pool.acquire();
     if (!buf2.empty())
-        std::printf("  버퍼 2 획득: %zu 바이트\n", buf2.size());
+        println("  buffer 2 acquired: {} bytes", buf2.size());
 
-    // 풀 잔여량 확인 (4 - 2 = 2개 남음)
-    std::printf("  풀 잔여: %zu / 4 버퍼\n", pool.available());
+    // Check remaining pool slots (4 - 2 = 2 left)
+    println("  pool remaining: {} / 4 buffers", pool.available());
 
-    // 반납
+    // Release
     pool.release(buf1);
     pool.release(buf2);
-    std::printf("  버퍼 반납 후 잔여: %zu / 4 버퍼\n\n", pool.available());
+    println("  pool remaining after release: {} / 4 buffers\n", pool.available());
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// §3  NUMA 친화성 설정 + PerfCounters
+// §3  NUMA affinity + PerfCounters
 // ─────────────────────────────────────────────────────────────────────────────
 
 static void demo_numa(Dispatcher& disp) {
-    std::printf("── §3  NUMA 친화성 ──\n");
+    println("── §3  NUMA Affinity ──");
 
-    // NUMA 노드 수 감지
+    // Detect NUMA node count
     int nodes = numa_node_count();
-    std::printf("  NUMA 노드 수: %d\n", nodes);
+    println("  NUMA node count: {}", nodes);
 
-    // CPU → NUMA 매핑
+    // CPU → NUMA mapping
     auto cpu_map = cpu_to_numa_map();
-    std::printf("  논리 CPU 수: %zu\n", cpu_map.size());
+    println("  logical CPU count: {}", cpu_map.size());
     if (!cpu_map.empty())
-        std::printf("  CPU 0 → NUMA 노드 %d\n", cpu_map[0]);
+        println("  CPU 0 → NUMA node {}", cpu_map[0]);
 
-    // CPU 0에 첫 번째 Reactor 고정 시도
+    // Attempt to pin first Reactor to CPU 0
     bool pinned = pin_reactor_to_cpu(disp, 0, 0);
-    std::printf("  Reactor[0] → CPU 0 고정: %s\n",
-                pinned ? "성공" : "지원 안 됨 (비Linux 또는 범위 초과)");
+    println("  Reactor[0] → CPU 0 pin: {}",
+                pinned ? "success" : "unsupported (non-Linux or out of range)");
 
-    // NUMA 노드별 자동 배치
+    // Auto-assign Reactors by NUMA node
     size_t bound = auto_numa_bind(disp);
-    std::printf("  auto_numa_bind() 바인딩: %zu 워커\n", bound);
+    println("  auto_numa_bind() bound: {} workers", bound);
 
-    // PerfCounters — PMU 하드웨어 성능 카운터
-    std::printf("\n── §3b  PerfCounters ──\n");
+    // PerfCounters — PMU hardware performance counters
+    println("\n── §3b  PerfCounters ──");
     PerfCounters perf;
-    std::printf("  PMU 카운터 사용 가능: %s\n",
-                perf.available() ? "yes (CAP_PERFMON 필요)" : "no (권한/하드웨어 없음)");
+    println("  PMU counters available: {}",
+                perf.available() ? "yes (requires CAP_PERFMON)" : "no (no permission/hardware)");
 
     perf.start();
-    // 측정할 작업
+    // Workload to measure
     volatile uint64_t sum = 0;
     for (int i = 0; i < 10000; ++i) sum += static_cast<uint64_t>(i);
     auto snap = perf.stop();
 
-    std::printf("  cycles: %llu, instructions: %llu\n",
+    println("  cycles: {}, instructions: {}",
                 static_cast<unsigned long long>(snap.cycles),
                 static_cast<unsigned long long>(snap.instructions));
-    std::printf("  IPC: %.2f\n", snap.ipc());
-    std::printf("  LLC misses: %llu, branch misses: %llu\n\n",
+    println("  IPC: {:.2f}", snap.ipc());
+    println("  LLC misses: {}, branch misses: {}\n",
                 static_cast<unsigned long long>(snap.llc_misses),
                 static_cast<unsigned long long>(snap.branch_misses));
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// §4  I/O 슬라이스 & 버퍼 풀
+// §4  I/O slices & buffer pool
 // ─────────────────────────────────────────────────────────────────────────────
 
 static void demo_io_slice() {
-    std::printf("── §4  I/O 슬라이스 & 범용 버퍼 풀 ──\n");
+    println("── §4  I/O Slices & General Buffer Pool ──");
 
-    // IOSlice — 읽기 전용 scatter-gather 슬라이스
+    // IOSlice — read-only scatter-gather slice
     std::string part1 = "Hello, ";
     std::string part2 = "qbuem!";
     std::vector<IOSlice> slices = {
@@ -183,46 +185,46 @@ static void demo_io_slice() {
     };
     size_t total = 0;
     for (auto& s : slices) total += s.size;
-    std::printf("  IOSlice 2개, 총 %zu 바이트\n", total);
+    println("  2 IOSlices, total {} bytes", total);
 
-    // to_buffer_view() / to_iovec() 변환
+    // to_buffer_view() / to_iovec() conversion
     auto bv   = slices[0].to_buffer_view();
     auto iov0 = slices[0].to_iovec();
-    std::printf("  IOSlice[0] BufferView 크기: %zu, iovec 크기: %zu\n",
+    println("  IOSlice[0] BufferView size: {}, iovec size: {}",
                 bv.size(), iov0.iov_len);
 
-    // MutableIOSlice — 쓰기 가능 슬라이스
+    // MutableIOSlice — writable slice
     alignas(64) std::byte buf1[16]{};
     alignas(64) std::byte buf2[16]{};
     std::vector<MutableIOSlice> mut_slices = {
         MutableIOSlice{buf1, sizeof(buf1)},
         MutableIOSlice{buf2, sizeof(buf2)},
     };
-    // 첫 번째 슬라이스에 데이터 복사
+    // Copy data into the first slice
     std::memcpy(mut_slices[0].data, "QBUEM", 5);
-    std::printf("  MutableIOSlice[0]: \"%s\"\n",
+    println("  MutableIOSlice[0]: \"{}\"",
                 reinterpret_cast<const char*>(buf1));
 
-    // as_const() — MutableIOSlice → IOSlice 변환
+    // as_const() — MutableIOSlice → IOSlice conversion
     IOSlice ro = mut_slices[0].as_const();
-    std::printf("  as_const() 크기: %zu\n", ro.size);
+    println("  as_const() size: {}", ro.size);
 
     // to_iovec() on MutableIOSlice
     auto iov1 = mut_slices[1].to_iovec();
-    std::printf("  MutableIOSlice[1] iovec 크기: %zu\n", iov1.iov_len);
+    println("  MutableIOSlice[1] iovec size: {}", iov1.iov_len);
 
-    // BufferPool<BufSize, Count> — lock-free 범용 버퍼 풀 (2개의 템플릿 인자)
-    BufferPool<1024, 8> bp;   // 1 KiB 버퍼 8개
-    std::printf("  BufferPool 가용: %zu / 8\n", bp.available());
+    // BufferPool<BufSize, Count> — lock-free general buffer pool (2 template args)
+    BufferPool<1024, 8> bp;   // 8 × 1 KiB buffers
+    println("  BufferPool available: {} / 8", bp.available());
 
     auto b = bp.acquire();
     if (b) {
-        std::printf("  BufferPool 버퍼 획득 성공\n");
+        println("  BufferPool buffer acquired");
         b->data[0] = std::byte{0xFF};
-        b->release();   // 풀에 자동 반납
-        std::printf("  BufferPool 버퍼 반납 완료\n");
+        b->release();   // automatically returned to pool
+        println("  BufferPool buffer released");
     }
-    std::printf("  BufferPool 가용 (반납 후): %zu / 8\n\n", bp.available());
+    println("  BufferPool available (after release): {} / 8\n", bp.available());
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -230,12 +232,12 @@ static void demo_io_slice() {
 // ─────────────────────────────────────────────────────────────────────────────
 
 int main() {
-    std::printf("=== qbuem NUMA + Huge Pages + CPU 힌트 예제 ===\n\n");
+    println("=== qbuem NUMA + Huge Pages + CPU Hints Example ===\n");
 
     demo_cpu_hints();
     demo_huge_pages();
 
-    // Dispatcher 생성 후 NUMA 바인딩 데모
+    // Create Dispatcher then run NUMA binding demo
     Dispatcher disp(2);
     std::jthread t([&] { disp.run(); });
 
@@ -245,6 +247,6 @@ int main() {
     disp.stop();
     t.join();
 
-    std::printf("=== 완료 ===\n");
+    println("=== Done ===");
     return 0;
 }

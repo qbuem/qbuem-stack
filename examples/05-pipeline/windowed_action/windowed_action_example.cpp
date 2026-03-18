@@ -1,18 +1,18 @@
 /**
  * @file windowed_action_example.cpp
- * @brief 이벤트 시간 기반 윈도우 처리 예제.
+ * @brief Event-time based windowed processing example.
  *
- * ## 커버리지
- * - TumblingWindow             — 고정 크기 비중첩 윈도우
- * - SlidingWindow              — 슬라이딩 윈도우 (step < size)
- * - SessionWindow              — 세션 기반 윈도우 (갭 타임아웃)
- * - WindowedAction<T,Key,Acc,Out> — 키 기반 시간 윈도우 집계 액션
- * - Watermark                  — 비순서 이벤트 처리 진행 상태
- * - EventTime                  — Context 슬롯 (이벤트 발생 시각)
- * - WindowedAction::try_push() — 아이템 투입
- * - WindowedAction::start()    — 워커 + 틱커 시작
- * - WindowedAction::stop()     — 즉시 정지
- * - WindowedAction::output()   — 출력 채널
+ * ## Coverage
+ * - TumblingWindow             — fixed-size non-overlapping window
+ * - SlidingWindow              — sliding window (step < size)
+ * - SessionWindow              — session-based window (gap timeout)
+ * - WindowedAction<T,Key,Acc,Out> — key-based time-window aggregation action
+ * - Watermark                  — out-of-order event processing progress state
+ * - EventTime                  — Context slot (event occurrence timestamp)
+ * - WindowedAction::try_push() — push item
+ * - WindowedAction::start()    — start workers + ticker
+ * - WindowedAction::stop()     — immediate stop
+ * - WindowedAction::output()   — output channel
  */
 
 #include <qbuem/core/dispatcher.hpp>
@@ -22,16 +22,17 @@
 #include <qbuem/pipeline/windowed_action.hpp>
 
 #include <chrono>
-#include <cstdio>
 #include <string>
 #include <thread>
 #include <vector>
+#include <qbuem/compat/print.hpp>
 
 using namespace qbuem;
 using namespace std::chrono_literals;
+using std::println;
 using Clock = std::chrono::system_clock;
 
-// ─── 도메인 타입 ──────────────────────────────────────────────────────────────
+// ─── Domain types ─────────────────────────────────────────────────────────────
 
 struct ClickEvent {
     std::string user_id;
@@ -46,16 +47,16 @@ struct WindowResult {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// §1  TumblingWindow — 1초 단위 클릭 집계
+// §1  TumblingWindow — 1-second click aggregation
 // ─────────────────────────────────────────────────────────────────────────────
 
 static void demo_tumbling() {
-    std::printf("── §1  TumblingWindow (1초 윈도우, 클릭 집계) ──\n");
+    println("── §1  TumblingWindow (1s window, click aggregation) ──");
 
     WindowedAction<ClickEvent, std::string, int, WindowResult> wa{
         WindowedAction<ClickEvent, std::string, int, WindowResult>::Config{
             .type    = WindowType::Tumbling,
-            .size    = 200ms,          // 200ms 윈도우 (데모용)
+            .size    = 200ms,          // 200ms window (for demo)
             .key_fn  = [](const ClickEvent& e) { return e.user_id; },
             .acc_fn  = [](int& acc, const ClickEvent& e) { acc += e.value; },
             .emit_fn = [](std::string uid, int cnt, Clock::time_point ws) {
@@ -72,7 +73,7 @@ static void demo_tumbling() {
 
     wa.start(disp, out_ch);
 
-    // 현재 시각 기준으로 이벤트 투입
+    // Push events relative to current time
     auto now = Clock::now();
 
     auto push_event = [&](std::string uid, int val, Clock::time_point ts) {
@@ -80,17 +81,17 @@ static void demo_tumbling() {
         wa.try_push(ClickEvent{uid, "/home", val}, ctx);
     };
 
-    // 첫 번째 윈도우: user_a 3번, user_b 2번
+    // First window: user_a 3 clicks, user_b 2 clicks
     push_event("user_a", 1, now);
     push_event("user_b", 1, now + 10ms);
     push_event("user_a", 1, now + 20ms);
     push_event("user_a", 1, now + 50ms);
     push_event("user_b", 1, now + 80ms);
 
-    // 두 번째 윈도우: user_a 1번
+    // Second window: user_a 1 click
     push_event("user_a", 1, now + 210ms);
 
-    // 결과 수집 (최대 3개: user_a(1st), user_b(1st), user_a(2nd))
+    // Collect results (up to 3: user_a(1st), user_b(1st), user_a(2nd))
     std::vector<WindowResult> results;
     auto deadline = std::chrono::steady_clock::now() + 2s;
     while (results.size() < 3 && std::chrono::steady_clock::now() < deadline) {
@@ -104,18 +105,17 @@ static void demo_tumbling() {
     t.join();
 
     for (auto& r : results) {
-        std::printf("  [TumblingResult] user=%s count=%d\n",
-                    r.user_id.c_str(), r.count);
+        println("  [TumblingResult] user={} count={}", r.user_id, r.count);
     }
-    std::printf("\n");
+    println("");
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// §2  SlidingWindow — 300ms 윈도우, 100ms 슬라이딩
+// §2  SlidingWindow — 300ms window, 100ms step
 // ─────────────────────────────────────────────────────────────────────────────
 
 static void demo_sliding() {
-    std::printf("── §2  SlidingWindow (300ms 윈도우, 100ms 스텝) ──\n");
+    println("── §2  SlidingWindow (300ms window, 100ms step) ──");
 
     WindowedAction<ClickEvent, std::string, int, WindowResult> wa{
         WindowedAction<ClickEvent, std::string, int, WindowResult>::Config{
@@ -141,7 +141,7 @@ static void demo_sliding() {
     Context ctx = Context{}.put(EventTime{now + 50ms});
     wa.try_push(ClickEvent{"alice", "/", 1}, ctx);
 
-    // 잠시 대기 후 결과 수집
+    // Brief wait then collect results
     std::this_thread::sleep_for(600ms);
 
     std::vector<WindowResult> results;
@@ -155,17 +155,17 @@ static void demo_sliding() {
     disp.stop();
     t.join();
 
-    std::printf("  SlidingWindow 결과 수: %zu (동일 이벤트가 여러 윈도우에 포함)\n",
+    println("  SlidingWindow result count: {} (same event appears in multiple windows)",
                 results.size());
-    std::printf("\n");
+    println("");
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// §3  SessionWindow — 갭 200ms 세션
+// §3  SessionWindow — 200ms gap session
 // ─────────────────────────────────────────────────────────────────────────────
 
 static void demo_session() {
-    std::printf("── §3  SessionWindow (gap=200ms) ──\n");
+    println("── §3  SessionWindow (gap=200ms) ──");
 
     WindowedAction<ClickEvent, std::string, int, WindowResult> wa{
         WindowedAction<ClickEvent, std::string, int, WindowResult>::Config{
@@ -193,12 +193,12 @@ static void demo_session() {
         wa.try_push(ClickEvent{std::move(uid), "/shop", 1}, ctx);
     };
 
-    // 세션 1: bob — 연속 클릭 3회 (갭 없음)
+    // Session 1: bob — 3 consecutive clicks (no gap)
     push("bob", now);
     push("bob", now + 50ms);
     push("bob", now + 100ms);
 
-    // 세션 2: bob — 갭 300ms 후 새 세션
+    // Session 2: bob — new session after 300ms gap
     push("bob", now + 400ms);
 
     std::this_thread::sleep_for(800ms);
@@ -214,41 +214,41 @@ static void demo_session() {
     disp.stop();
     t.join();
 
-    std::printf("  SessionWindow 결과 수: %zu\n", results.size());
+    println("  SessionWindow result count: {}", results.size());
     for (auto& r : results)
-        std::printf("  [Session] user=%s count=%d\n", r.user_id.c_str(), r.count);
-    std::printf("\n");
+        println("  [Session] user={} count={}", r.user_id, r.count);
+    println("");
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// §4  TumblingWindow 유틸리티 직접 사용
+// §4  Direct window utility usage
 // ─────────────────────────────────────────────────────────────────────────────
 
 static void demo_window_utils() {
-    std::printf("── §4  윈도우 유틸리티 직접 사용 ──\n");
+    println("── §4  Window Utility Direct Usage ──");
 
-    // TumblingWindow: 특정 시각이 속한 윈도우 계산
+    // TumblingWindow: compute the window containing a given timestamp
     TumblingWindow tw{1000ms};
     auto t0 = Clock::time_point(std::chrono::seconds(5));
     auto wd = tw.window_for(t0);
     auto dur = std::chrono::duration_cast<std::chrono::seconds>(
         wd.end - wd.start).count();
-    std::printf("  TumblingWindow(1s): window 크기 = %lds\n", dur);
+    println("  TumblingWindow(1s): window size = {}s", dur);
 
-    // SlidingWindow: 하나의 이벤트가 여러 윈도우에 속함
+    // SlidingWindow: one event can belong to multiple windows
     SlidingWindow sw{500ms, 200ms};
     auto windows = sw.windows_for(t0);
-    std::printf("  SlidingWindow(500ms/200ms): 이벤트가 %zu개 윈도우에 포함\n",
+    println("  SlidingWindow(500ms/200ms): event belongs to {} windows",
                 windows.size());
 
     // SessionWindow: tick_interval = gap/2
     SessionWindow sess{400ms};
-    std::printf("  SessionWindow(gap=400ms): tick_interval = %ldms\n",
+    println("  SessionWindow(gap=400ms): tick_interval = {}ms",
                 sess.tick_interval().count());
 
-    // Watermark 생성
+    // Create a Watermark
     Watermark wm{Clock::now()};
-    std::printf("  Watermark 생성 완료\n\n");
+    println("  Watermark created\n");
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -256,13 +256,13 @@ static void demo_window_utils() {
 // ─────────────────────────────────────────────────────────────────────────────
 
 int main() {
-    std::printf("=== qbuem WindowedAction 예제 ===\n\n");
+    println("=== qbuem WindowedAction Example ===\n");
 
     demo_window_utils();
     demo_tumbling();
     demo_sliding();
     demo_session();
 
-    std::printf("=== 완료 ===\n");
+    println("=== Done ===");
     return 0;
 }

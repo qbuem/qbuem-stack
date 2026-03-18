@@ -1,6 +1,6 @@
 /**
  * @file examples/stream_ops_example.cpp
- * @brief Stream 연산자 예시 — throttle, debounce, tumbling_window, map, filter
+ * @brief Stream operator examples — throttle, debounce, tumbling_window, map, filter
  */
 #include <qbuem/core/dispatcher.hpp>
 #include <qbuem/core/task.hpp>
@@ -10,20 +10,21 @@
 
 #include <atomic>
 #include <chrono>
-#include <iostream>
 #include <string>
 #include <thread>
 #include <vector>
+#include <qbuem/compat/print.hpp>
 
 using namespace qbuem;
 using namespace std::chrono_literals;
+using std::println;
 
-// ─── 기본 Stream map / filter ────────────────────────────────────────────────
+// ─── Basic Stream map / filter ───────────────────────────────────────────────
 
 Task<Result<void>> stream_map_filter(Dispatcher& dispatcher) {
     auto ch = std::make_shared<AsyncChannel<int>>(64);
 
-    // 소스 코루틴: 1~10 발행
+    // Source coroutine: publish 1..10
     dispatcher.spawn([ch]() -> Task<Result<void>> {
         for (int i = 1; i <= 10; ++i)
             ch->try_send(i);
@@ -38,9 +39,9 @@ Task<Result<void>> stream_map_filter(Dispatcher& dispatcher) {
         co_return x * 2;
     });
 
-    // filter: 짝수만
+    // filter: even values only
     auto evens = doubled | stream_filter([](const int& x) {
-        return x % 4 == 0; // 원래 값 기준 짝수 (doubled 기준으론 4의 배수)
+        return x % 4 == 0; // divisible by 4 in doubled stream (even in original)
     });
 
     std::vector<int> results;
@@ -48,19 +49,19 @@ Task<Result<void>> stream_map_filter(Dispatcher& dispatcher) {
         auto item = co_await evens.next();
         if (!item) break;
         results.push_back(*item);
-        std::cout << "[stream] map×2+filter: " << *item << "\n";
+        println("[stream] map×2+filter: {}", *item);
     }
 
-    std::cout << "[stream] map+filter: " << results.size() << " items\n";
+    println("[stream] map+filter: {} items", results.size());
     co_return {};
 }
 
-// ─── stream_throttle ─────────────────────────────────────────────────────────
+// ─── stream_throttle ──────────────────────────────────────────────────────────
 
 Task<Result<void>> stream_throttle_example(Dispatcher& dispatcher) {
     auto ch = std::make_shared<AsyncChannel<std::string>>(256);
 
-    // 빠르게 100개 발행
+    // Publish 20 items rapidly
     dispatcher.spawn([ch]() -> Task<Result<void>> {
         for (int i = 0; i < 20; ++i)
             ch->try_send("event-" + std::to_string(i));
@@ -70,7 +71,7 @@ Task<Result<void>> stream_throttle_example(Dispatcher& dispatcher) {
 
     Stream<std::string> src(ch);
 
-    // 최대 5개/100ms 스로틀
+    // Throttle: max 5 per 100ms
     auto throttled = src | stream_throttle<std::string>(5, 100);
 
     size_t count = 0;
@@ -79,16 +80,16 @@ Task<Result<void>> stream_throttle_example(Dispatcher& dispatcher) {
         if (!item) break;
         ++count;
     }
-    std::cout << "[stream] throttle: " << count << " events passed through\n";
+    println("[stream] throttle: {} events passed through", count);
     co_return {};
 }
 
-// ─── stream_debounce ─────────────────────────────────────────────────────────
+// ─── stream_debounce ──────────────────────────────────────────────────────────
 
 Task<Result<void>> stream_debounce_example(Dispatcher& dispatcher) {
     auto ch = std::make_shared<AsyncChannel<int>>(64);
 
-    // 빠르게 5개 발행 후 조용함
+    // Publish 5 items rapidly then silence
     dispatcher.spawn([ch]() -> Task<Result<void>> {
         for (int i = 0; i < 5; ++i)
             ch->try_send(i);
@@ -97,7 +98,7 @@ Task<Result<void>> stream_debounce_example(Dispatcher& dispatcher) {
     }());
 
     Stream<int> src(ch);
-    // 30ms 조용한 구간 후 마지막 아이템 방출
+    // Emit the last item after 30ms of silence
     auto debounced = src | stream_debounce<int>(30);
 
     size_t count = 0;
@@ -105,18 +106,18 @@ Task<Result<void>> stream_debounce_example(Dispatcher& dispatcher) {
         auto item = co_await debounced.next();
         if (!item) break;
         ++count;
-        std::cout << "[stream] debounce: value=" << *item << "\n";
+        println("[stream] debounce: value={}", *item);
     }
-    std::cout << "[stream] debounce: " << count << " event(s) emitted\n";
+    println("[stream] debounce: {} event(s) emitted", count);
     co_return {};
 }
 
-// ─── stream_tumbling_window ──────────────────────────────────────────────────
+// ─── stream_tumbling_window ───────────────────────────────────────────────────
 
 Task<Result<void>> stream_window_example(Dispatcher& dispatcher) {
     auto ch = std::make_shared<AsyncChannel<int>>(128);
 
-    // 100개 발행
+    // Publish 30 items
     dispatcher.spawn([ch]() -> Task<Result<void>> {
         for (int i = 0; i < 30; ++i)
             ch->try_send(i);
@@ -125,7 +126,7 @@ Task<Result<void>> stream_window_example(Dispatcher& dispatcher) {
     }());
 
     Stream<int> src(ch);
-    // 50ms 텀블링 윈도우
+    // 50ms tumbling window
     auto windowed = src | stream_tumbling_window<int>(50);
 
     size_t windows = 0;
@@ -133,17 +134,16 @@ Task<Result<void>> stream_window_example(Dispatcher& dispatcher) {
         auto window = co_await windowed.next();
         if (!window) break;
         ++windows;
-        std::cout << "[stream] window " << windows
-                  << ": " << window->size() << " items\n";
+        println("[stream] window {}: {} items", windows, window->size());
     }
-    std::cout << "[stream] tumbling_window: " << windows << " windows\n";
+    println("[stream] tumbling_window: {} windows", windows);
     co_return {};
 }
 
-// ─── main ────────────────────────────────────────────────────────────────────
+// ─── main ─────────────────────────────────────────────────────────────────────
 
 int main() {
-    std::cout << "=== Stream Operators ===\n";
+    println("=== Stream Operators ===");
 
     Dispatcher dispatcher(2);
     std::jthread run_th([&] { dispatcher.run(); });

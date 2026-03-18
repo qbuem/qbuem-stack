@@ -1,17 +1,18 @@
 /**
- * coro_json.cpp — qbuem-stack JSON 예제
+ * coro_json.cpp — qbuem-stack JSON example
  *
- * JSON 라이브러리: qbuem-json (https://github.com/qbuem/qbuem-json)
- *   구 beast-json과 동일한 API, 네임스페이스만 qbuem:: 으로 변경됨.
+ * JSON library: qbuem-json (https://github.com/qbuem/qbuem-json)
+ *   Same API as the former beast-json; only the namespace changed to qbuem::.
  *
- * qbuem-stack 프레임워크 코어는 특정 JSON 라이브러리에 의존하지 않습니다.
- * req.body() 는 raw bytes(std::string_view) 로 전달되며, 앱이 직접 파싱합니다.
+ * The qbuem-stack framework core does not depend on any specific JSON library.
+ * req.body() is delivered as raw bytes (std::string_view); the application
+ * parses it directly.
  *
- * 빌드:
+ * Build:
  *   cmake -DQBUEM_BUILD_EXAMPLES=ON ..
  *   make coro_json
  *
- * 테스트:
+ * Test:
  *   curl http://localhost:8080/user/42
  *   curl -X POST http://localhost:8080/echo \
  *        -H "Content-Type: application/json" \
@@ -20,12 +21,13 @@
 #include <qbuem_json/qbuem_json.hpp>
 #include <qbuem/core/awaiters.hpp>
 #include <qbuem/qbuem_stack.hpp>
-#include <iostream>
+#include <qbuem/compat/print.hpp>
+
 #include <string>
 
 using namespace qbuem;
 
-// ─── 응답 DTO (Nexus 엔진) ───────────────────────────────────────────────────
+// ─── Response DTOs ───────────────────────────────────────────────────────────
 struct UserResponse {
     std::string message;
     std::string status;
@@ -41,9 +43,9 @@ struct EchoResponse {
 };
 QBUEM_JSON_FIELDS(EchoResponse, echo_message, echo_name, ok)
 
-// ─── JSON 파싱 헬퍼 (DOM 엔진) ───────────────────────────────────────────────
-// req.body() 는 raw bytes(std::string_view) 입니다.
-// SafeValue 체인 시연용으로 DOM 엔진을 사용합니다.
+// ─── JSON parsing helper (DOM engine) ────────────────────────────────────────
+// req.body() is raw bytes (std::string_view).
+// Uses the DOM engine to demonstrate SafeValue chaining.
 static qbuem::Value parse_body(const Request& req) {
     qbuem::Document doc;
     std::string_view b = req.body();
@@ -56,11 +58,11 @@ static qbuem::Value parse_body(const Request& req) {
     }
 }
 
-// GET /user/:id — 비동기 코루틴 핸들러
+// GET /user/:id — async coroutine handler
 Task<void> async_user_handler(const Request& req, Response& res) {
-    std::cout << "[Async] GET " << req.path() << std::endl;
+    std::println("[Async] GET {}", req.path());
 
-    co_await sleep(0); // reactor 에 제어권을 한 번 양보 (coroutine 시연)
+    co_await sleep(0); // yield control to the reactor once (coroutine demo)
 
     res.status(200)
        .header("Content-Type", "application/json")
@@ -73,11 +75,11 @@ Task<void> async_user_handler(const Request& req, Response& res) {
     co_return;
 }
 
-// POST /echo — DOM SafeValue 체인으로 요청 파싱 + Nexus 로 응답 직렬화
+// POST /echo — parse request with DOM SafeValue chaining + serialize response with Nexus
 Task<void> echo_handler(const Request& req, Response& res) {
     qbuem::Value body = parse_body(req);
 
-    // .get("key") | fallback — 키 없거나 타입 불일치 시 nullopt 전파 (DOM SafeValue 시연)
+    // .get("key") | fallback — propagates nullopt when key is missing or type mismatch
     std::string msg  = body.get("message") | std::string("(no message)");
     std::string name = body.get("name")    | std::string("(anonymous)");
 
@@ -97,12 +99,12 @@ int main() {
         res.status(200).body("Welcome to qbuem-stack!");
     }));
 
-    std::cout << "coro_json example: http://0.0.0.0:8080\n"
-              << "  GET  /user/42\n"
-              << "  POST /echo  body: {\"message\":\"hi\",\"name\":\"qbuem\"}\n";
+    std::println("coro_json example: http://0.0.0.0:8080");
+    std::println("  GET  /user/42");
+    std::println("  POST /echo  body: {{\"message\":\"hi\",\"name\":\"qbuem\"}}");
 
     if (auto r = app.listen(8080); !r) {
-        std::cerr << "listen failed: " << r.error().message() << "\n";
+        std::println(stderr, "listen failed: {}", r.error().message());
         return 1;
     }
 }

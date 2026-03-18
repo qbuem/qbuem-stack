@@ -1,13 +1,13 @@
 /**
  * @file examples/pipeline_sensor_fusion.cpp
- * @brief Pipeline Guide §6 Recipe A: Sensor Fusion (N:1 Sync) 예시.
+ * @brief Pipeline Guide §6 Recipe A: Sensor Fusion (N:1 Sync) example.
  *
- * 시나리오:
- *   IMU (가속도/자이로) 데이터와 GPS 데이터가 서로 다른 속도로 들어옵니다.
- *   ServiceRegistry에 partial 데이터를 저장하고, 두 센서 데이터가
- *   같은 Context ID로 도착하면 Fusion을 수행합니다.
+ * Scenario:
+ *   IMU (accelerometer/gyro) data and GPS data arrive at different rates.
+ *   Partial data is stored in the ServiceRegistry, and when both sensor
+ *   readings arrive with the same Context ID, fusion is performed.
  *
- * 가이드 원문 (Recipe A):
+ * Guide excerpt (Recipe A):
  *   1. Use a Gather Action that stores partial data in the ServiceRegistry.
  *   2. Once all parts arrive (aligned by Context ID), compute the fusion and
  *      emit the result.
@@ -24,22 +24,23 @@
 
 #include <atomic>
 #include <chrono>
-#include <iostream>
 #include <mutex>
 #include <optional>
 #include <string>
 #include <thread>
 #include <unordered_map>
+#include <qbuem/compat/print.hpp>
 
 using namespace qbuem;
 using namespace std::chrono_literals;
+using std::println;
 
-// ─── 도메인 타입 ─────────────────────────────────────────────────────────────
+// ─── Domain types ─────────────────────────────────────────────────────────────
 
 struct ImuSample {
     std::string frame_id;
-    float ax, ay, az;   ///< 가속도
-    float gx, gy, gz;   ///< 자이로
+    float ax, ay, az;   ///< accelerometer
+    float gx, gy, gz;   ///< gyroscope
 };
 
 struct GpsSample {
@@ -47,7 +48,7 @@ struct GpsSample {
     double lat, lng, alt;
 };
 
-// 융합 결과
+// Fusion result
 struct FusedPose {
     std::string frame_id;
     float ax, ay, az;
@@ -55,26 +56,26 @@ struct FusedPose {
     bool complete = false;
 };
 
-// ServiceRegistry에 저장되는 수집 버퍼
+// Accumulation buffer stored in ServiceRegistry
 struct FusionBuffer {
     std::mutex                              mu;
     std::unordered_map<std::string, ImuSample> imu;
     std::unordered_map<std::string, GpsSample> gps;
 };
 
-// ─── 메시지 래퍼 ─────────────────────────────────────────────────────────────
+// ─── Message wrapper ──────────────────────────────────────────────────────────
 
-// 두 센서를 하나의 파이프라인에 입력하기 위한 variant
+// Variant to feed both sensor types into a single pipeline
 struct SensorMsg {
     enum class Kind { IMU, GPS } kind;
     ImuSample imu_data{};
     GpsSample gps_data{};
 };
 
-// ─── 액션 함수 ───────────────────────────────────────────────────────────────
+// ─── Action functions ─────────────────────────────────────────────────────────
 
-// Gather 액션: ServiceRegistry에 partial 데이터를 저장하고
-// 양쪽 데이터가 모이면 FusedPose를 방출합니다.
+// Gather action: store partial data in ServiceRegistry and emit FusedPose
+// once both readings for the same frame ID are available.
 static Task<Result<FusedPose>> gather_fuse(SensorMsg msg, ActionEnv env) {
     auto& buf = env.registry->get_or_create<FusionBuffer>();
     std::string fid;
@@ -92,7 +93,7 @@ static Task<Result<FusedPose>> gather_fuse(SensorMsg msg, ActionEnv env) {
         auto iit = buf.imu.find(fid);
         auto git = buf.gps.find(fid);
         if (iit != buf.imu.end() && git != buf.gps.end()) {
-            // 두 센서 데이터가 모임 → 융합
+            // Both sensor readings available → fuse
             FusedPose pose{
                 fid,
                 iit->second.ax, iit->second.ay, iit->second.az,
@@ -105,11 +106,11 @@ static Task<Result<FusedPose>> gather_fuse(SensorMsg msg, ActionEnv env) {
         }
     }
 
-    // 아직 짝이 없으면 빈 결과 반환 (파이프라인에서 필터링 필요)
+    // No matching pair yet — return empty result (pipeline must filter these out)
     co_return FusedPose{fid, 0,0,0, 0,0,0, false};
 }
 
-// ─── main ────────────────────────────────────────────────────────────────────
+// ─── main ─────────────────────────────────────────────────────────────────────
 
 int main() {
     ServiceRegistry registry;
@@ -127,29 +128,28 @@ int main() {
     gather.start(dispatcher, out_ch);
     std::jthread run_th([&] { dispatcher.run(); });
 
-    // 10 프레임: IMU + GPS 각각 투입 (순서 섞음)
+    // 10 frames: push IMU + GPS each (interleaved order)
     constexpr size_t kFrames = 10;
     for (size_t i = 0; i < kFrames; ++i) {
         std::string fid = "f" + std::to_string(i);
-        // GPS 먼저
+        // GPS first
         gather.try_push(SensorMsg{
             SensorMsg::Kind::GPS, {},
             GpsSample{fid, 37.5 + i*0.001, 127.0 + i*0.001, 50.0}});
-        // IMU 나중
+        // IMU second
         gather.try_push(SensorMsg{
             SensorMsg::Kind::IMU,
             ImuSample{fid, 0.1f*i, 0.2f*i, 9.8f, 0.f, 0.f, 0.f}});
     }
 
-    // 결과 수집
+    // Collect results
     size_t fused = 0;
     auto deadline = std::chrono::steady_clock::now() + 5s;
     while (fused < kFrames && std::chrono::steady_clock::now() < deadline) {
         auto item = out_ch->try_recv();
         if (item && item->value.complete) {
             ++fused;
-            std::cout << "[fusion] frame=" << item->value.frame_id
-                      << " lat=" << item->value.lat << "\n";
+            println("[fusion] frame={} lat={}", item->value.frame_id, item->value.lat);
         } else {
             std::this_thread::sleep_for(1ms);
         }
@@ -159,6 +159,6 @@ int main() {
     dispatcher.stop();
     run_th.join();
 
-    std::cout << "[sensor-fusion] fused=" << fused << "/" << kFrames << "\n";
+    println("[sensor-fusion] fused={}/{}", fused, kFrames);
     return (fused == kFrames) ? 0 : 1;
 }

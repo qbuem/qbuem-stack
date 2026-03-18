@@ -1,14 +1,14 @@
 /**
  * @file shm_layout_test.cpp
- * @brief SHM 메시지 인프라 레이아웃 및 구조체 제약 단위 테스트.
+ * @brief SHM message infrastructure layout and struct constraint unit tests.
  *
- * 커버리지:
- * - SHMHeader 크기(64B) 및 정렬(64B) 검증
- * - MetadataSlot 크기(32B) 및 정렬(32B) 검증
- * - SHMEnvelope 크기(128B) 검증
- * - SHMMagic 상수 검증
- * - calc_segment_size() 반환값이 페이지 경계 이상임을 확인
- * - TopicDescriptor 이름 설정/조회
+ * Coverage:
+ * - SHMHeader size (64B) and alignment (64B) validation
+ * - MetadataSlot size (32B) and alignment (32B) validation
+ * - SHMEnvelope size (128B) validation
+ * - SHMMagic constant validation
+ * - Verify calc_segment_size() return value is at least a page boundary
+ * - TopicDescriptor name set/get
  */
 
 #include <qbuem/shm/shm_channel.hpp>
@@ -19,7 +19,7 @@
 
 using namespace qbuem::shm;
 
-// ─── 구조체 크기/정렬 제약 ────────────────────────────────────────────────────
+// ─── Struct size/alignment constraints ───────────────────────────────────────
 
 TEST(SHMLayout, HeaderSize) {
     EXPECT_EQ(sizeof(SHMHeader), 64u);
@@ -46,7 +46,7 @@ TEST(SHMLayout, MagicConstant) {
     EXPECT_EQ(kSHMMagic, 0x5142554Du);
 }
 
-// ─── 헤더 초기 상태 ──────────────────────────────────────────────────────────
+// ─── Header initial state ────────────────────────────────────────────────────
 
 TEST(SHMLayout, HeaderDefaultState) {
     SHMHeader hdr;
@@ -57,7 +57,7 @@ TEST(SHMLayout, HeaderDefaultState) {
     EXPECT_EQ(hdr.state.load() & 1u, 1u);
 }
 
-// ─── MetadataSlot 초기 상태 ──────────────────────────────────────────────────
+// ─── MetadataSlot initial state ──────────────────────────────────────────────
 
 TEST(SHMLayout, MetadataSlotDefault) {
     MetadataSlot slot;
@@ -72,7 +72,7 @@ TEST(SHMLayout, MetadataSlotDefault) {
 // ─── calc_segment_size ───────────────────────────────────────────────────────
 
 TEST(SHMLayout, CalcSegmentSizeMinPage) {
-    // 아무리 작아도 반환값은 페이지 크기(4096B) 이상이어야 합니다
+    // Return value must always be at least the page size (4096B) regardless of inputs
     size_t sz = calc_segment_size(4, 8, false);
     EXPECT_GE(sz, 4096u);
 }
@@ -87,7 +87,7 @@ TEST(SHMLayout, CalcSegmentSizeEnvelopeAdds128) {
     // Use capacity=64 so the envelope overhead (64*128=8192) exceeds one page.
     size_t without = calc_segment_size(64, 64, false);
     size_t with_   = calc_segment_size(64, 64, true);
-    // envelope가 붙으면 capacity * 128B 이상 커져야 합니다
+    // With envelope, size must grow by at least capacity * 128B
     EXPECT_GE(with_, without + 64 * 128u);
 }
 
@@ -100,7 +100,7 @@ TEST(SHMLayout, TopicDescriptorName) {
 }
 
 TEST(SHMLayout, TopicDescriptorNameTruncation) {
-    // kMaxNameLen = 63 — 그보다 긴 이름은 잘립니다
+    // kMaxNameLen = 63 — names longer than that are truncated
     std::string long_name(100, 'x');
     TopicDescriptor desc;
     desc.set_name(long_name);

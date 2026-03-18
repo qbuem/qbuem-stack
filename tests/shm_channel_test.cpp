@@ -1,17 +1,17 @@
 /**
  * @file shm_channel_test.cpp
- * @brief SHMChannel<T> + SHMBus 기능 단위 테스트.
+ * @brief SHMChannel<T> + SHMBus functionality unit tests.
  *
- * 커버리지:
+ * Coverage:
  * - SHMChannel::create + is_open + capacity + size_approx
- * - try_send / try_recv (Vyukov MPMC 정확성)
+ * - try_send / try_recv (Vyukov MPMC correctness)
  * - close → is_open=false, try_send=false
- * - 링 버퍼 꽉 참 → try_send=false
- * - 링 버퍼 비어있음 → try_recv=nullopt
- * - 여러 메시지 순서 보존 (FIFO)
+ * - ring buffer full → try_send=false
+ * - ring buffer empty → try_recv=nullopt
+ * - multiple message order preservation (FIFO)
  * - SHMBus LOCAL_ONLY: declare / try_publish / subscribe / try_recv
- * - SHMBus: 소멸자 자원 해제 (memory leak 없음)
- * - calc_segment_size 반환값 검증
+ * - SHMBus: destructor releases resources (no memory leak)
+ * - calc_segment_size return value validation
  */
 
 #include <qbuem/shm/shm_bus.hpp>
@@ -23,7 +23,7 @@
 
 using namespace qbuem::shm;
 
-// ─── 테스트용 메시지 타입 ─────────────────────────────────────────────────────
+// ─── Test message type ────────────────────────────────────────────────────────
 
 struct Msg32 {
     int64_t  seq{0};
@@ -32,13 +32,13 @@ struct Msg32 {
 };
 static_assert(std::is_trivially_copyable_v<Msg32>);
 
-// 각 테스트마다 고유한 shm 이름 사용 (충돌 방지)
+// Use a unique shm name per test to prevent naming collisions
 static int g_shm_counter = 0;
 static std::string next_shm_name() {
     return "qbuem_test_" + std::to_string(++g_shm_counter);
 }
 
-// ─── SHMChannel 생성 ─────────────────────────────────────────────────────────
+// ─── SHMChannel creation ─────────────────────────────────────────────────────
 
 TEST(SHMChannel, CreateSucceeds) {
     auto name = next_shm_name();
@@ -126,11 +126,11 @@ TEST(SHMChannel, FullChannelTrySendReturnsFalse) {
     auto& ch = *res;
 
     Msg32 m{0, 0, 0};
-    // 채널 가득 채우기 (cap=4)
+    // Fill the channel (cap=4)
     for (size_t i = 0; i < ch->capacity(); ++i)
         EXPECT_TRUE(ch->try_send(m));
 
-    // 가득 찼으므로 false
+    // Full, so returns false
     EXPECT_FALSE(ch->try_send(m));
     ::shm_unlink(("/" + name).c_str());
 }
@@ -162,22 +162,22 @@ TEST(SHMChannel, TrySendAfterCloseReturnsFalse) {
 
 TEST(SHMChannel, UnlinkRemovesSegment) {
     auto name = next_shm_name();
-    // 생성 후 close → unlink 정상 동작 확인
+    // Verify unlink works correctly after create + close
     {
         auto res = SHMChannel<Msg32>::create(name, 8);
         ASSERT_TRUE(res.has_value());
         (*res)->close();
     }
-    // unlink 성공
+    // unlink succeeds
     auto r = SHMChannel<Msg32>::unlink(name);
     EXPECT_TRUE(r.has_value()) << r.error().message();
-    // 두 번 unlink 해도 에러 없음 (ENOENT → ok)
+    // Double unlink is also ok (ENOENT → ok)
     auto r2 = SHMChannel<Msg32>::unlink(name);
     EXPECT_TRUE(r2.has_value());
 }
 
 TEST(SHMChannel, UnlinkNonexistentOk) {
-    // 존재하지 않는 이름도 ok (ENOENT 무음 처리)
+    // Nonexistent name is also ok (ENOENT silently ignored)
     auto r = SHMChannel<Msg32>::unlink("qbuem_nonexistent_test_xyz");
     EXPECT_TRUE(r.has_value());
 }
@@ -240,10 +240,10 @@ TEST(SHMBus, MultipleSubscribers_LocalBroadcast) {
     BusMsg m{99, 1.0, "test\0\0\0"};
     bus.try_publish("bus.mc", m);
 
-    // 하나의 구독자가 받음 (MPMC — 경쟁)
+    // One subscriber receives it (MPMC — competition)
     auto r1 = sub1->try_recv();
     auto r2 = sub2->try_recv();
-    // 둘 중 정확히 하나만 메시지를 받아야 함
+    // Exactly one of the two must receive the message
     bool got = r1.has_value() || r2.has_value();
     EXPECT_TRUE(got);
 }
@@ -263,7 +263,7 @@ TEST(SHMBus, TryPublishUnknownTopicReturnsFalse) {
 }
 
 TEST(SHMBus, PerSubscriberBufferIsolation) {
-    // LocalSub bug fix 검증: 두 구독자가 서로 다른 buf_를 가져야 함
+    // Verify LocalSub bug fix: two subscribers must have different buf_ instances
     SHMBus bus;
     bus.declare<BusMsg>("iso", TopicScope::LOCAL_ONLY, 32);
     auto sub1 = bus.subscribe<BusMsg>("iso");
@@ -276,12 +276,12 @@ TEST(SHMBus, PerSubscriberBufferIsolation) {
     bus.try_publish("iso", a);
     bus.try_publish("iso", b);
 
-    // 각 구독자가 독립적인 버퍼를 사용 (포인터가 달라야 함)
+    // Each subscriber uses an independent buffer (pointers must differ)
     auto ra = sub1->try_recv();
     auto rb = sub2->try_recv();
 
     if (ra.has_value() && rb.has_value()) {
-        // 두 포인터는 달라야 함
+        // The two pointers must differ
         EXPECT_NE(*ra, *rb);
     }
 }

@@ -1,11 +1,11 @@
 /**
  * @file tests/enhancement_test.cpp
- * @brief 고도화: LockFreeConnectionPool, FutexSync, JwtAuthAction 레이아웃/기본 테스트.
+ * @brief Enhancement: LockFreeConnectionPool, FutexSync, JwtAuthAction layout/basic tests.
  */
 
 #include <gtest/gtest.h>
 
-// ── 고도화 headers ────────────────────────────────────────────────────────────
+// ── Enhancement headers ───────────────────────────────────────────────────────
 #include <qbuem/db/connection_pool.hpp>
 #include <qbuem/shm/futex_sync.hpp>
 #include <qbuem/security/jwt_action.hpp>
@@ -74,11 +74,11 @@ TEST(FutexSync, FutexWordCAS) {
     EXPECT_TRUE(ok);
     EXPECT_EQ(fw.load(), 20u);
 
-    // 이미 변경된 상태에서 CAS 실패 확인
+    // Verify CAS failure when already modified
     expected = 10;
     ok = fw.compare_exchange(expected, 30);
     EXPECT_FALSE(ok);
-    EXPECT_EQ(expected, 20u); // 실패 시 expected가 현재 값으로 업데이트
+    EXPECT_EQ(expected, 20u); // on failure, expected is updated to current value
 }
 
 TEST(FutexSync, FutexWordFetchAdd) {
@@ -109,7 +109,7 @@ TEST(FutexSync, FutexMutexTryLock) {
     auto guard = mtx.try_lock();
     EXPECT_TRUE(guard.has_value());
     EXPECT_TRUE(mtx.is_locked());
-    // guard 소멸 → unlock
+    // guard destruction → unlock
 }
 
 TEST(FutexSync, FutexMutexTryLockTwiceFails) {
@@ -119,7 +119,7 @@ TEST(FutexSync, FutexMutexTryLockTwiceFails) {
     EXPECT_TRUE(g1.has_value());
 
     auto g2 = mtx.try_lock();
-    EXPECT_FALSE(g2.has_value()); // 이미 잠김
+    EXPECT_FALSE(g2.has_value()); // already locked
 }
 
 TEST(FutexSync, FutexMutexUnlockAfterGuard) {
@@ -129,7 +129,7 @@ TEST(FutexSync, FutexMutexUnlockAfterGuard) {
         auto guard = mtx.try_lock();
         EXPECT_TRUE(mtx.is_locked());
     }
-    // guard 소멸 후 unlock
+    // unlocked after guard destruction
     EXPECT_FALSE(mtx.is_locked());
 }
 
@@ -177,7 +177,7 @@ TEST(JwtAction, JwtClaimsDefault) {
 TEST(JwtAction, JwtClaimsIsValidAt) {
     using namespace qbuem::security;
     JwtClaims c{};
-    c.exp = 2000000000LL; // 미래 만료
+    c.exp = 2000000000LL; // future expiry
     int64_t now = 1700000000LL;
     EXPECT_TRUE(c.is_valid_at(now));
 }
@@ -185,7 +185,7 @@ TEST(JwtAction, JwtClaimsIsValidAt) {
 TEST(JwtAction, JwtClaimsExpired) {
     using namespace qbuem::security;
     JwtClaims c{};
-    c.exp = 1000000000LL; // 과거 만료
+    c.exp = 1000000000LL; // past expiry
     int64_t now = 1700000000LL;
     EXPECT_FALSE(c.is_valid_at(now));
 }
@@ -194,18 +194,18 @@ TEST(JwtAction, JwtClaimsLeeway) {
     using namespace qbuem::security;
     JwtClaims c{};
     c.exp = 1700000000LL;
-    int64_t now = 1700000005LL; // 5초 초과
+    int64_t now = 1700000005LL; // 5 seconds past expiry
     EXPECT_FALSE(c.is_valid_at(now, 0));
-    EXPECT_TRUE(c.is_valid_at(now, 10));  // leeway 10초 허용
+    EXPECT_TRUE(c.is_valid_at(now, 10));  // leeway of 10 seconds allowed
 }
 
 TEST(JwtAction, JwtClaimsNbf) {
     using namespace qbuem::security;
     JwtClaims c{};
     c.nbf = 1700000010LL;
-    int64_t now = 1700000000LL;  // nbf 이전
+    int64_t now = 1700000000LL;  // before nbf
     EXPECT_FALSE(c.is_valid_at(now));
-    EXPECT_TRUE(c.is_valid_at(now, 15));  // leeway 허용
+    EXPECT_TRUE(c.is_valid_at(now, 15));  // leeway allowed
 }
 
 TEST(JwtAction, JwtAuthConfigDefaults) {

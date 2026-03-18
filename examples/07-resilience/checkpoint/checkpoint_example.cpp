@@ -1,27 +1,27 @@
 /**
  * @file checkpoint_example.cpp
- * @brief CheckpointedPipeline — 배치 로그 처리기 체크포인트 복합 예시.
+ * @brief CheckpointedPipeline — batch log processor checkpoint composite example.
  *
- * ## 시나리오: 실시간 로그 수집 파이프라인
- * 로그 이벤트를 파싱 → 보강 → 저장 단계로 처리하면서
- * 처리 진행상황을 체크포인트로 저장합니다.
+ * ## Scenario: Real-time log collection pipeline
+ * Log events are processed through parse → enrich → persist stages
+ * while saving processing progress as checkpoints.
  *
- * ## 단계
- * 1. [파싱]   원시 로그 문자열 → 구조화된 LogEvent
- * 2. [보강]   서비스명 조회, 심각도 분류
- * 3. [저장]   처리된 이벤트 카운터 증가 (실제는 DB/S3 저장)
+ * ## Stages
+ * 1. [Parse]   Raw log string → structured LogEvent
+ * 2. [Enrich]  Service name lookup, severity classification
+ * 3. [Persist] Increment processed event counter (actual: DB/S3 storage)
  *
- * ## 체크포인트 시나리오
- * - 매 N개 처리마다 자동 체크포인트 저장
- * - 수동 save_checkpoint(): 배치 완료 후 명시적 저장
- * - resume_from_checkpoint(): 재시작 시 마지막 오프셋에서 재개
+ * ## Checkpoint scenarios
+ * - Automatic checkpoint save every N items processed
+ * - Manual save_checkpoint(): explicit save after batch completion
+ * - resume_from_checkpoint(): resume from last offset on restart
  *
- * ## 커버리지
- * - CheckpointedPipeline<T>: 생성자 / pipeline() / enable_checkpoint
- * - push_counted(): 아이템 전달 + 카운터 증가
- * - save_checkpoint(): 수동 저장 (metadata_json 포함)
- * - resume_from_checkpoint(): 저장된 오프셋 복원
- * - items_processed(): 누적 처리 수 조회
+ * ## Coverage
+ * - CheckpointedPipeline<T>: constructor / pipeline() / enable_checkpoint
+ * - push_counted(): item delivery + counter increment
+ * - save_checkpoint(): manual save (with metadata_json)
+ * - resume_from_checkpoint(): restore saved offset
+ * - items_processed(): query cumulative processed count
  * - InMemoryCheckpointStore: save / load / size
  * - CheckpointData: offset / metadata_json / saved_at
  */
@@ -32,10 +32,10 @@
 #include <qbuem/pipeline/checkpoint.hpp>
 #include <qbuem/pipeline/context.hpp>
 #include <qbuem/pipeline/dynamic_pipeline.hpp>
+#include <qbuem/compat/print.hpp>
 
 #include <atomic>
 #include <chrono>
-#include <cstdio>
 #include <string>
 #include <thread>
 #include <vector>
@@ -43,7 +43,7 @@
 using namespace qbuem;
 using namespace std::chrono_literals;
 
-// ─── 도메인 타입 ─────────────────────────────────────────────────────────────
+// ─── Domain types ─────────────────────────────────────────────────────────────
 
 struct LogEvent {
     uint64_t    event_id;
@@ -55,12 +55,12 @@ struct LogEvent {
     bool        persisted = false;
 };
 
-// ─── 파이프라인 스테이지 ─────────────────────────────────────────────────────
+// ─── Pipeline stages ─────────────────────────────────────────────────────────
 
 static std::atomic<int> g_persisted_count{0};
 
 static Task<Result<LogEvent>> stage_parse(LogEvent ev, ActionEnv /*env*/) {
-    // raw 문자열에서 severity 파싱
+    // Parse severity from raw string
     if (ev.raw.find("ERROR") != std::string::npos) ev.severity = 2;
     else if (ev.raw.find("WARN") != std::string::npos) ev.severity = 1;
     else ev.severity = 0;
@@ -69,7 +69,7 @@ static Task<Result<LogEvent>> stage_parse(LogEvent ev, ActionEnv /*env*/) {
 }
 
 static Task<Result<LogEvent>> stage_enrich(LogEvent ev, ActionEnv /*env*/) {
-    // 실제 서비스 레지스트리 조회를 시뮬레이션
+    // Simulate service registry lookup
     ev.service  = (ev.event_id % 3 == 0) ? "payment"
                 : (ev.event_id % 3 == 1) ? "inventory"
                                           : "shipping";
@@ -78,7 +78,7 @@ static Task<Result<LogEvent>> stage_enrich(LogEvent ev, ActionEnv /*env*/) {
 }
 
 static Task<Result<LogEvent>> stage_persist(LogEvent ev, ActionEnv /*env*/) {
-    // 실제로는 DB 또는 S3에 기록
+    // In production: write to DB or S3
     ev.persisted = true;
     g_persisted_count.fetch_add(1, std::memory_order_relaxed);
     co_return ev;
@@ -105,10 +105,10 @@ struct RunGuard {
     }
 };
 
-// ─── 시나리오 1: 기본 배치 처리 + 자동 체크포인트 ──────────────────────────
+// ─── Scenario 1: Basic batch processing + automatic checkpoint ───────────────
 
 static void scenario_auto_checkpoint() {
-    std::puts("\n=== 시나리오 1: 배치 처리 + 자동 체크포인트 (매 5개) ===");
+    std::println("\n=== Scenario 1: Batch processing + auto checkpoint (every 5 items) ===");
     g_persisted_count.store(0);
 
     auto store = std::make_shared<InMemoryCheckpointStore>();
@@ -120,11 +120,11 @@ static void scenario_auto_checkpoint() {
     cp.pipeline().add_stage("enrich",  stage_enrich);
     cp.pipeline().add_stage("persist", stage_persist);
 
-    // 매 5개 처리마다 자동 체크포인트
+    // Automatic checkpoint every 5 items processed
     cp.enable_checkpoint(60s, /*every_n=*/5);
     cp.pipeline().start(guard.dispatcher);
 
-    // 10개 이벤트 전송
+    // Send 10 events
     const char* messages[] = {
         "INFO: order created",
         "WARN: payment retry",
@@ -148,35 +148,33 @@ static void scenario_auto_checkpoint() {
                 "{\"batch\":\"A\",\"seq\":" + std::to_string(i + 1) + "}"
             );
             if (!res.has_value())
-                std::printf("  [WARN] push_counted 실패: %s\n",
-                            res.error().message().c_str());
+                std::println("  [WARN] push_counted failed: {}",
+                            res.error().message());
         }
     });
 
-    // 파이프라인이 처리 완료할 때까지 잠시 대기
+    // Wait briefly for pipeline to finish processing
     std::this_thread::sleep_for(50ms);
 
-    std::printf("[결과] items_processed=%llu\n",
-                static_cast<unsigned long long>(cp.items_processed()));
-    std::printf("[결과] 저장소 체크포인트=%zu개\n", store->size());
+    std::println("[result] items_processed={}", cp.items_processed());
+    std::println("[result] store checkpoints={}", store->size());
 
-    // 체크포인트 내용 확인
+    // Verify checkpoint contents
     guard.run_and_wait([&]() -> Task<void> {
         auto res = co_await store->load("log-pipeline");
         if (res.has_value()) {
-            std::printf("[체크포인트] offset=%llu metadata=%s\n",
-                        static_cast<unsigned long long>(res->offset),
-                        res->metadata_json.c_str());
+            std::println("[checkpoint] offset={} metadata={}",
+                        res->offset, res->metadata_json);
         } else {
-            std::puts("[체크포인트] 저장 없음");
+            std::println("[checkpoint] no checkpoint saved");
         }
     });
 }
 
-// ─── 시나리오 2: 수동 체크포인트 저장 ─────────────────────────────────────
+// ─── Scenario 2: Manual checkpoint save ──────────────────────────────────────
 
 static void scenario_manual_checkpoint() {
-    std::puts("\n=== 시나리오 2: 수동 체크포인트 저장 ===");
+    std::println("\n=== Scenario 2: Manual checkpoint save ===");
     g_persisted_count.store(0);
 
     auto store = std::make_shared<InMemoryCheckpointStore>();
@@ -188,36 +186,35 @@ static void scenario_manual_checkpoint() {
     cp.pipeline().add_stage("persist", stage_persist);
     cp.pipeline().start(guard.dispatcher);
 
-    // 체크포인트 미활성화 상태에서 아이템 전송
+    // Send items without checkpoint enabled
     guard.run_and_wait([&]() -> Task<void> {
         for (uint64_t i = 0; i < 7; ++i) {
             LogEvent ev{i + 100, "INFO: manual batch item", "", 0};
             co_await cp.push_counted(std::move(ev));
         }
-        // 배치 완료 후 수동 저장
+        // Manual save after batch completion
         auto res = co_await cp.save_checkpoint("{\"phase\":\"first_batch_done\"}");
         if (res.has_value())
-            std::puts("  [체크포인트] 수동 저장 완료");
+            std::println("  [checkpoint] manual save completed");
         else
-            std::printf("  [체크포인트] 저장 실패: %s\n",
-                        res.error().message().c_str());
+            std::println("  [checkpoint] save failed: {}",
+                        res.error().message());
     });
 
-    std::printf("[결과] items_processed=%llu, 저장소=%zu개\n",
-                static_cast<unsigned long long>(cp.items_processed()),
-                store->size());
-    std::printf("[결과] checkpoint_enabled=%s\n",
+    std::println("[result] items_processed={}, store={}",
+                cp.items_processed(), store->size());
+    std::println("[result] checkpoint_enabled={}",
                 cp.checkpoint_enabled() ? "YES" : "NO");
 }
 
-// ─── 시나리오 3: 재시작 시 체크포인트에서 재개 ─────────────────────────────
+// ─── Scenario 3: Resume from checkpoint on restart ───────────────────────────
 
 static void scenario_resume_from_checkpoint() {
-    std::puts("\n=== 시나리오 3: 체크포인트 재개 (장애 복구 시뮬레이션) ===");
+    std::println("\n=== Scenario 3: Resume from checkpoint (crash recovery simulation) ===");
 
     auto store = std::make_shared<InMemoryCheckpointStore>();
 
-    // 1단계: 20개 처리 후 체크포인트 저장
+    // Phase 1: Process 20 items then save checkpoint
     {
         RunGuard guard;
         CheckpointedPipeline<LogEvent> cp("crash-recovery", store);
@@ -235,11 +232,11 @@ static void scenario_resume_from_checkpoint() {
                 "{\"last_event_id\":20,\"status\":\"normal\"}");
         });
 
-        std::printf("[1단계] 처리=%llu, 체크포인트 저장됨\n",
-                    static_cast<unsigned long long>(cp.items_processed()));
-    }  // RunGuard 파괴 → 프로세스 재시작 시뮬레이션
+        std::println("[phase 1] processed={}, checkpoint saved",
+                    cp.items_processed());
+    }  // RunGuard destroyed → simulates process restart
 
-    // 2단계: 새 인스턴스가 체크포인트에서 복원
+    // Phase 2: New instance restores from checkpoint
     {
         RunGuard guard;
         CheckpointedPipeline<LogEvent> cp("crash-recovery", store);
@@ -249,26 +246,26 @@ static void scenario_resume_from_checkpoint() {
         cp.pipeline().start(guard.dispatcher);
 
         guard.run_and_wait([&]() -> Task<void> {
-            // 재시작 직후 — 오프셋 0
-            std::printf("[2단계] 복원 전 offset=%llu\n",
-                        static_cast<unsigned long long>(cp.items_processed()));
+            // Before resume — offset is 0
+            std::println("[phase 2] offset before restore={}",
+                        cp.items_processed());
 
             auto res = co_await cp.resume_from_checkpoint();
             if (res.has_value()) {
-                std::printf("[2단계] 복원 후 offset=%llu (20번 이후부터 재처리)\n",
-                            static_cast<unsigned long long>(cp.items_processed()));
+                std::println("[phase 2] offset after restore={} (reprocessing from position 20)",
+                            cp.items_processed());
             } else {
-                std::printf("[2단계] 복원 실패: %s\n",
-                            res.error().message().c_str());
+                std::println("[phase 2] restore failed: {}",
+                            res.error().message());
             }
         });
     }
 }
 
-// ─── 시나리오 4: 존재하지 않는 체크포인트 복원 시도 ────────────────────────
+// ─── Scenario 4: Attempt to resume with no checkpoint ────────────────────────
 
 static void scenario_resume_no_checkpoint() {
-    std::puts("\n=== 시나리오 4: 체크포인트 없음 → 에러 처리 ===");
+    std::println("\n=== Scenario 4: No checkpoint → error handling ===");
 
     auto store = std::make_shared<InMemoryCheckpointStore>();
     RunGuard guard;
@@ -279,13 +276,13 @@ static void scenario_resume_no_checkpoint() {
     guard.run_and_wait([&]() -> Task<void> {
         auto res = co_await cp.resume_from_checkpoint();
         if (!res.has_value()) {
-            std::printf("[결과] 체크포인트 없음 확인: error=%s\n",
-                        res.error().message().c_str());
+            std::println("[result] confirmed no checkpoint: error={}",
+                        res.error().message());
         }
     });
 
-    std::printf("[결과] items_processed=%llu (변화 없음)\n",
-                static_cast<unsigned long long>(cp.items_processed()));
+    std::println("[result] items_processed={} (unchanged)",
+                cp.items_processed());
 }
 
 int main() {
@@ -293,6 +290,6 @@ int main() {
     scenario_manual_checkpoint();
     scenario_resume_from_checkpoint();
     scenario_resume_no_checkpoint();
-    std::puts("\ncheckpoint_example: ALL OK");
+    std::println("\ncheckpoint_example: ALL OK");
     return 0;
 }

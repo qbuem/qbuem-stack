@@ -1,31 +1,31 @@
 /**
  * @file pipeline_observer_health_example.cpp
- * @brief 파이프라인 관찰 가능성 + 상태 모니터링 예제.
+ * @brief Pipeline observability + health monitoring example.
  *
- * ## 커버리지 — pipeline/observability.hpp
- * - ActionMetrics              — 액션 단위 처리 지표 (items, errors, latency buckets)
- * - ActionMetrics::record_latency_us() — µs 단위 레이턴시 버킷 기록
- * - PipelineMetrics            — 파이프라인 집계 지표
+ * ## Coverage — pipeline/observability.hpp
+ * - ActionMetrics              — per-action processing metrics (items, errors, latency buckets)
+ * - ActionMetrics::record_latency_us() — record latency bucket in µs
+ * - PipelineMetrics            — aggregated pipeline metrics
  * - PipelineMetrics::total_processed() / total_errors() / error_rate()
- * - PipelineObserver           — 이벤트 훅 인터페이스
- * - LoggingObserver            — 표준 에러 출력 기본 구현
- * - NoopObserver               — 제로 오버헤드 비활성 구현
- * - HistogramMetrics           — 사용자 정의 버킷 레이턴시 히스토그램
+ * - PipelineObserver           — event hook interface
+ * - LoggingObserver            — default stderr logging implementation
+ * - NoopObserver               — zero-overhead inactive implementation
+ * - HistogramMetrics           — user-defined bucket latency histogram
  *
- * ## 커버리지 — pipeline/health.hpp
- * - PipelineVersion            — 시맨틱 버저닝 + compatible_with()
- * - PipelineVersionRegistry    — 파이프라인 버전 레지스트리
- * - ActionHealth               — 액션별 세부 상태 (to_json)
- * - PipelineHealth             — 파이프라인 단위 건강 집계 (recompute, to_json)
+ * ## Coverage — pipeline/health.hpp
+ * - PipelineVersion            — semantic versioning + compatible_with()
+ * - PipelineVersionRegistry    — pipeline version registry
+ * - ActionHealth               — per-action detailed health state (to_json)
+ * - PipelineHealth             — pipeline-level health aggregation (recompute, to_json)
  * - HealthStatus               — HEALTHY / DEGRADED / UNHEALTHY
- * - HealthRegistry             — 글로벌 건강 상태 레지스트리
- * - GraphTopologyExporter      — PipelineGraph 토폴로지 JSON 내보내기
+ * - HealthRegistry             — global health state registry
+ * - GraphTopologyExporter      — export PipelineGraph topology as JSON
  *
- * ## 커버리지 — pipeline/slo.hpp
- * - LatencyHistogram           — 롤링 1024 샘플 p99/p99.9 히스토그램
- * - LatencyHistogram::record() — 레이턴시 샘플 기록
+ * ## Coverage — pipeline/slo.hpp
+ * - LatencyHistogram           — rolling 1024-sample p99/p99.9 histogram
+ * - LatencyHistogram::record() — record a latency sample
  * - LatencyHistogram::p99() / p999() / bucket_counts()
- * - ErrorBudgetTracker         — 레이턴시 + 에러율 SLO 추적기
+ * - ErrorBudgetTracker         — latency + error rate SLO tracker
  * - ErrorBudgetTracker::record_success() / record_error()
  * - ErrorBudgetTracker::error_rate() / budget_exhausted() / check_slo()
  */
@@ -37,79 +37,80 @@
 #include <qbuem/pipeline/slo.hpp>
 
 #include <chrono>
-#include <cstdio>
 #include <string>
 #include <system_error>
+#include <qbuem/compat/print.hpp>
 
 using namespace qbuem;
 using namespace std::chrono_literals;
+using std::println;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // §1  ActionMetrics & PipelineMetrics
 // ─────────────────────────────────────────────────────────────────────────────
 
 static void demo_action_metrics() {
-    std::printf("── §1  ActionMetrics & PipelineMetrics ──\n");
+    println("── §1  ActionMetrics & PipelineMetrics ──");
 
     ActionMetrics m;
 
-    // 아이템 처리 기록 (원자 카운터)
+    // Record item processing (atomic counters)
     m.items_processed.fetch_add(100, std::memory_order_relaxed);
     m.errors.fetch_add(3, std::memory_order_relaxed);
     m.retried.fetch_add(5, std::memory_order_relaxed);
     m.dlq_count.fetch_add(1, std::memory_order_relaxed);
 
-    // 레이턴시 버킷 기록 (µs 단위)
+    // Record latency buckets (in µs)
     m.record_latency_us(500);    // < 1ms → lat_buckets[0]
     m.record_latency_us(5000);   // < 10ms → lat_buckets[1]
     m.record_latency_us(50000);  // < 100ms → lat_buckets[2]
     m.record_latency_us(200000); // >= 100ms → lat_buckets[3]
 
-    std::printf("  processed=%llu errors=%llu retried=%llu dlq=%llu\n",
+    println("  processed={} errors={} retried={} dlq={}",
                 static_cast<unsigned long long>(m.items_processed.load()),
                 static_cast<unsigned long long>(m.errors.load()),
                 static_cast<unsigned long long>(m.retried.load()),
                 static_cast<unsigned long long>(m.dlq_count.load()));
-    std::printf("  latency buckets: [0]=%llu [1]=%llu [2]=%llu [3]=%llu\n",
+    println("  latency buckets: [0]={} [1]={} [2]={} [3]={}",
                 static_cast<unsigned long long>(m.lat_buckets[0].load()),
                 static_cast<unsigned long long>(m.lat_buckets[1].load()),
                 static_cast<unsigned long long>(m.lat_buckets[2].load()),
                 static_cast<unsigned long long>(m.lat_buckets[3].load()));
 
-    // HistogramMetrics — 사용자 정의 버킷 히스토그램
+    // HistogramMetrics — user-defined bucket histogram
     auto hist = std::make_shared<HistogramMetrics>(
         std::initializer_list<uint64_t>{1000, 5000, 10000, 50000});
     m.histogram = hist;
 
-    m.record_latency_us(800);    // < 1000 → 버킷 0
-    m.record_latency_us(3000);   // < 5000 → 버킷 1
+    m.record_latency_us(800);    // < 1000 → bucket 0
+    m.record_latency_us(3000);   // < 5000 → bucket 1
     auto counts = hist->bucket_counts();
-    std::printf("  HistogramMetrics 버킷 수: %zu\n", counts.size());
+    println("  HistogramMetrics bucket count: {}", counts.size());
 
     // m.reset()
     m.reset();
-    std::printf("  reset() 후 processed=%llu\n\n",
+    println("  after reset() processed={}\n",
                 static_cast<unsigned long long>(m.items_processed.load()));
 
-    // PipelineMetrics — ActionMetrics는 atomic 필드로 인해 이동 불가
-    // actions 벡터는 직접 기록하지 않고 total_processed 등 인터페이스 확인
+    // PipelineMetrics — ActionMetrics cannot be moved due to atomic fields
+    // actions vector is not directly populated here; verify interface methods only
     PipelineMetrics pm;
     pm.name = "order-pipeline";
-    // 빈 상태에서 집계 메서드 확인
-    std::printf("  PipelineMetrics '%s': total_processed=%llu error_rate=%.4f\n\n",
-                pm.name.c_str(),
+    // Verify aggregate methods on empty state
+    println("  PipelineMetrics '{}': total_processed={} error_rate={:.4f}\n",
+                pm.name,
                 static_cast<unsigned long long>(pm.total_processed()),
                 pm.error_rate());
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// §2  PipelineObserver — 이벤트 훅
+// §2  PipelineObserver — event hooks
 // ─────────────────────────────────────────────────────────────────────────────
 
 static void demo_observer() {
-    std::printf("── §2  PipelineObserver ──\n");
+    println("── §2  PipelineObserver ──");
 
-    // LoggingObserver — 기본 로깅 구현
+    // LoggingObserver — default logging implementation
     LoggingObserver logging_obs;
     logging_obs.on_item_done("validate", 42, 1200);
     logging_obs.on_error("enrich",
@@ -119,11 +120,11 @@ static void demo_observer() {
     logging_obs.on_circuit_open("payment");
     logging_obs.on_circuit_close("payment");
 
-    // NoopObserver — 제로 오버헤드 비활성 구현
+    // NoopObserver — zero-overhead inactive implementation
     NoopObserver noop;
     noop.on_item_start("validate", 1);
     noop.on_dlq_item("enrich", {});
-    std::printf("  LoggingObserver & NoopObserver 완료\n\n");
+    println("  LoggingObserver & NoopObserver done\n");
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -131,17 +132,17 @@ static void demo_observer() {
 // ─────────────────────────────────────────────────────────────────────────────
 
 static void demo_version() {
-    std::printf("── §3  PipelineVersion & PipelineVersionRegistry ──\n");
+    println("── §3  PipelineVersion & PipelineVersionRegistry ──");
 
     PipelineVersion v1{1, 0, 0};
     PipelineVersion v2{1, 2, 3};
     PipelineVersion v3{2, 0, 0};
 
-    std::printf("  v1=%s v2=%s v3=%s\n",
-                v1.to_string().c_str(), v2.to_string().c_str(), v3.to_string().c_str());
-    std::printf("  v1.compatible_with(v2)=%s (major 동일)\n",
+    println("  v1={} v2={} v3={}",
+                v1.to_string(), v2.to_string(), v3.to_string());
+    println("  v1.compatible_with(v2)={} (same major)",
                 v1.compatible_with(v2) ? "true" : "false");
-    std::printf("  v1.compatible_with(v3)=%s (major 다름)\n",
+    println("  v1.compatible_with(v3)={} (different major)",
                 v1.compatible_with(v3) ? "true" : "false");
 
     // PipelineVersionRegistry
@@ -151,10 +152,10 @@ static void demo_version() {
 
     auto stored = vreg.get("order-pipeline");
     if (stored)
-        std::printf("  registered version: %s\n", stored->to_string().c_str());
+        println("  registered version: {}", stored->to_string());
 
     bool compat = vreg.compatible_with("order-pipeline", PipelineVersion{1, 5, 0});
-    std::printf("  compatible_with(1.5.0): %s\n\n", compat ? "yes" : "no");
+    println("  compatible_with(1.5.0): {}\n", compat ? "yes" : "no");
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -162,9 +163,9 @@ static void demo_version() {
 // ─────────────────────────────────────────────────────────────────────────────
 
 static void demo_health() {
-    std::printf("── §4  PipelineHealth & HealthRegistry ──\n");
+    println("── §4  PipelineHealth & HealthRegistry ──");
 
-    // ActionHealth 직접 구성
+    // Construct ActionHealth directly
     ActionHealth ah_validate;
     ah_validate.name             = "validate";
     ah_validate.circuit_state    = "CLOSED";
@@ -175,27 +176,26 @@ static void demo_health() {
 
     ActionHealth ah_publish;
     ah_publish.name             = "publish";
-    ah_publish.circuit_state    = "OPEN";   // 서킷 열림 → DEGRADED
+    ah_publish.circuit_state    = "OPEN";   // circuit open → DEGRADED
     ah_publish.error_rate_1m    = 0.15;
     ah_publish.p99_us           = 150000;
     ah_publish.queue_depth      = 42;
     ah_publish.items_processed  = 850;
 
-    std::printf("  ActionHealth JSON: %s\n",
-                ah_validate.to_json().c_str());
+    println("  ActionHealth JSON: {}", ah_validate.to_json());
 
-    // PipelineHealth 구성
+    // Build PipelineHealth
     PipelineHealth health;
     health.name    = "order-pipeline";
     health.actions = {ah_validate, ah_publish};
-    health.recompute();  // status 자동 계산
+    health.recompute();  // auto-compute status
 
-    std::printf("  전체 상태: %s\n",
-                std::string(to_string(health.status)).c_str());
+    println("  overall status: {}",
+                std::string(to_string(health.status)));
 
     auto json = health.to_json();
-    std::printf("  JSON (첫 80자): %.80s\n", json.c_str());
-    if (json.size() > 80) std::printf("  ...\n");
+    println("  JSON (first 80 chars): {:.80}", json);
+    if (json.size() > 80) println("  ...");
 
     // HealthRegistry
     auto& hreg = HealthRegistry::global();
@@ -203,10 +203,10 @@ static void demo_health() {
 
     auto retrieved = hreg.get("order-pipeline");
     if (retrieved)
-        std::printf("  HealthRegistry 조회: status=%s\n",
-                    std::string(to_string(retrieved->status)).c_str());
+        println("  HealthRegistry lookup: status={}",
+                    std::string(to_string(retrieved->status)));
 
-    std::printf("  all_json 길이: %zu\n\n", hreg.all_json().size());
+    println("  all_json length: {}\n", hreg.all_json().size());
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -214,59 +214,58 @@ static void demo_health() {
 // ─────────────────────────────────────────────────────────────────────────────
 
 static void demo_slo() {
-    std::printf("── §5  LatencyHistogram & ErrorBudgetTracker ──\n");
+    println("── §5  LatencyHistogram & ErrorBudgetTracker ──");
 
-    // LatencyHistogram — 롤링 1024 샘플
+    // LatencyHistogram — rolling 1024 samples
     LatencyHistogram hist;
     for (int i = 0; i < 900; ++i) hist.record(500us);    // 0.5ms
     for (int i = 0; i < 80;  ++i) hist.record(5000us);   // 5ms
     for (int i = 0; i < 15;  ++i) hist.record(50000us);  // 50ms
     for (int i = 0; i < 5;   ++i) hist.record(200000us); // 200ms
 
-    std::printf("  p99=%lldµs p99.9=%lldµs\n",
+    println("  p99={}µs p99.9={}µs",
                 static_cast<long long>(hist.p99().count()),
                 static_cast<long long>(hist.p999().count()));
 
     auto buckets = hist.bucket_counts();
-    std::printf("  버킷 [<1ms=%llu <10ms=%llu <100ms=%llu >=100ms=%llu]\n",
+    println("  buckets [<1ms={} <10ms={} <100ms={} >=100ms={}]",
                 static_cast<unsigned long long>(buckets[0]),
                 static_cast<unsigned long long>(buckets[1]),
                 static_cast<unsigned long long>(buckets[2]),
                 static_cast<unsigned long long>(buckets[3]));
 
     hist.reset();
-    std::printf("  reset() 후 p99=%lldµs\n",
+    println("  after reset() p99={}µs",
                 static_cast<long long>(hist.p99().count()));
 
-    // ErrorBudgetTracker — SLO 추적기
+    // ErrorBudgetTracker — SLO tracker
     bool violated = false;
     SloConfig cfg;
     cfg.p99_target    = 10000us;    // 10ms
     cfg.p999_target   = 50000us;    // 50ms
-    cfg.error_budget  = 0.01;       // 1% 에러 허용
+    cfg.error_budget  = 0.01;       // 1% error allowance
     cfg.on_violation  = [&](std::string_view name) {
-        std::printf("  SLO 위반 감지: %.*s\n",
-                    static_cast<int>(name.size()), name.data());
+        println("  SLO violation detected: {}", name);
         violated = true;
     };
 
     ErrorBudgetTracker tracker(std::move(cfg), "payment");
 
     for (int i = 0; i < 980; ++i) tracker.record_success(800us);
-    for (int i = 0; i < 20;  ++i) tracker.record_error();   // 2% 에러율
+    for (int i = 0; i < 20;  ++i) tracker.record_error();   // 2% error rate
 
-    std::printf("  total=%llu errors=%llu error_rate=%.4f\n",
+    println("  total={} errors={} error_rate={:.4f}",
                 static_cast<unsigned long long>(tracker.total_count()),
                 static_cast<unsigned long long>(tracker.error_count()),
                 tracker.error_rate());
-    std::printf("  budget_exhausted=%s\n",
+    println("  budget_exhausted={}",
                 tracker.budget_exhausted() ? "yes" : "no");
 
     tracker.check_slo();
 
-    // histogram() 메서드
+    // histogram() method
     auto& inner_hist = tracker.histogram();
-    std::printf("  내부 히스토그램 p99=%lldµs\n\n",
+    println("  inner histogram p99={}µs\n",
                 static_cast<long long>(inner_hist.p99().count()));
 }
 
@@ -275,7 +274,7 @@ static void demo_slo() {
 // ─────────────────────────────────────────────────────────────────────────────
 
 int main() {
-    std::printf("=== qbuem 파이프라인 관찰 가능성 + SLO 예제 ===\n\n");
+    println("=== qbuem Pipeline Observability + SLO Example ===\n");
 
     demo_action_metrics();
     demo_observer();
@@ -283,6 +282,6 @@ int main() {
     demo_health();
     demo_slo();
 
-    std::printf("=== 완료 ===\n");
+    println("=== Done ===");
     return 0;
 }

@@ -1,40 +1,40 @@
 /**
  * @file saga_example.cpp
- * @brief SagaOrchestrator — 분산 트랜잭션 (이커머스 주문 처리) 복합 예시.
+ * @brief SagaOrchestrator — distributed transaction (e-commerce order processing) composite example.
  *
- * ## 시나리오: 주문 처리 사가
- * 고객이 상품을 구매할 때 여러 서비스에 걸친 트랜잭션이 필요합니다.
+ * ## Scenario: Order processing saga
+ * When a customer purchases a product, a transaction spanning multiple services is required.
  *
- * 단계 1 [재고 예약]:
- *   execute:    상품 재고에서 수량 차감
- *   compensate: 재고 복원 (주문 취소 시)
+ * Step 1 [Stock reservation]:
+ *   execute:    Deduct quantity from product inventory
+ *   compensate: Restore inventory (on order cancellation)
  *
- * 단계 2 [결제 처리]:
- *   execute:    신용카드 결제 승인
- *   compensate: 결제 취소 / 환불
+ * Step 2 [Payment processing]:
+ *   execute:    Authorize credit card payment
+ *   compensate: Cancel payment / issue refund
  *
- * 단계 3 [배송 요청]:
- *   execute:    배송 시스템에 출고 요청
- *   compensate: 출고 취소 요청
+ * Step 3 [Shipment request]:
+ *   execute:    Request dispatch from shipping system
+ *   compensate: Request dispatch cancellation
  *
- * ## 실패 시나리오
- * - 결제 실패 → 재고 복원 보상 트랜잭션 자동 실행
- * - 배송 실패 → 결제 환불 + 재고 복원 역순 보상 실행
+ * ## Failure scenarios
+ * - Payment failure → auto-execute stock restore compensation transaction
+ * - Shipment failure → payment refund + stock restore in reverse order
  *
- * ## 커버리지
- * - SagaStep<T, T>: name / execute λ / compensate λ
- * - SagaOrchestrator<T>: add_step / run (성공/실패 경로)
- * - compensation_failures: 보상 실패 목록 확인
+ * ## Coverage
+ * - SagaStep<T, T>: name / execute lambda / compensate lambda
+ * - SagaOrchestrator<T>: add_step / run (success/failure paths)
+ * - compensation_failures: check compensation failure list
  */
 
 #include <qbuem/core/dispatcher.hpp>
 #include <qbuem/core/task.hpp>
 #include <qbuem/pipeline/context.hpp>
 #include <qbuem/pipeline/saga.hpp>
+#include <qbuem/compat/print.hpp>
 
 #include <atomic>
 #include <chrono>
-#include <cstdio>
 #include <string>
 #include <thread>
 #include <vector>
@@ -42,7 +42,7 @@
 using namespace qbuem;
 using namespace std::chrono_literals;
 
-// ─── 도메인 타입 ─────────────────────────────────────────────────────────────
+// ─── Domain types ─────────────────────────────────────────────────────────────
 
 struct OrderContext {
     uint64_t    order_id;
@@ -51,7 +51,7 @@ struct OrderContext {
     double      total_krw;
     std::string card_token;
 
-    // 실행 결과 상태 (단계별 채워짐)
+    // Execution result state (filled per step)
     bool stock_reserved  = false;
     bool payment_charged = false;
     bool shipment_queued = false;
@@ -59,88 +59,91 @@ struct OrderContext {
     std::string pg_txn_id;
 };
 
-// ─── 서비스 상태 시뮬레이션 ──────────────────────────────────────────────────
+// ─── Service state simulation ─────────────────────────────────────────────────
 
-static std::atomic<int> g_stock{10};              // 재고 수량
-static std::atomic<int> g_payment_fail_mode{0};  // 0=정상 1=실패
+static std::atomic<int> g_stock{10};              // inventory quantity
+static std::atomic<int> g_payment_fail_mode{0};  // 0=normal 1=fail
 static std::atomic<int> g_shipping_fail_mode{0};
 
-// 보상 실행 추적
+// Compensation execution tracking
 static std::vector<std::string> g_compensations;
 
-// ─── 단계별 실행/보상 함수 ───────────────────────────────────────────────────
+// ─── Per-step execute/compensate functions ────────────────────────────────────
 
 static Task<Result<OrderContext>> step_reserve_stock(OrderContext ord) {
     if (g_stock.load() < ord.quantity) {
-        std::printf("  [재고예약] 재고 부족 (재고=%d, 요청=%d)\n",
+        std::println("  [reserve_stock] insufficient stock (stock={}, requested={})",
                     g_stock.load(), ord.quantity);
         co_return unexpected(std::make_error_code(std::errc::no_space_on_device));
     }
     g_stock.fetch_sub(ord.quantity);
     ord.stock_reserved = true;
-    std::printf("  [재고예약] 완료 — 잔여재고=%d\n", g_stock.load());
+    std::println("  [reserve_stock] completed — remaining_stock={}", g_stock.load());
     co_return ord;
 }
 
 static Task<void> compensate_reserve_stock(OrderContext ord) {
     g_stock.fetch_add(ord.quantity);
-    g_compensations.push_back("재고복원");
-    std::printf("  [보상-재고복원] 재고 +%d 복원 → 잔여=%d\n",
+    g_compensations.push_back("stock_restore");
+    std::println("  [compensate-stock_restore] +{} restored → remaining={}",
                 ord.quantity, g_stock.load());
     co_return;
 }
 
 static Task<Result<OrderContext>> step_charge_payment(OrderContext ord) {
     if (g_payment_fail_mode.load()) {
-        std::puts("  [결제처리] 결제 거부 (시뮬레이션)");
+        std::println("  [charge_payment] payment declined (simulation)");
         co_return unexpected(std::make_error_code(std::errc::permission_denied));
     }
     ord.payment_charged = true;
     ord.pg_txn_id = "PG-" + std::to_string(ord.order_id);
-    std::printf("  [결제처리] 완료 — txn=%s 금액=%.0f원\n",
-                ord.pg_txn_id.c_str(), ord.total_krw);
+    std::println("  [charge_payment] completed — txn={} amount={:.0f}",
+                ord.pg_txn_id, ord.total_krw);
     co_return ord;
 }
 
 static Task<void> compensate_charge_payment(OrderContext ord) {
-    g_compensations.push_back("결제취소");
-    std::printf("  [보상-결제취소] txn=%s 환불 처리\n", ord.pg_txn_id.c_str());
+    g_compensations.push_back("payment_cancel");
+    std::println("  [compensate-payment_cancel] txn={} refund processed",
+                ord.pg_txn_id);
     co_return;
 }
 
 static Task<Result<OrderContext>> step_request_shipment(OrderContext ord) {
     if (g_shipping_fail_mode.load()) {
-        std::puts("  [배송요청] 배송 시스템 오류 (시뮬레이션)");
+        std::println("  [request_shipment] shipping system error (simulation)");
         co_return unexpected(std::make_error_code(std::errc::connection_refused));
     }
     ord.shipment_queued     = true;
     ord.shipment_tracking_id = "SHIP-" + std::to_string(ord.order_id);
-    std::printf("  [배송요청] 완료 — 운송장=%s\n", ord.shipment_tracking_id.c_str());
+    std::println("  [request_shipment] completed — tracking={}",
+                ord.shipment_tracking_id);
     co_return ord;
 }
 
 static Task<void> compensate_request_shipment(OrderContext ord) {
-    g_compensations.push_back("출고취소");
-    std::printf("  [보상-출고취소] 운송장=%s 취소\n", ord.shipment_tracking_id.c_str());
+    g_compensations.push_back("shipment_cancel");
+    std::println("  [compensate-shipment_cancel] tracking={} cancelled",
+                ord.shipment_tracking_id);
     co_return;
 }
 
-// ─── SagaOrchestrator 구성 ───────────────────────────────────────────────────
+// ─── SagaOrchestrator configuration ──────────────────────────────────────────
 
 static SagaOrchestrator<OrderContext> build_order_saga() {
     SagaOrchestrator<OrderContext> saga;
     saga.add_step(SagaStep<OrderContext, OrderContext>{
-        .name       = "재고예약",
+        .name       = "reserve_stock",
         .execute    = step_reserve_stock,
         .compensate = compensate_reserve_stock,
     });
     saga.add_step(SagaStep<OrderContext, OrderContext>{
-        .name       = "결제처리",
+        .name       = "charge_payment",
         .execute    = step_charge_payment,
         .compensate = compensate_charge_payment,
     });
     saga.add_step(SagaStep<OrderContext, OrderContext>{
-        .name       = "배송요청",
+        .name       = "request_shipment",
         .execute    = step_request_shipment,
         .compensate = compensate_request_shipment,
     });
@@ -168,10 +171,10 @@ struct RunGuard {
     }
 };
 
-// ─── 시나리오 1: 정상 주문 ───────────────────────────────────────────────────
+// ─── Scenario 1: Happy path order ────────────────────────────────────────────
 
 static void scenario_happy_path() {
-    std::puts("\n=== 시나리오 1: 정상 주문 ===");
+    std::println("\n=== Scenario 1: Happy path order ===");
     g_stock.store(10);
     g_payment_fail_mode.store(0);
     g_shipping_fail_mode.store(0);
@@ -190,22 +193,22 @@ static void scenario_happy_path() {
         if (success) result = *res;
     });
 
-    std::printf("[결과] 성공=%s 재고예약=%s 결제=%s 배송=%s\n",
+    std::println("[result] success={} stock_reserved={} payment={} shipment={}",
                 success ? "YES" : "NO",
                 result.stock_reserved  ? "OK" : "FAIL",
                 result.payment_charged ? "OK" : "FAIL",
                 result.shipment_queued ? "OK" : "FAIL");
-    std::printf("[결과] 운송장=%s, 남은재고=%d\n",
-                result.shipment_tracking_id.c_str(), g_stock.load());
-    if (!g_compensations.empty()) std::puts("[보상] 예상치 않은 보상 실행!");
+    std::println("[result] tracking={}, remaining_stock={}",
+                result.shipment_tracking_id, g_stock.load());
+    if (!g_compensations.empty()) std::println("[compensation] unexpected compensation executed!");
 }
 
-// ─── 시나리오 2: 결제 실패 → 재고 보상 ──────────────────────────────────────
+// ─── Scenario 2: Payment failure → stock compensation ────────────────────────
 
 static void scenario_payment_failure() {
-    std::puts("\n=== 시나리오 2: 결제 실패 → 자동 재고 복원 ===");
+    std::println("\n=== Scenario 2: Payment failure → auto stock restore ===");
     g_stock.store(10);
-    g_payment_fail_mode.store(1);  // 결제 강제 실패
+    g_payment_fail_mode.store(1);  // force payment failure
     g_shipping_fail_mode.store(0);
     g_compensations.clear();
 
@@ -219,22 +222,23 @@ static void scenario_payment_failure() {
         auto res = co_await saga.run(ord, {});
         failed   = !res.has_value();
         if (failed)
-            std::printf("[결과] 사가 실패: %s\n", res.error().message().c_str());
+            std::println("[result] saga failed: {}", res.error().message());
     });
 
-    std::printf("[보상] 실행된 보상: ");
-    for (const auto& c : g_compensations) std::printf("%s ", c.c_str());
-    std::printf("\n[보상] 재고 복원됨: %d (원래=10, 결제 실패 전 차감=3)\n",
+    std::print("[compensation] executed compensations:");
+    for (const auto& c : g_compensations) std::print(" {}", c);
+    std::println("");
+    std::println("[compensation] stock restored: {} (original=10, deducted=3 before payment failed)",
                 g_stock.load());
 }
 
-// ─── 시나리오 3: 배송 실패 → 결제 환불 + 재고 복원 ─────────────────────────
+// ─── Scenario 3: Shipment failure → payment refund + stock restore ────────────
 
 static void scenario_shipping_failure() {
-    std::puts("\n=== 시나리오 3: 배송 실패 → 결제 환불 + 재고 복원 ===");
+    std::println("\n=== Scenario 3: Shipment failure → payment refund + stock restore ===");
     g_stock.store(10);
     g_payment_fail_mode.store(0);
-    g_shipping_fail_mode.store(1);  // 배송 강제 실패
+    g_shipping_fail_mode.store(1);  // force shipment failure
     g_compensations.clear();
 
     auto saga = build_order_saga();
@@ -248,25 +252,26 @@ static void scenario_shipping_failure() {
         failed   = !res.has_value();
     });
 
-    std::printf("[보상] 실행된 보상 (역순): ");
-    for (const auto& c : g_compensations) std::printf("[%s] ", c.c_str());
-    std::printf("\n[결과] 재고=%d (10 복원됨)\n", g_stock.load());
-    // 보상 실패 확인
+    std::print("[compensation] executed (reverse order):");
+    for (const auto& c : g_compensations) std::print(" [{}]", c);
+    std::println("");
+    std::println("[result] stock={} (10 restored)", g_stock.load());
+    // Check compensation failures
     const auto& cf = saga.compensation_failures();
-    std::printf("[보상실패] %zu건\n", cf.size());
+    std::println("[compensation_failures] {} items", cf.size());
 }
 
-// ─── 시나리오 4: 재고 부족 ───────────────────────────────────────────────────
+// ─── Scenario 4: Out of stock ─────────────────────────────────────────────────
 
 static void scenario_out_of_stock() {
-    std::puts("\n=== 시나리오 4: 재고 부족 (첫 단계 실패) ===");
-    g_stock.store(1);  // 재고 1개
+    std::println("\n=== Scenario 4: Out of stock (first step failure) ===");
+    g_stock.store(1);  // only 1 item in stock
     g_payment_fail_mode.store(0);
     g_shipping_fail_mode.store(0);
     g_compensations.clear();
 
     auto saga = build_order_saga();
-    OrderContext ord{1004, 77, 5, 250000.0, "tok_visa_1234"};  // 5개 요청
+    OrderContext ord{1004, 77, 5, 250000.0, "tok_visa_1234"};  // requesting 5
 
     RunGuard guard;
     bool failed = false;
@@ -275,12 +280,13 @@ static void scenario_out_of_stock() {
         auto res = co_await saga.run(ord, {});
         failed   = !res.has_value();
         if (failed)
-            std::printf("[결과] 사가 실패: %s\n", res.error().message().c_str());
+            std::println("[result] saga failed: {}", res.error().message());
     });
 
-    // 첫 단계에서 실패 → 보상 없음 (아직 아무것도 실행되지 않음)
-    std::printf("[보상] 실행 없음: %s\n", g_compensations.empty() ? "YES" : "NO");
-    std::printf("[재고] 변화 없음=%d\n", g_stock.load());
+    // Failed at first step → no compensation needed (nothing executed yet)
+    std::println("[compensation] none executed: {}",
+                g_compensations.empty() ? "YES" : "NO");
+    std::println("[stock] unchanged={}", g_stock.load());
 }
 
 int main() {
@@ -288,6 +294,6 @@ int main() {
     scenario_payment_failure();
     scenario_shipping_failure();
     scenario_out_of_stock();
-    std::puts("\nsaga_example: ALL OK");
+    std::println("\nsaga_example: ALL OK");
     return 0;
 }
