@@ -161,7 +161,7 @@ public:
       }
     }
 
-    // ── 2. 100-continue 처리 ──────────────────────────────────────────────
+    // ── 2. Handle 100-continue ────────────────────────────────────────────
     {
       std::string_view expect_hdr = frame.header("Expect");
       if (expect_hdr == "100-continue") {

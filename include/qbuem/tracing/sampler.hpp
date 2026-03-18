@@ -48,39 +48,39 @@ enum class SamplingDecision {
 };
 
 // ---------------------------------------------------------------------------
-// SamplingContext — 샘플링 결정에 필요한 정보
+// SamplingContext — information required to make a sampling decision
 // ---------------------------------------------------------------------------
 
 /**
- * @brief 샘플링 시점에 Sampler에게 제공되는 컨텍스트.
+ * @brief Context provided to the Sampler at sampling time.
  */
 struct SamplingContext {
-  std::string_view pipeline_name;  ///< 파이프라인 이름
-  std::string_view action_name;    ///< 액션 이름
-  std::string_view span_name;      ///< 스팬 이름
-  const TraceContext *parent;      ///< 부모 TraceContext (루트면 nullptr)
+  std::string_view pipeline_name;  ///< Pipeline name
+  std::string_view action_name;    ///< Action name
+  std::string_view span_name;      ///< Span name
+  const TraceContext *parent;      ///< Parent TraceContext (nullptr for root)
 };
 
 // ---------------------------------------------------------------------------
-// Sampler — 순수 가상 인터페이스
+// Sampler — pure virtual interface
 // ---------------------------------------------------------------------------
 
 /**
- * @brief 스팬 샘플링 결정 인터페이스.
+ * @brief Span sampling decision interface.
  */
 class Sampler {
 public:
   virtual ~Sampler() = default;
 
   /**
-   * @brief 주어진 컨텍스트에 대해 샘플링 여부를 결정합니다.
-   * @param ctx 샘플링 컨텍스트.
-   * @returns RECORD_AND_SAMPLE 또는 DROP.
+   * @brief Decides whether to sample the given context.
+   * @param ctx Sampling context.
+   * @returns RECORD_AND_SAMPLE or DROP.
    */
   [[nodiscard]] virtual SamplingDecision should_sample(
       const SamplingContext &ctx) noexcept = 0;
 
-  /// @brief 이 Sampler의 설명 문자열.
+  /// @brief Description string for this Sampler.
   [[nodiscard]] virtual std::string_view description() const noexcept = 0;
 };
 
@@ -89,7 +89,7 @@ public:
 // ---------------------------------------------------------------------------
 
 /**
- * @brief 항상 샘플링합니다. 개발/디버그 환경에 적합.
+ * @brief Always samples. Suitable for development/debug environments.
  */
 class AlwaysSampler final : public Sampler {
 public:
@@ -108,7 +108,7 @@ public:
 // ---------------------------------------------------------------------------
 
 /**
- * @brief 절대 샘플링하지 않습니다. 트레이싱 비활성화 시 zero-overhead.
+ * @brief Never samples. Zero-overhead when tracing is disabled.
  */
 class NeverSampler final : public Sampler {
 public:
@@ -127,15 +127,15 @@ public:
 // ---------------------------------------------------------------------------
 
 /**
- * @brief 0.0~1.0 확률 기반 샘플러.
+ * @brief Probability-based sampler in the range [0.0, 1.0].
  *
- * `rate = 0.1` → 10% 샘플링, `rate = 1.0` → 100% 샘플링.
- * 스레드별 RNG를 사용하여 lock-free 동작.
+ * `rate = 0.1` → 10% sampling, `rate = 1.0` → 100% sampling.
+ * Uses per-thread RNG for lock-free operation.
  */
 class ProbabilitySampler final : public Sampler {
 public:
   /**
-   * @param rate 샘플링 확률 [0.0, 1.0]. 범위 초과 시 clamping.
+   * @param rate Sampling probability [0.0, 1.0]. Values outside the range are clamped.
    */
   explicit ProbabilitySampler(double rate) noexcept
       : rate_(std::clamp(rate, 0.0, 1.0)) {}
