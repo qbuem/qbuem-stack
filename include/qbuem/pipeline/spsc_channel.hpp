@@ -117,7 +117,7 @@ public:
      * @brief Sends an item. co_awaits when the channel is full.
      *
      * @param item Item to send.
-     * @returns `Result<void>::ok()` or `errc::broken_pipe` (if closed).
+     * @returns `Result<void>{}` or `errc::broken_pipe` (if closed).
      */
     Task<Result<void>> send(T item) {
         for (;;) {

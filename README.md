@@ -91,7 +91,7 @@ int main() {
         res.status(200).body("Zero allocation hello");
     });
 
-    // C++20 Coroutine Async handler
+    // C++23 Coroutine Async handler
     app.get("/api/v1/user/:id", [](const qbuem::Request& req, qbuem::Response& res)
         -> qbuem::Task<void> {
         auto id = req.param("id");

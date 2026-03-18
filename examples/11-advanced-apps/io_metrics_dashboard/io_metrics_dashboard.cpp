@@ -322,7 +322,7 @@ struct SnapSink {
     Task<Result<void>> sink(const IOEvent& /*ev*/) {
         uint64_t seq = g_snap_trigger.fetch_add(1, std::memory_order_relaxed);
         if ((seq % kSnapInterval) != 0) {
-            co_return Result<void>::ok();
+            co_return Result<void>{};
         }
 
         // 스냅샷 조립 (helper 함수로 분리 — GCC coroutine 프레임 크기 최소화)
@@ -334,7 +334,7 @@ struct SnapSink {
 
         // MessageBus fan-out: 경보 구독자에게도 전달
         if (bus) co_await bus->publish("alerts", snap);
-        co_return Result<void>::ok();
+        co_return Result<void>{};
     }
 };
 
@@ -475,7 +475,7 @@ int main() {
                     std::printf("  [경보] 에러율 %.2f%% 임계값 초과!\n",
                                 snap.error_rate_pct);
             } catch (...) {}
-            co_return Result<void>::ok();
+            co_return Result<void>{};
         });
 
     // ── §B  StaticPipeline 구성 ──────────────────────────────────────────────

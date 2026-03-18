@@ -236,7 +236,7 @@ public:
      *
      * @param item Item to process.
      * @param ctx  Item context.
-     * @returns Result<void>::ok() or an error.
+     * @returns Result<void>{} or an error.
      */
     Task<Result<void>> push(T item, Context ctx = {}) {
         std::shared_ptr<AsyncChannel<ContextualItem<T>>> first_in;

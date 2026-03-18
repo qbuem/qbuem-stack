@@ -193,7 +193,7 @@ public:
      * @param topic Topic to publish to.
      * @param msg   Message to publish.
      * @param ctx   Message context.
-     * @returns Result<void>::ok() or an error.
+     * @returns Result<void>{} or an error.
      */
     template <typename T>
     Task<Result<void>> publish(std::string_view topic, T msg, Context ctx = {}) {
@@ -621,11 +621,11 @@ public:
 
     /**
      * @brief Calls subscribe_stream<T>() to initialize the stream channel.
-     * @returns Always `Result<void>::ok()`.
+     * @returns Always `Result<void>{}`.
      */
     Result<void> init() noexcept {
         stream_ch_ = bus_.subscribe_stream<T>(topic_, cap_);
-        return Result<void>::ok();
+        return Result<void>{};
     }
 
     /**
@@ -690,7 +690,7 @@ public:
         : bus_(bus), topic_(std::move(topic)) {}
 
     /** @brief Initialization (no-op). */
-    Result<void> init() noexcept { return Result<void>::ok(); }
+    Result<void> init() noexcept { return Result<void>{}; }
 
     /**
      * @brief Publishes a message received from the pipeline to the MessageBus topic.

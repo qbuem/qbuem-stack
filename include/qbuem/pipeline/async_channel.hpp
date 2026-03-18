@@ -152,7 +152,7 @@ public:
    *
    * Returns an error immediately if the channel is closed.
    *
-   * @returns `Result<void>::ok()` or `errc::broken_pipe` (channel closed).
+   * @returns `Result<void>{}` or `errc::broken_pipe` (channel closed).
    */
   Task<Result<void>> send(T value) {
     for (;;) {

@@ -210,7 +210,7 @@ public:
      * Use this to clean up segments left in `/dev/shm` after process exit.
      *
      * @param name Channel name (same as passed to `create()`).
-     * @returns `Result<void>::ok()` on success, error otherwise.
+     * @returns `Result<void>{}` on success, error otherwise.
      */
     static Result<void> unlink(std::string_view name) noexcept;
 
@@ -496,7 +496,7 @@ Result<void> SHMChannel<T>::unlink(std::string_view name) noexcept {
 
     if (::shm_unlink(shm_name.c_str()) < 0 && errno != ENOENT)
         return unexpected(std::make_error_code(std::errc::no_such_file_or_directory));
-    return Result<void>::ok();
+    return Result<void>{};
 }
 
 template <typename T>

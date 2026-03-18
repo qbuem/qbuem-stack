@@ -334,7 +334,7 @@ endif()
 의존: task, result
 내용: Context (불변 persistent list), ServiceRegistry (DI),
        ActionEnv, WorkerLocal<T>, ContextualItem<T>
-       C++20 Concepts: ActionFn, BatchActionFn, PipelineInputFor
+       C++23 Concepts: ActionFn, BatchActionFn, PipelineInputFor
 ```
 
 #### `qbuem::channel` (header-only)

@@ -89,7 +89,7 @@ public:
    * @param fd       File descriptor to watch.
    * @param type     Event type to watch (`EventType::Read`, `Write`, or `Error`).
    * @param callback Callback invoked when the event fires. Receives the fd as argument.
-   * @returns `Result<void>::ok()` on success, or an error code on failure.
+   * @returns `Result<void>{}` on success, or an error code on failure.
    *
    * @note This function must only be called from the thread running this Reactor.
    * @warning The fd must have the `O_NONBLOCK` flag set. Registering a blocking fd
@@ -121,7 +121,7 @@ public:
    *
    * @param fd   File descriptor to stop watching.
    * @param type Event type to unregister.
-   * @returns `Result<void>::ok()` on success, or an error code on failure.
+   * @returns `Result<void>{}` on success, or an error code on failure.
    */
   virtual Result<void> unregister_event(int fd, EventType type) = 0;
 
@@ -132,7 +132,7 @@ public:
    * Passing an already-expired timer ID is silently ignored.
    *
    * @param timer_id Timer ID returned by `register_timer()`.
-   * @returns `Result<void>::ok()` on success, or an error code on failure.
+   * @returns `Result<void>{}` on success, or an error code on failure.
    */
   virtual Result<void> unregister_timer(int timer_id) = 0;
 

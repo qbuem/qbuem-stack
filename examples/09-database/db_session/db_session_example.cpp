@@ -160,7 +160,7 @@ public:
         co_return unexpected(std::make_error_code(std::errc::not_supported));
     }
 
-    Task<Result<void>> close() override { co_return Result<void>::ok(); }
+    Task<Result<void>> close() override { co_return Result<void>{}; }
 
     Task<bool> ping() override { co_return true; }
 
@@ -268,20 +268,20 @@ public:
         std::chrono::seconds /*ttl*/ = std::chrono::seconds{3600}) override {
         std::lock_guard lock(mu_);
         data_[std::string(session_id)] = std::move(value);
-        co_return Result<void>::ok();
+        co_return Result<void>{};
     }
 
     Task<Result<void>> del(std::string_view session_id) override {
         std::lock_guard lock(mu_);
         data_.erase(std::string(session_id));
-        co_return Result<void>::ok();
+        co_return Result<void>{};
     }
 
     Task<Result<void>>
     touch(std::string_view /*session_id*/,
           std::chrono::seconds /*ttl*/ = std::chrono::seconds{3600}) override {
         // No real expiry tracking in this demo store — just succeed
-        co_return Result<void>::ok();
+        co_return Result<void>{};
     }
 
     size_t count() const {

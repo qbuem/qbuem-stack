@@ -22,19 +22,19 @@ Existing Korean comments in legacy files should be translated to English when to
 ## Project Identity
 
 **qbuem-stack v2.2.0** — Zero Latency · Zero Allocation · Zero Dependency
-C++20 high-performance infrastructure library for WAS (Web Application Servers), IPC, and data pipelines.
+C++23 high-performance infrastructure library for WAS (Web Application Servers), IPC, and data pipelines.
 
-- **Language**: C++20 (concepts, coroutines `co_await`/`co_return`, `std::expected`, `std::span`, `std::format`)
+- **Language**: C++23 (concepts, coroutines `co_await`/`co_return`, `std::expected`, `std::span`, `std::format`, `std::print`/`std::println`, `std::unreachable()`, `if consteval`, `std::to_underlying`)
 - **Platform**: POSIX only — Linux (`io_uring`) and macOS (`kqueue`). Windows is explicitly unsupported.
 - **Dependencies**: Zero in core headers. Optional `qbuem-json` fetched via CMake `FetchContent` for examples.
-- **Build system**: CMake ≥ 3.20, `C++20` required, no extensions.
+- **Build system**: CMake ≥ 3.20, `C++23` required, no extensions.
 
 ---
 
 ## Build Commands
 
 ```bash
-# Configure (from repo root)
+# Configure (from repo root) — requires a C++23-capable compiler (GCC 13+, Clang 17+)
 cmake -B build -DCMAKE_BUILD_TYPE=Release
 
 # Build everything
@@ -302,16 +302,16 @@ Core headers (`include/qbuem/`) must compile with zero third-party includes.
 |---|------|-----------------|
 | D1 | No third-party `#include` in any public header | `#include <nlohmann/json.hpp>` in a pipeline header |
 | D2 | No Boost headers anywhere in `include/` or `src/` | `#include <boost/asio.hpp>` |
-| D3 | Only C++20 standard library headers permitted in `include/` | `#include <fmt/format.h>` — use `<format>` instead |
+| D3 | Only C++23 standard library headers permitted in `include/` | `#include <fmt/format.h>` — use `<format>` instead |
 | D4 | Optional integrations (JSON, logging libs) belong in `examples/` only | JSON serialization logic inside `include/qbuem/pipeline/` |
 | D5 | CMake `target_link_libraries` for core targets must list only system libs | Adding `nlohmann_json` to `qbuem_stack` link deps |
 | D6 | `FetchContent` / `find_package` for non-test deps is forbidden | Pulling `spdlog` for core logging |
 
 ---
 
-### Pillar 5 — C++20 Compliance
+### Pillar 5 — C++23 Compliance
 
-All new and modified code must use C++20 features where applicable. Using an older equivalent is a review failure.
+All new and modified code must use C++23 features where applicable. Using an older equivalent is a review failure.
 
 | # | Rule | Failure example |
 |---|------|-----------------|
@@ -325,6 +325,11 @@ All new and modified code must use C++20 features where applicable. Using an old
 | M8 | `std::bit_cast<T>` instead of `reinterpret_cast` for type-punning of trivially-copyable types | `*reinterpret_cast<float*>(&int_val)` |
 | M9 | Concepts (`requires` / `concept`) for template constraints instead of SFINAE | `std::enable_if_t<...>` or `std::void_t<...>` |
 | M10 | Three-way comparison `operator<=>` for types that need ordering | Manual `operator<`, `operator>`, `operator<=`, `operator>=` |
+| M11 | `std::print`/`std::println` instead of `printf`/`cout` in examples | `printf("value: %d\n", x);` or `std::cout << "value: " << x << "\n";` in example code |
+| M12 | `std::unreachable()` instead of `__builtin_unreachable()` | `__builtin_unreachable();` in default branches or postcondition assertions |
+| M13 | `std::expected<T, E>` / `std::unexpected<E>` used directly (via `Result<T>` alias) — standard C++23, no polyfill needed | Using a custom `Expected<T,E>` type or a third-party polyfill |
+| M14 | `if consteval` instead of `std::is_constant_evaluated()` | `if (std::is_constant_evaluated()) { ... }` in constexpr functions |
+| M15 | `std::to_underlying(e)` instead of `static_cast<std::underlying_type_t<E>>(e)` | `static_cast<int>(my_enum_value)` when converting enum to its underlying integer type |
 
 ---
 

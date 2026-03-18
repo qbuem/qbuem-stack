@@ -190,7 +190,7 @@ Result<std::unique_ptr<PCIeDevice>> PCIeDevice::open(BDF bdf) noexcept {
     cfg.index = VFIO_PCI_CONFIG_REGION_INDEX;
     if (::ioctl(device_fd, VFIO_DEVICE_GET_REGION_INFO, &cfg) == 0) {
         uint16_t ids[2]{};
-        ::pread(device_fd, ids, sizeof(ids), static_cast<off_t>(cfg.offset));
+        [[maybe_unused]] auto n = ::pread(device_fd, ids, sizeof(ids), static_cast<off_t>(cfg.offset));
         dev->vendor_id_ = ids[0];
         dev->device_id_ = ids[1];
     }
@@ -311,7 +311,20 @@ template size_t enumerate_pcie_devices<64>(char (&)[64][16]) noexcept;
 // ─── bdf_to_iommu_group ──────────────────────────────────────────────────────
 
 Result<int> bdf_to_iommu_group(std::string_view bdf) noexcept {
-    return PCIeDevice::find_iommu_group(bdf);
+    // Resolve the IOMMU group via the sysfs symlink directly.
+    char path[256];
+    std::snprintf(path, sizeof(path),
+                  "/sys/bus/pci/devices/%.*s/iommu_group",
+                  static_cast<int>(bdf.size()), bdf.data());
+    char resolved[256];
+    ssize_t n = ::readlink(path, resolved, sizeof(resolved) - 1);
+    if (n < 0)
+        return std::unexpected(std::error_code{errno, std::system_category()});
+    resolved[n] = '\0';
+    const char* last_slash = std::strrchr(resolved, '/');
+    if (!last_slash)
+        return std::unexpected(std::make_error_code(std::errc::invalid_argument));
+    return std::atoi(last_slash + 1);
 }
 
 } // namespace qbuem::pcie

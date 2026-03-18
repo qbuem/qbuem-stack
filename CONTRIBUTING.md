@@ -123,7 +123,7 @@ Pipeline components must test all of the following:
 
 ## Code Style
 
-- C++20: use concepts, coroutines, `std::span`, `std::format`
+- C++23: use concepts, coroutines, `std::span`, `std::format`, `std::print`/`std::println`, `std::expected`, `std::unreachable()`
 - Do not add external dependencies (OS syscalls only)
 - `alignas(64)` — apply to shared mutable data at cache-line boundaries
 - `[[nodiscard]]` — apply to all functions where ignoring the return value is a bug

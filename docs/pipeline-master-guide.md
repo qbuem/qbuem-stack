@@ -11,7 +11,7 @@ Pipeline 시스템은 "Three Zeros" 철학을 따릅니다: **Zero Latency, Zero
 
 ### 핵심 원칙
 
-- **Lock-Free by Default**: C++20 코루틴 + MPMC/SPSC ring buffer로 mutex 제거.
+- **Lock-Free by Default**: C++23 coroutines + MPMC/SPSC ring buffer, eliminating mutex.
 - **Worker Isolation (Bulkheading)**: 스테이지마다 독립 worker pool — 하나의 병목이 전체를 막지 않음.
 - **Natural Backpressure**: 소비자 포화 시 `co_await`로 생산자를 언어 레벨에서 일시 정지.
 - **Mechanical Sympathy**: NUMA-aware 스케줄링, cache-aligned 구조체.

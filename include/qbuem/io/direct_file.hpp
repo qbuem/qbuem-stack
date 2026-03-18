@@ -263,7 +263,7 @@ public:
         if (!res) return unexpected(res.error());
         file_ = std::move(*res);
         offset_ = 0;
-        return Result<void>::ok();
+        return Result<void>{};
     }
 
     /**
@@ -280,7 +280,7 @@ public:
         auto res = file_.write_at(buf_.span(), offset_);
         if (!res) return unexpected(res.error());
         offset_ += static_cast<off_t>(kStride);
-        return Result<void>::ok();
+        return Result<void>{};
     }
 
     /** @brief Flush and close the backing file. */
@@ -322,7 +322,7 @@ public:
         if (!res) return unexpected(res.error());
         file_ = std::move(*res);
         offset_ = 0;
-        return Result<void>::ok();
+        return Result<void>{};
     }
 
     /**

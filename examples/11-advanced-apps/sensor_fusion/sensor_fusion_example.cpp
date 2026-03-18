@@ -231,7 +231,7 @@ struct FusionSink {
             s.position.x, s.position.y, s.position.z,
             s.velocity.x, s.velocity.y, s.confidence);
         g_sink_count.fetch_add(1, std::memory_order_relaxed);
-        co_return Result<void>::ok();
+        co_return Result<void>{};
     }
 };
 

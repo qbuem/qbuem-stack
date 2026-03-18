@@ -254,4 +254,15 @@ void EpollReactor::stop() { running_ = false; }
 
 bool EpollReactor::is_running() const { return running_; }
 
+Result<void> EpollReactor::register_signal(int /*sig*/,
+                                           std::function<void(int)> /*callback*/) {
+  // Signal handling via signalfd is not yet implemented in EpollReactor.
+  // Use the kqueue reactor on macOS or implement signalfd(2) on Linux.
+  return std::unexpected(std::make_error_code(std::errc::not_supported));
+}
+
+Result<void> EpollReactor::unregister_signal(int /*sig*/) {
+  return std::unexpected(std::make_error_code(std::errc::not_supported));
+}
+
 } // namespace qbuem

@@ -7,7 +7,7 @@ This document provides a comprehensive overview of the current implementation st
 | Category | Module | Status | Features |
 | :--- | :--- | :--- | :--- |
 | **Core** | Reactor | ✅ | epoll, kqueue, io_uring basic support. |
-| | Task | ✅ | C++20 Coroutines, Symmetric Transfer. |
+| | Task | ✅ | C++23 Coroutines, Symmetric Transfer. |
 | | Allocator | ✅ | Arena, FixedPoolResource. |
 | **Network** | TCP | ✅ | Non-blocking, co_await connect/read/write. |
 | | UDP | ⚠️ | Basic send_to/recv_from. **Needs Batching.** |
@@ -33,7 +33,7 @@ This document provides a comprehensive overview of the current implementation st
 
 ### 2. Networking Excellence (Level 3-5)
 - [ ] **UDP+ (HFT Ready)**: `recvmmsg` integration and Reliable UDP (RUDP) for game servers.
-- [ ] **HTTP/3 (QUIC)**: Native C++20 QUIC implementation for modern web/mobile apps.
+- [ ] **HTTP/3 (QUIC)**: Native C++23 QUIC implementation for modern web/mobile apps.
 - [ ] **SIMD Compression**: Native zstd/lz4 integration that operates directly on `std::span` buffers.
 
 ### 3. IPC & Distributed (Level 3, 6-7)
@@ -61,7 +61,7 @@ This document provides a comprehensive overview of the current implementation st
 
 | Feature | qbuem-stack | Aeron / LMAX | libevent / Nginx |
 | :--- | :--- | :--- | :--- |
-| **Core Model** | io_uring + C++20 Task | Thread-per-Core | epoll / Reactor |
+| **Core Model** | io_uring + C++23 Task | Thread-per-Core | epoll / Reactor |
 | **IPC** | Wait-free SHM (<200ns) | Shared Memory (~5μs) | Unix Socket / Pipe (>10μs) |
 | **Allocation** | Zero (Fixed Pool) | Low (Flyweight) | Dynamic (Heap) |
 | **Hardware** | Native FPGA/PCIe/RDMA | Network-centric | OS-generic |

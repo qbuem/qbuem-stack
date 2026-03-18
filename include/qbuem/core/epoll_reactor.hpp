@@ -45,6 +45,9 @@ public:
 
   Result<void> unregister_timer(int timer_id) override;
 
+  Result<void> register_signal(int sig, std::function<void(int)> callback) override;
+  Result<void> unregister_signal(int sig) override;
+
   Result<int> poll(int timeout_ms) override;
 
   void stop() override;

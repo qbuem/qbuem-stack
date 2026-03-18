@@ -6,7 +6,7 @@
 
 ## Overview
 
-Demonstrates `TaskGroup` — structured concurrency for C++20 coroutines. Multiple coroutines run concurrently; `join()` waits for all and propagates the first error; `join_all<T>()` collects typed results; `cancel()` propagates stop tokens to all children.
+Demonstrates `TaskGroup` — structured concurrency for C++23 coroutines. Multiple coroutines run concurrently; `join()` waits for all and propagates the first error; `join_all<T>()` collects typed results; `cancel()` propagates stop tokens to all children.
 
 ## Scenario: Product Page Data Aggregation (MSA Pattern)
 
@@ -110,4 +110,4 @@ task_group_example: ALL OK
 
 - `join()` returns the **first** error encountered; other concurrent tasks may still be running at that point (use `cancel()` to abort them).
 - `join_all<T>()` requires all spawned tasks to return `Result<T>` with the same `T`; for heterogeneous types, use separate `TaskGroup` instances.
-- `stop_token` follows the C++20 `std::stop_token` API — check `stop_requested()` at yield points.
+- `stop_token` follows the C++23 `std::stop_token` API — check `stop_requested()` at yield points.

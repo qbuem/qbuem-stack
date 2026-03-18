@@ -171,7 +171,8 @@ target_link_libraries(qbuem_pipeline_ipc_tests
     GTest::gtest_main
 )
 
-# ── Kqueue Enhancement tests ──────────────────────────────────────────────────
+# ── Kqueue Enhancement tests (macOS only) ────────────────────────────────────
+if(APPLE)
 add_executable(qbuem_kqueue_tests
     kqueue_test.cpp
 )
@@ -180,6 +181,7 @@ target_link_libraries(qbuem_kqueue_tests
     qbuem-stack::qbuem
     GTest::gtest_main
 )
+endif()
 
 include(GoogleTest)
 gtest_discover_tests(qbuem_shm_tests)
@@ -197,4 +199,6 @@ gtest_discover_tests(qbuem_infra_tests)
 gtest_discover_tests(qbuem_middleware_tests)
 gtest_discover_tests(qbuem_pipeline_advanced_tests)
 gtest_discover_tests(qbuem_pipeline_ipc_tests)
+if(APPLE)
 gtest_discover_tests(qbuem_kqueue_tests)
+endif()

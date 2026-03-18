@@ -100,7 +100,7 @@ public:
      *
      * @param item Item to send.
      * @param prio Priority (default Normal).
-     * @returns `Result<void>::ok()` or an error (`errc::broken_pipe`).
+     * @returns `Result<void>{}` or an error (`errc::broken_pipe`).
      */
     Task<Result<void>> send(T item, Priority prio = Priority::Normal) {
         if (closed_.load(std::memory_order_relaxed))

@@ -226,7 +226,7 @@ All modules must adhere to these quantitative benchmarks to be considered part o
 - [ ] **`Distributed Storage (NVMe-oF)`**: High-speed remote block access via RDMA/TCP.
 - [ ] **`SIMD Erasure Coding`**: Wire-speed data redundancy using AVX-512/ISA-L.
 - [ ] **`Distributed Pipelines`**: Stretching pipelines across hosts via RDMA/InfinityBand.
-- [ ] **`Post-Quantum Security`**: Native C++20 Kyber/Dilithium support for v3 identities.
+- [ ] **`Post-Quantum Security`**: Native C++23 Kyber/Dilithium support for v3 identities.
 - [ ] **`Smart DB Cache`**: SHM-shared and hardware-invalidated query caches.
 
 ---

@@ -176,11 +176,11 @@ public:
    *
    * No-op if the file is already closed.
    *
-   * @returns `Result<void>::ok()` on success, or an error code on failure.
+   * @returns `Result<void>{}` on success, or an error code on failure.
    */
   Task<Result<void>> close() {
     if (fd_ < 0) {
-      co_return Result<void>::ok();
+      co_return Result<void>{};
     }
     int fd = fd_;
     fd_ = -1;
@@ -188,7 +188,7 @@ public:
       co_return unexpected(
           std::error_code(errno, std::system_category()));
     }
-    co_return Result<void>::ok();
+    co_return Result<void>{};
   }
 
   // ─── Accessors ──────────────────────────────────────────────────────────

@@ -423,7 +423,7 @@ struct PerceptionSink {
             r.confidence,
             r.objects.size(),
             flag);
-        co_return Result<void>::ok();
+        co_return Result<void>{};
     }
 };
 
@@ -622,7 +622,7 @@ int main() {
                 (void)r;
                 g_state_msgs.fetch_add(1, std::memory_order_relaxed);
             } catch (...) {}
-            co_return Result<void>::ok();
+            co_return Result<void>{};
         });
 
     // ── §B  StaticPipeline — Perception ────────────────────────────────────

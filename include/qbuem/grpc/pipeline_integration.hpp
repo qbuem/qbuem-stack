@@ -133,7 +133,7 @@ public:
      * Returns an error if the stream is closed or the send fails.
      *
      * @param value Message value to send (moved).
-     * @returns `Result<void>::ok()` on success.
+     * @returns `Result<void>{}` on success.
      *          `errc::broken_pipe` if the stream is already closed.
      *          `errc::connection_reset` if `push_fn_` returns `false`.
      *
@@ -156,7 +156,7 @@ public:
             co_return unexpected(
                 std::make_error_code(std::errc::connection_reset));
         }
-        co_return Result<void>::ok();
+        co_return Result<void>{};
     }
 
     /**

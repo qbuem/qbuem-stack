@@ -384,7 +384,7 @@ public:
         auto res = SHMChannel<T>::open(name_);
         if (!res) return unexpected(res.error());
         channel_ = std::move(*res);
-        return Result<void>::ok();
+        return Result<void>{};
     }
 
     /**
@@ -426,7 +426,7 @@ public:
         auto res = SHMChannel<T>::create(name_, capacity_);
         if (!res) return unexpected(res.error());
         channel_ = std::move(*res);
-        return Result<void>::ok();
+        return Result<void>{};
     }
 
     /**

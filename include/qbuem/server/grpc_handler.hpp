@@ -126,7 +126,7 @@ public:
    * @brief Writes a single response message to the stream.
    *
    * @param response Response message to send.
-   * @returns `Result<void>::ok()` on success, or an error code on stream error.
+   * @returns `Result<void>{}` on success, or an error code on stream error.
    */
   virtual Task<Result<void>> send(Res response) = 0;
 
@@ -364,7 +364,7 @@ public:
    *
    * @param request Client request message.
    * @param stream  Server stream used to send responses.
-   * @returns `Result<void>::ok()` on success.
+   * @returns `Result<void>{}` on success.
    */
   Task<Result<void>> dispatch_server_stream(const GrpcMessage& request,
                                              Stream<Res>&        stream) {
@@ -379,7 +379,7 @@ public:
 
     Req req = deserialize_fn_(std::span<const uint8_t>(request.payload));
     co_await server_stream_fn_(std::move(req), stream);
-    co_return Result<void>::ok();
+    co_return Result<void>{};
   }
 
   /**
@@ -417,7 +417,7 @@ public:
    *
    * @param channel Client request stream.
    * @param stream  Server response stream.
-   * @returns `Result<void>::ok()` on success.
+   * @returns `Result<void>{}` on success.
    */
   Task<Result<void>> dispatch_bidi(AsyncChannel<Req>& channel,
                                     Stream<Res>&        stream) {
@@ -427,7 +427,7 @@ public:
     }
 
     co_await bidi_fn_(channel, stream);
-    co_return Result<void>::ok();
+    co_return Result<void>{};
   }
 
   // ── gRPC frame serialization/deserialization ─────────────────────────────

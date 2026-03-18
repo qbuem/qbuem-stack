@@ -34,8 +34,8 @@ option(QBUEM_INSTALL        "Generate install rules" ON)
 # Usage:
 #   cmake -DQBUEM_XDP=ON [-DQBUEM_XDP_LIBBPF=ON] ..
 #
-# QBUEM_XDP=ON        : 헤더/타겟 노출, QBUEM_HAS_XDP 정의
-# QBUEM_XDP_LIBBPF=ON : libbpf 연동 (xsk_umem__create 등 실제 구현 활성화)
+# QBUEM_XDP=ON        : expose headers/targets, define QBUEM_HAS_XDP
+# QBUEM_XDP_LIBBPF=ON : link libbpf (enables real implementation such as xsk_umem__create)
 option(QBUEM_XDP        "Enable AF_XDP support (Linux 4.18+)"           OFF)
 option(QBUEM_XDP_LIBBPF "Link libbpf for AF_XDP (requires QBUEM_XDP=ON)" OFF)
 
@@ -70,7 +70,7 @@ endif()
 # cmake -DQBUEM_SANITIZE=asan   (ASan + UBSan + LSan)
 # cmake -DQBUEM_SANITIZE=tsan   (TSan)
 # cmake -DQBUEM_SANITIZE=msan   (MSan, clang only)
-# ASan 과 TSan 은 동시 사용 불가.
+# ASan and TSan cannot be used simultaneously.
 set(QBUEM_SANITIZE "" CACHE STRING "Sanitizer preset: asan | tsan | msan")
 
 if(QBUEM_SANITIZE STREQUAL "asan")
@@ -469,11 +469,11 @@ qbuem_compile_options(qbuem)
 
 # ============================================================================
 # ── Backward-compatible alias targets ────────────────────────────────────────
-# 기존 CMake 코드를 변경하지 않아도 동작하도록 alias 유지.
+# Maintain aliases so that existing CMake consumers need no changes.
 #
 #   qbuem-stack::core    →  qbuem-stack::reactor  (IO core layer)
-#   qbuem-stack::stack   →  qbuem-stack::qbuem    (전체 스택)
-#   qbuem-stack::net     (이미 qbuem_net ALIAS로 등록됨)
+#   qbuem-stack::stack   →  qbuem-stack::qbuem    (full stack)
+#   qbuem-stack::net     (already registered as qbuem_net ALIAS)
 # ============================================================================
 add_library(qbuem_core_compat INTERFACE)
 target_link_libraries(qbuem_core_compat INTERFACE qbuem_reactor)
@@ -513,6 +513,7 @@ if(QBUEM_INSTALL)
         qbuem_http2
         qbuem_grpc
         qbuem_xdp
+        qbuem_pcie
         qbuem
         qbuem_core_compat
         qbuem_stack_compat

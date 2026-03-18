@@ -114,7 +114,7 @@ public:
     }
 #endif
     if (fd < 0) {
-      co_return Result<TcpStream>::err(
+      co_return std::unexpected(
           std::error_code(errno, std::system_category()));
     }
 
@@ -123,7 +123,7 @@ public:
     auto r = addr.to_sockaddr(ss, len);
     if (!r) {
       ::close(fd);
-      co_return Result<TcpStream>::err(r.error());
+      co_return std::unexpected(r.error());
     }
 
     int rc = ::connect(fd, reinterpret_cast<const sockaddr *>(&ss), len);
@@ -133,7 +133,7 @@ public:
     if (errno != EINPROGRESS) {
       auto ec = std::error_code(errno, std::system_category());
       ::close(fd);
-      co_return Result<TcpStream>::err(ec);
+      co_return std::unexpected(ec);
     }
 
     // EINPROGRESS: wait for a Reactor write event
@@ -183,7 +183,7 @@ public:
   Task<Result<size_t>> read(std::span<std::byte> buf) {
     ssize_t n = co_await AsyncRead{fd_, buf.data(), buf.size()};
     if (n < 0) {
-      co_return Result<size_t>::err(std::error_code(errno, std::system_category()));
+      co_return std::unexpected(std::error_code(errno, std::system_category()));
     }
     co_return static_cast<size_t>(n);
   }
@@ -199,7 +199,7 @@ public:
   Task<Result<size_t>> write(std::span<const std::byte> buf) {
     ssize_t n = co_await AsyncWrite{fd_, buf.data(), buf.size()};
     if (n < 0) {
-      co_return Result<size_t>::err(std::error_code(errno, std::system_category()));
+      co_return std::unexpected(std::error_code(errno, std::system_category()));
     }
     co_return static_cast<size_t>(n);
   }
@@ -237,7 +237,7 @@ public:
     ssize_t n = co_await ReadvAwaiter{fd_, bufs.data(),
                                       static_cast<int>(bufs.size())};
     if (n < 0) {
-      co_return Result<size_t>::err(std::error_code(errno, std::system_category()));
+      co_return std::unexpected(std::error_code(errno, std::system_category()));
     }
     co_return static_cast<size_t>(n);
   }
@@ -275,7 +275,7 @@ public:
     ssize_t n = co_await WritevAwaiter{fd_, bufs.data(),
                                        static_cast<int>(bufs.size())};
     if (n < 0) {
-      co_return Result<size_t>::err(std::error_code(errno, std::system_category()));
+      co_return std::unexpected(std::error_code(errno, std::system_category()));
     }
     co_return static_cast<size_t>(n);
   }

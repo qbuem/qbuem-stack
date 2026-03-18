@@ -23,7 +23,7 @@
 #include <qbuem/core/task.hpp>
 
 #include <chrono>
-#include <print>
+#include <qbuem/compat/print.hpp>  // C++23 std::println — shim for GCC < 14
 #include <stop_token>
 #include <string_view>
 
@@ -81,7 +81,7 @@ Task<void> example_monadic_chain(std::stop_token st) {
     auto resp = co_await fetch("http://httpbin.org/status/200").send(st);
 
     // map(): transform success value (Result<FetchResponse> → Result<int>)
-    auto status = resp.map([](const FetchResponse &r) { return r.status(); });
+    auto status = resp.transform([](const FetchResponse &r) { return r.status(); });
     println("  map() status: {}", status.value_or(-1));
 
     // and_then(): conditional transform (Result<FetchResponse> → Result<std::string>)
@@ -98,7 +98,7 @@ Task<void> example_monadic_chain(std::stop_token st) {
 
     // Full chain: map → and_then → value_or
     std::string summary = resp
-        .map([](const FetchResponse &r) {
+        .transform([](const FetchResponse &r) {
             return std::string("status=") + std::to_string(r.status());
         })
         .and_then([](const std::string &s) -> Result<std::string> {
@@ -127,7 +127,7 @@ Task<void> example_error_handling(std::stop_token st) {
 
     // value_or(): safe fallback on error
     int fallback_status = bad
-        .map([](const FetchResponse &r) { return r.status(); })
+        .transform([](const FetchResponse &r) { return r.status(); })
         .value_or(0);
     println("  value_or(0): {}", fallback_status);
 }
@@ -221,7 +221,7 @@ Task<void> example_fetch_client(std::stop_token st) {
 
     // Monadic chaining on client responses works exactly like fetch()
     auto uuid = r2
-        .map([](const FetchResponse &r) { return std::string(r.body()); })
+        .transform([](const FetchResponse &r) { return std::string(r.body()); })
         .value_or("(error)");
     println("  body (first 60 chars): {}", uuid.substr(0, 60));
 
@@ -231,7 +231,7 @@ Task<void> example_fetch_client(std::stop_token st) {
         .header("Content-Type", "application/json")
         .body(R"({"source":"fetch_client_example"})")
         .send(st);
-    println("  POST status: {}", r3.map([](auto &r){ return r.status(); }).value_or(-1));
+    println("  POST status: {}", r3.transform([](auto &r){ return r.status(); }).value_or(-1));
 }
 
 // ─── main ─────────────────────────────────────────────────────────────────────

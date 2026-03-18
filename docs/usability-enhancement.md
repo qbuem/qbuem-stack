@@ -14,7 +14,7 @@ auto p = PipelineBuilder<Raw>()
 ```
 
 ### Proposed Refactor: `qbuem::pipe` and `operator|`
-Leverage C++20 template deduction and the Pipe operator for a more natural flow.
+Leverage C++23 template deduction and the Pipe operator for a more natural flow.
 ```cpp
 // Automatic type deduction from Task<Result<Out>> return type
 auto p = qbuem::pipe<Raw>()
@@ -27,9 +27,9 @@ auto p = qbuem::pipe<Raw>()
 
 ---
 
-## 2. Leveraging C++20 for API Excellence
+## 2. Leveraging C++23 for API Excellence
 
-We will mandate C++20 idioms throughout the stack to eliminate boilerplate and enhance safety.
+We will mandate C++23 idioms throughout the stack to eliminate boilerplate and enhance safety.
 
 ### 2.1. Strict Concepts & Constraints
 Replace cryptic template errors with clear, readable requirements.
@@ -44,7 +44,7 @@ auto p = qbuem::pipe<Raw>() | MyInvalidStage{};
 ```
 
 ### 2.2. Standardized Cancellation (`std::stop_token`)
-Actions will use the standard C++20 cancellation mechanism, allowing for unified shutdown across the entire stack.
+Actions will use the standard C++23 cancellation mechanism, allowing for unified shutdown across the entire stack.
 ```cpp
 Task<Result<Out>> stage_long_running(In in, std::stop_token stop) {
     while (!stop.stop_requested()) {
@@ -54,7 +54,7 @@ Task<Result<Out>> stage_long_running(In in, std::stop_token stop) {
 ```
 
 ### 2.3. Zero-Allocation Views (`std::span`)
-Migrate all `BufferView` references to `std::span<std::byte>`, aligning with the standard and improving interoperability with other C++20 libraries.
+Migrate all `BufferView` references to `std::span<std::byte>`, aligning with the standard and improving interoperability with other C++23 libraries.
 
 ### 2.4. Compile-Time Validation (`consteval`)
 Use `consteval` for schema validation and Morton code pre-computation, moving errors from runtime to compile-time.
