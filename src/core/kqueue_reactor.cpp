@@ -50,7 +50,8 @@ Result<void> KqueueReactor::register_event(int fd, EventType type,
     else entry->write_cb = std::move(callback);
 
     struct kevent ev;
-    EV_SET(&ev, fd, filter, EV_ADD | EV_ENABLE, 0, 0, entry);
+    // Use EV_CLEAR for Edge-Triggered behavior per optimization guide.
+    EV_SET(&ev, fd, filter, EV_ADD | EV_ENABLE | EV_CLEAR, 0, 0, entry);
     changelist_.push_back(ev);
     entry->active = true;
 
@@ -95,10 +96,42 @@ Result<int> KqueueReactor::register_timer(int timeout_ms,
     });
 
     if (ctx->id == TimerWheel::kInvalid) {
-        return unexpected(std::make_error_code(std::errc::not_enough_memory));
+        return Result<int>::err(std::make_error_code(std::errc::not_enough_memory));
     }
     
     return static_cast<int>(ctx->id);
+}
+
+Result<void> KqueueReactor::register_signal(int sig, std::function<void(int)> callback) {
+    auto* entry = get_or_create_entry(sig);
+    if (!entry) return unexpected(std::make_error_code(std::errc::not_enough_memory));
+
+    entry->signal_cb = std::move(callback);
+
+    struct kevent ev;
+    EV_SET(&ev, sig, EVFILT_SIGNAL, EV_ADD | EV_ENABLE, 0, 0, entry);
+    changelist_.push_back(ev);
+    entry->active = true;
+
+    return Result<void>::ok();
+}
+
+Result<void> KqueueReactor::unregister_signal(int sig) {
+    if (static_cast<size_t>(sig) >= entry_map_.size() || !entry_map_[sig]) {
+        return Result<void>::ok();
+    }
+
+    auto* entry = entry_map_[sig];
+    struct kevent ev;
+    EV_SET(&ev, sig, EVFILT_SIGNAL, EV_DELETE, 0, 0, nullptr);
+    changelist_.push_back(ev);
+
+    entry->signal_cb = nullptr;
+    if (!entry->read_cb && !entry->write_cb && !entry->signal_cb) {
+        entry->active = false;
+    }
+
+    return Result<void>::ok();
 }
 
 Result<void> KqueueReactor::unregister_timer(int timer_id) {
@@ -127,7 +160,7 @@ Result<int> KqueueReactor::poll(int timeout_ms) {
     int n = kevent(kq_fd_, nullptr, 0, events_.data(), events_.size(), ts_ptr);
     if (n < 0) {
         if (errno == EINTR) return Result<int>::ok(0);
-        return unexpected(std::error_code(errno, std::system_category()));
+        return Result<int>::err(std::error_code(errno, std::system_category()));
     }
 
     // 2. Dispatch events
@@ -146,8 +179,22 @@ Result<int> KqueueReactor::poll(int timeout_ms) {
         auto* entry = static_cast<KqueueEntry*>(ev.udata);
         if (!entry || !entry->active) continue;
 
-        if (ev.filter == EVFILT_READ && entry->read_cb) {
-            entry->read_cb(entry->ident);
+        if (ev.flags & EV_ERROR) {
+            // Handle error (EV_ERROR is stored in data)
+            continue;
+        }
+
+        if (ev.filter == EVFILT_SIGNAL) {
+            if (entry->signal_cb) {
+                entry->signal_cb(static_cast<int>(ev.ident));
+            }
+        } else if (ev.filter == EVFILT_READ) {
+            if (entry->read_cb) entry->read_cb(entry->ident);
+            // Handle EOF (peer closed) - we might want to trigger read_cb 
+            // anyway to let it see 0 bytes read, but EV_EOF is a nice hint.
+            if (ev.flags & EV_EOF && entry->read_cb) {
+                // entry->read_cb(entry->ident); // already called or could be specialized
+            }
         } else if (ev.filter == EVFILT_WRITE && entry->write_cb) {
             entry->write_cb(entry->ident);
         }

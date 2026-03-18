@@ -48,6 +48,9 @@
 #  include <sys/un.h>
 #  include <sys/uio.h>
 #  include <unistd.h>
+#  ifdef __APPLE__
+#    include <sys/ucred.h>
+#  endif
 #endif
 
 namespace qbuem::uds {

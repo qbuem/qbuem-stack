@@ -48,8 +48,10 @@
 
 #include <atomic>
 #include <cstdint>
-#include <linux/futex.h>
-#include <sys/syscall.h>
+#ifdef __linux__
+#  include <linux/futex.h>
+#  include <sys/syscall.h>
+#endif
 #include <unistd.h>
 
 namespace qbuem::shm {
@@ -228,8 +230,10 @@ public:
      */
     void unlock() noexcept {
         fw_.store(0, std::memory_order_release);
+#ifdef __linux__
         // wake any waiter
         ::syscall(SYS_futex, &fw_.value, FUTEX_WAKE, 1, nullptr, nullptr, 0);
+#endif
     }
 
     /** @brief Checks whether the mutex is locked. */
@@ -289,8 +293,10 @@ public:
      */
     void release(uint32_t count = 1) noexcept {
         fw_.fetch_add(count, std::memory_order_release);
+#ifdef __linux__
         ::syscall(SYS_futex, &fw_.value, FUTEX_WAKE,
                   static_cast<int>(count), nullptr, nullptr, 0);
+#endif
     }
 
     /** @brief Returns the current count. */

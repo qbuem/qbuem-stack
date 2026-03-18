@@ -34,6 +34,7 @@
 #include <span>
 #include <string_view>
 #include <system_error>
+#include <type_traits>
 #include <variant>
 #include <vector>
 
@@ -159,8 +160,13 @@ public:
    * @param u  The unexpected tag object.
    */
   template <typename E>
-  Result(unexpected<E> u)                                       // NOLINT
-      : data_(std::in_place_index<2>, std::error_code(u.value)) {}
+  Result(unexpected<E> u) : data_(std::in_place_index<2>) {      // NOLINT
+    if constexpr (std::is_same_v<E, std::error_code>) {
+      std::get<2>(data_) = u.value;
+    } else {
+      std::get<2>(data_) = std::make_error_code(u.value);
+    }
+  }
 
   /**
    * @brief Check whether the result holds a success value.
@@ -360,7 +366,13 @@ public:
    * @param u  The unexpected tag object.
    */
   template <typename E>
-  Result(unexpected<E> u) : ok_(false), ec_(u.value) {}        // NOLINT
+  Result(unexpected<E> u) : ok_(false) {                         // NOLINT
+    if constexpr (std::is_same_v<E, std::error_code>) {
+      ec_ = u.value;
+    } else {
+      ec_ = std::make_error_code(u.value);
+    }
+  }
 
   /** @brief Returns true if in the success state. */
   bool has_value() const noexcept { return ok_; }

@@ -233,6 +233,8 @@ FetchContent_Declare(qbuem_json
 FetchContent_GetProperties(qbuem_json)
 if(NOT qbuem_json_POPULATED)
     message(STATUS "Fetching qbuem-json (tag: ${QBUEM_JSON_TAG})")
+    set(QBUEM_JSON_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+    set(QBUEM_JSON_BUILD_BENCHMARKS OFF CACHE BOOL "" FORCE)
     FetchContent_MakeAvailable(qbuem_json)
 endif()
 

@@ -28,6 +28,9 @@ public:
 
   Result<void> unregister_event(int fd, EventType type) override;
 
+  Result<void> register_signal(int sig, std::function<void(int)> callback) override;
+  Result<void> unregister_signal(int sig) override;
+
   Result<void> unregister_timer(int timer_id) override;
 
   Result<int> poll(int timeout_ms) override;
@@ -39,10 +42,11 @@ public:
   void post(std::function<void()> fn) override;
 
 private:
-  struct KqueueEntry {
+  struct alignas(64) KqueueEntry {
     int ident;
     std::function<void(int)> read_cb;
     std::function<void(int)> write_cb;
+    std::function<void(int)> signal_cb;
     bool active = false;
   };
 

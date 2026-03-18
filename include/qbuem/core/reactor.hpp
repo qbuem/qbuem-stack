@@ -136,6 +136,9 @@ public:
    */
   virtual Result<void> unregister_timer(int timer_id) = 0;
 
+  virtual Result<void> register_signal(int sig, std::function<void(int)> callback) = 0;
+  virtual Result<void> unregister_signal(int sig) = 0;
+
   /**
    * @brief Check whether the Reactor's event loop is currently running.
    * @returns true if running, false otherwise.

@@ -234,7 +234,7 @@ private:
   // -------------------------------------------------------------------------
   // Worker loop
   // -------------------------------------------------------------------------
-  Task<void> worker_loop(size_t worker_idx, Dispatcher &dispatcher) {
+  Task<void> worker_loop(size_t worker_idx, [[maybe_unused]] Dispatcher &dispatcher) {
     auto stop_token = stop_src_ ? stop_src_->get_token() : std::stop_token{};
 
     for (;;) {

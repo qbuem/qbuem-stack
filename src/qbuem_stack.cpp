@@ -532,7 +532,7 @@ Result<void> App::listen(int port, bool ipv6) {
     int fd = make_listen_socket(port, ipv6);
     if (fd < 0) {
       for (int sfd : server_fds) ::close(sfd);
-      return unexpected(std::make_error_code(std::errc::address_in_use));
+      return Result<void>::err(std::make_error_code(std::errc::address_in_use));
     }
     server_fds.push_back(fd);
   }
@@ -1121,7 +1121,7 @@ Result<void> App::listen(int port, bool ipv6) {
 
     if (!listen_res) {
       for (int sfd : server_fds) ::close(sfd);
-      return unexpected(listen_res.error());
+      return Result<void>::err(listen_res.error());
     }
   } // for each reactor
 
@@ -1147,7 +1147,7 @@ Result<void> App::listen_unix(std::string_view path) {
   // ── Unix domain socket ────────────────────────────────────────────────────
   int server_fd = ::socket(AF_UNIX, SOCK_STREAM, 0);
   if (server_fd == -1)
-    return unexpected(
+    return Result<void>::err(
         std::make_error_code(std::errc::resource_unavailable_try_again));
 
   // Remove any stale socket file.
@@ -1157,7 +1157,7 @@ Result<void> App::listen_unix(std::string_view path) {
   addr.sun_family = AF_UNIX;
   if (path.size() >= sizeof(addr.sun_path) - 1) {
     close(server_fd);
-    return unexpected(std::make_error_code(std::errc::filename_too_long));
+    return Result<void>::err(std::make_error_code(std::errc::filename_too_long));
   }
   std::memcpy(addr.sun_path, path.data(), path.size());
   addr.sun_path[path.size()] = '\0';
@@ -1165,12 +1165,12 @@ Result<void> App::listen_unix(std::string_view path) {
   if (::bind(server_fd, reinterpret_cast<struct sockaddr *>(&addr),
              sizeof(addr)) < 0) {
     close(server_fd);
-    return unexpected(std::make_error_code(std::errc::address_in_use));
+    return Result<void>::err(std::make_error_code(std::errc::address_in_use));
   }
 
   if (::listen(server_fd, SOMAXCONN) < 0) {
     close(server_fd);
-    return unexpected(std::make_error_code(std::errc::address_in_use));
+    return Result<void>::err(std::make_error_code(std::errc::address_in_use));
   }
 
   std::cout << "Draco WAS listening on unix:" << path << "\n";
@@ -1340,7 +1340,7 @@ Result<void> App::listen_unix(std::string_view path) {
             });
       });
   if (!listen_res)
-    return unexpected(listen_res.error());
+    return Result<void>::err(listen_res.error());
 
   dispatcher_.run();
 

@@ -29,6 +29,7 @@
 #include <sys/socket.h>
 #include <sys/uio.h>
 #include <unistd.h>
+#include <fcntl.h>
 
 namespace qbuem {
 
@@ -99,11 +100,21 @@ public:
    * @returns TcpStream on success, or an error code on failure.
    */
   static Task<Result<TcpStream>> connect(SocketAddr addr) {
+#ifdef __linux__
     int fd = ::socket(
         addr.family() == SocketAddr::Family::IPv6 ? AF_INET6 : AF_INET,
         SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
+#else
+    int fd = ::socket(
+        addr.family() == SocketAddr::Family::IPv6 ? AF_INET6 : AF_INET,
+        SOCK_STREAM, 0);
+    if (fd >= 0) {
+      ::fcntl(fd, F_SETFL, ::fcntl(fd, F_GETFL) | O_NONBLOCK);
+      ::fcntl(fd, F_SETFD, FD_CLOEXEC);
+    }
+#endif
     if (fd < 0) {
-      co_return unexpected(
+      co_return Result<TcpStream>::err(
           std::error_code(errno, std::system_category()));
     }
 
@@ -112,7 +123,7 @@ public:
     auto r = addr.to_sockaddr(ss, len);
     if (!r) {
       ::close(fd);
-      co_return unexpected(r.error());
+      co_return Result<TcpStream>::err(r.error());
     }
 
     int rc = ::connect(fd, reinterpret_cast<const sockaddr *>(&ss), len);
@@ -122,7 +133,7 @@ public:
     if (errno != EINPROGRESS) {
       auto ec = std::error_code(errno, std::system_category());
       ::close(fd);
-      co_return unexpected(ec);
+      co_return Result<TcpStream>::err(ec);
     }
 
     // EINPROGRESS: wait for a Reactor write event
@@ -172,7 +183,7 @@ public:
   Task<Result<size_t>> read(std::span<std::byte> buf) {
     ssize_t n = co_await AsyncRead{fd_, buf.data(), buf.size()};
     if (n < 0) {
-      co_return unexpected(std::error_code(errno, std::system_category()));
+      co_return Result<size_t>::err(std::error_code(errno, std::system_category()));
     }
     co_return static_cast<size_t>(n);
   }
@@ -188,7 +199,7 @@ public:
   Task<Result<size_t>> write(std::span<const std::byte> buf) {
     ssize_t n = co_await AsyncWrite{fd_, buf.data(), buf.size()};
     if (n < 0) {
-      co_return unexpected(std::error_code(errno, std::system_category()));
+      co_return Result<size_t>::err(std::error_code(errno, std::system_category()));
     }
     co_return static_cast<size_t>(n);
   }
@@ -226,7 +237,7 @@ public:
     ssize_t n = co_await ReadvAwaiter{fd_, bufs.data(),
                                       static_cast<int>(bufs.size())};
     if (n < 0) {
-      co_return unexpected(std::error_code(errno, std::system_category()));
+      co_return Result<size_t>::err(std::error_code(errno, std::system_category()));
     }
     co_return static_cast<size_t>(n);
   }
@@ -264,7 +275,7 @@ public:
     ssize_t n = co_await WritevAwaiter{fd_, bufs.data(),
                                        static_cast<int>(bufs.size())};
     if (n < 0) {
-      co_return unexpected(std::error_code(errno, std::system_category()));
+      co_return Result<size_t>::err(std::error_code(errno, std::system_category()));
     }
     co_return static_cast<size_t>(n);
   }
