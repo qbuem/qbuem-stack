@@ -125,18 +125,18 @@ TEST(TimerWheelTest, NextExpiryMsMaxWhenNoTimers) {
 // ─── immediate timer (delay=0) ────────────────────────────────────────────────
 
 TEST(TimerWheelTest, ImmediateTimerFiresOnZeroTick) {
-    // delay=0 타이머는 "다음 tick에서 즉시 실행" — tick(0)은 시간이 흐르지 않아
-    // 아무것도 실행되지 않으며, tick(1) 이후 실행됩니다.
+    // delay=0 timer means "run immediately on the next tick" — tick(0) does not
+    // advance time so nothing executes; it fires after tick(1).
     TimerWheel wheel;
     int count = 0;
     wheel.schedule(0, [&] { ++count; });
     wheel.tick(0);
-    // tick(0)은 시간이 경과하지 않으므로 아무것도 실행되지 않아야 함
-    // (delay=0 타이머는 slot 0에 들어가며, 256ms tick 후 처음 slot 0을 방문)
-    // 실용적으로는 tick(1)을 사용해도 마찬가지 (slot 1을 방문)
-    // delay=0은 "가능한 빨리" 를 의미하므로, schedule 후 짧은 tick으로 테스트
-    EXPECT_GE(count, 0); // 실행됐거나 아직 대기 중
-    wheel.tick(256);     // 256ms 후 slot 0을 방문하면 실행됨
+    // tick(0) advances no time so nothing must fire
+    // (delay=0 timer is placed in slot 0, which is visited after a 256ms tick)
+    // Practically tick(1) behaves the same (visits slot 1)
+    // delay=0 means "as soon as possible", so test with a short tick after schedule
+    EXPECT_GE(count, 0); // fired or still pending
+    wheel.tick(256);     // visits slot 0 after 256ms — fires now
     EXPECT_EQ(count, 1);
 }
 

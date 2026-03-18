@@ -447,7 +447,7 @@ TEST(FeedbackLoop, FailedItemRetried) {
     auto fn = [&](int x, ActionEnv) -> Task<Result<int>> {
         size_t attempt = attempts.fetch_add(1, std::memory_order_relaxed) + 1;
         if (attempt < 3) {
-            // 재시도 채널에 다시 투입
+            // re-push to retry channel
             feedback_ch->try_send(ContextualItem<int>{x, {}});
             co_return unexpected(std::make_error_code(std::errc::resource_unavailable_try_again));
         }

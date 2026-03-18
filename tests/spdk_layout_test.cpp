@@ -1,6 +1,6 @@
 /**
  * @file tests/spdk_layout_test.cpp
- * @brief v1.7.0: RDMA Channel, eBPF Tracer, NVMe IO 레이아웃/기본 테스트.
+ * @brief v1.7.0: RDMA Channel, eBPF Tracer, NVMe IO layout/basic tests.
  */
 
 #include <gtest/gtest.h>
@@ -60,7 +60,7 @@ TEST(RdmaLayout, RDMAChannelIsNotCopyable) {
 
 TEST(EbpfLayout, TraceEventSize) {
     using namespace qbuem::ebpf;
-    // TraceEvent는 정확히 64바이트 (단일 캐시 라인)
+    // TraceEvent is exactly 64 bytes (single cache line)
     static_assert(sizeof(TraceEvent) == 64, "TraceEvent must be exactly 64 bytes");
     EXPECT_EQ(sizeof(TraceEvent), 64u);
 }
@@ -81,7 +81,7 @@ TEST(EbpfLayout, TraceEventLabelSetGet) {
 TEST(EbpfLayout, TraceEventLabelTruncation) {
     using namespace qbuem::ebpf;
     TraceEvent evt{};
-    // 23자 초과 레이블은 잘려야 함
+    // Labels longer than 23 characters must be truncated
     evt.set_label("this_label_is_over_23_characters_long");
     auto lbl = evt.get_label();
     EXPECT_EQ(lbl.size(), 23u);
@@ -105,7 +105,7 @@ TEST(EbpfLayout, BPFStatsFields) {
 }
 
 TEST(EbpfLayout, TracePointMacro) {
-    // QBUEM_TRACE은 no-op 함수 호출이어야 함 — 컴파일 성공만 확인
+    // QBUEM_TRACE must be a no-op function call — only verify compilation succeeds
     QBUEM_TRACE("test.event", 1u, 2u);
     SUCCEED();
 }
@@ -124,7 +124,7 @@ TEST(NvmeLayout, NVMeResultOk) {
     r.status = 0;
     EXPECT_TRUE(r.ok());
 
-    // status bit1 이상 = 오류
+    // status bit1 or higher = error
     r.status = 0x02;
     EXPECT_FALSE(r.ok());
 }
@@ -132,7 +132,7 @@ TEST(NvmeLayout, NVMeResultOk) {
 TEST(NvmeLayout, NVMeResultSCT) {
     using namespace qbuem::spdk;
     NVMeResult r{};
-    // bits [11:9] = SCT
+    // bits [11:9] = SCT (Status Code Type)
     r.status = (0x1u << 9);
     EXPECT_EQ(r.sct(), 1u);
 }
@@ -140,7 +140,7 @@ TEST(NvmeLayout, NVMeResultSCT) {
 TEST(NvmeLayout, NVMeResultSC) {
     using namespace qbuem::spdk;
     NVMeResult r{};
-    // bits [8:1] = SC
+    // bits [8:1] = SC (Status Code)
     r.status = (0x05u << 1);
     EXPECT_EQ(r.sc(), 5u);
 }
@@ -156,7 +156,7 @@ TEST(NvmeLayout, NVMeDeviceInfoTotalBytes) {
 TEST(NvmeLayout, NVMeDeviceInfoDefaults) {
     using namespace qbuem::spdk;
     NVMeDeviceInfo info{};
-    EXPECT_EQ(info.lba_size, 512u);  // 기본값
+    EXPECT_EQ(info.lba_size, 512u);  // default value
     EXPECT_EQ(info.ns_id,    1u);
     EXPECT_FALSE(info.volatile_write_cache);
 }

@@ -112,7 +112,7 @@ TEST(SHMLayout, TopicDescriptorScopeDefault) {
     EXPECT_EQ(desc.scope, TopicScope::LOCAL_ONLY);
 }
 
-// ─── SHMBus 토픽 레지스트리 (로컬 스코프) ────────────────────────────────────
+// ─── SHMBus topic registry (local scope) ─────────────────────────────────────
 
 struct TestMsg { int value; };
 
@@ -147,7 +147,7 @@ TEST(SHMBus, TryPublishUnknownTopicReturnsFalse) {
 TEST(SHMBus, TryPublishTypeMismatchReturnsFalse) {
     SHMBus bus;
     bus.declare<TestMsg>("mismatch.topic", TopicScope::LOCAL_ONLY, 64);
-    // 다른 타입으로 발행 시도
+    // Attempt to publish with a different type
     struct OtherMsg { double x; };
     OtherMsg other{1.0};
     EXPECT_FALSE(bus.try_publish("mismatch.topic", other));
