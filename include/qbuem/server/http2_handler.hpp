@@ -140,19 +140,19 @@ public:
             uint8_t first = data[pos];
 
             if (first & 0x80) {
-                // ── 인덱스 헤더 필드 표현 (RFC 7541 섹션 6.1) ──────────────
-                // 비트 패턴: 1xxxxxxx
-                // 정수 인코딩: 7비트 접두사
+                // ── Indexed Header Field representation (RFC 7541 section 6.1) ─
+                // Bit pattern: 1xxxxxxx
+                // Integer encoding: 7-bit prefix
                 uint32_t index = decode_integer(data, pos, 7);
                 if (index > 0 && index < 62) {
                     const auto& [name, value] = STATIC_TABLE[index];
                     headers[std::string(name)] = std::string(value);
                 }
-                // index == 0은 에러, 62 이상은 동적 테이블(미지원) → 무시
+                // index == 0 is an error; index >= 62 is dynamic table (unsupported) → ignore
             } else if ((first & 0xC0) == 0x40) {
-                // ── 리터럴 헤더 필드 — 증분 인덱싱 (RFC 7541 섹션 6.2.1) ──
-                // 비트 패턴: 01xxxxxx
-                // 6비트 접두사로 이름 인덱스 디코딩
+                // ── Literal Header Field — Incremental Indexing (RFC 7541 section 6.2.1) ─
+                // Bit pattern: 01xxxxxx
+                // Decode name index with 6-bit prefix
                 uint32_t name_index = decode_integer(data, pos, 6);
                 std::string name;
                 if (name_index > 0 && name_index < 62) {
@@ -162,11 +162,11 @@ public:
                 }
                 std::string value = decode_string(data, pos);
                 headers[std::move(name)] = std::move(value);
-                // 동적 테이블 갱신은 무시 (최소 구현)
+                // Dynamic table update is ignored (minimal implementation)
             } else if ((first & 0xF0) == 0x00) {
-                // ── 리터럴 헤더 필드 — 인덱싱 없음 (RFC 7541 섹션 6.2.2) ──
-                // 비트 패턴: 0000xxxx
-                // 4비트 접두사로 이름 인덱스 디코딩
+                // ── Literal Header Field — Without Indexing (RFC 7541 section 6.2.2) ─
+                // Bit pattern: 0000xxxx
+                // Decode name index with 4-bit prefix
                 uint32_t name_index = decode_integer(data, pos, 4);
                 std::string name;
                 if (name_index > 0 && name_index < 62) {
@@ -177,9 +177,9 @@ public:
                 std::string value = decode_string(data, pos);
                 headers[std::move(name)] = std::move(value);
             } else if ((first & 0xF0) == 0x10) {
-                // ── 리터럴 헤더 필드 — 절대 인덱싱 없음 (RFC 7541 섹션 6.2.3) ──
-                // 비트 패턴: 0001xxxx
-                // 4비트 접두사로 이름 인덱스 디코딩
+                // ── Literal Header Field — Never Indexed (RFC 7541 section 6.2.3) ─
+                // Bit pattern: 0001xxxx
+                // Decode name index with 4-bit prefix
                 uint32_t name_index = decode_integer(data, pos, 4);
                 std::string name;
                 if (name_index > 0 && name_index < 62) {
@@ -190,11 +190,11 @@ public:
                 std::string value = decode_string(data, pos);
                 headers[std::move(name)] = std::move(value);
             } else if ((first & 0xE0) == 0x20) {
-                // ── 동적 테이블 크기 갱신 (RFC 7541 섹션 6.3) ──────────────
-                // 비트 패턴: 001xxxxx — 무시
+                // ── Dynamic Table Size Update (RFC 7541 section 6.3) ──────────
+                // Bit pattern: 001xxxxx — ignore
                 decode_integer(data, pos, 5);
             } else {
-                // 알 수 없는 표현 — 1바이트 건너뜀
+                // Unknown representation — skip 1 byte
                 ++pos;
             }
         }
@@ -204,12 +204,12 @@ public:
 
 private:
     /**
-     * @brief HPACK 정수 인코딩 디코딩 (RFC 7541 섹션 5.1).
+     * @brief Decodes an HPACK integer encoding (RFC 7541 section 5.1).
      *
-     * @param data  원본 바이트 스팬.
-     * @param pos   현재 읽기 위치 (in-out). 디코딩 후 다음 위치로 이동합니다.
-     * @param prefix_bits 정수 접두사 비트 수 (1~8).
-     * @returns 디코딩된 정수값.
+     * @param data  Source byte span.
+     * @param pos   Current read position (in-out). Advances to the next position after decoding.
+     * @param prefix_bits Number of prefix bits for the integer (1~8).
+     * @returns Decoded integer value.
      */
     static uint32_t decode_integer(std::span<const uint8_t> data,
                                    size_t& pos,

@@ -197,10 +197,10 @@ private:
 };
 
 /**
- * @brief 프로세스 싱글톤 전역 레지스트리를 반환합니다.
+ * @brief Returns the process-singleton global registry.
  *
- * 모든 파이프라인의 루트 레지스트리입니다.
- * 프로세스 시작 시 한 번 초기화하고 이후 읽기만 합니다.
+ * This is the root registry for all pipelines.
+ * Initialize it once at process startup and only read from it afterward.
  *
  * @code
  * global_registry().register_singleton<ILogger>(make_logger());
