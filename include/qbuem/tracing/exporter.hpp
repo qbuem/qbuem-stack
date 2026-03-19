@@ -40,7 +40,7 @@
 #include <format>
 #include <memory>
 #include <mutex>
-#include <print>
+#include <qbuem/compat/print.hpp>
 #include <string>
 #include <string_view>
 #include <unordered_map>

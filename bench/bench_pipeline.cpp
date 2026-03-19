@@ -24,7 +24,7 @@
 #include <array>
 #include <atomic>
 #include <cstddef>
-#include <print>
+#include <qbuem/compat/print.hpp>
 #include <string>
 
 using namespace qbuem;

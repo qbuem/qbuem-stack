@@ -24,7 +24,7 @@
 #include <cstdint>
 #include <initializer_list>
 #include <memory>
-#include <print>
+#include <qbuem/compat/print.hpp>
 #include <string>
 #include <string_view>
 #include <system_error>

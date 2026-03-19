@@ -2,7 +2,7 @@
 
 **Zero Latency · Zero Allocation · Zero Dependency**
 
-> **Current Version: v2.2.0** — Monadic HTTP Fetch Client (curl-free). Pipeline ↔ MessageBus ↔ SHM fully integrated.
+> **Current Version: v3.3.0** — C++23 enforcement · ARM NEON SIMD parity · ConfigManager/Secret<T> · GridBitset game APIs.
 >
 > High-performance C++ infrastructure for Web Application Servers (WAS), Inter-Process Communication (IPC), and Data Processing.
 
@@ -159,17 +159,129 @@ See [examples/06-ipc-messaging/ipc_pipeline](./examples/06-ipc-messaging/ipc_pip
 
 ---
 
-## Performance Benchmarks (v2.1.0)
+## Performance Benchmarks (v3.3.0)
 
-| Component | Metric | Result |
+> Measured on Ubuntu 24.04 / GCC 13.3 / `-O3 -march=native`. Single-threaded.
+
+### Core Components
+
+| Component | Operation | Result |
 | :--- | :--- | :--- |
-| **Event Dispatch** | Latency | ~6 μs (macOS/kqueue) |
-| **AsyncChannel** | Throughput | 44M ops/s (MPMC) |
-| **SHMChannel** | IPC Latency | < 150 ns (inter-process) |
-| **HTTP Parser** | Throughput | 317 MB/s (SIMD) |
-| **Memory Alloc** | `FixedPool` | 4.5 ns / alloc |
-| **Router Lookup** | Latency | 112 ns (RadixTree) |
-| **MessageBus** | Fan-out | lock-free, O(subscribers) |
+| **Arena** | 64B bump-alloc | **2.6 ns** / alloc |
+| **Arena** | Request lifecycle (10 alloc + reset) | **1.3 ns** / req |
+| **FixedPool** | alloc + dealloc (free-list) | **1.2 ns** / round-trip |
+| **AsyncChannel** | try_send + try_recv (MPMC) | **47M ops/s** |
+| **SpscChannel** | try_send + try_recv (wait-free) | **113M ops/s** |
+| **SpscChannel** | Batch fill 1000 + drain 1000 | **271M ops/s** / **1 GB/s** |
+| **HTTP Parser** | GET (74 B) | **320 MB/s** |
+| **HTTP Parser** | POST + 10 headers (310 B) | **303 MB/s** |
+| **HTTP Parser** | Large headers (542 B, 13 headers) | **355 MB/s** |
+| **Router** | Static route lookup | **120 ns** |
+| **Router** | Param route (`/users/:id`) | **147 ns** |
+| **Router** | 1100-route table lookup | **143 ns** |
+| **Context** | `get<T>()` (type-key lookup) | **35–50 ns** |
+| **IOSlice** | create + to_iovec() | **0.3 ns** |
+| **SHMChannel** | IPC latency | **< 150 ns** (inter-process) |
+
+### GridBitset — Spatial Bitset (game / simulation)
+
+> 256×256 grid, 32 layers, ~10 % density. Single atomic operation unless noted.
+
+| Operation | Result | Notes |
+| :--- | :--- | :--- |
+| `test(x, y, layer)` | **~28 ns** | L2/L3 latency at 256×256 scale |
+| `any_in_range(x, y, 0, 15)` | **~28 ns** | single AND+cmp, L3-bound |
+| `any_in_column(x, y)` | **~28 ns** | zero-compare only |
+| `lowest_layer / highest_layer` | **~28 ns** | BSF / CLZ instruction |
+| `count_layers (POPCNT)` | **~28 ns** | single POPCNT |
+| `toggle(x, y, layer)` | **~31 ns** | fetch_xor |
+| `any_in_box 8×8` | **37 ns** | 64-cell scan |
+| `any_in_box 16×16` | **29 ns** | early-exit on hit |
+| `raycast` (32-step DDA) | **30 ns** | early-hit cache-friendly |
+| `raycast` (128-step diagonal) | **30 ns** | early-hit stops quickly |
+| `for_each_set` (256×256, 10 % sparse) | **~1 ns / cell** | sequential, L1-hot |
+| `merge_from` (OR full grid) | **5.5 ns / cell** | 256×256 sequential write |
+| `diff_from` (AND-NOT full grid) | **5.3 ns / cell** | 256×256 sequential write |
+| `GridBitset2D::for_each_set` (sparse) | **~0.2 ns / cell** | SB-skip + POPCNT |
+| `GridBitset2D::raycast_2d` (diagonal) | **29 ns** | Bresenham, early-hit |
+
+---
+
+---
+
+## GridBitset — Game & Simulation Spatial Map
+
+`GridBitset<W, H, D>` and `GridBitset2D<W, H>` are zero-allocation, wait-free
+spatial bitsets with a full game-ready API.
+
+### Dimension Modes
+
+| Type | Mode | Storage per cell | Use case |
+| :--- | :--- | :--- | :--- |
+| `GridBitset<W,H,D>` (D=1) | 2D flag | 1 bit packed | Walkability map |
+| `GridBitset<W,H,D>` (D≤64) | 2.5D layers | 1 `uint64_t` | Multi-floor, voxel chunk |
+| `GridBitset2D<W,H>` | 2D Morton | 8×8 Super-Blocks | Tile map, collision, FOV |
+
+### API Quick Reference
+
+```cpp
+// 2.5D voxel chunk — 256×256 grid, 32 vertical layers
+GridBitset<256, 256, 32> world;
+
+// ── Basic writes ────────────────────────────────────────────
+world.set(x, y, layer);           // mark occupied
+world.clear(x, y, layer);         // mark free
+world.toggle(x, y, layer);        // XOR flip (doors, switches) → bool
+world.store_column(x, y, mask);   // replace all 32 layers at once
+world.clear_box(x1,y1, x2,y2, 0, 31);  // blast damage zone
+
+// ── Queries (~1–3 ns) ───────────────────────────────────────
+world.test(x, y, layer);                // single bit
+world.any_in_column(x, y);             // broad-phase: anything here?
+world.any_in_range(x, y, 2, 5);        // floors 2–5 occupied?
+world.any_in_box(x1,y1,x2,y2, 0, 15); // bounding-box overlap
+world.lowest_layer(x, y);              // BSF: ground floor
+world.highest_layer(x, y);            // CLZ: ceiling floor
+world.count_layers(x, y);             // POPCNT: stacked objects
+
+// ── Raycasting (DDA Bresenham) ──────────────────────────────
+auto hit = world.raycast(0, 0, /*dx*/1, /*dy*/0, 0, 15, /*max_steps*/128);
+if (hit) std::print("hit at ({},{}) after {} steps\n",
+                    hit->x, hit->y, hit->steps);
+
+// ── Iteration (sparse skip) ─────────────────────────────────
+world.for_each_set([](uint32_t x, uint32_t y, uint64_t layers) {
+    // called only for non-empty cells; layers = full layer bitmask
+});
+world.for_each_set_in_box(x1,y1, x2,y2, 0, 15, fn);
+
+// ── Grid algebra ────────────────────────────────────────────
+world.merge_from(other);       // OR  — spawn entities into world
+world.intersect_with(other);  // AND — shared visibility
+world.diff_from(other);        // AND-NOT — remove destroyed obstacles
+
+// ── 2D tile map (Morton-code cache-optimal layout) ──────────
+GridBitset2D<128, 128> tiles;
+tiles.set(x, y);              tiles.clear(x, y);
+tiles.toggle(x, y);           // flip tile state
+tiles.test(x, y);
+tiles.any_in_box(x1,y1, x2,y2);
+tiles.count_all();                  // POPCNT entire map
+auto los = tiles.raycast_2d(px, py, tx, ty);  // line-of-sight
+tiles.for_each_set([](uint32_t x, uint32_t y) { /* ... */ });
+tiles.merge_from(other);
+tiles.diff_from(other);
+```
+
+### Thread Safety
+
+All **read operations** (`test`, `any_*`, `snapshot`, `lowest/highest_layer`,
+`count_*`, `for_each_*`, `raycast*`) are **wait-free** — safe to call from any
+number of threads concurrently with no locks.
+
+All **write operations** (`set`, `clear`, `toggle`, `merge_from`, `diff_from`,
+`clear_box`) are **lock-free** via `fetch_or`/`fetch_and`/`fetch_xor`.
+Multiple writers to different cells are fully safe.
 
 ---
 
@@ -201,9 +313,8 @@ hello_world → async_timer → tcp_echo_server → arena → pipeline/fanout
 
 ## Roadmap Highlights
 
-- **v2.2.0 (Current)**: Monadic HTTP fetch client (curl-free), async DNS, timeout, redirect, connection pool, kTLS HTTPS.
-- **v2.3.0 (Next)**: HTTP/3 native (quiche bundled), QUIC transport support.
-- **v2.4.0**: AF_XDP production examples, eBPF CO-RE enhancements.
+- **v3.3.0 (Current)**: Full C++23 enforcement (`std::print`, `std::jthread`, `std::format_to_n`). ARM NEON SIMD parity (WebSocket masking, GF(2⁸) erasure, base64url, CRC32, HTTP header scan). `ConfigManager` + `Secret<T>`. GridBitset game-ready APIs (toggle, raycast, for_each, merge/diff/intersect).
+- **v3.4.0 (Next)**: AF_XDP production examples, QUIC/HTTP3 via quiche integration, sanitizer clean-up pass.
 
 ---
 

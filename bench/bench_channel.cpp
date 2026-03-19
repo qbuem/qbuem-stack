@@ -20,7 +20,7 @@
 #include <qbuem/pipeline/spsc_channel.hpp>
 
 #include <cstdint>
-#include <print>
+#include <qbuem/compat/print.hpp>
 
 using namespace qbuem;
 

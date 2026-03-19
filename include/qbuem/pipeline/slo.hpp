@@ -27,7 +27,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
-#include <print>
+#include <qbuem/compat/print.hpp>
 #include <functional>
 #include <string>
 #include <string_view>

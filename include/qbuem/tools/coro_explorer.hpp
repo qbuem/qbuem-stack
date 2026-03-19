@@ -44,7 +44,7 @@
 #include <cstdint>
 #include <cstring>
 #include <optional>
-#include <print>
+#include <qbuem/compat/print.hpp>
 #include <span>
 #include <string_view>
 #include <vector>
