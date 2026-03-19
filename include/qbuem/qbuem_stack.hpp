@@ -49,6 +49,16 @@
 #include <qbuem/shm/reliable_cast.hpp>
 #include <qbuem/security/simd_validator.hpp>
 
+// v2.7.0: Next-Gen Networking (Fetch+)
+#include <qbuem/http/fetch_stream.hpp>
+#include <qbuem/http/http2_client.hpp>
+#include <qbuem/http/http3_client.hpp>
+
+// v2.8.0: Low-Latency UDP Infrastructure (UDP+)
+#include <qbuem/net/udp_mmsg.hpp>
+#include <qbuem/net/rudp_socket.hpp>
+#include <qbuem/net/udp_multicast.hpp>
+
 #include <atomic>
 #include <chrono>
 #include <cstdint>

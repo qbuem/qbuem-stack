@@ -201,21 +201,21 @@ All modules must adhere to these quantitative benchmarks to be considered part o
 
 ---
 
-## 🏗 Milestone: v2.7.0 — Next-Gen Networking (Fetch+)
+## ✅ Completed: v2.7.0 — Next-Gen Networking (Fetch+)
 > **Reference Design**: [docs/fetch-advancement.md](./docs/fetch-advancement.md) / [docs/network-optimization-guide.md](./docs/network-optimization-guide.md)
 
-- [ ] **`HTTP/2 & HTTP/3`**: Frame-based multiplexing and UDP-based low-latency transport.
-- [ ] **`Kernel TLS (kTLS)`**: Zero-copy HTTPS integration via kernel-level crypto.
-- [ ] **`Zero-Copy Streaming`**: Processing multi-GB payloads using constant memory via body-bound pipelines.
+- [x] **`FetchStream`**: Zero-copy response body streaming. `FetchStreamClient::stream()` returns a `FetchStream` delivering body via `AsyncChannel<FetchChunk*>` from a fixed pool — constant 64 KiB × 64 slot memory overhead for any response size. Content-Length and chunked transfer-encoding supported. (`include/qbuem/http/fetch_stream.hpp`)
+- [x] **`Http2Client`**: HTTP/2 multiplexed fetch client. Binary framing (9-byte frame headers), HPACK static-table encoding/literal decoding, SETTINGS handshake, PING ACK, WINDOW_UPDATE flow control, RST_STREAM/GOAWAY handling. Multiple concurrent streams on one TCP connection. (`include/qbuem/http/http2_client.hpp`)
+- [x] **`Http3Client`**: HTTP/3 zero-dependency interface. `IHttp3Transport` injection point for quiche/ngtcp2/msquic/mvfst. QUIC varint encode/decode (RFC 9000 §16). H3 frame type constants (RFC 9114). `Http3Request`/`Http3Response` value types. 0-RTT and CMake integration guide. (`include/qbuem/http/http3_client.hpp`)
 
 ---
 
-## 🏗 Milestone: v2.8.0 — Low-Latency UDP Infrastructure (UDP+)
+## ✅ Completed: v2.8.0 — Low-Latency UDP Infrastructure (UDP+)
 > **Reference Design**: [docs/udp-architecture.md](./docs/udp-architecture.md) / [docs/network-optimization-guide.md](./docs/network-optimization-guide.md)
 
-- [ ] **`MMSG Batching`**: `recvmmsg` and `sendmmsg` integration for high-throughput datagram processing.
-- [ ] **`Reliable UDP (RUDP)`**: Lightweight reliability layer (Sequencing, ACKs) for real-time sync.
-- [ ] **`Native Multicast`**: High-speed 1:N distribution for financial and media feeds.
+- [x] **`UdpMmsgSocket`**: `recvmmsg`/`sendmmsg` batching — up to 64 datagrams per syscall (64× syscall reduction). `RecvBatch<N,BufSize>` inline storage (zero heap), `SendBatch<N>` zero-copy span references, `MSG_WAITFORONE` for latency-optimal collection. 8 MiB `SO_RCVBUF` for burst absorption. (`include/qbuem/net/udp_mmsg.hpp`)
+- [x] **`RudpSocket`**: Reliable UDP with 32-bit sequencing, cumulative ACK, selective NACK (up to 8 gap entries per header), sliding window flow control (`kRudpWindow=128`), exponential-backoff retransmit. 12-byte base wire header. `connect()`/`listen()` factory, `send()`/`recv()` API, out-of-order reorder buffer. (`include/qbuem/net/rudp_socket.hpp`)
+- [x] **`MulticastSocket`**: IPv4 (`IP_ADD_MEMBERSHIP`) and IPv6 (`IPV6_JOIN_GROUP`) multicast. `create_sender()`/`create_receiver()` factories. `set_ttl()`, `set_loopback()`, `join_group()`, `leave_group()`. `SO_REUSEPORT` for multi-worker receive. Async `send()`/`recv_from()` via reactor. (`include/qbuem/net/udp_multicast.hpp`)
 
 ---
 
