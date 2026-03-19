@@ -39,7 +39,7 @@
  *
  * // 2. Create XSK socket
  * auto xsk = qbuem::xdp::XskSocket::create("eth0", 0, *umem, {});
- * if (!xsk) { /* handle error */ }
+ * if (!xsk) { handle_error(); }
  *
  * // 3. Prepare Fill Ring
  * umem->fill_frames(2048);

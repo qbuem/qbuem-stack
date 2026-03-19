@@ -43,7 +43,7 @@
 #include <coroutine>
 #include <memory>
 #include <string>
-#include <thread>
+#include <thread>  // std::jthread
 
 namespace qbuem {
 
@@ -115,7 +115,7 @@ private:
 
       // Move host into the lambda to avoid an extra string copy.
       // port is a struct member — capture by value via explicit init-capture.
-      std::thread([host = std::move(host),
+      std::jthread([host = std::move(host),
                    port = port,
                    st,
                    handle,

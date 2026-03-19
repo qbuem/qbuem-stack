@@ -233,7 +233,9 @@ public:
 
         // Wait for SYN+ACK (simple: receive next segment)
         std::array<std::byte, kRudpHeaderMax + kRudpMtu> buf{};
-        auto [n, from] = co_return_pair co_await sock->udp_.recv_from(buf);
+        auto res_sa = co_await sock->udp_.recv_from(buf);
+        if (!res_sa) co_return unexpected(res_sa.error());
+        auto& [n, from] = *res_sa;
         (void)from;
         RudpHeader hdr;
         hdr.decode(buf);
@@ -405,14 +407,16 @@ public:
     [[nodiscard]] uint32_t recv_seq()        const noexcept { return recv_seq_; }
     [[nodiscard]] size_t   unacked_count()   const noexcept { return retransmit_q_.size(); }
 
+    // Constructor is public to allow std::make_unique inside static factory methods.
+    // Do not call directly — use connect() or listen() instead.
+    RudpSocket(UdpSocket udp, SocketAddr remote)
+        : udp_(std::move(udp)), remote_(remote) {}
+
 private:
     // ── Construction (internal) ───────────────────────────────────────────────
 
     // Workaround: structured binding co_return not valid in all compilers
     #define co_return_pair
-
-    RudpSocket(UdpSocket udp, SocketAddr remote)
-        : udp_(std::move(udp)), remote_(remote) {}
 
     // ── Segment construction ──────────────────────────────────────────────────
 
@@ -430,6 +434,7 @@ private:
     // ── Transmit / retransmit ─────────────────────────────────────────────────
 
     Task<Result<void>> transmit(RudpSegment& seg, std::stop_token st) {
+        (void)st; // stop_token reserved for future retransmit cancellation
         std::array<std::byte, kRudpHeaderMax + kRudpMtu> frame{};
         size_t hlen = seg.header.encode(frame);
         std::memcpy(frame.data() + hlen, seg.payload.data(), seg.payload.size());
@@ -452,6 +457,7 @@ private:
     // ── Control frames ────────────────────────────────────────────────────────
 
     Task<Result<void>> send_ctrl(uint8_t flags, std::stop_token st) {
+        (void)st; // stop_token reserved for future send cancellation
         RudpHeader hdr;
         hdr.seq    = send_seq_;
         hdr.ack    = recv_seq_;
@@ -470,6 +476,7 @@ private:
     }
 
     Task<void> send_nack(std::stop_token st) {
+        (void)st; // stop_token reserved for future send cancellation
         RudpHeader hdr;
         hdr.seq    = send_seq_;
         hdr.ack    = recv_seq_;

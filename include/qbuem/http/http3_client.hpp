@@ -367,7 +367,7 @@ public:
     [[nodiscard]] Task<Result<Http3Response>> get(
             std::string url, std::stop_token st,
             std::vector<std::pair<std::string,std::string>> hdrs = {}) {
-        Http3Request req{.method="GET", .url=std::move(url), .headers=std::move(hdrs)};
+        Http3Request req{.method="GET", .url=std::move(url), .body={}, .headers=std::move(hdrs)};
         co_return co_await transport_->send_request(req, st);
     }
 

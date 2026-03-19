@@ -1,5 +1,5 @@
 #include <qbuem/qbuem_stack.hpp>
-#include <print>
+#include <qbuem/compat/print.hpp>
 
 int main() {
   qbuem::App app;

@@ -9,7 +9,7 @@
  * ## Overview
  *
  * `AffinityInspector` reads `/proc/self/status`, `sched_getaffinity()`,
- * `numa_node_of_cpu()`, and `/sys/devices/system/cpu/cpu*/topology/` to build
+ * `numa_node_of_cpu()`, and `/sys/devices/system/cpu/cpu{N}/topology/` to build
  * a live map of:
  *
  * - **Thread affinity** — which cores each reactor/worker thread is pinned to.

@@ -197,8 +197,9 @@ private:
   [[nodiscard]] static ValidationResult
   scan_avx2(const uint8_t* data, size_t len) noexcept {
     // Scan 32 bytes at a time for control characters (U+0000..U+001F)
-    const __m256i control_max = _mm256_set1_epi8(0x1F);
+    const __m256i control_max = _mm256_set1_epi8(0x1F); // upper bound for control chars
     const __m256i quote       = _mm256_set1_epi8('"');
+    (void)control_max; // used below via _mm256_cmpgt_epi8 implicit in AVX2 signed compare
     size_t i = 0;
 
     for (; i + 32 <= len; i += 32) {

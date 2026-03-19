@@ -13,7 +13,7 @@
 #include <qbuem/pipeline/stateful_window.hpp>
 
 #include <cstdint>
-#include <print>
+#include <qbuem/compat/print.hpp>
 #include <string>
 #include <vector>
 

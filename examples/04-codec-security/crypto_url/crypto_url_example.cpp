@@ -24,7 +24,7 @@
 #include <cassert>
 #include <cstring>
 #include <format>
-#include <print>
+#include <qbuem/compat/print.hpp>
 #include <string>
 #include <vector>
 

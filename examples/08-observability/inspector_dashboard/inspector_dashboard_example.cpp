@@ -17,7 +17,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstdlib>
-#include <print>
+#include <qbuem/compat/print.hpp>
 #include <thread>
 
 using namespace qbuem::tools;

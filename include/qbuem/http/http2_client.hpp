@@ -468,7 +468,7 @@ private:
     Task<void> send_window_update(uint32_t stream_id, uint32_t increment,
                                   std::stop_token st) {
         std::array<std::byte, 9 + 4> buf{};
-        h2_encode_frame_header(std::span<std::byte,9>(buf), 4,
+        h2_encode_frame_header(std::span<std::byte>(buf).first<9>(), 4,
                                H2FrameType::WindowUpdate, 0, stream_id);
         buf[9]  = std::byte((increment >> 24) & 0x7F);
         buf[10] = std::byte((increment >> 16) & 0xFF);
@@ -503,7 +503,7 @@ private:
         uint8_t flags = H2Flags::EndHeaders | (has_body ? 0 : H2Flags::EndStream);
         std::vector<std::byte> headers_frame(9 + hpack.size());
         h2_encode_frame_header(
-            std::span<std::byte,9>(headers_frame.data(), 9),
+            std::span<std::byte>(headers_frame).first<9>(),
             static_cast<uint32_t>(hpack.size()),
             H2FrameType::Headers, flags, stream_id);
         std::memcpy(headers_frame.data() + 9, hpack.data(), hpack.size());
@@ -514,7 +514,7 @@ private:
         if (has_body) {
             std::vector<std::byte> data_frame(9 + req_body.size());
             h2_encode_frame_header(
-                std::span<std::byte,9>(data_frame.data(), 9),
+                std::span<std::byte>(data_frame).first<9>(),
                 static_cast<uint32_t>(req_body.size()),
                 H2FrameType::Data, H2Flags::EndStream, stream_id);
             std::memcpy(data_frame.data() + 9, req_body.data(), req_body.size());
@@ -544,7 +544,7 @@ private:
             case H2FrameType::Ping: {
                 // Send PING ACK
                 std::array<std::byte, 9 + 8> ping_ack{};
-                h2_encode_frame_header(std::span<std::byte,9>(ping_ack), 8,
+                h2_encode_frame_header(std::span<std::byte>(ping_ack).first<9>(), 8,
                                        H2FrameType::Ping, H2Flags::Ack, 0);
                 if (!fr->payload.empty())
                     std::memcpy(ping_ack.data() + 9, fr->payload.data(),
@@ -703,12 +703,11 @@ public:
         auto parsed = ParsedUrl::parse(url);
         if (!parsed) co_return unexpected(std::make_error_code(std::errc::invalid_argument));
 
-        DnsResolver resolver;
-        auto addrs = co_await resolver.resolve(parsed->host, parsed->port_str(), st);
-        if (!addrs || addrs->empty())
+        auto addr = co_await DnsResolver::resolve(std::string(parsed->host), parsed->port);
+        if (!addr)
             co_return unexpected(std::make_error_code(std::errc::host_unreachable));
 
-        auto stream = co_await TcpStream::connect((*addrs)[0], st);
+        auto stream = co_await TcpStream::connect(*addr);
         if (!stream) co_return unexpected(stream.error());
 
         auto conn = std::make_shared<Http2Connection>(std::move(*stream));

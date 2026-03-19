@@ -75,7 +75,7 @@ namespace qbuem::tracing {
  * Size is exactly 128 bytes (2 cache lines).
  */
 struct alignas(64) SpanRecord {
-    static constexpr size_t kNameLen = 64;
+    static constexpr size_t kNameLen = 56;
 
     uint64_t trace_id_hi{0};  ///< W3C trace-id high 64 bits
     uint64_t trace_id_lo{0};  ///< W3C trace-id low 64 bits
@@ -206,9 +206,13 @@ public:
     [[nodiscard]] TraceContext context() const noexcept {
         if (!record_) return {};
         TraceContext ctx;
-        ctx.trace_id   = record_->trace_id_lo;
-        ctx.parent_id  = record_->span_id;
-        ctx.is_sampled = record_->sampled != 0;
+        // Reconstruct TraceId from hi/lo uint64_t fields
+        std::memcpy(ctx.trace_id.bytes,     &record_->trace_id_hi, 8);
+        std::memcpy(ctx.trace_id.bytes + 8, &record_->trace_id_lo, 8);
+        // Reconstruct SpanId from span_id uint64_t field
+        std::memcpy(ctx.parent_span_id.bytes, &record_->span_id, 8);
+        // W3C sample flag
+        ctx.flags = record_->sampled ? uint8_t{1} : uint8_t{0};
         return ctx;
     }
 
@@ -276,7 +280,9 @@ public:
      */
     [[nodiscard]] ActiveSpan start_span(std::string_view operation_name,
                                         const TraceContext& parent_ctx) noexcept {
-        return make_span(operation_name, parent_ctx.parent_id, false);
+        uint64_t parent_id{};
+        std::memcpy(&parent_id, parent_ctx.parent_span_id.bytes, 8);
+        return make_span(operation_name, parent_id, false);
     }
 
     /**

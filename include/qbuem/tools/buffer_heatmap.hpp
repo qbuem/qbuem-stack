@@ -108,21 +108,22 @@ struct SlotRecord {
 
 // ─── HeatmapTicket ───────────────────────────────────────────────────────────
 
-// Forward declaration
-class BufferHeatmap;
-
 /**
  * @brief RAII buffer acquisition ticket.
  *
  * Tracks a buffer through one pipeline stage. On destruction (or explicit
  * `release(next_stage)`), the handoff is recorded.
+ *
+ * heatmap_ is stored as void* to avoid a forward-declaration conflict with the
+ * BufferHeatmap type alias. The inline destructor and release() cast it back to
+ * BufferHeatmap* after the full type is available.
  */
 class HeatmapTicket {
 public:
     HeatmapTicket() = default;
 
-    explicit HeatmapTicket(BufferHeatmap* heatmap,
-                           uint64_t       slot_idx,
+    explicit HeatmapTicket(void*            heatmap,
+                           uint64_t         slot_idx,
                            std::string_view stage) noexcept
         : heatmap_(heatmap), slot_idx_(slot_idx) {
         size_t len = std::min(stage.size(), kStageLen - 1);
@@ -154,10 +155,10 @@ public:
 
 private:
     static constexpr size_t kStageLen = 24;
-    BufferHeatmap* heatmap_{nullptr};
-    uint64_t       slot_idx_{0};
-    bool           released_{false};
-    char           stage_[kStageLen]{};
+    void*    heatmap_{nullptr};  ///< Actually BufferHeatmap* — cast after type alias is visible
+    uint64_t slot_idx_{0};
+    bool     released_{false};
+    char     stage_[kStageLen]{};
 };
 
 // ─── BufferHeatmap ───────────────────────────────────────────────────────────

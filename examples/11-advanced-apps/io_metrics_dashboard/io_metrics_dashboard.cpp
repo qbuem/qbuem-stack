@@ -55,7 +55,7 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
-#include <print>
+#include <qbuem/compat/print.hpp>
 #include <cstdlib>
 #include <cstring>
 #include <memory>
