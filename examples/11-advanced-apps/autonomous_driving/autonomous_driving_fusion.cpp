@@ -1,13 +1,13 @@
 /**
  * @file autonomous_driving_fusion.cpp
- * @brief 자율주행 멀티센서 퓨전 예제
+ * @brief Autonomous driving multi-sensor fusion example
  *
- * ## 개요
- * 실제 하드웨어 없이 Mock HAL 레이어로 6종 센서를 시뮬레이션합니다.
- * qbuem StaticPipeline + DynamicPipeline + MessageBus를 활용해
- * Perception → Planning → Control 파이프라인을 구현합니다.
+ * ## Overview
+ * Simulates 6 sensor types via a Mock HAL layer without real hardware.
+ * Implements a Perception → Planning → Control pipeline using
+ * qbuem StaticPipeline + DynamicPipeline + MessageBus.
  *
- * ## 아키텍처
+ * ## Architecture
  * ```
  * ┌─────────────────────────── Mock HAL Layer ──────────────────────────────┐
  * │  MockCamera  MockRadar  MockLiDAR  MockIMU  MockGPS  MockUltrasonic     │
@@ -17,33 +17,33 @@
  *          ┌─────────────────────────────────────────┐
  *          │   StaticPipeline<RawSensorBundle,        │
  *          │                  PerceptionResult>        │
- *          │  1. validate_bundle()  — 센서 타임스탬프 정합성  │
- *          │  2. calibrate()        — 외부 보정 행렬 적용    │
- *          │  3. fuse_perception()  — EKF 스타일 가중 퓨전   │
- *          │  4. track_objects()    — 장애물 추적 + SORT     │
+ *          │  1. validate_bundle()  — sensor timestamp alignment  │
+ *          │  2. calibrate()        — extrinsic calibration       │
+ *          │  3. fuse_perception()  — EKF-style weighted fusion   │
+ *          │  4. track_objects()    — obstacle tracking + SORT    │
  *          └─────────────────┬───────────────────────┘
  *                             │ PerceptionResult
  *                             ▼
  *          ┌─────────────────────────────────────────┐
  *          │   DynamicPipeline<PerceptionResult>      │
- *          │  "obstacle_check" — 충돌 위험도 계산       │
- *          │  "path_plan"      — 목표 경로 생성         │
- *          │  "velocity_cmd"   — 속도/조향 명령 생성     │
- *          │  "emergency"      — 긴급 제동 판단 (hotswap) │
+ *          │  "obstacle_check" — collision risk calc  │
+ *          │  "path_plan"      — target path gen      │
+ *          │  "velocity_cmd"   — speed/steer command  │
+ *          │  "emergency"      — emergency braking (hotswap) │
  *          └─────────────────┬───────────────────────┘
  *                             │
  *                    MessageBus("vehicle_state")
  *                    MessageBus("alerts")
  *
- * ## 차량 상태 머신
+ * ## Vehicle state machine
  *   IDLE → PERCEPTION → PLANNING → CONTROL → EMERGENCY(hot-swap)
  *
- * ## 커버리지
+ * ## Coverage
  * - Mock HAL (Camera, Radar, LiDAR, IMU, GPS, Ultrasonic)
  * - StaticPipeline<In, Out> + PipelineBuilder + with_sink()
  * - DynamicPipeline<T> + hot_swap() (normal → emergency)
  * - MessageBus: publish / subscribe
- * - Dispatcher + Task<T> + 코루틴 수명 관리
+ * - Dispatcher + Task<T> + coroutine lifetime management
  */
 
 #include <qbuem/core/dispatcher.hpp>
@@ -51,6 +51,7 @@
 #include <qbuem/pipeline/dynamic_pipeline.hpp>
 #include <qbuem/pipeline/message_bus.hpp>
 #include <qbuem/pipeline/static_pipeline.hpp>
+#include <qbuem/compat/print.hpp>
 
 #include <algorithm>
 #include <array>
@@ -58,7 +59,6 @@
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
-#include <cstdio>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -69,7 +69,7 @@ using namespace qbuem;
 using namespace std::chrono_literals;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// §0  기본 수학 타입
+// §0  Basic math types
 // ─────────────────────────────────────────────────────────────────────────────
 
 struct Vec2 { double x{0}, y{0}; };
@@ -80,35 +80,35 @@ inline double vec3_len(Vec3 v) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// §1  센서 데이터 타입 (HAL 출력 구조체)
+// §1  Sensor data types (HAL output structs)
 // ─────────────────────────────────────────────────────────────────────────────
 
 struct CameraFrame {
     uint32_t width{1920}, height{1080};
     uint8_t  lane_detected{1};
-    double   lane_offset_m{0.0};    ///< 차선 중심 대비 횡방향 오프셋
+    double   lane_offset_m{0.0};    ///< lateral offset from lane center
     double   forward_clearance_m{50.0};
     uint64_t ts_us{0};
 };
 
 struct RadarTrack {
     double   range_m{30.0};
-    double   velocity_mps{0.0};    ///< 상대 속도 (양수 = 접근)
+    double   velocity_mps{0.0};    ///< relative velocity (positive = approaching)
     double   azimuth_deg{0.0};
     uint64_t ts_us{0};
 };
 
 struct LidarCloud {
     uint32_t point_count{32768};
-    double   nearest_m{8.0};       ///< 전방 최근접 포인트
-    Vec3     centroid{0, 0, 1.5};  ///< 클러스터 무게중심
+    double   nearest_m{8.0};       ///< nearest forward point
+    Vec3     centroid{0, 0, 1.5};  ///< cluster centroid
     uint64_t ts_us{0};
 };
 
 struct ImuSample {
     Vec3     accel{0, 0, 9.81};    ///< m/s²
     Vec3     gyro{};               ///< rad/s
-    double   heading_deg{0.0};     ///< 절대 방위각
+    double   heading_deg{0.0};     ///< absolute bearing
     uint64_t ts_us{0};
 };
 
@@ -121,14 +121,14 @@ struct GnssPosition {
 };
 
 struct UltrasonicPing {
-    double   front_m{3.5};        ///< 초음파 전방 거리
+    double   front_m{3.5};        ///< ultrasonic front distance
     double   rear_m{5.0};
     double   left_m{1.8};
     double   right_m{1.8};
     uint64_t ts_us{0};
 };
 
-// 퓨전 파이프라인 입력 — 한 사이클에 모든 센서 묶음
+// Fusion pipeline input — all sensors bundled per cycle
 struct RawSensorBundle {
     CameraFrame    camera;
     RadarTrack     radar;
@@ -141,20 +141,20 @@ struct RawSensorBundle {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// §2  퍼셉션 결과 타입
+// §2  Perception result types
 // ─────────────────────────────────────────────────────────────────────────────
 
 struct TrackedObject {
     uint32_t id{0};
-    Vec3     position_enu;  ///< East-North-Up 좌표 (m)
+    Vec3     position_enu;  ///< East-North-Up coordinates (m)
     Vec3     velocity;      ///< m/s
     double   ttc_sec{99};   ///< Time-To-Collision
     bool     critical{false};
 };
 
 struct PerceptionResult {
-    Vec3     ego_pos_enu;          ///< 자차 위치
-    Vec3     ego_vel;              ///< 자차 속도
+    Vec3     ego_pos_enu;          ///< ego vehicle position
+    Vec3     ego_vel;              ///< ego vehicle velocity
     double   ego_heading_deg{0};
     double   lane_offset_m{0};
     std::vector<TrackedObject> objects;
@@ -164,13 +164,13 @@ struct PerceptionResult {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// §3  Mock HAL — 실제 하드웨어 없이 물리 시뮬레이션 데이터 생성
+// §3  Mock HAL — generates physics simulation data without real hardware
 // ─────────────────────────────────────────────────────────────────────────────
 
 struct MockCamera {
     CameraFrame read(uint64_t ts_us, int cycle) const {
         double t = ts_us * 1e-6;
-        // 차선이탈: cycle 12~18 구간에서 점차 이탈
+        // Lane departure: gradually departs during cycles 12-18
         double offset = (cycle >= 12 && cycle <= 18)
             ? 0.15 * std::sin((cycle - 12) * 0.5)
             : 0.02 * std::sin(t * 0.7);
@@ -186,9 +186,9 @@ struct MockCamera {
 struct MockRadar {
     RadarTrack read(uint64_t ts_us, int cycle) const {
         double t = ts_us * 1e-6;
-        // cycle 20~25: 앞차가 갑자기 감속 (접근 속도 급증)
+        // cycles 20-25: lead vehicle suddenly decelerates (closing speed spikes)
         double rel_vel = (cycle >= 20 && cycle <= 25)
-            ? 8.0 + 2.0 * (cycle - 20)   // 최대 18 m/s 접근
+            ? 8.0 + 2.0 * (cycle - 20)   // max 18 m/s closing speed
             : 1.5 + 1.0 * std::sin(t * 0.5);
         double range = std::max(4.0, 25.0 - rel_vel * (cycle >= 20 ? (cycle-20)*0.1 : 0.0));
         return {
@@ -256,34 +256,34 @@ struct MockUltrasonic {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// §4  EKF 스타일 상태 추정기 (경량 버전)
+// §4  EKF-style state estimator (lightweight version)
 // ─────────────────────────────────────────────────────────────────────────────
 
 struct EKFState {
     Vec3   pos{};
     Vec3   vel{};
     double heading{0};
-    double pos_var{1.0};  ///< 위치 분산 (신뢰도 역수)
+    double pos_var{1.0};  ///< position variance (inverse confidence)
     double vel_var{0.5};
 };
 
-// g_ekf_mtx 로 모든 EKF 상태 접근을 보호합니다.
-// fuse_perception 이 co_await 전에 mutex 를 해제하므로
-// 코루틴 프레임에 mutex 가 올라가지 않습니다.
+// g_ekf_mtx protects all EKF state access.
+// fuse_perception releases the mutex before co_await so the
+// mutex does not live on the coroutine frame.
 static std::mutex  g_ekf_mtx;
 static EKFState    g_ekf{};
 
-// ── mutex 미획득 내부 헬퍼 (항상 g_ekf_mtx 보유 상태에서만 호출) ──
+// ── internal helpers without mutex (must always be called while holding g_ekf_mtx) ──
 
 static void ekf_predict_nolock(double dt, const ImuSample& imu) {
-    // 속도 적분 (가속도 기반)
+    // Integrate velocity from acceleration
     g_ekf.vel.x += imu.accel.x * dt;
     g_ekf.vel.y += imu.accel.y * dt;
-    // 위치 적분
+    // Integrate position
     g_ekf.pos.x += g_ekf.vel.x * dt;
     g_ekf.pos.y += g_ekf.vel.y * dt;
     g_ekf.heading = imu.heading_deg;
-    // 예측 분산 증가
+    // Prediction variance grows
     g_ekf.pos_var += 0.1 * dt;
     g_ekf.vel_var += 0.05 * dt;
 }
@@ -293,26 +293,26 @@ static void ekf_update_gnss_nolock(const GnssPosition& gnss) {
     constexpr double kLat0 = 37.5665, kLon0 = 126.9780;
     double obs_x = (gnss.lon - kLon0) * kMpD * std::cos(kLat0 * M_PI / 180.0);
     double obs_y = (gnss.lat - kLat0) * kMpD;
-    double R = gnss.hdop * 2.0;  // GNSS 노이즈 공분산
-    double K = g_ekf.pos_var / (g_ekf.pos_var + R);  // 칼만 게인
+    double R = gnss.hdop * 2.0;  // GNSS noise covariance
+    double K = g_ekf.pos_var / (g_ekf.pos_var + R);  // Kalman gain
     g_ekf.pos.x += K * (obs_x - g_ekf.pos.x);
     g_ekf.pos.y += K * (obs_y - g_ekf.pos.y);
     g_ekf.pos.z  = gnss.alt;
-    g_ekf.pos_var *= (1.0 - K);  // 업데이트 후 분산 감소
+    g_ekf.pos_var *= (1.0 - K);  // variance decreases after update
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// §5  StaticPipeline 스테이지 함수
+// §5  StaticPipeline stage functions
 // ─────────────────────────────────────────────────────────────────────────────
 
-// Stage 1: 타임스탬프 정합성 검사
+// Stage 1: timestamp alignment check
 static Task<Result<RawSensorBundle>> validate_bundle(RawSensorBundle b, ActionEnv) {
     constexpr uint64_t kMaxJitter_us = 50000;  // 50ms
     uint64_t ref = b.ts_us;
     if (std::abs((int64_t)(b.camera.ts_us    - ref)) > (int64_t)kMaxJitter_us ||
         std::abs((int64_t)(b.radar.ts_us     - ref)) > (int64_t)kMaxJitter_us ||
         std::abs((int64_t)(b.lidar.ts_us     - ref)) > (int64_t)kMaxJitter_us) {
-        // 타임스탬프 불일치 — 보정
+        // Timestamp mismatch — normalize
         b.camera.ts_us     = ref;
         b.radar.ts_us      = ref;
         b.lidar.ts_us      = ref;
@@ -323,40 +323,40 @@ static Task<Result<RawSensorBundle>> validate_bundle(RawSensorBundle b, ActionEn
     co_return b;
 }
 
-// Stage 2: 외부 보정 (카메라 왜곡, 레이더 바이어스 제거)
+// Stage 2: extrinsic calibration (camera distortion, radar bias removal)
 static Task<Result<RawSensorBundle>> calibrate(RawSensorBundle b, ActionEnv) {
-    // Camera: 렌즈 왜곡 보정 (오프셋 바이어스 -0.01m)
+    // Camera: lens distortion correction (offset bias -0.01m)
     b.camera.lane_offset_m -= 0.01;
-    // Radar: 반경 바이어스 보정 (+0.3m)
+    // Radar: range bias correction (+0.3m)
     b.radar.range_m += 0.3;
-    // IMU: 중력 성분 제거 (z축 9.81 빼기)
+    // IMU: remove gravity component (subtract 9.81 from z-axis)
     b.imu.accel.z -= 9.81;
     co_return b;
 }
 
-// Stage 3: EKF 퓨전 — GNSS + IMU 상태 추정
+// Stage 3: EKF fusion — GNSS + IMU state estimation
 static Task<Result<PerceptionResult>> fuse_perception(RawSensorBundle b, ActionEnv) {
-    constexpr double kDt = 0.05;  // 50ms 사이클
+    constexpr double kDt = 0.05;  // 50ms cycle
 
-    // mutex 보호 구간: predict + update + snapshot 을 원자적으로 수행.
-    // co_await 이전에 lock 을 해제해 mutex 가 코루틴 프레임에 올라가지 않습니다.
+    // Mutex-protected section: perform predict + update + snapshot atomically.
+    // Release lock before co_await to keep mutex off the coroutine frame.
     EKFState snap;
     {
         std::lock_guard<std::mutex> lk(g_ekf_mtx);
         ekf_predict_nolock(kDt, b.imu);
         ekf_update_gnss_nolock(b.gnss);
-        snap = g_ekf;  // 상태 복사 후 즉시 해제
+        snap = g_ekf;  // copy state then immediately release
     }
 
     PerceptionResult r;
-    r.objects.reserve(8);  // 최대 추적 객체 수 사전 할당 — push_back 재할당 방지
+    r.objects.reserve(8);  // pre-allocate to avoid realloc on push_back
     r.cycle_id        = b.cycle_id;
     r.ego_pos_enu     = snap.pos;
     r.ego_vel         = snap.vel;
     r.ego_heading_deg = snap.heading;
     r.lane_offset_m   = b.camera.lane_offset_m;
 
-    // 신뢰도: GNSS HDOP + LiDAR 밀도 + 레이더 품질
+    // Confidence: GNSS HDOP + LiDAR density + radar quality
     double gnss_q  = std::max(0.0, 1.0 - (b.gnss.hdop - 1.0) / 5.0);
     double lidar_q = std::min(1.0, b.lidar.point_count / 65536.0);
     double radar_q = (b.radar.range_m > 3.0 && b.radar.range_m < 200.0) ? 1.0 : 0.5;
@@ -364,22 +364,22 @@ static Task<Result<PerceptionResult>> fuse_perception(RawSensorBundle b, ActionE
     co_return r;
 }
 
-// Stage 4: 객체 추적 (SORT 간소화 버전)
-// atomic fetch_add 로 data race 제거 (pipeline 이 멀티워커일 때도 안전)
+// Stage 4: object tracking (simplified SORT)
+// Uses atomic fetch_add to eliminate data races (safe even with multi-worker pipeline)
 static std::atomic<uint32_t> g_track_id{0};
 static Task<Result<PerceptionResult>> track_objects(PerceptionResult r, ActionEnv) {
-    // Radar + LiDAR 교차 검증으로 전방 객체 추적
-    double radar_range = r.ego_pos_enu.x; // dummy — 실제론 별도 트래커
+    // Cross-validate Radar + LiDAR to track forward objects
+    double radar_range = r.ego_pos_enu.x; // dummy — separate tracker in production
     (void)radar_range;
 
-    // 예시: 전방 LiDAR 기반 추적 객체 생성
-    // (실제 SORT: 헝가리안 알고리즘 + 칼만 필터 per-track)
+    // Example: create tracked object from forward LiDAR
+    // (full SORT: Hungarian algorithm + Kalman filter per-track)
     TrackedObject obj;
     obj.id = g_track_id.fetch_add(1, std::memory_order_relaxed) % 16;
-    // 객체 위치: ENU 기준 자차 전방
+    // Object position: ahead of ego in ENU frame
     double cos_h = std::cos(r.ego_heading_deg * M_PI / 180.0);
     double sin_h = std::sin(r.ego_heading_deg * M_PI / 180.0);
-    // 전방 차량 위치 추정 (LiDAR nearest + heading)
+    // Forward vehicle position estimate (LiDAR nearest + heading)
     double dist = std::max(3.0, r.ego_pos_enu.z > 0 ? r.ego_pos_enu.z : 8.0);
     (void)dist;
     obj.position_enu = {
@@ -389,9 +389,9 @@ static Task<Result<PerceptionResult>> track_objects(PerceptionResult r, ActionEn
     };
     obj.velocity = {r.ego_vel.x * 0.8, r.ego_vel.y * 0.8, 0};
 
-    // TTC = 상대 거리 / 접근 속도
+    // TTC = relative distance / closing speed
     double closing_speed = vec3_len(r.ego_vel) - vec3_len(obj.velocity);
-    double separation    = 12.0;  // 실제론 lidar.nearest_m
+    double separation    = 12.0;  // use lidar.nearest_m in production
     obj.ttc_sec  = (closing_speed > 0.1) ? (separation / closing_speed) : 99.0;
     obj.critical = (obj.ttc_sec < 3.0);
 
@@ -401,10 +401,10 @@ static Task<Result<PerceptionResult>> track_objects(PerceptionResult r, ActionEn
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// §6  Sink — 퍼셉션 최종 수집
+// §6  Sink — final perception collection
 // ─────────────────────────────────────────────────────────────────────────────
 
-// alignas(64): 인접 카운터 간 false sharing 방지 (각 카운터가 독립된 캐시라인 점유)
+// alignas(64): prevent false sharing between adjacent counters (each on its own cache line)
 alignas(64) static std::atomic<int> g_perception_count{0};
 alignas(64) static std::atomic<int> g_emergency_count{0};
 
@@ -412,11 +412,11 @@ struct PerceptionSink {
     Result<void> init() { return {}; }
     Task<Result<void>> sink(const PerceptionResult& r) {
         g_perception_count.fetch_add(1, std::memory_order_relaxed);
-        const char* flag = r.emergency_flag ? " [!긴급!]" : "";
-        std::printf(
-            "  [Perc #%3llu] pos=(%.1f,%.1f) vel=(%.2f,%.2f) "
-            "lane=%.2fm conf=%.2f tracks=%zu%s\n",
-            (unsigned long long)r.cycle_id,
+        const char* flag = r.emergency_flag ? " [!EMERGENCY!]" : "";
+        std::println(
+            "  [Perc #{:3}] pos=({:.1f},{:.1f}) vel=({:.2f},{:.2f}) "
+            "lane={:.2f}m conf={:.2f} tracks={}{}",
+            r.cycle_id,
             r.ego_pos_enu.x, r.ego_pos_enu.y,
             r.ego_vel.x, r.ego_vel.y,
             r.lane_offset_m,
@@ -428,54 +428,54 @@ struct PerceptionSink {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// §7  DynamicPipeline 스테이지 — Planning / Control / Emergency
+// §7  DynamicPipeline stages — Planning / Control / Emergency
 // ─────────────────────────────────────────────────────────────────────────────
 
 alignas(64) static std::atomic<int> g_plan_count{0};
 alignas(64) static std::atomic<int> g_alert_count{0};
 
-// 장애물 위험도 계산
+// Obstacle collision risk calculation
 static Task<Result<PerceptionResult>> obstacle_check(PerceptionResult r, ActionEnv) {
     for (auto& obj : r.objects) {
         if (obj.ttc_sec < 5.0) {
-            std::printf("    [장애물] id=%u TTC=%.1fs %s\n",
-                        obj.id, obj.ttc_sec, obj.critical ? "⚠ CRITICAL" : "주의");
+            std::println("    [obstacle] id={} TTC={:.1f}s {}",
+                        obj.id, obj.ttc_sec, obj.critical ? "WARNING CRITICAL" : "caution");
             g_alert_count.fetch_add(1, std::memory_order_relaxed);
         }
     }
     co_return r;
 }
 
-// 경로 계획 (간단 Pure Pursuit)
+// Path planning (simple Pure Pursuit)
 static Task<Result<PerceptionResult>> path_plan(PerceptionResult r, ActionEnv) {
-    // 차선 복귀 보정: offset이 크면 조향각 생성
+    // Lane recovery: generate steering angle when offset is large
     double steer = -0.5 * r.lane_offset_m;  // rad
     (void)steer;
     g_plan_count.fetch_add(1, std::memory_order_relaxed);
     co_return r;
 }
 
-// 속도 명령 생성 (정상 주행)
+// Velocity command generation (normal driving)
 static Task<Result<PerceptionResult>> velocity_cmd_normal(PerceptionResult r, ActionEnv) {
     double target_v = 13.9;  // 50 km/h
     for (auto& obj : r.objects) {
         if (obj.ttc_sec < 5.0)
             target_v = std::min(target_v, obj.ttc_sec * 2.0);
     }
-    std::printf("    [속도 명령] target=%.1f km/h (정상)\n", target_v * 3.6);
+    std::println("    [velocity cmd] target={:.1f} km/h (normal)", target_v * 3.6);
     co_return r;
 }
 
-// 긴급 제동 — hot-swap 후 활성화
+// Emergency braking — activated after hot-swap
 static Task<Result<PerceptionResult>> velocity_cmd_emergency(PerceptionResult r, ActionEnv) {
     g_emergency_count.fetch_add(1, std::memory_order_relaxed);
-    std::printf("    [긴급 제동] AEB 작동! 즉시 정차 명령 (사이클 #%llu)\n",
-                (unsigned long long)r.cycle_id);
+    std::println("    [emergency braking] AEB activated! Immediate stop command (cycle #{})",
+                r.cycle_id);
     co_return r;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// §8  차량 상태 머신
+// §8  Vehicle state machine
 // ─────────────────────────────────────────────────────────────────────────────
 
 enum class VehicleState { IDLE, PERCEPTION, PLANNING, CONTROL, EMERGENCY };
@@ -492,17 +492,17 @@ static const char* state_name(VehicleState s) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// §9  코루틴 엔트리 포인트
+// §9  Coroutine entry points
 // ─────────────────────────────────────────────────────────────────────────────
 
 static std::atomic<bool>    g_perception_done{false};
 static std::atomic<bool>    g_planning_done{false};
 
-// sleep 폴링 대신 condition_variable 로 완료 신호 — CPU 대기 시간 최소화
+// Use condition_variable for completion signaling instead of sleep polling
 static std::mutex              g_done_mtx;
 static std::condition_variable g_done_cv;
 
-// GCC ICE 우회: 코루틴 프레임에 큰 구조체를 올리지 않도록 힙 할당 사용
+// Workaround for GCC ICE: use heap allocation to avoid large structs on coroutine frames
 [[gnu::noinline]]
 static std::unique_ptr<RawSensorBundle> make_bundle(int i) {
     static MockCamera     cam;
@@ -556,12 +556,12 @@ static Task<void> run_planning(
     for (int i = 0; i < cycles; ++i) {
         uint64_t ts = static_cast<uint64_t>(i) * 50000ULL;
 
-        // 퍼셉션 결과 간단 재현
+        // Reproduce simplified perception result
         PerceptionResult r;
         r.cycle_id = static_cast<uint64_t>(i + 1);
         r.lane_offset_m = cam.read(ts, i).lane_offset_m;
 
-        // Radar TTC 계산
+        // Compute Radar TTC
         auto rad = radar.read(ts, i);
         double ego_speed = 13.9;  // 50 km/h
         double ttc = (rad.velocity_mps > 0.1)
@@ -572,15 +572,15 @@ static Task<void> run_planning(
         obj.id       = static_cast<uint32_t>(i % 8);
         obj.ttc_sec  = ttc;
         obj.critical = (ttc < 3.0);
-        r.objects.reserve(1);  // push_back 시 재할당 방지
+        r.objects.reserve(1);  // prevent realloc on push_back
         r.objects.push_back(obj);
         r.emergency_flag = obj.critical;
         r.confidence = 0.85;
         r.ego_vel    = {ego_speed, 0, 0};
 
-        // 긴급 상황 감지 → hot-swap
+        // Emergency detected → hot-swap
         if (r.emergency_flag && !swapped) {
-            std::printf("\n  [State Machine] %s → EMERGENCY (TTC=%.1fs)\n",
+            std::println("\n  [State Machine] {} -> EMERGENCY (TTC={:.1f}s)",
                         state_name(state), ttc);
             dp->hot_swap("velocity_cmd", velocity_cmd_emergency);
             state   = VehicleState::EMERGENCY;
@@ -589,7 +589,7 @@ static Task<void> run_planning(
 
         dp->try_push(r);
 
-        // 차량 상태 버스 발행
+        // Publish vehicle state to bus
         co_await bus.publish("vehicle_state", r);
     }
     g_planning_done.store(true, std::memory_order_release);
@@ -602,10 +602,10 @@ static Task<void> run_planning(
 // ─────────────────────────────────────────────────────────────────────────────
 
 int main() {
-    std::printf("=== 자율주행 멀티센서 퓨전 예제 ===\n");
-    std::printf("    Mock HAL: Camera | Radar | LiDAR | IMU | GNSS | Ultrasonic\n\n");
+    std::println("=== Autonomous driving multi-sensor fusion example ===");
+    std::println("    Mock HAL: Camera | Radar | LiDAR | IMU | GNSS | Ultrasonic\n");
 
-    constexpr int kCycles = 30;  // 30 사이클 × 50ms = 1.5초 시뮬레이션
+    constexpr int kCycles = 30;  // 30 cycles × 50ms = 1.5s simulation
 
     Dispatcher disp(4);
     std::jthread worker([&] { disp.run(); });
@@ -626,8 +626,8 @@ int main() {
         });
 
     // ── §B  StaticPipeline — Perception ────────────────────────────────────
-    std::printf("── §A  Perception StaticPipeline 구성 ──\n");
-    std::printf("       validate → calibrate → fuse(EKF) → track(SORT)\n\n");
+    std::println("── §A  Perception StaticPipeline configuration ──");
+    std::println("       validate -> calibrate -> fuse(EKF) -> track(SORT)\n");
 
     auto perc_pipe = std::make_shared<StaticPipeline<RawSensorBundle, PerceptionResult>>(
         PipelineBuilder<RawSensorBundle>{}
@@ -639,7 +639,7 @@ int main() {
             .build());
     perc_pipe->start(disp);
 
-    std::printf("── §B  Perception 루프 (%d 사이클, 50ms 간격) ──\n", kCycles);
+    std::println("── §B  Perception loop ({} cycles, 50ms interval) ──", kCycles);
     disp.spawn(run_perception(perc_pipe, kCycles));
 
     {
@@ -647,11 +647,11 @@ int main() {
         g_done_cv.wait_for(lk, 8s,
             []{ return g_perception_done.load(std::memory_order_acquire); });
     }
-    std::this_thread::sleep_for(300ms);  // 파이프라인 drain 대기
+    std::this_thread::sleep_for(300ms);  // wait for pipeline drain
 
     // ── §C  DynamicPipeline — Planning / Control ────────────────────────────
-    std::printf("\n── §C  Planning DynamicPipeline 구성 ──\n");
-    std::printf("       obstacle_check → path_plan → velocity_cmd (→ hot-swap: emergency)\n\n");
+    std::println("\n── §C  Planning DynamicPipeline configuration ──");
+    std::println("       obstacle_check -> path_plan -> velocity_cmd (-> hot-swap: emergency)\n");
 
     auto plan_dp = std::make_shared<DynamicPipeline<PerceptionResult>>();
     plan_dp->add_stage("obstacle_check", obstacle_check);
@@ -666,28 +666,28 @@ int main() {
         g_done_cv.wait_for(lk, 8s,
             []{ return g_planning_done.load(std::memory_order_acquire); });
     }
-    std::this_thread::sleep_for(300ms);  // 파이프라인 drain 대기
+    std::this_thread::sleep_for(300ms);  // wait for pipeline drain
 
     disp.stop();
     worker.join();
 
-    // ── 결과 요약 ────────────────────────────────────────────────────────────
-    std::printf("\n══════════════════════════════════════════\n");
-    std::printf("  자율주행 센서 퓨전 결과 요약\n");
-    std::printf("══════════════════════════════════════════\n");
-    std::printf("  Perception 처리   : %d / %d 사이클\n", g_perception_count.load(), kCycles);
-    std::printf("  Planning 계획     : %d 회\n",          g_plan_count.load());
-    std::printf("  장애물 경보       : %d 건\n",          g_alert_count.load());
-    std::printf("  긴급 제동 발동    : %d 회 (AEB)\n",    g_emergency_count.load());
-    std::printf("  Vehicle State 메시지: %d 건\n",        g_state_msgs.load());
-    std::printf("  EKF 위치 추정     : (%.1f, %.1f, %.1f) m\n",
+    // ── Results summary ───────────────────────────────────────────────────────
+    std::println("\n==========================================");
+    std::println("  Autonomous driving sensor fusion results");
+    std::println("==========================================");
+    std::println("  Perception processed : {} / {} cycles", g_perception_count.load(), kCycles);
+    std::println("  Planning executions  : {}", g_plan_count.load());
+    std::println("  Obstacle alerts      : {}", g_alert_count.load());
+    std::println("  Emergency braking    : {} (AEB)", g_emergency_count.load());
+    std::println("  Vehicle state msgs   : {}", g_state_msgs.load());
+    std::println("  EKF position estimate: ({:.1f}, {:.1f}, {:.1f}) m",
                 g_ekf.pos.x, g_ekf.pos.y, g_ekf.pos.z);
-    std::printf("──────────────────────────────────────────\n");
-    std::printf("  Pipeline: validate→calibrate→fuse(EKF)→track(SORT)\n");
-    std::printf("  DynamicPipeline: normal→[hot-swap]→emergency AEB\n");
-    std::printf("  MessageBus: vehicle_state 토픽 구독/발행\n");
+    std::println("------------------------------------------");
+    std::println("  Pipeline: validate->calibrate->fuse(EKF)->track(SORT)");
+    std::println("  DynamicPipeline: normal->[hot-swap]->emergency AEB");
+    std::println("  MessageBus: vehicle_state topic subscribe/publish");
 
     bool ok = (g_perception_count.load() > 0 && g_plan_count.load() > 0);
-    std::printf("\nautonomous_driving_fusion: %s\n", ok ? "ALL OK" : "WARN — 출력 없음");
+    std::println("\nautonomous_driving_fusion: {}", ok ? "ALL OK" : "WARN — no output");
     return 0;
 }

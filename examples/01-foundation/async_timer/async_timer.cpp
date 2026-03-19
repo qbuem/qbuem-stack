@@ -1,6 +1,6 @@
 #include <qbuem/core/awaiters.hpp>
 #include <qbuem/qbuem_stack.hpp>
-#include <iostream>
+#include <print>
 
 using namespace qbuem;
 
@@ -13,19 +13,18 @@ int main() {
 
   app.get("/sleep",
           AsyncHandler([](const Request &req, Response &res) -> Task<void> {
-            std::cout << "[Server] Handling /sleep request..." << std::endl;
+            std::println("[Server] Handling /sleep request...");
             co_await sleep(1000); // 1-second non-blocking delay
-            std::cout << "[Server] Resuming after 1s sleep" << std::endl;
+            std::println("[Server] Resuming after 1s sleep");
             res.status(200).body("Hello after 1s sleep!");
             co_return;
           }));
 
-  std::cout << "Draco WAS Async Timer Example running on http://0.0.0.0:8080"
-            << std::endl;
-  std::cout << "Try: curl http://localhost:8080/sleep" << std::endl;
+  std::println("Draco WAS Async Timer Example running on http://0.0.0.0:8080");
+  std::println("Try: curl http://localhost:8080/sleep");
 
   if (auto result = app.listen(8080); !result) {
-    std::cerr << "Failed to listen: " << result.error().message() << std::endl;
+    std::println(stderr, "Failed to listen: {}", result.error().message());
     return 1;
   }
 }
