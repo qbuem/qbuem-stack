@@ -18,14 +18,13 @@
  */
 
 #include <qbuem/common.hpp>
-#include <cinttypes>
 
 #include <algorithm>
 #include <atomic>
-#include <cstdio>
 #include <cstdint>
 #include <initializer_list>
 #include <memory>
+#include <print>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -353,7 +352,7 @@ public:
  * @brief Default implementation that logs events to standard output.
  *
  * Intended for development and debugging rather than production use.
- * Output format: `[qbuem] <event>: <content>` (thread-safe, `fprintf`-based).
+ * Output format: `[qbuem] <event>: <content>` (thread-safe, `std::print`-based).
  */
 class LoggingObserver : public PipelineObserver {
 public:
@@ -367,11 +366,9 @@ public:
   void on_item_done(std::string_view action_name,
                     uint64_t item_id,
                     uint64_t latency_us) override {
-    std::fprintf(stderr,
-                 "[qbuem] item_done: action=%.*s id=%" PRIu64
-                 " latency=%" PRIu64 "us\n",
-                 static_cast<int>(action_name.size()), action_name.data(),
-                 item_id, latency_us);
+    std::print(stderr,
+               "[qbuem] item_done: action={} id={} latency={}us\n",
+               action_name, item_id, latency_us);
   }
 
   /**
@@ -382,10 +379,9 @@ public:
    */
   void on_error(std::string_view action_name,
                 std::error_code ec) override {
-    std::fprintf(stderr,
-                 "[qbuem] error: action=%.*s code=%d msg=%s\n",
-                 static_cast<int>(action_name.size()), action_name.data(),
-                 ec.value(), ec.message().c_str());
+    std::print(stderr,
+               "[qbuem] error: action={} code={} msg={}\n",
+               action_name, ec.value(), ec.message());
   }
 
   /**
@@ -398,10 +394,9 @@ public:
   void on_scale_event(std::string_view action_name,
                       size_t old_workers,
                       size_t new_workers) override {
-    std::fprintf(stderr,
-                 "[qbuem] scale: action=%.*s %zu -> %zu workers\n",
-                 static_cast<int>(action_name.size()), action_name.data(),
-                 old_workers, new_workers);
+    std::print(stderr,
+               "[qbuem] scale: action={} {} -> {} workers\n",
+               action_name, old_workers, new_workers);
   }
 
   /**
@@ -414,11 +409,9 @@ public:
   void on_state_change(std::string_view pipeline_name,
                        std::string_view old_state,
                        std::string_view new_state) override {
-    std::fprintf(stderr,
-                 "[qbuem] state: pipeline=%.*s %.*s -> %.*s\n",
-                 static_cast<int>(pipeline_name.size()), pipeline_name.data(),
-                 static_cast<int>(old_state.size()),    old_state.data(),
-                 static_cast<int>(new_state.size()),    new_state.data());
+    std::print(stderr,
+               "[qbuem] state: pipeline={} {} -> {}\n",
+               pipeline_name, old_state, new_state);
   }
 
   /**
@@ -427,9 +420,7 @@ public:
    * @param action_name Name of the action whose circuit opened.
    */
   void on_circuit_open(std::string_view action_name) override {
-    std::fprintf(stderr,
-                 "[qbuem] circuit_open: action=%.*s\n",
-                 static_cast<int>(action_name.size()), action_name.data());
+    std::print(stderr, "[qbuem] circuit_open: action={}\n", action_name);
   }
 
   /**
@@ -438,9 +429,7 @@ public:
    * @param action_name Name of the action whose circuit closed.
    */
   void on_circuit_close(std::string_view action_name) override {
-    std::fprintf(stderr,
-                 "[qbuem] circuit_close: action=%.*s\n",
-                 static_cast<int>(action_name.size()), action_name.data());
+    std::print(stderr, "[qbuem] circuit_close: action={}\n", action_name);
   }
 };
 

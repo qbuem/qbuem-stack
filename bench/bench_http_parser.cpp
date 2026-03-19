@@ -1,16 +1,16 @@
 /**
  * @file bench/bench_http_parser.cpp
- * @brief HTTP/1.1 파서 처리량 벤치마크.
+ * @brief HTTP/1.1 parser throughput benchmark.
  *
- * ### 측정 항목
- * - HttpParser: 단순 GET 요청 파싱 처리량 (MB/s, ops/s)
- * - HttpParser: 헤더 10개 POST 요청 파싱 처리량
- * - HttpParser: chunked transfer encoding 파싱
- * - HttpParser: 스트리밍 파싱 (분할 수신 시뮬레이션)
+ * ### Measured Items
+ * - HttpParser: simple GET request parse throughput (MB/s, ops/s)
+ * - HttpParser: POST request with 10 headers parse throughput
+ * - HttpParser: chunked transfer encoding parsing
+ * - HttpParser: streaming parse (split receive simulation)
  *
- * ### 성능 목표 (v1.0)
- * - 파서 처리량 (GET)  : > 300 MB/s
- * - 파서 처리량 (POST) : > 200 MB/s
+ * ### Performance Goals (v1.0)
+ * - Parser throughput (GET)  : > 300 MB/s
+ * - Parser throughput (POST) : > 200 MB/s
  */
 
 #include "bench_common.hpp"
@@ -18,9 +18,10 @@
 #include <qbuem/http/parser.hpp>
 #include <qbuem/http/request.hpp>
 
+#include <print>
 #include <string>
 
-// ─── 테스트 HTTP 메시지 ───────────────────────────────────────────────────────
+// ─── Test HTTP messages ───────────────────────────────────────────────────────
 
 static const std::string kSimpleGet =
     "GET /api/v1/health HTTP/1.1\r\n"
@@ -35,7 +36,7 @@ static const std::string kPostWithHeaders =
     "Content-Length: 23\r\n"
     "Authorization: Bearer tok\r\n"
     "Accept: application/json\r\n"
-    "Accept-Language: ko-KR\r\n"
+    "Accept-Language: en-US\r\n"
     "X-Request-ID: abc123def456\r\n"
     "X-Forwarded-For: 192.168.1.1\r\n"
     "Cache-Control: no-cache\r\n"
@@ -60,7 +61,7 @@ static const std::string kLargeHeaders =
     "Host: api.example.com\r\n"
     "Authorization: Bearer eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.payload.sig\r\n"
     "Accept: application/json, text/plain, */*\r\n"
-    "Accept-Language: ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7\r\n"
+    "Accept-Language: en-US,en;q=0.9\r\n"
     "Accept-Encoding: gzip, deflate, br\r\n"
     "X-Request-ID: 550e8400-e29b-41d4-a716-446655440000\r\n"
     "X-Correlation-ID: corr-abc123\r\n"
@@ -72,12 +73,12 @@ static const std::string kLargeHeaders =
     "Connection: keep-alive\r\n"
     "\r\n";
 
-// ─── 벤치마크 함수들 ──────────────────────────────────────────────────────────
+// ─── Benchmark functions ──────────────────────────────────────────────────────
 
 static void bench_parser_simple_get() {
-    bench::section("HTTP Parser — GET (단순 요청)");
+    bench::section("HTTP Parser — GET (Simple Request)");
 
-    printf("  요청 크기: %zu bytes\n", kSimpleGet.size());
+    std::println("  Request size: {} bytes", kSimpleGet.size());
 
     constexpr uint64_t kWarmup  = 10'000;
     constexpr uint64_t kIter    = 500'000;
@@ -97,18 +98,18 @@ static void bench_parser_simple_get() {
 
     const double mb_s = res.mb_per_sec(kSimpleGet.size());
     if (mb_s >= 300.0) {
-        bench::pass("처리량 목표 달성: >= 300 MB/s");
+        bench::pass("Throughput goal met: >= 300 MB/s");
     } else if (mb_s >= 100.0) {
-        bench::pass("처리량 기본 달성: >= 100 MB/s");
+        bench::pass("Throughput basic goal met: >= 100 MB/s");
     } else {
-        bench::fail("처리량 목표 미달: < 100 MB/s");
+        bench::fail("Throughput goal missed: < 100 MB/s");
     }
 }
 
 static void bench_parser_post_with_headers() {
-    bench::section("HTTP Parser — POST (헤더 10개 + JSON body)");
+    bench::section("HTTP Parser — POST (10 Headers + JSON Body)");
 
-    printf("  요청 크기: %zu bytes\n", kPostWithHeaders.size());
+    std::println("  Request size: {} bytes", kPostWithHeaders.size());
 
     constexpr uint64_t kWarmup  = 5'000;
     constexpr uint64_t kIter    = 300'000;
@@ -130,7 +131,7 @@ static void bench_parser_post_with_headers() {
 static void bench_parser_chunked() {
     bench::section("HTTP Parser — Chunked Transfer Encoding");
 
-    printf("  요청 크기: %zu bytes\n", kChunked.size());
+    std::println("  Request size: {} bytes", kChunked.size());
 
     constexpr uint64_t kWarmup  = 5'000;
     constexpr uint64_t kIter    = 200'000;
@@ -150,9 +151,9 @@ static void bench_parser_chunked() {
 }
 
 static void bench_parser_large_headers() {
-    bench::section("HTTP Parser — 대형 헤더 GET (13개 헤더)");
+    bench::section("HTTP Parser — Large Headers GET (13 headers)");
 
-    printf("  요청 크기: %zu bytes\n", kLargeHeaders.size());
+    std::println("  Request size: {} bytes", kLargeHeaders.size());
 
     constexpr uint64_t kWarmup  = 5'000;
     constexpr uint64_t kIter    = 200'000;
@@ -172,15 +173,15 @@ static void bench_parser_large_headers() {
 }
 
 static void bench_parser_streaming() {
-    bench::section("HTTP Parser — 스트리밍 파싱 (분할 수신)");
+    bench::section("HTTP Parser — Streaming Parse (Split Receive)");
 
-    // 1바이트씩 파싱 (최악 케이스)
+    // byte-by-byte parsing (worst case)
     constexpr uint64_t kWarmup = 1'000;
     constexpr uint64_t kIter   = 10'000;
 
     {
         auto res = bench::run_batch(
-            "HttpParser: byte-by-byte (최악 케이스)",
+            "HttpParser: byte-by-byte (worst case)",
             kSimpleGet.size(),
             kWarmup, kIter,
             [&]() {
@@ -195,7 +196,7 @@ static void bench_parser_streaming() {
         res.print();
     }
 
-    // 16바이트 청크로 파싱 (일반적인 TCP recv 케이스)
+    // 16-byte chunk parsing (typical TCP recv case)
     {
         constexpr size_t kChunkSize = 16;
         auto res = bench::run_batch(
@@ -216,13 +217,13 @@ static void bench_parser_streaming() {
     }
 }
 
-// ─── 메인 ────────────────────────────────────────────────────────────────────
+// ─── Main ─────────────────────────────────────────────────────────────────────
 
 int main() {
-    printf("\n");
-    printf("══════════════════════════════════════════════════════════════\n");
-    printf("  qbuem-stack v1.0.0 — HTTP Parser 성능 벤치마크\n");
-    printf("══════════════════════════════════════════════════════════════\n");
+    std::println();
+    std::println("══════════════════════════════════════════════════════════════");
+    std::println("  qbuem-stack — HTTP Parser Performance Benchmark");
+    std::println("══════════════════════════════════════════════════════════════");
 
     bench_parser_simple_get();
     bench_parser_post_with_headers();
@@ -230,9 +231,11 @@ int main() {
     bench_parser_large_headers();
     bench_parser_streaming();
 
-    printf("\n══════════════════════════════════════════════════════════════\n");
-    printf("  완료\n");
-    printf("══════════════════════════════════════════════════════════════\n\n");
+    std::println();
+    std::println("══════════════════════════════════════════════════════════════");
+    std::println("  Done");
+    std::println("══════════════════════════════════════════════════════════════");
+    std::println();
 
     return 0;
 }

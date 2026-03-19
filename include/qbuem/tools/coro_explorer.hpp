@@ -44,6 +44,7 @@
 #include <cstdint>
 #include <cstring>
 #include <optional>
+#include <print>
 #include <span>
 #include <string_view>
 #include <vector>
@@ -331,27 +332,27 @@ public:
      */
     static void render_tui(const std::vector<CoroRecord>& records,
                            FILE* out = stdout) noexcept {
-        std::fputs("\033[1;35m── CoroExplorer ─────────────────────────────────\033[0m\n", out);
-        std::fprintf(out, "  Active: %zu coroutines\n\n", records.size());
+        std::print(out, "\033[1;35m── CoroExplorer ─────────────────────────────────\033[0m\n");
+        std::print(out, "  Active: {} coroutines\n\n", records.size());
 
         for (const auto& rec : records) {
             // Indentation by depth
-            for (uint16_t d = 0; d < rec.depth; ++d) std::fputs("  ", out);
+            for (uint16_t d = 0; d < rec.depth; ++d) std::print(out, "  ");
 
             const char* state_colour =
                 rec.state == CoroState::Running   ? "\033[0;32m" :
                 rec.state == CoroState::Suspended ? "\033[0;33m" : "\033[0;31m";
 
-            std::fprintf(out, "%s[%s]\033[0m #%llu %s",
+            std::print(out, "{}[{}]\033[0m #{} {}",
                          state_colour,
-                         coro_state_str(rec.state).data(),
-                         static_cast<unsigned long long>(rec.id),
+                         coro_state_str(rec.state),
+                         rec.id,
                          rec.name);
 
             if (rec.state == CoroState::Suspended && rec.awaiter[0])
-                std::fprintf(out, " (awaiting: %s)", rec.awaiter);
+                std::print(out, " (awaiting: {})", rec.awaiter);
 
-            std::fprintf(out, "  — suspended %.1f µs total, %u resumes\n",
+            std::print(out, "  — suspended {:.1f} µs total, {} resumes\n",
                          rec.suspend_us(), rec.resume_count);
         }
         std::fflush(out);

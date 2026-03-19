@@ -38,9 +38,9 @@
 #include <atomic>
 #include <chrono>
 #include <format>
-#include <iostream>
 #include <memory>
 #include <mutex>
+#include <print>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -179,7 +179,7 @@ public:
 
     {
       std::lock_guard<std::mutex> lk(mtx_);
-      std::cerr << out;
+      std::print(stderr, "{}", out);
     }
   }
 

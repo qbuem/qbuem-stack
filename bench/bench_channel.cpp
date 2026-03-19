@@ -1,15 +1,15 @@
 /**
  * @file bench/bench_channel.cpp
- * @brief AsyncChannel MPMC 성능 벤치마크.
+ * @brief AsyncChannel MPMC performance benchmark.
  *
- * ### 측정 항목
- * - try_send/try_recv 처리량 (wait-free, single-threaded)
- * - ArenaChannel 처리량
- * - SpscChannel 처리량 (wait-free)
- * - 배치 채널 fill/drain 처리량
+ * ### Measured Items
+ * - try_send/try_recv throughput (wait-free, single-threaded)
+ * - ArenaChannel throughput
+ * - SpscChannel throughput (wait-free)
+ * - Batch channel fill/drain throughput
  *
- * ### 성능 목표 (v1.0)
- * - try_send + try_recv : > 50M ops/s (단일 스레드, 포화 없음)
+ * ### Performance Goals (v1.0)
+ * - try_send + try_recv : > 50M ops/s (single-thread, unsaturated)
  * - SpscChannel         : > 100M ops/s (wait-free SPSC)
  */
 
@@ -20,6 +20,7 @@
 #include <qbuem/pipeline/spsc_channel.hpp>
 
 #include <cstdint>
+#include <print>
 
 using namespace qbuem;
 
@@ -54,11 +55,11 @@ static void bench_async_channel_trysend() {
         res.print();
 
         const double ops_s = res.ops_per_sec();
-        // MPMC CAS round-trip target: > 40M ops/s (hardware limit at 2× LOCK CMPXCHG / 2.8 GHz)
+        // MPMC CAS round-trip target: > 40M ops/s (hardware limit at 2x LOCK CMPXCHG / 2.8 GHz)
         if (ops_s >= 40e6) {
-            bench::pass("처리량 목표 달성: >= 40M ops/s");
+            bench::pass("Throughput goal met: >= 40M ops/s");
         } else {
-            bench::fail("처리량 목표 미달: < 40M ops/s");
+            bench::fail("Throughput goal missed: < 40M ops/s");
         }
     }
 
@@ -112,15 +113,15 @@ static void bench_spsc_channel() {
 
         const double ops_s = res.ops_per_sec();
         if (ops_s >= 100e6) {
-            bench::pass("SpscChannel 목표 달성: >= 100M ops/s");
+            bench::pass("SpscChannel goal met: >= 100M ops/s");
         } else {
-            bench::fail("SpscChannel 목표 미달: < 100M ops/s");
+            bench::fail("SpscChannel goal missed: < 100M ops/s");
         }
     }
 }
 
 static void bench_arena_channel() {
-    bench::section("ArenaChannel<int> — Arena 기반 고속 채널");
+    bench::section("ArenaChannel<int> — Arena-backed High-Speed Channel");
 
     constexpr size_t   kCapacity = 4096;
     constexpr uint64_t kWarmup   = 50'000;
@@ -150,7 +151,7 @@ static void bench_arena_channel() {
 }
 
 static void bench_channel_batch_throughput() {
-    bench::section("채널 배치 처리량 비교 (fill → drain)");
+    bench::section("Channel Batch Throughput Comparison (fill -> drain)");
 
     constexpr size_t   kCapacity = 8192;
     constexpr size_t   kBatch    = 1000;
@@ -198,22 +199,24 @@ static void bench_channel_batch_throughput() {
     }
 }
 
-// ─── 메인 ────────────────────────────────────────────────────────────────────
+// ─── Main ─────────────────────────────────────────────────────────────────────
 
 int main() {
-    printf("\n");
-    printf("══════════════════════════════════════════════════════════════\n");
-    printf("  qbuem-stack v1.0.0 — 채널 성능 벤치마크\n");
-    printf("══════════════════════════════════════════════════════════════\n");
+    std::println();
+    std::println("══════════════════════════════════════════════════════════════");
+    std::println("  qbuem-stack — Channel Performance Benchmark");
+    std::println("══════════════════════════════════════════════════════════════");
 
     bench_async_channel_trysend();
     bench_spsc_channel();
     bench_arena_channel();
     bench_channel_batch_throughput();
 
-    printf("\n══════════════════════════════════════════════════════════════\n");
-    printf("  완료\n");
-    printf("══════════════════════════════════════════════════════════════\n\n");
+    std::println();
+    std::println("══════════════════════════════════════════════════════════════");
+    std::println("  Done");
+    std::println("══════════════════════════════════════════════════════════════");
+    std::println();
 
     return 0;
 }

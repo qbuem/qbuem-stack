@@ -142,23 +142,23 @@ All modules must adhere to these quantitative benchmarks to be considered part o
 
 ---
 
-## ✅ Completed: v2.1.0 — Pipeline ↔ IPC 완전 연계
+## ✅ Completed: v2.1.0 — Pipeline ↔ IPC Full Integration
 
 ### v2.1.0 — Pipeline IPC Bridge & Reliability
 
-- [x] **PipelineBuilder::with_source()**: 외부 소스(SHMSource, MessageBusSource)를 Pipeline Head에 연결. 소스 펌프 코루틴 자동 생성. (`include/qbuem/pipeline/static_pipeline.hpp`)
-- [x] **PipelineBuilder::with_sink()**: 외부 싱크(SHMSink, MessageBusSink)를 Pipeline Tail에 연결. drain 코루틴 자동 생성. (`include/qbuem/pipeline/static_pipeline.hpp`)
-- [x] **MessageBusSource\<T\>**: MessageBus 토픽 구독 → Pipeline 소스 브릿지. `init()+next()` 프로토콜. (`include/qbuem/pipeline/message_bus.hpp`)
-- [x] **MessageBusSink\<T\>**: Pipeline Tail → MessageBus 발행 브릿지. `init()+sink()` 프로토콜. (`include/qbuem/pipeline/message_bus.hpp`)
-- [x] **SHMSource\<T\>**: `SHMChannel<T>` Consumer 측 Pipeline 어댑터. `name_`을 `std::string`으로 소유 (dangling ref 방지). (`include/qbuem/shm/shm_bus.hpp`)
-- [x] **SHMSink\<T\>**: `SHMChannel<T>` Producer 측 Pipeline 어댑터. (`include/qbuem/shm/shm_bus.hpp`)
-- [x] **SHMChannel\<T\>::unlink()**: SHM 세그먼트 파일시스템 이름 제거 (멱등, ENOENT → ok). (`include/qbuem/shm/shm_channel.hpp`)
-- [x] **ipc_pipeline_example.cpp**: 5개 시나리오 복합 통합 예시 (SHM→Pipeline, Pipeline→MessageBus, 전체 체인). (`examples/ipc_pipeline_example.cpp`)
-- [x] **pipeline_ipc_test.cpp**: Pipeline ↔ MessageBus IPC 통합 테스트 7개. (`tests/pipeline_ipc_test.cpp`)
+- [x] **PipelineBuilder::with_source()**: Connects external sources (SHMSource, MessageBusSource) to the Pipeline Head. Automatically generates source pump coroutines. (`include/qbuem/pipeline/static_pipeline.hpp`)
+- [x] **PipelineBuilder::with_sink()**: Connects external sinks (SHMSink, MessageBusSink) to the Pipeline Tail. Automatically generates drain coroutines. (`include/qbuem/pipeline/static_pipeline.hpp`)
+- [x] **MessageBusSource\<T\>**: MessageBus topic subscription → Pipeline source bridge. `init()+next()` protocol. (`include/qbuem/pipeline/message_bus.hpp`)
+- [x] **MessageBusSink\<T\>**: Pipeline Tail → MessageBus publish bridge. `init()+sink()` protocol. (`include/qbuem/pipeline/message_bus.hpp`)
+- [x] **SHMSource\<T\>**: `SHMChannel<T>` consumer-side Pipeline adapter. Owns `name_` as `std::string` (prevents dangling reference). (`include/qbuem/shm/shm_bus.hpp`)
+- [x] **SHMSink\<T\>**: `SHMChannel<T>` producer-side Pipeline adapter. (`include/qbuem/shm/shm_bus.hpp`)
+- [x] **SHMChannel\<T\>::unlink()**: Removes SHM segment filesystem name (idempotent; ENOENT → ok). (`include/qbuem/shm/shm_channel.hpp`)
+- [x] **ipc_pipeline_example.cpp**: 5-scenario composite integration example (SHM→Pipeline, Pipeline→MessageBus, full chain). (`examples/ipc_pipeline_example.cpp`)
+- [x] **pipeline_ipc_test.cpp**: 7 Pipeline ↔ MessageBus IPC integration tests. (`tests/pipeline_ipc_test.cpp`)
 
 ---
 
-## ✅ Completed: v2.0.0 — 고도화 (Enhancement)
+## ✅ Completed: v2.0.0 — Enhancement
 
 ### v2.0.0 — Lock-free Infrastructure & JWT Pipeline Integration
 - [x] **LockFreeConnectionPool**: LIFO FreeStack CAS-based O(1) lock-free acquire/release + PooledConnection RAII guard. (`include/qbuem/db/connection_pool.hpp`)
@@ -230,9 +230,9 @@ All modules must adhere to these quantitative benchmarks to be considered part o
 - [x] **`Smart DB Cache`**: SHM-backed open-addressing hash table, seqlock (odd=write, even=read), FNV-1a hash, TTL expiry, LRU eviction. `SmartCacheStats` atomics. (`include/qbuem/db/smart_cache.hpp`)
 
 ### 3. Secure Configuration Management
-- [ ] **`ConfigManager`**: Hierarchical configuration loader with environment variable priority and SIMD-accelerated parsing.
-- [ ] **`Secret<T>` Wrapper**: Implementation of masked sensitive data types with RAII-based memory zeroing.
-- [ ] **Layered Loader**: Integration with JSON/TOML files and system environment variables. Reference: [docs/secure-config-architecture.md](./docs/secure-config-architecture.md).
+- [x] **`ConfigManager`**: Hierarchical configuration loader with environment variable priority and SIMD-accelerated parsing. (`include/qbuem/config/config_manager.hpp`)
+- [x] **`Secret<T>` Wrapper**: Move-only sensitive data type with volatile RAII memory zeroing and `std::formatter` → always `[REDACTED]`. (`include/qbuem/config/config_manager.hpp`)
+- [x] **Layered Loader**: `set_default()`, `set()`, `load_env()`, `load_file()` layered config with `get_or<T>()` and `get_secret()`. Reference: [docs/secure-config-architecture.md](./docs/secure-config-architecture.md).
 
 ---
 
@@ -258,26 +258,30 @@ All modules must adhere to these quantitative benchmarks to be considered part o
 
 ---
 
-## 🚀 Future Roadmap: v3.3.0 — Modernization & ARM Optimization
+## ✅ Completed: v3.3.0 — C++23 Enforcement + ARM NEON SIMD Parity
 > **Reference Design**: [docs/cpp23-upgrade-strategy.md](./docs/cpp23-upgrade-strategy.md) / [docs/neon-optimization-strategy.md](./docs/neon-optimization-strategy.md)
 
 ### 1. C++23 Modernization & Refactoring
-- [ ] **`std::expected` Migration**: Replace all `qbuem::Result<T>` and `qbuem::unexpected` aliases with direct `std::expected<T, std::error_code>` and `std::unexpected`.
-- [ ] **`std::jthread` Adoption**: Replace `std::thread` in `Dispatcher`, `DnsResolver`, and tests with `std::jthread` for RAII-based safety.
-- [ ] **`std::print` / `std::println`**: Replace legacy `printf`/`fprintf` in benchmarks and examples with type-safe C++23 print functions.
-- [ ] **`std::to_underlying`**: Replace manual `static_cast` on enums (e.g., in `WebSocketHandler`) with `std::to_underlying`.
-- [ ] **`std::views` & `std::ranges`**: Integrate `std::views::zip`, `std::views::chunk`, and `std::views::enumerate` into pipeline and SIMD processing loops.
+- [x] **`std::expected` Migration**: `qbuem::Result<T>` and `qbuem::unexpected` are aliases for `std::expected<T, std::error_code>` and `std::unexpected` — fully C++23 compliant.
+- [x] **`std::jthread` Adoption**: `std::thread` replaced with `std::jthread` in `Dispatcher` (src/core/dispatcher.cpp) and tests (tests/kqueue_test.cpp).
+- [x] **`std::print` / `std::println`**: All `printf`/`fprintf`/`std::cerr` replaced with `std::print`/`std::println` in bench/, observability.hpp, slo.hpp, trace_logger.hpp, exporter.hpp, coro_explorer.hpp.
+- [x] **`std::to_underlying`**: Manual `static_cast` on enums replaced with `std::to_underlying` in `WebSocketHandler`.
+- [x] **`std::format_to_n`**: `snprintf`/`__builtin_snprintf` replaced with `std::format_to_n` in `socket_addr.hpp` and `adaptive_rate_limiter.hpp`.
 
 ### 2. ARM NEON SIMD Optimization
-- [ ] **`SIMD Erasure Coding`**: Implement NEON split-table lookup (`vtblq_u8`) for `gf_mul_add`.
-- [ ] **`SIMD Validator`**: Implement hardware CRC32 via ARMv8-A extensions (`__crc32cw`).
-- [ ] **`SIMD Cryptography`**: Vectorize `constant_time_equal` and `base64url_encode` in `crypto.hpp` using 128-bit NEON registers.
-- [ ] **`WebSocket Masking`**: Implement NEON-accelerated XOR masking/unmasking.
-- [ ] **`HTTP Parser`**: Optimize `find_header_end` for AArch64 using `vget_lane_u64` and `clz` for faster bitmask scanning.
+- [x] **`SIMD Erasure Coding`**: NEON `vqtbl1q_u8` split-table lookup path for GF(2^8) `gf_mul_add` in `buf/simd_erasure.hpp`.
+- [x] **`SIMD Validator`**: ARM hardware CRC32 via `__crc32cd`/`__crc32cw`/`__crc32ch`/`__crc32cb` (`__ARM_FEATURE_CRC32`); NEON scan with `vmaxvq_u8` early-out + nibble-compaction bitmask in `security/simd_validator.hpp`.
+- [x] **`SIMD Cryptography`**: NEON `vorrq_u8` accumulator `constant_time_equal` + NEON `vqtbl1q_u8` split-alphabet `base64url_encode` (12B→16char/iter) in `crypto.hpp`.
+- [x] **`WebSocket Masking`**: NEON 16-byte/iter XOR masking path in `server/websocket_handler.hpp`.
+- [x] **`HTTP Parser`**: AArch64 `find_header_end` with `vmaxvq_u8` early-out, `vshrn_n_u16`/`vget_lane_u64` nibble compaction, `__builtin_ctzll>>2` O(1) first-match in `src/http/parser.cpp`.
+
+### 3. Zero-Allocation Config + Secret Management
+- [x] **`ConfigManager`**: `ConfigTable<512>` fixed-capacity FNV-1a open-addressing flat hash, zero heap at access. (`include/qbuem/config/config_manager.hpp`)
+- [x] **`Secret<T>`**: Move-only, volatile-wipe destructor, `std::formatter` specialization emits `[REDACTED]`. (`include/qbuem/config/config_manager.hpp`)
 
 ---
 <details>
-<summary><b>v2.0.0 — 고도화 (Enhancement)</b></summary>
+<summary><b>v2.0.0 — Enhancement</b></summary>
 
 - [x] **LockFreeConnectionPool**: LIFO FreeStack (CAS push/pop, max 256 slots), O(1) lock-free `acquire()`/`release()`, waiter queue, idle timeout cleanup, `warmup()`, `drain()`.
 - [x] **PooledConnection**: RAII guard for pool-acquired connections. `acquire(pool)` factory. Move-only.
@@ -329,9 +333,9 @@ All modules must adhere to these quantitative benchmarks to be considered part o
 <details>
 <summary><b>v1.5.0 — Zero-dep Security & TLS</b></summary>
 
-- [x] **kTLS Optimization**: `ktls_sendfile()` / `ktls_sendfile_all()` — sendfile + kTLS zero-copy 암호화 전송. Linux 폴백 EAGAIN 처리 포함.
-- [x] **SIMD Auth Parser**: `SIMDJwtParser` — AVX2/SSE4.2/NEON/Scalar `.` 탐색, Base64url 검증, 클레임 추출 (zero-allocation). JwtView 클레임 API (`claim()`, `claim_int()`, `is_expired()`).
-- [x] **Hardware Entropy**: `rdrand64()`, `rdseed64()` CPUID 기반 inline asm, `hw_entropy_fill()`, `hw_seed_fill()`, `has_rdrand()`, `has_rdseed()`. getrandom/arc4random 투명 폴백.
+- [x] **kTLS Optimization**: `ktls_sendfile()` / `ktls_sendfile_all()` — sendfile + kTLS zero-copy encrypted transmission. Includes Linux fallback EAGAIN handling.
+- [x] **SIMD Auth Parser**: `SIMDJwtParser` — AVX2/SSE4.2/NEON/Scalar dot-scan, Base64url validation, claim extraction (zero-allocation). JwtView claim API (`claim()`, `claim_int()`, `is_expired()`).
+- [x] **Hardware Entropy**: `rdrand64()`, `rdseed64()` CPUID-based inline asm, `hw_entropy_fill()`, `hw_seed_fill()`, `has_rdrand()`, `has_rdseed()`. Transparent getrandom/arc4random fallback.
 </details>
 
 <details>

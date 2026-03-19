@@ -3,7 +3,7 @@
 #include <gtest/gtest.h>
 #include <sys/socket.h>
 #include <unistd.h>
-#include <thread>
+#include <thread>  // for std::this_thread::sleep_for
 #include <atomic>
 #include <csignal>
 
@@ -123,7 +123,7 @@ TEST_F(KqueueReactorTest, SignalHandling) {
 // Test post() from another thread
 TEST_F(KqueueReactorTest, PostFromThread) {
     std::atomic<bool> called{false};
-    std::thread t([&]() {
+    std::jthread t([&]() {
         std::this_thread::sleep_for(std::chrono::milliseconds(20));
         reactor->post([&]() {
             called = true;
@@ -135,5 +135,5 @@ TEST_F(KqueueReactorTest, PostFromThread) {
     }
 
     EXPECT_TRUE(called);
-    t.join();
+    // std::jthread auto-joins on destruction
 }

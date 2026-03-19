@@ -46,8 +46,9 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
-#include <cstdio>       // fopen, fscanf
+#include <cstdio>       // std::fopen, std::fscanf, std::fclose for /proc/stat
 #include <cstring>
+#include <format>
 #include <functional>
 #include <optional>
 #include <string>
@@ -306,8 +307,11 @@ inline Middleware adaptive_rate_limit(AdaptiveRateLimitConfig cfg = {}) {
 
         // Diagnostic headers.
         char factor_buf[16];
-        std::snprintf(factor_buf, sizeof(factor_buf), "%.2f", static_cast<double>(factor));
-        res.header("X-Load-Factor", factor_buf);
+        auto r = std::format_to_n(factor_buf, sizeof(factor_buf) - 1,
+                                   "{:.2f}", static_cast<double>(factor));
+        *r.out = '\0';
+        res.header("X-Load-Factor", std::string_view{factor_buf,
+                                        static_cast<size_t>(r.out - factor_buf)});
         res.header("X-RateLimit-Limit",
                    std::to_string(static_cast<long>(eff_burst)));
         res.header("X-RateLimit-Remaining",

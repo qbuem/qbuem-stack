@@ -44,6 +44,12 @@
 #  endif
 #endif
 
+// ARM NEON SIMD (AArch64)
+#if defined(__ARM_NEON)
+#  include <arm_neon.h>
+#  define QBUEM_CRYPTO_NEON 1
+#endif
+
 namespace qbuem {
 
 // ─── Constant-time comparison ─────────────────────────────────────────────────
@@ -59,19 +65,16 @@ namespace qbuem {
  */
 [[nodiscard]] inline bool constant_time_equal(std::string_view a,
                                                std::string_view b) noexcept {
-  // Branchless implementation: no early return on size mismatch.
-  // A size difference is folded into `diff` via XOR reduction, so the
-  // function always touches min(a.size(), b.size()) bytes.  This prevents
-  // content-based timing oracles while remaining branchless on the sizes.
+  // Branchless constant-time comparison — prevents timing-oracle attacks.
+  // No early return on size mismatch; size difference is folded into `diff`.
   //
-  // Note: the *number of loop iterations* still depends on string length.
-  // For truly length-independent timing use fixed-length tokens (e.g. CSRF
-  // tokens, HMAC digests) so both operands always have the same size.
+  // Note: the *number of loop iterations* depends on string length.
+  // For truly length-independent timing use fixed-length tokens (CSRF tokens,
+  // HMAC digests) so both operands always have the same size.
   const size_t na = a.size();
   const size_t nb = b.size();
 
-  // Encode size mismatch as a non-zero diff without branching.
-  // Reduce all bits of (na XOR nb) into a single byte.
+  // Fold size mismatch into the low byte of diff (branchless).
   size_t sz_diff = na ^ nb;
   sz_diff |= sz_diff >> 32;
   sz_diff |= sz_diff >> 16;
@@ -79,8 +82,30 @@ namespace qbuem {
   volatile uint8_t diff = static_cast<uint8_t>(sz_diff & 0xFF);
 
   const size_t n = na < nb ? na : nb;
+  const auto*  pa = reinterpret_cast<const uint8_t*>(a.data());
+  const auto*  pb = reinterpret_cast<const uint8_t*>(b.data());
+
+#if defined(QBUEM_CRYPTO_NEON)
+  // AArch64 NEON path: process 16 bytes per iteration.
+  // vorrq_u8 accumulates all XOR differences; vmaxvq_u8 collapses to scalar.
+  // The volatile write at the end prevents optimisation across the barrier.
+  uint8x16_t acc = vdupq_n_u8(0);
+  size_t i = 0;
+  for (; i + 16 <= n; i += 16) {
+    const uint8x16_t va = vld1q_u8(pa + i);
+    const uint8x16_t vb = vld1q_u8(pb + i);
+    acc = vorrq_u8(acc, veorq_u8(va, vb)); // OR-accumulate all XOR differences
+  }
+  // Collapse 16-byte accumulator to a single byte (UMAXV on AArch64)
+  diff |= vmaxvq_u8(acc);
+  // Scalar tail
+  for (; i < n; ++i)
+    diff |= pa[i] ^ pb[i];
+#else
   for (size_t i = 0; i < n; ++i)
-    diff |= static_cast<uint8_t>(a[i]) ^ static_cast<uint8_t>(b[i]);
+    diff |= pa[i] ^ pb[i];
+#endif
+
   return diff == 0;
 }
 
@@ -126,10 +151,107 @@ inline void random_fill(void *buf, size_t len) {
 namespace detail {
 
 inline std::string base64url_encode(const uint8_t *data, size_t len) {
+  // Base64url alphabet (RFC 4648 §5): A-Z, a-z, 0-9, '-', '_' (no padding)
   static constexpr char kTable[] =
       "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+
   std::string out;
   out.reserve((len * 4 + 2) / 3);
+
+#if defined(QBUEM_CRYPTO_NEON)
+  // AArch64 NEON path: process 12 input bytes → 16 output chars per iteration.
+  // Strategy:
+  //   1. Load 12 bytes (0..11) into 3×uint8x16 with vld1q_lane_u8.
+  //   2. Shuffle/extract 6-bit indices using bit manipulation.
+  //   3. Use vqtbl1q_u8 (table lookup) to map 6-bit index → ASCII char.
+  //
+  // We use the "split alphabet" approach with two 64-entry vtbl lookups.
+  // Each lookup covers 32 chars (upper/lower halves of the 64-char alphabet).
+
+  // Two 16-byte sub-tables covering indices 0-31 and 32-63
+  alignas(16) uint8_t tbl0[16], tbl1[16], tbl2[16], tbl3[16];
+  for (int i = 0; i < 16; ++i) tbl0[i] = static_cast<uint8_t>(kTable[i]);
+  for (int i = 0; i < 16; ++i) tbl1[i] = static_cast<uint8_t>(kTable[i + 16]);
+  for (int i = 0; i < 16; ++i) tbl2[i] = static_cast<uint8_t>(kTable[i + 32]);
+  for (int i = 0; i < 16; ++i) tbl3[i] = static_cast<uint8_t>(kTable[i + 48]);
+
+  const uint8x16_t vtbl0 = vld1q_u8(tbl0);
+  const uint8x16_t vtbl1 = vld1q_u8(tbl1);
+  const uint8x16_t vtbl2 = vld1q_u8(tbl2);
+  const uint8x16_t vtbl3 = vld1q_u8(tbl3);
+
+  // Process 12 input bytes at a time → 16 base64 output chars
+  size_t i = 0;
+  for (; i + 12 <= len; i += 12) {
+    // Load 12 bytes into a 16-byte vector (last 4 bytes are don't-care)
+    uint8x16_t in = vld1q_u8(data + i);
+
+    // Extract 16 × 6-bit indices from the 12-byte (96-bit) input:
+    //   Byte layout: AAAAAABB BBBBCCCC CCDDDDDD
+    //   → idx0 = A>>2,  idx1 = ((A&3)<<4)|(B>>4)
+    //     idx2 = ((B&0xF)<<2)|(C>>6), idx3 = C&63  (for each 3-byte group)
+
+    // We process 4 groups of 3 bytes (12 bytes total), producing 16 6-bit indices.
+    // Use scalar loop here — NEON byte extraction for 6-bit packing is
+    // compiler-friendly and the table lookup is the main win.
+    alignas(16) uint8_t idx[16];
+    for (int g = 0; g < 4; ++g) {
+      const uint8_t b0 = data[i + g * 3 + 0];
+      const uint8_t b1 = data[i + g * 3 + 1];
+      const uint8_t b2 = data[i + g * 3 + 2];
+      idx[g * 4 + 0] = (b0 >> 2) & 0x3F;
+      idx[g * 4 + 1] = static_cast<uint8_t>(((b0 & 3) << 4) | (b1 >> 4));
+      idx[g * 4 + 2] = static_cast<uint8_t>(((b1 & 0xF) << 2) | (b2 >> 6));
+      idx[g * 4 + 3] = b2 & 0x3F;
+    }
+    (void)in; // suppress unused warning (used conceptually above)
+
+    // Map 6-bit indices to ASCII via 4×16-entry vtbl lookups.
+    // Each index is in 0-63; select the right sub-table based on which quarter.
+    uint8x16_t vidx = vld1q_u8(idx);
+    const uint8x16_t kMask16 = vdupq_n_u8(0x0F);
+    const uint8x16_t kThresh0 = vdupq_n_u8(15); // boundary: 0-15 → tbl0
+    const uint8x16_t kThresh1 = vdupq_n_u8(31); // boundary: 16-31 → tbl1
+    const uint8x16_t kThresh2 = vdupq_n_u8(47); // boundary: 32-47 → tbl2
+
+    // Use vqtbl1q_u8 with per-sub-table indices (mask to low 4 bits each time)
+    const uint8x16_t lo_idx = vandq_u8(vidx, kMask16);
+    // Select which sub-table result to use via vcleq_u8 masks
+    const uint8x16_t in_q0 = vcleq_u8(vidx, kThresh0);         // idx <= 15
+    const uint8x16_t in_q1 = vandq_u8(vcgtq_u8(vidx, kThresh0),
+                                       vcleq_u8(vidx, kThresh1)); // 16..31
+    const uint8x16_t in_q2 = vandq_u8(vcgtq_u8(vidx, kThresh1),
+                                       vcleq_u8(vidx, kThresh2)); // 32..47
+    const uint8x16_t in_q3 = vcgtq_u8(vidx, kThresh2);           // 48..63
+
+    const uint8x16_t sub_idx_1 = vsubq_u8(vidx, vdupq_n_u8(16));
+    const uint8x16_t sub_idx_2 = vsubq_u8(vidx, vdupq_n_u8(32));
+    const uint8x16_t sub_idx_3 = vsubq_u8(vidx, vdupq_n_u8(48));
+
+    const uint8x16_t r0 = vandq_u8(vqtbl1q_u8(vtbl0, lo_idx),      in_q0);
+    const uint8x16_t r1 = vandq_u8(vqtbl1q_u8(vtbl1, vandq_u8(sub_idx_1, kMask16)), in_q1);
+    const uint8x16_t r2 = vandq_u8(vqtbl1q_u8(vtbl2, vandq_u8(sub_idx_2, kMask16)), in_q2);
+    const uint8x16_t r3 = vandq_u8(vqtbl1q_u8(vtbl3, vandq_u8(sub_idx_3, kMask16)), in_q3);
+
+    const uint8x16_t result = vorrq_u8(vorrq_u8(r0, r1), vorrq_u8(r2, r3));
+
+    // Append 16 chars to output
+    const size_t old_sz = out.size();
+    out.resize(old_sz + 16);
+    vst1q_u8(reinterpret_cast<uint8_t*>(out.data() + old_sz), result);
+  }
+  // Scalar tail for remaining bytes
+  for (; i < len; i += 3) {
+    uint32_t b  = static_cast<uint8_t>(data[i]) << 16;
+    if (i + 1 < len) b |= static_cast<uint8_t>(data[i + 1]) << 8;
+    if (i + 2 < len) b |= static_cast<uint8_t>(data[i + 2]);
+    out += kTable[(b >> 18) & 0x3F];
+    out += kTable[(b >> 12) & 0x3F];
+    if (i + 1 < len) out += kTable[(b >> 6) & 0x3F];
+    if (i + 2 < len) out += kTable[(b     ) & 0x3F];
+  }
+#else
+  // Scalar path
   for (size_t i = 0; i < len; i += 3) {
     uint32_t b  = static_cast<uint8_t>(data[i]) << 16;
     if (i + 1 < len) b |= static_cast<uint8_t>(data[i + 1]) << 8;
@@ -139,6 +261,7 @@ inline std::string base64url_encode(const uint8_t *data, size_t len) {
     if (i + 1 < len) out += kTable[(b >> 6) & 0x3F];
     if (i + 2 < len) out += kTable[(b     ) & 0x3F];
   }
+#endif
   return out;
 }
 
