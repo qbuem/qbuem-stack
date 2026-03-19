@@ -229,6 +229,11 @@ All modules must adhere to these quantitative benchmarks to be considered part o
 - [x] **`Post-Quantum Security`**: `IPqcBackend` injection (liboqs/BoringSSL/stub). `PqcKem` (ML-KEM-512/768/1024) + `PqcDsa` (ML-DSA-44/65/87) + SLH-DSA. `HybridKemConfig` X25519+ML-KEM-768. Constexpr size tables. (`include/qbuem/security/pqc.hpp`)
 - [x] **`Smart DB Cache`**: SHM-backed open-addressing hash table, seqlock (odd=write, even=read), FNV-1a hash, TTL expiry, LRU eviction. `SmartCacheStats` atomics. (`include/qbuem/db/smart_cache.hpp`)
 
+### 3. Secure Configuration Management
+- [ ] **`ConfigManager`**: Hierarchical configuration loader with environment variable priority and SIMD-accelerated parsing.
+- [ ] **`Secret<T>` Wrapper**: Implementation of masked sensitive data types with RAII-based memory zeroing.
+- [ ] **Layered Loader**: Integration with JSON/TOML files and system environment variables. Reference: [docs/secure-config-architecture.md](./docs/secure-config-architecture.md).
+
 ---
 
 ## ✅ Completed: v3.1.0 — Observability & Visual Tooling
