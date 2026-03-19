@@ -39,6 +39,16 @@
 #include <qbuem/http/fetch_client.hpp>
 #include <qbuem/http/fetch_tls.hpp>
 
+// v2.5.0: High-Performance Stream Processing (Pipeline+)
+#include <qbuem/pipeline/backpressure_monitor.hpp>
+#include <qbuem/pipeline/stateful_window.hpp>
+#include <qbuem/pipeline/dynamic_router.hpp>
+
+// v2.6.0: Advanced WAS & Middleware
+#include <qbuem/http/template_engine.hpp>
+#include <qbuem/shm/reliable_cast.hpp>
+#include <qbuem/security/simd_validator.hpp>
+
 #include <atomic>
 #include <chrono>
 #include <cstdint>

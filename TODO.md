@@ -183,21 +183,21 @@ All modules must adhere to these quantitative benchmarks to be considered part o
 
 ---
 
-## 🏗 Milestone: v2.5.0 — High-Performance Stream processing (Pipeline+)
+## ✅ Completed: v2.5.0 — High-Performance Stream Processing (Pipeline+)
 > **Reference Design**: [docs/ecosystem-expansion.md](./docs/ecosystem-expansion.md)
 
-- [ ] **`StatefulWindow`**: Native support for sliding/tumbling window aggregations.
-- [ ] **`DynamicRouter`**: SIMD-accelerated branch predicate evaluation.
-- [ ] **`BackpressureMonitor`**: Real-time stage pressure and latency metrics via atomics.
+- [x] **`StatefulWindow`**: Thread-local accumulation with TumblingFlush/CountFlush/HybridFlush strategies. (`include/qbuem/pipeline/stateful_window.hpp`)
+- [x] **`DynamicRouter`**: SIMD-accelerated (AVX2/SSE4.2/NEON) predicate evaluation for FirstMatch/AllMatch/LoadBalance fan-out routing. (`include/qbuem/pipeline/dynamic_router.hpp`)
+- [x] **`BackpressureMonitor`**: Cache-line-aligned per-stage atomic counters; latency histogram (8 buckets); P50/P99/P99.9 snapshot; threshold-based alerting. (`include/qbuem/pipeline/backpressure_monitor.hpp`)
 
 ---
 
-## 🏗 Milestone: v2.6.0 — Advanced WAS & Middleware
+## ✅ Completed: v2.6.0 — Advanced WAS & Middleware
 > **Reference Design**: [docs/ecosystem-expansion.md](./docs/ecosystem-expansion.md)
 
-- [ ] **`qbuem-template`**: Zero-copy pre-compiled template engine.
-- [ ] **`ReliableCast<T>`**: Zero-copy 1:N multicast for SHM-based IPC.
-- [ ] **`SIMDValidator`**: Wire-speed JSON Schema/Binary validation using SIMD skip-patterns.
+- [x] **`TemplateEngine`**: Zero-copy pre-compiled template engine with `{{key}}`, `{{{raw}}}`, `{{#if}}`, `{{#each}}`, `{{> partial}}`, `{{! comment }}` syntax. Renders directly into caller buffer; thread-safe reentrant. (`include/qbuem/http/template_engine.hpp`)
+- [x] **`ReliableCast<T>`**: Zero-copy 1:N SHM multicast ring buffer. Single-write/N-consumer with DropSlow/BlockSlow/BestEffort slow-consumer policies; per-consumer cursors on separate cache lines. (`include/qbuem/shm/reliable_cast.hpp`)
+- [x] **`SIMDValidator`**: Wire-speed JSON structural validation (AVX2/SSE4.2/NEON) + binary frame validation (magic, length field, CRC32). `validate_batch()` for multi-message parallel validation. (`include/qbuem/security/simd_validator.hpp`)
 
 ---
 
