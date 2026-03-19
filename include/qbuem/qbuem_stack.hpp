@@ -59,6 +59,28 @@
 #include <qbuem/net/rudp_socket.hpp>
 #include <qbuem/net/udp_multicast.hpp>
 
+// v3.0.0: Zero-Copy Hardware I/O (AF_XDP, NVMe-oF, SIMD Erasure, PQC)
+#include <qbuem/xdp/xdp_pipeline.hpp>
+#include <qbuem/net/nvme_of.hpp>
+#include <qbuem/buf/simd_erasure.hpp>
+#include <qbuem/pipeline/distributed_pipeline.hpp>
+#include <qbuem/security/pqc.hpp>
+
+// v3.1.0: Production Observability (SmartCache, LifecycleTracer, TraceLogger, CLI, Inspector)
+#include <qbuem/db/smart_cache.hpp>
+#include <qbuem/tracing/lifecycle_tracer.hpp>
+#include <qbuem/tracing/trace_logger.hpp>
+#include <qbuem/tools/qbuem_cli.hpp>
+#include <qbuem/tools/qbuem_inspector.hpp>
+#include <qbuem/ebpf/memleak_bridge.hpp>
+#include <qbuem/tools/coro_explorer.hpp>
+
+// v3.2.0: Hardware Telemetry & Chaos Engineering
+#include <qbuem/tools/affinity_inspector.hpp>
+#include <qbuem/tools/buffer_heatmap.hpp>
+#include <qbuem/tools/chaos_hardware.hpp>
+#include <qbuem/tools/traffic_twin.hpp>
+
 #include <atomic>
 #include <chrono>
 #include <cstdint>

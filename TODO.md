@@ -219,39 +219,39 @@ All modules must adhere to these quantitative benchmarks to be considered part o
 
 ---
 
-## 🌌 Future Vision: v3.0.0 — The Ultimate Protocol Stack
+## ✅ Completed: v3.0.0 — The Ultimate Protocol Stack
 > **Reference Design**: [docs/feature-status-advancement.md](./docs/feature-status-advancement.md)
 
-- [ ] **`AF_XDP Bypass`**: Direct user-space networking for sub-microsecond packet processing.
-- [ ] **`Distributed Storage (NVMe-oF)`**: High-speed remote block access via RDMA/TCP.
-- [ ] **`SIMD Erasure Coding`**: Wire-speed data redundancy using AVX-512/ISA-L.
-- [ ] **`Distributed Pipelines`**: Stretching pipelines across hosts via RDMA/InfinityBand.
-- [ ] **`Post-Quantum Security`**: Native C++23 Kyber/Dilithium support for v3 identities.
-- [ ] **`Smart DB Cache`**: SHM-shared and hardware-invalidated query caches.
+- [x] **`AF_XDP Bypass`**: `XdpSource<T>` / `XdpSink<T>` bridging AF_XDP sockets into `StaticPipeline`. `RawPacket` zero-copy UMEM frame descriptor. Fill Ring replenishment on consume. (`include/qbuem/xdp/xdp_pipeline.hpp`)
+- [x] **`Distributed Storage (NVMe-oF)`**: `INvmeOfTransport` injection interface, `NvmeOfAddr::parse()` URL parser (`rdma://`/`tcp://`), scatter-gather `read_scatter()`, `trim()`, `flush()`. `NvmeOfConnection` retry logic + stats. (`include/qbuem/net/nvme_of.hpp`)
+- [x] **`SIMD Erasure Coding`**: GF(2^8) arithmetic (log/alog tables, Russian-peasant multiply), Vandermonde generator matrix, AVX2 VPSHUFB split-table GF multiply + scalar fallback. `ErasureCoder(k,m)`: `encode()`, `reconstruct()`, Gauss-Jordan inversion over GF(2^8). (`include/qbuem/buf/simd_erasure.hpp`)
+- [x] **`Distributed Pipelines`**: `IDistributedTransport` injection, `TrivialCodec<T>` memcpy codec, `DistributedPipeline<In,Out>` local/remote stage mixing, `DistributedPipelineWorker<In,Out>` listener. (`include/qbuem/pipeline/distributed_pipeline.hpp`)
+- [x] **`Post-Quantum Security`**: `IPqcBackend` injection (liboqs/BoringSSL/stub). `PqcKem` (ML-KEM-512/768/1024) + `PqcDsa` (ML-DSA-44/65/87) + SLH-DSA. `HybridKemConfig` X25519+ML-KEM-768. Constexpr size tables. (`include/qbuem/security/pqc.hpp`)
+- [x] **`Smart DB Cache`**: SHM-backed open-addressing hash table, seqlock (odd=write, even=read), FNV-1a hash, TTL expiry, LRU eviction. `SmartCacheStats` atomics. (`include/qbuem/db/smart_cache.hpp`)
 
 ---
- 
- ## 🏗 Milestone: v3.1.0 — Observability & Visual Tooling
- > **Reference Design**: [docs/observability-suite.md](./docs/observability-suite.md)
- 
- - [ ] **`qbuem-tracer`**: Zero-allocation OTLP/SHM tracer with `start_lifecycle()` API.
-- [ ] **`qbuem-logger`**: Trace-aware async logger with lifecycle correlation.
-- [ ] **`qbuem-cli`**: Dual-mode CLI (TUI dashboard + HTML-serve backend).
- - [ ] **`qbuem-inspector`**: Visual dashboard with "Full Journey" timeline view.
- - [ ] **`eBPF Bridge`**: Production-grade memory leak & perf analysis integration.
- - [ ] **`CoroExplorer`**: Coroutine stack-trace and suspension point visualization.
- 
- ---
- 
- ## 🌌 Milestone: v3.2.0 — Elite Tooling & Chaos Engineering
- > **Reference Design**: [docs/observability-suite.md](./docs/observability-suite.md)
- 
- - [ ] **`Affinity Inspector`**: Real-time Core/NUMA mapping and topology visualization.
- - [ ] **`Buffer Heatmap`**: Visual lifecycle tracking for zero-copy memory segments.
- - [ ] **`Chaos-Hardware`**: User-space fault-injection for PCIe/NVMe/RDMA.
- - [ ] **`Traffic-Twin`**: Deterministic protocol recording and replay tool.
- 
- ---
+
+## ✅ Completed: v3.1.0 — Observability & Visual Tooling
+> **Reference Design**: [docs/observability-suite.md](./docs/observability-suite.md)
+
+- [x] **`qbuem-tracer`**: `LifecycleTracer<N>` — zero-allocation OTLP/SHM tracer. `ShmSpanRing<N>` MPSC lock-free ring. `SpanRecord` (128 bytes, trivially copyable). `ActiveSpan` RAII, `start_lifecycle()`, `start_span()`, `drain()`. (`include/qbuem/tracing/lifecycle_tracer.hpp`)
+- [x] **`qbuem-logger`**: `TraceLogger<Cap>` — trace-aware async logger. `TraceLogRing<N>` MPSC ring. `ILogSink` / `StderrLogSink` with W3C traceparent. `log()`/`info()`/`warn()`/`error()` hot path (~10 ns). Background flush via `std::jthread`. (`include/qbuem/tracing/trace_logger.hpp`)
+- [x] **`qbuem-cli`**: `CliServer` + `ICliDataSource` + `tui_render()` ANSI dashboard + `html_export()` self-contained snapshot. (`include/qbuem/tools/qbuem_cli.hpp`)
+- [x] **`qbuem-inspector`**: `JourneyCollector` (span grouping by trace_id), `Journey` Gantt timeline, `inspector_html()` embedded SSE UI, `InspectorServer` drain loop. (`include/qbuem/tools/qbuem_inspector.hpp`)
+- [x] **`eBPF Bridge`**: `MemleakBridge` — `IEbpfRuntime` injection, `AllocRecord` ring, `generate_report()` leak detection with configurable TTL, uprobe attachment API. (`include/qbuem/ebpf/memleak_bridge.hpp`)
+- [x] **`CoroExplorer`**: `CoroRegistry<N>` lock-free slab, `CoroGuard` RAII, `CoroExplorer::snapshot()` + `render_tui()` + `to_json()`. (`include/qbuem/tools/coro_explorer.hpp`)
+
+---
+
+## ✅ Completed: v3.2.0 — Elite Tooling & Chaos Engineering
+> **Reference Design**: [docs/observability-suite.md](./docs/observability-suite.md)
+
+- [x] **`Affinity Inspector`**: `AffinityInspector::refresh()` reads sysfs CPU/NUMA topology. `CpuInfo`, `ThreadAffinityInfo`, `NumaNodeInfo`, `AffinitySnapshot`. `render_tui()`. (`include/qbuem/tools/affinity_inspector.hpp`)
+- [x] **`Buffer Heatmap`**: `BufferHeatmapT<MaxSlots, RingCap>` — `on_alloc()`, `on_stage_enter()`, `on_stage_exit()`, `on_release()`, `find_stalls()`, `render_ascii()`. `HeatmapTicket` RAII handoff. (`include/qbuem/tools/buffer_heatmap.hpp`)
+- [x] **`Chaos-Hardware`**: `ChaosHardware` — probabilistic fault injection (`ErrorInjection`, `LatencySpike`, `BitFlip`, `PartialWrite`, `Reorder`, `DropCompletion`). `inject_pre()`/`inject_post()` lock-free hot path. Compile-out when `QBUEM_CHAOS_ENABLED` not defined. (`include/qbuem/tools/chaos_hardware.hpp`)
+- [x] **`Traffic-Twin`**: `TrafficRecorder` (captures via `ITraceWriter`) + `TrafficReplayer` (WallClock/AsFastAs/StepByStep modes via `ITraceReader`). `TraceFileHeader`/`TraceRecord`/`TraceFileFooter` binary format. (`include/qbuem/tools/traffic_twin.hpp`)
+
+---
  
  ## ✅ Completed Milestones
 
