@@ -23,7 +23,7 @@
 
 #include <atomic>
 #include <chrono>
-#include <print>
+#include <qbuem/compat/print.hpp>
 #include <stop_token>
 #include <string_view>
 

@@ -42,6 +42,8 @@
 #include <qbuem/core/task.hpp>
 
 #include <atomic>
+#include <qbuem/compat/print.hpp>
+
 #include <chrono>
 #include <cstdint>
 #include <functional>

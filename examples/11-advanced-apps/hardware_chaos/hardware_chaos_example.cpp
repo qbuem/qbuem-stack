@@ -20,7 +20,7 @@
 #include <array>
 #include <chrono>
 #include <cstdlib>
-#include <print>
+#include <qbuem/compat/print.hpp>
 #include <thread>
 #include <vector>
 

@@ -269,8 +269,10 @@ public:
         if (level < min_level_) return;
         TraceLogRecord rec;
         rec.timestamp_ns = now_ns();
-        rec.trace_id     = ctx.trace_id;
-        rec.span_id      = ctx.parent_id;
+        // Extract low 64 bits from TraceId (stored as bytes[16])
+        std::memcpy(&rec.trace_id, ctx.trace_id.bytes + 8, 8);
+        // Extract uint64_t from SpanId (stored as bytes[8])
+        std::memcpy(&rec.span_id, ctx.parent_span_id.bytes, 8);
         rec.level        = level;
         std::memcpy(rec.service, service_, sizeof(service_));
         rec.set_message(msg);

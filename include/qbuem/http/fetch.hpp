@@ -90,6 +90,15 @@ struct ParsedUrl {
   std::string path;    ///< Path + query ("/path?query", "/" if absent)
 
   /**
+   * @brief Returns the port as a decimal string (e.g., "80", "443").
+   *
+   * Used by DNS resolvers that accept string service names.
+   */
+  [[nodiscard]] std::string port_str() const {
+    return std::to_string(port);
+  }
+
+  /**
    * @brief Parse a URL string into a `ParsedUrl`.
    *
    * @param url  URL string to parse.

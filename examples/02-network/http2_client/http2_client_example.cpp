@@ -23,7 +23,7 @@
 #include <qbuem/core/task.hpp>
 
 #include <chrono>
-#include <print>
+#include <qbuem/compat/print.hpp>
 #include <stop_token>
 #include <thread>
 

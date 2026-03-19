@@ -49,7 +49,7 @@
  */
 
 #include <qbuem/common.hpp>
-#include <qbuem/buf/arena.hpp>
+#include <qbuem/core/arena.hpp>
 #include <qbuem/core/task.hpp>
 #include <qbuem/http/fetch.hpp>
 #include <qbuem/net/dns.hpp>
@@ -430,18 +430,18 @@ public:
      */
     [[nodiscard]] Task<Result<std::shared_ptr<FetchStream>>>
     stream(std::string url, std::stop_token st) {
+        (void)st;
         // Parse URL
         auto parsed = ParsedUrl::parse(url);
         if (!parsed) co_return unexpected(std::make_error_code(std::errc::invalid_argument));
 
         // DNS resolve
-        DnsResolver resolver;
-        auto addrs = co_await resolver.resolve(parsed->host, parsed->port_str(), st);
-        if (!addrs || addrs->empty())
+        auto addr = co_await DnsResolver::resolve(std::string(parsed->host), parsed->port);
+        if (!addr)
             co_return unexpected(std::make_error_code(std::errc::host_unreachable));
 
         // Connect
-        auto conn = co_await TcpStream::connect((*addrs)[0], st);
+        auto conn = co_await TcpStream::connect(*addr);
         if (!conn) co_return unexpected(conn.error());
 
         // Send HTTP/1.1 GET request

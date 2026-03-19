@@ -37,7 +37,11 @@ A pure performance benchmark comparing:
 ---
 
 ## 3. Implementation Checklist
-- [ ] Implement `micro_ticker_example.cpp` in `01-foundation`.
-- [ ] Add `spatial_fusion` to `11-advanced-apps`.
+- [x] Implement `micro_ticker_example.cpp` in `01-foundation`.
+- [x] Add `spatial_fusion` to `11-advanced-apps`.
 - [ ] Refactor `game_server.cpp` to use `LockFreeHashMap` and `AOIManager`.
-- [ ] Create `lockfree_bench` to prove the performance gains.
+- [x] Create `lockfree_bench` to prove the performance gains.
+- [x] Add `hft_matching` to `11-advanced-apps` (new, per §2-1).
+- [x] Implement `GridBitset<W,H,D>` header (`include/qbuem/buf/grid_bitset.hpp`).
+- [x] Implement `AdaptiveRateLimiter` middleware (`include/qbuem/middleware/adaptive_rate_limiter.hpp`).
+- [x] Implement `TopicSchemaRegistry` (`include/qbuem/shm/topic_schema_registry.hpp`).

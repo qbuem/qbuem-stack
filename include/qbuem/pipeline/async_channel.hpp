@@ -165,7 +165,7 @@ public:
       }
 
       // Channel full — wait until a consumer frees space
-      co_await SendAwaiter{this};
+      co_await SendAwaiter{.chan = this, .waiter = {}};
     }
   }
 
@@ -186,7 +186,7 @@ public:
         co_return std::nullopt; // EOS
 
       // Channel empty — wait for an item to arrive
-      co_await RecvAwaiter{this};
+      co_await RecvAwaiter{.chan = this, .waiter = {}};
     }
   }
 

@@ -84,7 +84,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
-#include <print>
+#include <qbuem/compat/print.hpp>
 #include <cstring>
 #include <memory>
 #include <mutex>

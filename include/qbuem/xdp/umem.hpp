@@ -115,7 +115,7 @@ struct UmemFrame {
  *     .use_hugepages = true,
  * };
  * auto umem = qbuem::xdp::Umem::create(cfg);
- * if (!umem) { /* handle error */ }
+ * if (!umem) { handle_error(); }
  *
  * // Register frames in the Fill Ring (kernel writes packets to these addresses)
  * umem->fill_frames(batch_size);

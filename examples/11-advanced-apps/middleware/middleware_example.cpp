@@ -11,7 +11,7 @@
 #include <qbuem/middleware/token_auth.hpp>
 #include <qbuem/middleware/security.hpp>
 
-#include <print>
+#include <qbuem/compat/print.hpp>
 #include <string>
 
 struct PublicResponse    { std::string message; };

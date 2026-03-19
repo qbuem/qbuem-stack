@@ -15,7 +15,7 @@
 #include <qbuem/tools/qbuem_inspector.hpp>
 
 #include <chrono>
-#include <print>
+#include <qbuem/compat/print.hpp>
 #include <thread>
 
 using namespace qbuem::tracing;

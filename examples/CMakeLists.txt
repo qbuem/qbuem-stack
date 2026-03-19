@@ -34,6 +34,11 @@ add_executable(async_timer
     01-foundation/async_timer/async_timer.cpp)
 target_link_libraries(async_timer PRIVATE qbuem-stack::qbuem)
 
+# MicroTicker: sub-millisecond precision reactor driving (jitter comparison)
+add_executable(micro_ticker_example
+    01-foundation/micro_ticker/micro_ticker_example.cpp)
+target_link_libraries(micro_ticker_example PRIVATE qbuem-stack::qbuem)
+
 # ── 02 Network ────────────────────────────────────────────────────────────────
 
 add_executable(tcp_echo_server
@@ -65,6 +70,11 @@ target_link_libraries(zero_copy_arena_channel_example PRIVATE qbuem-stack::qbuem
 add_executable(numa_hugepages_example
     03-memory/numa_hugepages/numa_hugepages_example.cpp)
 target_link_libraries(numa_hugepages_example PRIVATE qbuem-stack::qbuem)
+
+# LockFree Bench: LockFreeHashMap vs mutex+map, IntrusiveList vs list, GenerationPool vs shared_ptr
+add_executable(lockfree_bench
+    03-memory/lockfree_bench/lockfree_bench.cpp)
+target_link_libraries(lockfree_bench PRIVATE qbuem-stack::qbuem)
 
 # ── 04 Codec & Security ───────────────────────────────────────────────────────
 
@@ -222,6 +232,16 @@ target_link_libraries(autonomous_driving_fusion PRIVATE qbuem-stack::qbuem)
 add_executable(io_metrics_dashboard
     11-advanced-apps/io_metrics_dashboard/io_metrics_dashboard.cpp)
 target_link_libraries(io_metrics_dashboard PRIVATE qbuem-stack::qbuem)
+
+# HFT Matching Engine: LockFreeHashMap + IntrusiveList + GenerationPool + MicroTicker
+add_executable(hft_matching
+    11-advanced-apps/hft_matching/hft_matching.cpp)
+target_link_libraries(hft_matching PRIVATE qbuem-stack::qbuem)
+
+# Spatial Sensor Fusion: GridBitset 2.5D voxel grid + sphere queries + MicroTicker
+add_executable(spatial_fusion_example
+    11-advanced-apps/spatial_fusion/spatial_fusion_example.cpp)
+target_link_libraries(spatial_fusion_example PRIVATE qbuem-stack::qbuem)
 
 # ── qbuem-json dependent examples ────────────────────────────────────────────
 # Fetches qbuem-json via FetchContent; skipped if unavailable or no network.

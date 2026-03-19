@@ -55,6 +55,8 @@
 #include <qbuem/core/task.hpp>
 #include <qbuem/pipeline/async_channel.hpp>
 
+#include <qbuem/compat/print.hpp>
+
 #include <cstddef>
 #include <functional>
 #include <memory>

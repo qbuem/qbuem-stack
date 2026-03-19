@@ -1,6 +1,6 @@
 #include <qbuem/core/kqueue_reactor.hpp>
 #include <qbuem/buf/kqueue_buffer_pool.hpp>
-#include <print>
+#include <qbuem/compat/print.hpp>
 #include <chrono>
 #include <unistd.h>
 #include <fcntl.h>

@@ -95,6 +95,8 @@ struct RawPacket {
 
 // ─── XdpSource<T> ─────────────────────────────────────────────────────────────
 
+#ifdef QBUEM_HAS_XDP
+
 /**
  * @brief Pipeline source adapter that ingests packets from an AF_XDP socket.
  *
@@ -257,6 +259,8 @@ private:
     XskSocket* xsk_;
     Umem*      umem_;
 };
+
+#endif // QBUEM_HAS_XDP
 
 } // namespace qbuem::xdp
 

@@ -41,7 +41,7 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
-#include <print>
+#include <qbuem/compat/print.hpp>
 #include <memory>
 #include <string>
 #include <thread>

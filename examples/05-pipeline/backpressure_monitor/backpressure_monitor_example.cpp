@@ -12,7 +12,7 @@
 #include <qbuem/pipeline/backpressure_monitor.hpp>
 
 #include <chrono>
-#include <print>
+#include <qbuem/compat/print.hpp>
 #include <random>
 #include <string>
 #include <thread>
