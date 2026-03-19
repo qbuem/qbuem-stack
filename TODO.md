@@ -252,9 +252,25 @@ All modules must adhere to these quantitative benchmarks to be considered part o
 - [x] **`Traffic-Twin`**: `TrafficRecorder` (captures via `ITraceWriter`) + `TrafficReplayer` (WallClock/AsFastAs/StepByStep modes via `ITraceReader`). `TraceFileHeader`/`TraceRecord`/`TraceFileFooter` binary format. (`include/qbuem/tools/traffic_twin.hpp`)
 
 ---
- 
- ## ✅ Completed Milestones
 
+## 🚀 Future Roadmap: v3.3.0 — Modernization & ARM Optimization
+> **Reference Design**: [docs/cpp23-upgrade-strategy.md](./docs/cpp23-upgrade-strategy.md) / [docs/neon-optimization-strategy.md](./docs/neon-optimization-strategy.md)
+
+### 1. C++23 Modernization & Refactoring
+- [ ] **`std::expected` Migration**: Replace all `qbuem::Result<T>` and `qbuem::unexpected` aliases with direct `std::expected<T, std::error_code>` and `std::unexpected`.
+- [ ] **`std::jthread` Adoption**: Replace `std::thread` in `Dispatcher`, `DnsResolver`, and tests with `std::jthread` for RAII-based safety.
+- [ ] **`std::print` / `std::println`**: Replace legacy `printf`/`fprintf` in benchmarks and examples with type-safe C++23 print functions.
+- [ ] **`std::to_underlying`**: Replace manual `static_cast` on enums (e.g., in `WebSocketHandler`) with `std::to_underlying`.
+- [ ] **`std::views` & `std::ranges`**: Integrate `std::views::zip`, `std::views::chunk`, and `std::views::enumerate` into pipeline and SIMD processing loops.
+
+### 2. ARM NEON SIMD Optimization
+- [ ] **`SIMD Erasure Coding`**: Implement NEON split-table lookup (`vtblq_u8`) for `gf_mul_add`.
+- [ ] **`SIMD Validator`**: Implement hardware CRC32 via ARMv8-A extensions (`__crc32cw`).
+- [ ] **`SIMD Cryptography`**: Vectorize `constant_time_equal` and `base64url_encode` in `crypto.hpp` using 128-bit NEON registers.
+- [ ] **`WebSocket Masking`**: Implement NEON-accelerated XOR masking/unmasking.
+- [ ] **`HTTP Parser`**: Optimize `find_header_end` for AArch64 using `vget_lane_u64` and `clz` for faster bitmask scanning.
+
+---
 <details>
 <summary><b>v2.0.0 — 고도화 (Enhancement)</b></summary>
 

@@ -36,6 +36,8 @@
 ## Documentation Map
 
 - **[Roadmap & Progress](./TODO.md)**: Current status and 40M RPS / 200ns benchmark targets.
+- **[C++23 Modernization](./docs/cpp23-upgrade-strategy.md)**: Roadmap for migrating to pure C++23 standard types (`std::expected`, `std::jthread`, `std::print`).
+- **[ARM NEON Optimization](./docs/neon-optimization-strategy.md)**: SIMD acceleration strategy for AArch64 (Erasure Coding, Cryptography, Masking).
 - **[Strategic Vision](./docs/strategic-evaluation.md)**: Why `qbuem-stack` is a universal platform.
 - **[Feature Status & Advancement](./docs/feature-status-advancement.md)**: Detailed audit and competitive analysis against industry leaders.
 

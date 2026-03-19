@@ -309,33 +309,38 @@ Core headers (`include/qbuem/`) must compile with zero third-party includes.
 
 ---
 
-### Pillar 5 — C++23 Compliance
+### Pillar 5 — Hardware Alignment
 
-All new and modified code must use C++23 features where applicable. Using an older equivalent is a review failure.
+Performance must be gained through mechanical sympathy, not just algorithm choice.
 
 | # | Rule | Failure example |
 |---|------|-----------------|
-| M1 | `std::jthread` instead of `std::thread` | `std::thread t([]{...}); t.join();` |
-| M2 | `container.contains(key)` instead of `container.count(key)` or `container.find(key) != end()` | `if (map.count(k))` |
-| M3 | `std::format(...)` instead of `snprintf` / `sprintf` / `fprintf` / `ostringstream` | `std::ostringstream ss; ss << x;` |
-| M4 | `std::span<T>` instead of raw pointer + size pairs | `void f(const T* data, size_t len)` |
-| M5 | Designated initializers for aggregate initialization | `MyConfig c; c.timeout = 5; c.retries = 3;` instead of `MyConfig{.timeout=5, .retries=3}` |
-| M6 | `[[nodiscard]]` on all functions returning `Result<T>`, `Task<T>`, or error codes | Unmarked `Result<void> init()` |
-| M7 | `std::stop_token` for cooperative cancellation — no manual `std::atomic<bool> running` flags | `std::atomic<bool> stop_flag_` as a thread stop mechanism |
-| M8 | `std::bit_cast<T>` instead of `reinterpret_cast` for type-punning of trivially-copyable types | `*reinterpret_cast<float*>(&int_val)` |
-| M9 | Concepts (`requires` / `concept`) for template constraints instead of SFINAE | `std::enable_if_t<...>` or `std::void_t<...>` |
-| M10 | Three-way comparison `operator<=>` for types that need ordering | Manual `operator<`, `operator>`, `operator<=`, `operator>=` |
-| M11 | `std::print`/`std::println` instead of `printf`/`cout` in examples | `printf("value: %d\n", x);` or `std::cout << "value: " << x << "\n";` in example code |
-| M12 | `std::unreachable()` instead of `__builtin_unreachable()` | `__builtin_unreachable();` in default branches or postcondition assertions |
-| M13 | `std::expected<T, E>` / `std::unexpected<E>` used directly (via `Result<T>` alias) — standard C++23, no polyfill needed | Using a custom `Expected<T,E>` type or a third-party polyfill |
-| M14 | `if consteval` instead of `std::is_constant_evaluated()` | `if (std::is_constant_evaluated()) { ... }` in constexpr functions |
-| M15 | `std::to_underlying(e)` instead of `static_cast<std::underlying_type_t<E>>(e)` | `static_cast<int>(my_enum_value)` when converting enum to its underlying integer type |
+| H1 | **SIMD-First**: All parsing, crypto, and buffer ops must use NEON (AArch64) and AVX2/512 (x86_64). | Implementing a scalar loop for CRC or XOR masking |
+| H2 | **Architectural Symmetry**: Optimization in one SIMD path (e.g., NEON) must be mirrored in the other (e.g., AVX) to maintain parity. | Adding `vtblq_u8` optimization for ARM but leaving x86 as scalar |
+| H3 | **NUMA-Aware**: Memory must be allocated on the same node as the processing thread. | Cross-NUMA memory access in the hot path |
+| H4 | **Cache Alignment**: Use `alignas(64)` for all shared mutable data structures. | `atomic<int> a, b;` placed side-by-side in a struct |
+
+---
+
+### Pillar 6 — C++23 Mandatory Compliance
+
+All code MUST use pure C++23 features. Using older equivalents or custom aliases is a critical failure.
+
+| # | Rule | Mandatory Requirement |
+|---|------|-----------------------|
+| M1 | **Pure Standard Types**: Use `std::expected<T, E>` and `std::unexpected` directly. | **NO** `qbuem::Result<T>` or `Result<T>` aliases |
+| M2 | `std::jthread` | Replace all `std::thread` to ensure RAII-based auto-join/stop |
+| M3 | `std::print` / `std::println` | No `printf`, `fprintf`, or `std::cout` in any code |
+| M4 | `std::to_underlying(e)` | Use for all enum-to-integer conversions; no manual `static_cast` |
+| M5 | `if consteval` | Use instead of `std::is_constant_evaluated()` |
+| M6 | `std::views` / `std::ranges` | Use `zip`, `chunk`, `enumerate` for processing loops |
+| M7 | `[[nodiscard]]` | Mandatory on all functions returning `std::expected`, `Task`, or error codes |
 
 ---
 
 ## Critical Design Rules
 
-1. **No exceptions** — `Task<T>::unhandled_exception()` calls `std::terminate()`. Always return `Task<Result<T>>` and propagate errors as values via `std::unexpected(errc)`.
+1. **No exceptions** — `Task<T>::unhandled_exception()` calls `std::terminate()`. Always return `Task<std::expected<T, E>>` and propagate errors as values via `std::unexpected(errc)`.
 
 2. **No cross-reactor resume** — Never call `handle.resume()` from a different reactor thread. Use `waiter.reactor->post([h]{ h.resume(); })`.
 
