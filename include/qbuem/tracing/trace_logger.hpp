@@ -55,6 +55,7 @@
 #include <cstdint>
 #include <cstring>
 #include <format>
+#include <print>
 #include <span>
 #include <string_view>
 
@@ -189,12 +190,11 @@ public:
 
         // W3C traceparent: 00-<trace_id_128_hex>-<span_id_hex>-01
         // We use trace_id (64-bit) zero-padded to 32 hex chars
-        std::fprintf(stderr,
-            "[%s.%09uZ] [%s] [00-%016llx0000000000000000-%016llx-01] [%s] %s\n",
+        std::print(stderr,
+            "[{}.{:09}Z] [{}] [00-{:016x}0000000000000000-{:016x}-01] [{}] {}\n",
             ts, ns,
-            level_str(rec.level).data(),
-            static_cast<unsigned long long>(rec.trace_id),
-            static_cast<unsigned long long>(rec.span_id),
+            level_str(rec.level),
+            rec.trace_id, rec.span_id,
             rec.service,
             rec.msg);
     }

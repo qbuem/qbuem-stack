@@ -81,6 +81,9 @@
 #include <qbuem/tools/chaos_hardware.hpp>
 #include <qbuem/tools/traffic_twin.hpp>
 
+// v3.3.0: Zero-Allocation Config + Secret<T> management
+#include <qbuem/config/config_manager.hpp>
+
 #include <atomic>
 #include <chrono>
 #include <cstdint>

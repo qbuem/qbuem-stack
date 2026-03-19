@@ -1,17 +1,17 @@
 /**
  * @file bench/bench_router.cpp
- * @brief Radix Tree Router 성능 벤치마크.
+ * @brief Radix Tree Router performance benchmark.
  *
- * ### 측정 항목
- * - 정적 경로 룩업 지연 (ns/lookup)
- * - 파라미터 경로 룩업 지연 (e.g. /user/:id)
- * - 1000개 경로 등록 후 최악 케이스 룩업
- * - 404 미스 케이스 지연
+ * ### Measured Items
+ * - Static route lookup latency (ns/lookup)
+ * - Parameter route lookup latency (e.g., /user/:id)
+ * - Worst-case lookup after 1000 routes registered
+ * - 404 miss case latency
  *
- * ### 성능 목표 (v1.0)
- * - 정적 룩업  : < 200 ns
- * - 파라미터   : < 300 ns
- * - 1000-route : < 500 ns (최악)
+ * ### Performance Goals (v1.0)
+ * - Static lookup  : < 200 ns
+ * - Param lookup   : < 300 ns
+ * - 1000-route     : < 500 ns (worst case)
  */
 
 #include "bench_common.hpp"
@@ -19,6 +19,7 @@
 #include <qbuem/http/request.hpp>
 #include <qbuem/http/router.hpp>
 
+#include <print>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -26,14 +27,14 @@
 using qbuem::Method;
 using qbuem::Router;
 
-// ─── 더미 핸들러 ─────────────────────────────────────────────────────────────
+// ─── Dummy handler ────────────────────────────────────────────────────────────
 
 static qbuem::Handler noop_handler = [](const qbuem::Request&, qbuem::Response&) {};
 
-// ─── 벤치마크 ────────────────────────────────────────────────────────────────
+// ─── Benchmarks ───────────────────────────────────────────────────────────────
 
 static void bench_static_lookup() {
-    bench::section("Router — 정적 경로 룩업");
+    bench::section("Router — Static Route Lookup");
 
     Router router;
     router.add_route(Method::Get,    "/",                     noop_handler);
@@ -54,7 +55,7 @@ static void bench_static_lookup() {
 
     {
         auto res = bench::run(
-            "Router: GET /api/v1/health (정적)",
+            "Router: GET /api/v1/health (static)",
             kWarmup, kIter,
             [&]() {
                 params.clear();
@@ -64,15 +65,15 @@ static void bench_static_lookup() {
         );
         res.print();
         if (res.avg_ns() < 200.0) {
-            bench::pass("정적 룩업 목표 달성: < 200 ns");
+            bench::pass("Static lookup goal met: < 200 ns");
         } else {
-            bench::fail("정적 룩업 목표 미달: >= 200 ns");
+            bench::fail("Static lookup goal missed: >= 200 ns");
         }
     }
 
     {
         auto res = bench::run(
-            "Router: GET / (루트)",
+            "Router: GET / (root)",
             kWarmup, kIter,
             [&]() {
                 params.clear();
@@ -98,7 +99,7 @@ static void bench_static_lookup() {
 }
 
 static void bench_param_lookup() {
-    bench::section("Router — 파라미터 경로 룩업");
+    bench::section("Router — Parameter Route Lookup");
 
     Router router;
     router.add_route(Method::Get,    "/api/v1/users/:id",             noop_handler);
@@ -115,7 +116,7 @@ static void bench_param_lookup() {
 
     {
         auto res = bench::run(
-            "Router: GET /users/:id (단일 파라미터)",
+            "Router: GET /users/:id (single param)",
             kWarmup, kIter,
             [&]() {
                 params.clear();
@@ -125,15 +126,15 @@ static void bench_param_lookup() {
         );
         res.print();
         if (res.avg_ns() < 300.0) {
-            bench::pass("파라미터 룩업 목표 달성: < 300 ns");
+            bench::pass("Param lookup goal met: < 300 ns");
         } else {
-            bench::fail("파라미터 룩업 목표 미달: >= 300 ns");
+            bench::fail("Param lookup goal missed: >= 300 ns");
         }
     }
 
     {
         auto res = bench::run(
-            "Router: GET /users/:id/orders/:oid (이중 파라미터)",
+            "Router: GET /users/:id/orders/:oid (double param)",
             kWarmup, kIter,
             [&]() {
                 params.clear();
@@ -147,7 +148,7 @@ static void bench_param_lookup() {
 }
 
 static void bench_large_routing_table() {
-    bench::section("Router — 대규모 라우팅 테이블 (1000+ 경로)");
+    bench::section("Router — Large Routing Table (1000+ routes)");
 
     Router router;
     std::vector<std::string> path_store;
@@ -173,7 +174,7 @@ static void bench_large_routing_table() {
 
     {
         auto res = bench::run(
-            "Router: 1100-route — /api/v250/resource (히트)",
+            "Router: 1100-route — /api/v250/resource (hit)",
             kWarmup, kIter,
             [&]() {
                 params.clear();
@@ -183,15 +184,15 @@ static void bench_large_routing_table() {
         );
         res.print();
         if (res.avg_ns() < 500.0) {
-            bench::pass("대규모 테이블 목표 달성: < 500 ns");
+            bench::pass("Large table goal met: < 500 ns");
         } else {
-            bench::fail("대규모 테이블 목표 미달: >= 500 ns");
+            bench::fail("Large table goal missed: >= 500 ns");
         }
     }
 
     {
         auto res = bench::run(
-            "Router: 1100-route — /no/such/path (미스/404)",
+            "Router: 1100-route — /no/such/path (miss/404)",
             kWarmup, kIter,
             [&]() {
                 params.clear();
@@ -203,21 +204,23 @@ static void bench_large_routing_table() {
     }
 }
 
-// ─── 메인 ────────────────────────────────────────────────────────────────────
+// ─── Main ─────────────────────────────────────────────────────────────────────
 
 int main() {
-    printf("\n");
-    printf("══════════════════════════════════════════════════════════════\n");
-    printf("  qbuem-stack v1.0.0 — Router 성능 벤치마크\n");
-    printf("══════════════════════════════════════════════════════════════\n");
+    std::println();
+    std::println("══════════════════════════════════════════════════════════════");
+    std::println("  qbuem-stack — Router Performance Benchmark");
+    std::println("══════════════════════════════════════════════════════════════");
 
     bench_static_lookup();
     bench_param_lookup();
     bench_large_routing_table();
 
-    printf("\n══════════════════════════════════════════════════════════════\n");
-    printf("  완료\n");
-    printf("══════════════════════════════════════════════════════════════\n\n");
+    std::println();
+    std::println("══════════════════════════════════════════════════════════════");
+    std::println("  Done");
+    std::println("══════════════════════════════════════════════════════════════");
+    std::println();
 
     return 0;
 }

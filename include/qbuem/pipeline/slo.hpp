@@ -27,7 +27,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
-#include <cstdio>
+#include <print>
 #include <functional>
 #include <string>
 #include <string_view>
@@ -378,10 +378,8 @@ private:
  *   void on_slo_violation(std::string_view action_name,
  *                          std::string_view metric_name,
  *                          double measured, double target) override {
- *     std::fprintf(stderr, "[SLO violation] %s: %s %.2f > %.2f\n",
- *       std::string(action_name).c_str(),
- *       std::string(metric_name).c_str(),
- *       measured, target);
+ *     std::print(stderr, "[SLO violation] {}: {} {:.2f} > {:.2f}\n",
+ *       action_name, metric_name, measured, target);
  *   }
  * };
  * ```
@@ -429,12 +427,10 @@ public:
                          std::string_view metric_name,
                          double           measured,
                          double           target) override {
-    std::fprintf(stderr,
-                 "[qbuem/slo] violation: action=%.*s metric=%.*s"
-                 " measured=%.3f target=%.3f\n",
-                 static_cast<int>(action_name.size()), action_name.data(),
-                 static_cast<int>(metric_name.size()), metric_name.data(),
-                 measured, target);
+    std::print(stderr,
+               "[qbuem/slo] violation: action={} metric={}"
+               " measured={:.3f} target={:.3f}\n",
+               action_name, metric_name, measured, target);
   }
 };
 

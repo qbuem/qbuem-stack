@@ -76,6 +76,9 @@
 #elif defined(__SSE4_2__)
 #  include <nmmintrin.h>
 #  define QBUEM_ERASURE_SSE4
+#elif defined(__ARM_NEON)
+#  include <arm_neon.h>
+#  define QBUEM_ERASURE_NEON
 #endif
 
 namespace qbuem {
@@ -231,6 +234,44 @@ inline void gf_mul_add(uint8_t coeff, std::span<const std::byte> in,
     for (; i < n; ++i)
         out[i] = std::byte(static_cast<uint8_t>(out[i]) ^
                            gf256::fast_mul(coeff, static_cast<uint8_t>(in[i])));
+
+#elif defined(QBUEM_ERASURE_NEON)
+    // ARM NEON path: vtblq_u8 split-table GF(2^8) multiply-accumulate.
+    // Each byte x is split into lo nibble (x & 0x0F) and hi nibble (x >> 4).
+    // The product gf_mul(coeff, x) = tbl_lo[x&0xF] ^ tbl_hi[x>>4].
+    // vtblq_u8 performs a 16-byte table lookup — equivalent to AVX2 vpshufb.
+
+    // Build 16-entry lo/hi lookup tables
+    alignas(16) uint8_t tbl_lo[16], tbl_hi[16];
+    for (int i = 0; i < 16; ++i) {
+        tbl_lo[i] = gf256::fast_mul(coeff, static_cast<uint8_t>(i));
+        tbl_hi[i] = gf256::fast_mul(coeff, static_cast<uint8_t>(i << 4));
+    }
+    const uint8x16_t vtbl_lo = vld1q_u8(tbl_lo);
+    const uint8x16_t vtbl_hi = vld1q_u8(tbl_hi);
+    const uint8x16_t mask_lo = vdupq_n_u8(0x0F);
+
+    size_t i = 0;
+    for (; i + 16 <= n; i += 16) {
+        const uint8x16_t src = vld1q_u8(
+            reinterpret_cast<const uint8_t*>(in.data() + i));
+        const uint8x16_t dst = vld1q_u8(
+            reinterpret_cast<const uint8_t*>(out.data() + i));
+        // Split nibbles
+        const uint8x16_t lo_nibble = vandq_u8(src, mask_lo);
+        const uint8x16_t hi_nibble = vshrq_n_u8(src, 4);
+        // Table lookup: vtblq_u8 = vpshufb equivalent on AArch64
+        const uint8x16_t res = veorq_u8(
+            vqtbl1q_u8(vtbl_lo, lo_nibble),
+            vqtbl1q_u8(vtbl_hi, hi_nibble));
+        vst1q_u8(reinterpret_cast<uint8_t*>(out.data() + i),
+                 veorq_u8(dst, res));
+    }
+    // Scalar tail
+    for (; i < n; ++i)
+        out[i] = std::byte(static_cast<uint8_t>(out[i]) ^
+                           gf256::fast_mul(coeff, static_cast<uint8_t>(in[i])));
+
 #else
     // Scalar fallback
     for (size_t i = 0; i < n; ++i)

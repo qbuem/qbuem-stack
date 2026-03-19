@@ -75,6 +75,14 @@
  *            fetch() JavaScript-style entry point; DnsResolver non-blocking;
  *            FetchRequest::timeout() + max_redirects(); FetchClient connection pool;
  *            TlsStream / fetch_tls() kTLS kernel offload for HTTPS).
+ * - 3.3.0: C++23 enforcement + SIMD NEON parity + Zero-Allocation ConfigManager
+ *           (std::print/std::println replaces all printf/fprintf/std::cerr;
+ *            std::jthread replaces std::thread; std::to_underlying for enum casts;
+ *            NEON SIMD parity in websocket XOR masking, erasure coding GF(2^8),
+ *            JSON/binary SIMD validator scan + hardware CRC32, HTTP header-end scan,
+ *            base64url encoding, constant-time comparison;
+ *            ConfigManager: zero-heap fixed-capacity ConfigTable<Cap>,
+ *            Secret<T> move-only volatile-wipe with [REDACTED] std::formatter).
  */
 
 /**
@@ -103,36 +111,36 @@ namespace qbuem {
  *   - `patch`: incremented for backwards-compatible bug fixes only.
  *
  * @code
- * static_assert(qbuem::Version::major >= 2, "qbuem-stack 2.x required");
- * std::cout << qbuem::Version::string << '\n'; // "2.2.0"
+ * static_assert(qbuem::Version::major >= 3, "qbuem-stack 3.x required");
+ * std::print("{}\n", qbuem::Version::string); // "3.3.0"
  * @endcode
  */
 struct Version {
   /** @brief Major version number. Incremented on backwards-incompatible API changes. */
-  static constexpr int major = 2;
+  static constexpr int major = 3;
 
   /** @brief Minor version number. Incremented when new backwards-compatible features are added. */
-  static constexpr int minor = 2;
+  static constexpr int minor = 3;
 
   /** @brief Patch version number. Incremented for backwards-compatible bug fixes only. */
   static constexpr int patch = 0;
 
   /** @brief Version string in "major.minor.patch" format (null-terminated). */
-  static constexpr std::string_view string = "2.2.0";
+  static constexpr std::string_view string = "3.3.0";
 };
 
 } // namespace qbuem
 
 /** @brief Major version number (for use in preprocessor `#if` conditions). */
-#define QBUEM_VERSION_MAJOR 2
+#define QBUEM_VERSION_MAJOR 3
 
 /** @brief Minor version number (for use in preprocessor `#if` conditions). */
-#define QBUEM_VERSION_MINOR 2
+#define QBUEM_VERSION_MINOR 3
 
 /** @brief Patch version number (for use in preprocessor `#if` conditions). */
 #define QBUEM_VERSION_PATCH 0
 
 /** @brief Version string literal "major.minor.patch" (for use in preprocessor conditions). */
-#define QBUEM_VERSION_STRING "2.2.0"
+#define QBUEM_VERSION_STRING "3.3.0"
 
 /** @} */ // end of qbuem_version

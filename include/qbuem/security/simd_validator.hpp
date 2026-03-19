@@ -82,6 +82,10 @@
 #elif defined(__ARM_NEON)
 #  include <arm_neon.h>
 #  define QBUEM_SIMD_VALIDATOR_NEON 1
+#  if defined(__ARM_FEATURE_CRC32)
+#    include <arm_acle.h>
+#    define QBUEM_SIMD_VALIDATOR_ARM_CRC32 1
+#  endif
 #endif
 
 namespace qbuem {
@@ -240,18 +244,33 @@ private:
 #if defined(QBUEM_SIMD_VALIDATOR_NEON)
   [[nodiscard]] static ValidationResult
   scan_neon(const uint8_t* data, size_t len) noexcept {
+    // Process 16 bytes per iteration using NEON vqtbl1q + horizontal max.
+    // vmaxvq_u8 collapses 16 lanes to a single byte: non-zero iff any lane hit.
+    // This avoids two separate vgetq_lane_u64 calls and maps directly to a
+    // single UMAXV instruction on AArch64.
     size_t i = 0;
+    const uint8x16_t kThresh = vdupq_n_u8(0x20); // control-char threshold
     for (; i + 16 <= len; i += 16) {
       const uint8x16_t chunk = vld1q_u8(data + i);
-      // Check for control characters (< 0x20)
-      const uint8x16_t ctrl = vcltq_u8(chunk, vdupq_n_u8(0x20));
-      const uint64x2_t any  = vreinterpretq_u64_u8(ctrl);
-      if (vgetq_lane_u64(any, 0) || vgetq_lane_u64(any, 1)) {
-        // Found a potential control character — fall through to scalar for exact offset
-        break;
+      const uint8x16_t ctrl  = vcltq_u8(chunk, kThresh);
+      // vmaxvq_u8: horizontal max across all 16 lanes (AArch64 UMAXV)
+      if (vmaxvq_u8(ctrl) != 0) {
+        // At least one control character present — find exact lane via bitmask.
+        // Extract a 16-bit presence bitmask using vshrn_n_u16 + vget_lane_u64.
+        const uint8x8_t  narrowed = vshrn_n_u16(vreinterpretq_u16_u8(ctrl), 4);
+        const uint64_t   mask     = vget_lane_u64(vreinterpret_u64_u8(narrowed), 0);
+        // __builtin_ctzll gives index of first set nibble (each nibble = 1 lane)
+        const int first_lane = __builtin_ctzll(mask) >> 2;
+        // Fall through to scalar for exact-context error reporting
+        auto r = scan_scalar(data + i + static_cast<size_t>(first_lane),
+                             len  - i - static_cast<size_t>(first_lane));
+        if (!r.ok) r.error_offset += i + static_cast<size_t>(first_lane);
+        return r;
       }
     }
-    return scan_scalar(data + i, len - i);
+    auto r = scan_scalar(data + i, len - i);
+    if (!r.ok) r.error_offset += i;
+    return r;
   }
 #endif
 
@@ -421,7 +440,7 @@ public:
     size_t len = data.size();
 
 #if defined(QBUEM_SIMD_VALIDATOR_SSE42)
-    // Use hardware CRC32c instruction (SSE4.2 _mm_crc32_u64)
+    // x86: hardware CRC32c via SSE4.2 _mm_crc32_u64
     size_t i = 0;
     for (; i + 8 <= len; i += 8) {
       uint64_t word;
@@ -430,6 +449,31 @@ public:
     }
     for (; i < len; ++i)
       crc = _mm_crc32_u8(crc, p[i]);
+
+#elif defined(QBUEM_SIMD_VALIDATOR_ARM_CRC32)
+    // AArch64: hardware CRC32 via ARMv8-A CRC32 extensions (__crc32cw etc.)
+    // These map to the CRC32CX/CRC32CH/CRC32CB instructions respectively.
+    size_t i = 0;
+    for (; i + 8 <= len; i += 8) {
+      uint64_t word;
+      std::memcpy(&word, p + i, 8);
+      crc = __crc32cd(crc, word); // 64-bit CRC32C instruction
+    }
+    if (i + 4 <= len) {
+      uint32_t word4;
+      std::memcpy(&word4, p + i, 4);
+      crc = __crc32cw(crc, word4);
+      i += 4;
+    }
+    if (i + 2 <= len) {
+      uint16_t word2;
+      std::memcpy(&word2, p + i, 2);
+      crc = __crc32ch(crc, word2);
+      i += 2;
+    }
+    for (; i < len; ++i)
+      crc = __crc32cb(crc, p[i]);
+
 #else
     // Scalar table-driven CRC32 (IEEE 802.3)
     static constexpr auto kTable = []() constexpr {

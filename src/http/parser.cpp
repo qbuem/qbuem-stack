@@ -66,23 +66,43 @@ static size_t find_header_end(const char *data, size_t len) noexcept {
       return i;
   }
 #elif defined(QBUEM_HAS_NEON)
+  // AArch64-optimised `\r\n\r\n` scanner.
+  //
+  // Strategy (mirrors AVX2 path — Architectural Symmetry per H2):
+  // 1. Compare 16 bytes against '\r' → 16-lane mask (0x00 or 0xFF per byte).
+  // 2. Use vshrn_n_u16 + vget_lane_u64 to compact the mask into a 64-bit
+  //    integer where each nibble represents one input byte.
+  // 3. __builtin_ctzll isolates the first set nibble (lane) in O(1).
+  // 4. Scalar confirmation of the 4-byte sequence at the candidate offset.
+  //
+  // This eliminates the previous O(16) inner loop and matches the x86 path's
+  // bitmask-driven iteration (mask &= mask-1 equivalent).
   const uint8x16_t v_cr = vdupq_n_u8(static_cast<uint8_t>('\r'));
   size_t i = 0;
   for (; i + 16 <= len; i += 16) {
-    uint8x16_t chunk = vld1q_u8(reinterpret_cast<const uint8_t *>(data + i));
-    uint8x16_t cmp   = vceqq_u8(chunk, v_cr);
-    // Extract 16-bit mask via vget_lane
-    uint64_t lo, hi;
-    vst1_u64(&lo, vreinterpret_u64_u8(vget_low_u8(cmp)));
-    vst1_u64(&hi, vreinterpret_u64_u8(vget_high_u8(cmp)));
-    uint64_t mask64 = lo | (hi ? ~0ULL : 0ULL); // simplified — use byte scan
-    // Scalar check on potential hits
-    for (int b = 0; b < 16 && i + b + 3 < len; ++b) {
-      if (data[i+b] == '\r' && data[i+b+1] == '\n' &&
-          data[i+b+2] == '\r' && data[i+b+3] == '\n')
-        return i + static_cast<size_t>(b);
+    const uint8x16_t chunk = vld1q_u8(reinterpret_cast<const uint8_t *>(data + i));
+    const uint8x16_t cmp   = vceqq_u8(chunk, v_cr);
+
+    // Fast early-out: if no '\r' in these 16 bytes, skip immediately.
+    // vmaxvq_u8 → UMAXV instruction, one cycle on AArch64.
+    if (vmaxvq_u8(cmp) == 0) continue;
+
+    // Compact the 16-byte mask to a 64-bit word (each nibble = 1 byte).
+    // vshrn_n_u16: narrows 16-bit lanes to 8-bit (high 4 bits of each 0xFF/0x00 lane).
+    const uint8x8_t  narrow = vshrn_n_u16(vreinterpretq_u16_u8(cmp), 4);
+    uint64_t         mask64 = vget_lane_u64(vreinterpret_u64_u8(narrow), 0);
+
+    // Iterate over set nibbles (each set nibble = candidate '\r' position).
+    while (mask64) {
+      // __builtin_ctzll: find lowest set bit; divide by 4 to get byte index.
+      const int lane = __builtin_ctzll(mask64) >> 2;
+      const size_t off = i + static_cast<size_t>(lane);
+      if (off + 3 < len &&
+          data[off+1] == '\n' && data[off+2] == '\r' && data[off+3] == '\n')
+        return off;
+      // Clear the lowest set nibble and continue scanning.
+      mask64 &= mask64 - 1;
     }
-    (void)mask64;
   }
   for (; i + 3 < len; ++i) {
     if (data[i]=='\r' && data[i+1]=='\n' && data[i+2]=='\r' && data[i+3]=='\n')

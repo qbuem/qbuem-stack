@@ -2,26 +2,26 @@
 
 /**
  * @file bench/bench_common.hpp
- * @brief qbuem-stack 성능 벤치마크 공통 유틸리티.
+ * @brief Common benchmark utilities for qbuem-stack.
  *
- * ### 설계 원칙
- * - 외부 의존성 없음 (std::chrono + POSIX만 사용)
- * - 컴파일러 최적화 방지: DoNotOptimize() 사용
- * - 통계: 평균, 최소, 최대, 처리량(ops/s, MB/s) 출력
+ * ### Design Principles
+ * - No external dependencies (std::chrono + POSIX only)
+ * - Compiler optimization prevention: DoNotOptimize()
+ * - Statistics: avg, min, max, throughput (ops/s, MB/s)
  */
 
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
-#include <cstdio>
 #include <functional>
 #include <numeric>
+#include <print>
 #include <string>
 #include <vector>
 
 namespace bench {
 
-// ─── 컴파일러 최적화 방지 ────────────────────────────────────────────────────
+// ─── Compiler optimization prevention ────────────────────────────────────────
 
 template <typename T>
 inline void do_not_optimize(T const& value) {
@@ -37,7 +37,7 @@ inline void clobber_memory() {
     asm volatile("" : : : "memory");
 }
 
-// ─── 타이밍 유틸리티 ─────────────────────────────────────────────────────────
+// ─── Timing utilities ─────────────────────────────────────────────────────────
 
 using Clock = std::chrono::steady_clock;
 using Nanos = std::chrono::nanoseconds;
@@ -47,7 +47,7 @@ inline uint64_t now_ns() {
         std::chrono::duration_cast<Nanos>(Clock::now().time_since_epoch()).count());
 }
 
-// ─── 벤치마크 결과 ───────────────────────────────────────────────────────────
+// ─── Benchmark result ─────────────────────────────────────────────────────────
 
 struct Result {
     std::string name;
@@ -66,38 +66,38 @@ struct Result {
     }
 
     void print() const {
-        printf("  %-40s  %8.1f ns/op  %10.0f ops/s  [min=%6.1f max=%8.1f]\n",
-               name.c_str(), avg_ns(), ops_per_sec(), min_ns, max_ns);
+        std::print("  {:<40}  {:8.1f} ns/op  {:10.0f} ops/s  [min={:6.1f} max={:8.1f}]\n",
+               name, avg_ns(), ops_per_sec(), min_ns, max_ns);
     }
 
     void print_throughput(size_t bytes_per_iter) const {
-        printf("  %-40s  %8.1f ns/op  %10.0f ops/s  %7.1f MB/s  [min=%6.1f max=%8.1f]\n",
-               name.c_str(), avg_ns(), ops_per_sec(),
+        std::print("  {:<40}  {:8.1f} ns/op  {:10.0f} ops/s  {:7.1f} MB/s  [min={:6.1f} max={:8.1f}]\n",
+               name, avg_ns(), ops_per_sec(),
                mb_per_sec(bytes_per_iter), min_ns, max_ns);
     }
 };
 
-// ─── 벤치마크 실행기 ─────────────────────────────────────────────────────────
+// ─── Benchmark runner ─────────────────────────────────────────────────────────
 
 /**
- * @brief 단일 벤치마크 실행.
+ * @brief Run a single benchmark.
  *
- * @param name        벤치마크 이름
- * @param warmup_iter 워밍업 반복 횟수 (JIT, 분기 예측 준비)
- * @param measure_iter 측정 반복 횟수
- * @param fn          벤치마크 함수 (1 iteration)
+ * @param name         Benchmark name
+ * @param warmup_iter  Warmup iteration count (JIT, branch prediction prep)
+ * @param measure_iter Measurement iteration count
+ * @param fn           Benchmark function (1 iteration)
  */
 Result run(const std::string& name,
            uint64_t warmup_iter,
            uint64_t measure_iter,
            std::function<void()> fn) {
-    // 워밍업
+    // Warmup
     for (uint64_t i = 0; i < warmup_iter; ++i) {
         fn();
         clobber_memory();
     }
 
-    // 측정
+    // Measure
     std::vector<double> samples;
     samples.reserve(static_cast<size_t>(measure_iter));
 
@@ -117,13 +117,13 @@ Result run(const std::string& name,
 }
 
 /**
- * @brief 배치 벤치마크 실행 — fn()이 N번 작업을 수행.
+ * @brief Run a batch benchmark — fn() performs N operations per call.
  *
- * @param name         벤치마크 이름
- * @param batch_size   fn() 한 번 호출 시 처리하는 아이템 수
- * @param warmup_runs  워밍업 fn() 호출 횟수
- * @param measure_runs 측정 fn() 호출 횟수
- * @param fn           배치 처리 함수
+ * @param name          Benchmark name
+ * @param batch_size    Number of items processed per fn() call
+ * @param warmup_runs   Warmup fn() call count
+ * @param measure_runs  Measurement fn() call count
+ * @param fn            Batch processing function
  */
 Result run_batch(const std::string& name,
                  uint64_t           batch_size,
@@ -143,20 +143,20 @@ Result run_batch(const std::string& name,
     return Result{name, static_cast<uint64_t>(total_ops), total_ns, ns_per_op, ns_per_op};
 }
 
-// ─── 섹션 헤더 ───────────────────────────────────────────────────────────────
+// ─── Section header ───────────────────────────────────────────────────────────
 
 inline void section(const char* title) {
-    printf("\n╔══════════════════════════════════════════════════════════╗\n");
-    printf("║  %-57s║\n", title);
-    printf("╚══════════════════════════════════════════════════════════╝\n");
+    std::println("\n╔══════════════════════════════════════════════════════════╗");
+    std::print("║  {:<57}║\n", title);
+    std::println("╚══════════════════════════════════════════════════════════╝");
 }
 
 inline void pass(const char* msg) {
-    printf("  \033[32m✓\033[0m %s\n", msg);
+    std::println("  \033[32m✓\033[0m {}", msg);
 }
 
 inline void fail(const char* msg) {
-    printf("  \033[31m✗\033[0m %s\n", msg);
+    std::println("  \033[31m✗\033[0m {}", msg);
 }
 
 } // namespace bench
