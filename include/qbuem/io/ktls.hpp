@@ -114,13 +114,13 @@ struct KtlsSessionParams256 {
               sizeof(crypto_info.salt)); // implicit salt (4 bytes)
   std::memcpy(crypto_info.rec_seq, params.seq.data(),
               sizeof(crypto_info.rec_seq));
-
-    return Result<void>::err(std::error_code{errno, std::system_category()});
+  if (::setsockopt(sockfd, SOL_TLS, TLS_TX, &crypto_info, sizeof(crypto_info)) < 0) {
+    return std::unexpected(std::error_code{errno, std::system_category()});
   }
-  return Result<void>::ok();
+  return {};
 #else
   (void)sockfd; (void)params;
-  return Result<void>::err(std::make_error_code(std::errc::not_supported));
+  return std::unexpected(std::make_error_code(std::errc::not_supported));
 #endif
 }
 
@@ -149,13 +149,13 @@ struct KtlsSessionParams256 {
   std::memcpy(crypto_info.salt, params.iv.data(), sizeof(crypto_info.salt));
   std::memcpy(crypto_info.rec_seq, params.seq.data(),
               sizeof(crypto_info.rec_seq));
-
-    return Result<void>::err(std::error_code{errno, std::system_category()});
+  if (::setsockopt(sockfd, SOL_TLS, TLS_RX, &crypto_info, sizeof(crypto_info)) < 0) {
+    return std::unexpected(std::error_code{errno, std::system_category()});
   }
-  return Result<void>::ok();
+  return {};
 #else
   (void)sockfd; (void)params;
-  return Result<void>::err(std::make_error_code(std::errc::not_supported));
+  return std::unexpected(std::make_error_code(std::errc::not_supported));
 #endif
 }
 
@@ -226,14 +226,14 @@ struct KtlsSessionParams256 {
     if (errno == EAGAIN || errno == EWOULDBLOCK) {
       // Non-blocking socket: return however much has been sent so far
       if (total > 0) break;
-      return Result<size_t>::err(std::error_code{errno, std::system_category()});
+      return std::unexpected(std::error_code{errno, std::system_category()});
     }
-    return Result<size_t>::err(std::error_code{errno, std::system_category()});
+    return std::unexpected(std::error_code{errno, std::system_category()});
   }
   return total;
 #else
   (void)sockfd; (void)filefd; (void)offset; (void)count;
-  return Result<size_t>::err(std::make_error_code(std::errc::not_supported));
+  return std::unexpected(std::make_error_code(std::errc::not_supported));
 #endif
 }
 
@@ -285,7 +285,7 @@ struct KtlsSessionParams256 {
   auto r = enable_ktls(sockfd, tx_params, rx_params);
   if (!r && r.error() == std::make_error_code(std::errc::not_supported)) {
     // kTLS not available on this kernel — silently fall back to user-space TLS.
-    return Result<void>::ok();
+    return Result<void>{};
   }
   return r;
 }
@@ -341,12 +341,12 @@ struct KtlsSessionParams256 {
 [[nodiscard]] inline Result<void> prepare_socket_for_ktls(int sockfd) noexcept {
 #if defined(__linux__)
   if (::setsockopt(sockfd, IPPROTO_TCP, TCP_ULP, "tls", sizeof("tls") - 1) < 0) {
-    return Result<void>::err(std::error_code{errno, std::system_category()});
+    return std::unexpected(std::error_code{errno, std::system_category()});
   }
-  return Result<void>::ok();
+  return Result<void>{};
 #else
   (void)sockfd;
-  return Result<void>::err(std::make_error_code(std::errc::not_supported));
+  return std::unexpected(std::make_error_code(std::errc::not_supported));
 #endif
 }
 

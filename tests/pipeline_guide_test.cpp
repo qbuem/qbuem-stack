@@ -1,17 +1,17 @@
 /**
  * @file tests/pipeline_guide_test.cpp
- * @brief Pipeline Master Guide 패턴 검증 테스트.
+ * @brief Pipeline Master Guide pattern validation tests.
  *
- * 이 테스트 파일은 `docs/pipeline-master-guide.md`에서 소개된 각 패턴과
- * 레시피를 실제로 검증합니다.
+ * This test file validates each pattern and recipe introduced in
+ * `docs/pipeline-master-guide.md`.
  *
- * ## 커버리지
- * §3-2  DynamicPipeline 기본 동작 / hot_swap
- * §4-1  Bulkheading — 무거운 액션을 별도 워커로 격리
- * §5-1  Fan-out (Broadcast) — PipelineGraph 1→N 분기
- * §5-1  Fan-in  (Merge)    — PipelineGraph N→1 수집
- * §5-2  Sidecar Observation — T-pipe 복사 관찰
- * §5-2  Feedback Loop       — 실패 아이템 업스트림 재전송
+ * ## Coverage
+ * §3-2  DynamicPipeline basic operation / hot_swap
+ * §4-1  Bulkheading — isolate heavy actions to a separate worker
+ * §5-1  Fan-out (Broadcast) — PipelineGraph 1→N branching
+ * §5-1  Fan-in  (Merge)    — PipelineGraph N→1 collection
+ * §5-2  Sidecar Observation — T-pipe copy observation
+ * §5-2  Feedback Loop       — upstream retransmit of failed items
  * §6A   Sensor Fusion (N:1 Sync) — ServiceRegistry Gather
  * §6B   Hardware Batching (NPU)  — BatchAction
  * §6C   Resilient WAS (DLQ)      — DlqAction + DeadLetterQueue
@@ -45,9 +45,9 @@
 using namespace qbuem;
 using namespace std::chrono_literals;
 
-// ─── 공통 헬퍼 ───────────────────────────────────────────────────────────────
+// ─── Common helpers ───────────────────────────────────────────────────────────
 
-/// GTest 환경에서 Dispatcher를 안전하게 실행/정지하는 RAII 래퍼
+/// RAII wrapper that safely runs and stops a Dispatcher in a GTest environment.
 struct RunGuard {
     Dispatcher dispatcher;
     std::jthread thread;
@@ -81,7 +81,7 @@ struct RunGuard {
     }
 };
 
-/// 채널에서 최대 `n`개 항목을 타임아웃 `timeout` 내에 수집합니다.
+/// Collects up to `n` items from the channel within the given `timeout`.
 template <typename T>
 std::vector<T> collect(
     std::shared_ptr<AsyncChannel<ContextualItem<T>>> ch,
@@ -103,10 +103,10 @@ std::vector<T> collect(
 // §3-2  DynamicPipeline
 // =============================================================================
 
-// ── 3-2-1: 기본 스테이지 실행 ─────────────────────────────────────────────
+// ── 3-2-1: Basic stage execution ──────────────────────────────────────────
 
 TEST(DynamicPipeline, BasicStageExecution) {
-    // Guide §3-2: 런타임에 스테이지를 추가하고 처리 결과 검증
+    // Guide §3-2: Add stages at runtime and verify processing results
     DynamicPipeline<int> dp;
     dp.add_stage("double", [](int x, ActionEnv) -> Task<Result<int>> {
         co_return x * 2;
@@ -126,17 +126,17 @@ TEST(DynamicPipeline, BasicStageExecution) {
     // double(x) + 1: 1→3, 2→5, 3→7, 4→9, 5→11
     ASSERT_EQ(results.size(), 5u);
     for (int r : results) {
-        EXPECT_GT(r, 0) << "결과는 양수여야 함";
+        EXPECT_GT(r, 0) << "result must be positive";
     }
     dp.stop();
 }
 
-// ── 3-2-2: Hot-swap — 실행 중 스테이지 교체 ──────────────────────────────
+// ── 3-2-2: Hot-swap — replace stage while running ─────────────────────────
 
 TEST(DynamicPipeline, HotSwapReplaceStage) {
-    // Guide §3-2: Hot-swapping — factory 교체 및 파이프라인 재시작으로 새 함수 적용
-    // hot_swap은 factory를 교체하고 기존 워커에 stop 신호를 보냅니다.
-    // 새 워커는 새로운 DynamicPipeline으로 재시작해야 합니다.
+    // Guide §3-2: Hot-swapping — replace the factory and restart the pipeline to apply the new function.
+    // hot_swap replaces the factory and sends a stop signal to existing workers.
+    // New workers must be started by restarting with a new DynamicPipeline.
 
     // Phase 1: v1 (×2)
     {
@@ -156,7 +156,7 @@ TEST(DynamicPipeline, HotSwapReplaceStage) {
         g.run_and_wait([]() -> Task<void> { co_return; });
     }
 
-    // hot_swap 동작 검증: 존재하지 않는 스테이지는 false, 존재하면 true
+    // Verify hot_swap behavior: nonexistent stage returns false, existing returns true
     {
         DynamicPipeline<int> dp;
         dp.add_stage("transform", [](int x, ActionEnv) -> Task<Result<int>> {
@@ -168,7 +168,7 @@ TEST(DynamicPipeline, HotSwapReplaceStage) {
         EXPECT_TRUE(dp.hot_swap("transform", [](int x, ActionEnv) -> Task<Result<int>> {
             co_return x * 10;  // v2: ×10
         }));
-        // hot_swap 후 새 파이프라인 시작
+        // Start new pipeline after hot_swap
         RunGuard g;
         dp.start(g.dispatcher);
         dp.try_push(10);
@@ -182,12 +182,12 @@ TEST(DynamicPipeline, HotSwapReplaceStage) {
     }
 }
 
-// ── 3-2-3: 스테이지 추가 — 런타임에 스테이지 삽입 ──────────────────────
+// ── 3-2-3: Add stage — insert a stage at runtime ────────────────────────
 
 TEST(DynamicPipeline, AddStageAtRuntime) {
-    // add_stage는 start() 전후 모두 호출 가능.
-    // start() 전에 추가된 스테이지만 워커가 스폰됨.
-    // start() 후 추가 시 새 스테이지는 stop/start 재시작 후 활성화됨.
+    // add_stage can be called before or after start().
+    // Only stages added before start() will have workers spawned.
+    // Stages added after start() become active after a stop/start restart.
     DynamicPipeline<int> dp;
     dp.add_stage("first", [](int x, ActionEnv) -> Task<Result<int>> {
         co_return x + 100;
@@ -208,21 +208,21 @@ TEST(DynamicPipeline, AddStageAtRuntime) {
 }
 
 // =============================================================================
-// §4-1  Bulkheading — 무거운 액션의 독립적인 워커 격리
+// §4-1  Bulkheading — independent worker isolation for heavy actions
 // =============================================================================
 
 TEST(Bulkheading, HeavyActionIsolatedFromLight) {
-    // Guide §4-1: heavy 액션에 별도 워커 풀을 부여해 light 액션이 블록되지 않는 것 확인
+    // Guide §4-1: assign a separate worker pool to heavy actions to verify light actions are not blocked
     std::atomic<size_t> light_count{0};
     std::atomic<size_t> heavy_count{0};
 
-    // light 스테이지: 즉시 처리
+    // light stage: processed immediately
     auto light_fn = [&](int x) -> Task<Result<int>> {
         light_count.fetch_add(1, std::memory_order_relaxed);
         co_return x;
     };
 
-    // heavy 스테이지: 독립 워커 풀 (min=1, max=4)
+    // heavy stage: independent worker pool (min=1, max=4)
     auto heavy_fn = [&](int x) -> Task<Result<int>> {
         heavy_count.fetch_add(1, std::memory_order_relaxed);
         co_return x * 2;
@@ -251,8 +251,8 @@ TEST(Bulkheading, HeavyActionIsolatedFromLight) {
 
     pipeline.stop();
 
-    EXPECT_EQ(light_count.load(), kItems) << "light 스테이지 처리 수 불일치";
-    EXPECT_EQ(heavy_count.load(), kItems) << "heavy 스테이지 처리 수 불일치";
+    EXPECT_EQ(light_count.load(), kItems) << "light stage processed count mismatch";
+    EXPECT_EQ(heavy_count.load(), kItems) << "heavy stage processed count mismatch";
 }
 
 // =============================================================================
@@ -260,7 +260,7 @@ TEST(Bulkheading, HeavyActionIsolatedFromLight) {
 // =============================================================================
 
 TEST(PipelineGraph, FanOutBroadcast) {
-    // Guide §5-1: 하나의 소스 → 두 싱크(main, audit)
+    // Guide §5-1: one source → two sinks (main, audit)
     struct Msg { std::string content; std::string branch; };
 
     PipelineGraph<Msg> graph;
@@ -289,7 +289,7 @@ TEST(PipelineGraph, FanOutBroadcast) {
     for (size_t i = 0; i < kItems; ++i)
         graph.try_push(Msg{"msg-" + std::to_string(i), ""});
 
-    // 팬아웃: 각 입력이 2개 출력을 생성 → 총 kItems*2
+    // fan-out: each input produces 2 outputs → total kItems*2
     auto results = collect(graph.output(), kItems * 2);
 
     size_t main_cnt  = 0, audit_cnt = 0;
@@ -298,17 +298,17 @@ TEST(PipelineGraph, FanOutBroadcast) {
         if (r.branch == "audit") ++audit_cnt;
     }
 
-    EXPECT_EQ(main_cnt,  kItems) << "main 브랜치 출력 수 불일치";
-    EXPECT_EQ(audit_cnt, kItems) << "audit 브랜치 출력 수 불일치";
+    EXPECT_EQ(main_cnt,  kItems) << "main branch output count mismatch";
+    EXPECT_EQ(audit_cnt, kItems) << "audit branch output count mismatch";
     graph.stop();
 }
 
 // =============================================================================
-// §5-1  Fan-in (Merge) — 여러 소스 → 하나의 출력
+// §5-1  Fan-in (Merge) — multiple sources → single output
 // =============================================================================
 
 TEST(PipelineGraph, FanInMerge) {
-    // Guide §5-1: 두 소스(source_a, source_b) → 공통 처리 노드 → 싱크
+    // Guide §5-1: two sources (source_a, source_b) → common processing node → sink
     struct Event { int id; std::string from; };
 
     PipelineGraph<Event> graph;
@@ -331,7 +331,7 @@ TEST(PipelineGraph, FanInMerge) {
     RunGuard g(2);
     graph.start(g.dispatcher);
 
-    // 두 소스에 각각 5개 투입 → 총 10개 출력
+    // Push 5 items to each source → 10 total outputs
     constexpr size_t kEach = 5;
     for (size_t i = 0; i < kEach; ++i) {
         graph.try_push(Event{static_cast<int>(i * 2),     ""});  // source_a
@@ -339,16 +339,16 @@ TEST(PipelineGraph, FanInMerge) {
     }
 
     auto results = collect(graph.output(), kEach * 2);
-    EXPECT_GE(results.size(), kEach) << "팬인 후 결과 수 부족";
+    EXPECT_GE(results.size(), kEach) << "too few results after fan-in";
     graph.stop();
 }
 
 // =============================================================================
-// §5-1  Conditional Edge (A/B 라우팅) — edge_if 술어 라우팅
+// §5-1  Conditional Edge (A/B routing) — edge_if predicate routing
 // =============================================================================
 
 TEST(PipelineGraph, ConditionalEdgeRouting) {
-    // edge_if: 짝수 → even_sink, 홀수 → odd_sink
+    // edge_if: even → even_sink, odd → odd_sink
     PipelineGraph<int> graph;
     graph
         .node("source", [](int x, ActionEnv) -> Task<Result<int>> { co_return x; },
@@ -375,29 +375,29 @@ TEST(PipelineGraph, ConditionalEdgeRouting) {
     ASSERT_EQ(results.size(), 6u);
 
     for (int r : results) {
-        // 짝수 경로는 *10 이므로 10의 배수, 홀수 경로는 *100 이므로 100의 배수
+        // even path multiplies by 10 (multiples of 10), odd path multiplies by 100 (multiples of 100)
         bool is_even_branch = (r % 10 == 0) && (r % 100 != 0);
         bool is_odd_branch  = (r % 100 == 0);
         EXPECT_TRUE(is_even_branch || is_odd_branch)
-            << "라우팅 결과가 두 경로 중 하나여야 함: r=" << r;
+            << "routing result must belong to one of the two paths: r=" << r;
     }
     graph.stop();
 }
 
 // =============================================================================
-// §5-2  Sidecar Observation — T-pipe 복사 관찰
+// §5-2  Sidecar Observation — T-pipe copy observation
 // =============================================================================
 
 TEST(SidecarObservation, TeeChannelDoesNotAffectLatency) {
-    // Guide §5-2: 관찰 경로가 메인 경로의 처리 결과에 영향을 주지 않아야 함
+    // Guide §5-2: the observation path must not affect the main path's processing result
     std::atomic<size_t> observed{0};
     auto side_ch = std::make_shared<AsyncChannel<ContextualItem<int>>>(64);
 
     auto tee_fn = [&side_ch, &observed](int x, ActionEnv) -> Task<Result<int>> {
-        // 사이드카: 값을 복사해 관찰 채널에 넣음 (메인 경로는 원본 반환)
+        // sidecar: copy value into observation channel (main path returns original)
         side_ch->try_send(ContextualItem<int>{x, {}});
         observed.fetch_add(1, std::memory_order_relaxed);
-        co_return x; // 원본 그대로 통과
+        co_return x; // pass through unchanged
     };
 
     auto main_fn = [](int x) -> Task<Result<int>> {
@@ -424,22 +424,22 @@ TEST(SidecarObservation, TeeChannelDoesNotAffectLatency) {
 
     pipeline.stop();
 
-    // 메인 경로 결과 확인 (×2)
+    // Verify main path results (×2)
     ASSERT_EQ(main_results.size(), kItems);
     for (int r : main_results)
         EXPECT_GT(r, 0);
 
-    // 사이드카 관찰 수 확인
-    EXPECT_EQ(observed.load(), kItems) << "사이드카 관찰 수가 투입 수와 다름";
+    // Verify sidecar observation count
+    EXPECT_EQ(observed.load(), kItems) << "sidecar observation count differs from input count";
 }
 
 // =============================================================================
-// §5-2  Feedback Loop — 실패 아이템 업스트림 재전송
+// §5-2  Feedback Loop — upstream retransmit of failed items
 // =============================================================================
 
 TEST(FeedbackLoop, FailedItemRetried) {
-    // Guide §5-2: 처리 실패 아이템을 업스트림 채널로 다시 전송
-    // 첫 번째 시도는 실패, 두 번째 시도는 성공하도록 attempt 카운터 사용
+    // Guide §5-2: retransmit failed items to the upstream channel
+    // First attempt fails, second attempt succeeds, using an attempt counter
     std::atomic<size_t> attempts{0};
 
     auto feedback_ch = std::make_shared<AsyncChannel<ContextualItem<int>>>(64);
@@ -447,7 +447,7 @@ TEST(FeedbackLoop, FailedItemRetried) {
     auto fn = [&](int x, ActionEnv) -> Task<Result<int>> {
         size_t attempt = attempts.fetch_add(1, std::memory_order_relaxed) + 1;
         if (attempt < 3) {
-            // 재시도 채널에 다시 투입
+            // re-push to retry channel
             feedback_ch->try_send(ContextualItem<int>{x, {}});
             co_return unexpected(std::make_error_code(std::errc::resource_unavailable_try_again));
         }
@@ -460,10 +460,10 @@ TEST(FeedbackLoop, FailedItemRetried) {
     RunGuard g;
     action.start(g.dispatcher, out_ch);
 
-    // 첫 번째 투입
+    // First push
     action.try_push(42);
 
-    // feedback_ch에서 재시도 항목을 action으로 다시 투입
+    // Re-push retry items from feedback_ch back into action
     auto refeeder = [&]() -> Task<void> {
         for (size_t i = 0; i < 5; ++i) {
             auto item = co_await feedback_ch->recv();
@@ -473,7 +473,7 @@ TEST(FeedbackLoop, FailedItemRetried) {
     };
     g.dispatcher.spawn(refeeder());
 
-    // 성공 결과 대기
+    // Wait for success result
     auto results = collect(out_ch, 1, 5000ms);
 
     // Close feedback_ch first so the refeeder coroutine can exit cleanly,
@@ -481,9 +481,9 @@ TEST(FeedbackLoop, FailedItemRetried) {
     feedback_ch->close();
     action.stop();
 
-    ASSERT_FALSE(results.empty()) << "피드백 루프로 재시도 후 결과가 없음";
-    EXPECT_EQ(results[0], 420) << "42*10=420 이어야 함";
-    EXPECT_GE(attempts.load(), 3u) << "최소 3번 시도 필요";
+    ASSERT_FALSE(results.empty()) << "no result after retry via feedback loop";
+    EXPECT_EQ(results[0], 420) << "should be 42*10=420";
+    EXPECT_GE(attempts.load(), 3u) << "at least 3 attempts required";
 }
 
 // =============================================================================
@@ -509,7 +509,7 @@ struct SensorMsg {
 } // namespace
 
 TEST(SensorFusion, NToOneSyncViaServiceRegistry) {
-    // Guide Recipe A: ServiceRegistry에 partial 데이터 저장 → 두 센서 동기화
+    // Guide Recipe A: store partial data in ServiceRegistry → synchronize two sensors
     ServiceRegistry registry;
 
     auto gather = [](SensorMsg msg, ActionEnv env) -> Task<Result<FusedPose>> {
@@ -546,14 +546,14 @@ TEST(SensorFusion, NToOneSyncViaServiceRegistry) {
     constexpr size_t kFrames = 6;
     for (size_t i = 0; i < kFrames; ++i) {
         std::string fid = "f" + std::to_string(i);
-        // GPS 먼저, IMU 나중
+        // GPS first, IMU second
         action.try_push(SensorMsg{SensorMsg::Kind::GPS,
                                    {}, GpsData{fid, 37.5 + i*0.01, 127.0}});
         action.try_push(SensorMsg{SensorMsg::Kind::IMU,
                                    ImuData{fid, float(i), float(i), 9.8f}});
     }
 
-    // kFrames*2 메시지 중 complete=true인 것만 수집
+    // Collect only complete=true items out of kFrames*2 messages
     size_t fused = 0;
     auto deadline = std::chrono::steady_clock::now() + 5s;
     while (fused < kFrames && std::chrono::steady_clock::now() < deadline) {
@@ -563,7 +563,7 @@ TEST(SensorFusion, NToOneSyncViaServiceRegistry) {
     }
 
     action.stop();
-    EXPECT_EQ(fused, kFrames) << "모든 프레임이 융합되어야 함";
+    EXPECT_EQ(fused, kFrames) << "all frames must be fused";
 }
 
 // =============================================================================
@@ -571,7 +571,7 @@ TEST(SensorFusion, NToOneSyncViaServiceRegistry) {
 // =============================================================================
 
 TEST(HardwareBatching, BatchActionAccumulatesAndFlushes) {
-    // Guide Recipe B: max_batch_size 도달 또는 타임아웃 시 배치 처리
+    // Guide Recipe B: batch processing when max_batch_size is reached or on timeout
     std::atomic<size_t> batch_calls{0};
     std::atomic<size_t> total_items{0};
 
@@ -592,7 +592,7 @@ TEST(HardwareBatching, BatchActionAccumulatesAndFlushes) {
     RunGuard g;
     ba.start(g.dispatcher);
 
-    // 정확히 2배치 = 8개 투입
+    // Exactly 2 batches = 8 items pushed
     constexpr size_t kItems = 8;
     for (size_t i = 1; i <= kItems; ++i)
         ba.try_push(static_cast<int>(i));
@@ -601,16 +601,16 @@ TEST(HardwareBatching, BatchActionAccumulatesAndFlushes) {
 
     ba.stop();
 
-    // 모든 아이템이 처리되어야 함
-    EXPECT_EQ(results.size(), kItems) << "배치 처리 후 출력 수 불일치";
-    // 최소 2번 배치 호출 (kItems / kBatch)
+    // All items must be processed
+    EXPECT_EQ(results.size(), kItems) << "output count mismatch after batch processing";
+    // At least 2 batch calls (kItems / kBatch)
     EXPECT_GE(batch_calls.load(), kItems / kBatch)
-        << "배치 함수 호출 수 부족";
-    EXPECT_EQ(total_items.load(), kItems) << "처리된 총 아이템 수 불일치";
+        << "insufficient batch function call count";
+    EXPECT_EQ(total_items.load(), kItems) << "total processed item count mismatch";
 }
 
 TEST(HardwareBatching, BatchActionTimeoutFlush) {
-    // max_batch_size 미달이어도 max_wait_ms 후 플러시 확인
+    // Verify flush after max_wait_ms even when max_batch_size is not reached
     std::atomic<size_t> batches{0};
 
     BatchAction<int,int> ba{
@@ -619,8 +619,8 @@ TEST(HardwareBatching, BatchActionTimeoutFlush) {
             co_return v;
         },
         BatchAction<int,int>::Config{
-            .max_batch_size = 100,   // 매우 큰 배치 크기
-            .max_wait_ms    = 30,    // 30ms 후 강제 플러시
+            .max_batch_size = 100,   // very large batch size
+            .max_wait_ms    = 30,    // force flush after 30ms
             .workers        = 1,
         }
     };
@@ -628,13 +628,13 @@ TEST(HardwareBatching, BatchActionTimeoutFlush) {
     RunGuard g;
     ba.start(g.dispatcher);
 
-    // 1개만 투입 — 배치 크기 미달, 타임아웃으로 플러시 유발
+    // Push only 1 item — below batch size, timeout triggers flush
     ba.try_push(99);
 
     auto results = collect(ba.output(), 1, 2000ms);
     ba.stop();
 
-    ASSERT_EQ(results.size(), 1u) << "타임아웃 플러시 후 결과 없음";
+    ASSERT_EQ(results.size(), 1u) << "no result after timeout flush";
     EXPECT_EQ(results[0], 99);
     EXPECT_GE(batches.load(), 1u);
 }
@@ -644,13 +644,13 @@ TEST(HardwareBatching, BatchActionTimeoutFlush) {
 // =============================================================================
 
 TEST(DeadLetterQueue, DlqActionSendsFailuresToDlq) {
-    // Guide Recipe C: max_attempts 초과 후 DLQ로 전송
+    // Guide Recipe C: send to DLQ after exceeding max_attempts
     auto dlq = std::make_shared<DeadLetterQueue<int>>();
 
     std::atomic<int> attempt_counter{0};
     auto failing_fn = [&](int x, ActionEnv) -> Task<Result<int>> {
         attempt_counter.fetch_add(1, std::memory_order_relaxed);
-        // 항상 실패
+        // always fail
         (void)x;
         co_return unexpected(std::make_error_code(std::errc::io_error));
     };
@@ -667,20 +667,20 @@ TEST(DeadLetterQueue, DlqActionSendsFailuresToDlq) {
 
     action.try_push(42);
 
-    // DLQ에 항목이 쌓일 때까지 대기
+    // Wait until items accumulate in the DLQ
     auto deadline = std::chrono::steady_clock::now() + 3s;
     while (dlq->size() == 0 && std::chrono::steady_clock::now() < deadline)
         std::this_thread::sleep_for(5ms);
 
     action.stop();
 
-    EXPECT_GE(dlq->size(), 1u) << "DLQ에 실패 항목이 없음";
+    EXPECT_GE(dlq->size(), 1u) << "no failed items in DLQ";
     EXPECT_GE(attempt_counter.load(), static_cast<int>(kMaxAttempts))
-        << "최대 시도 횟수만큼 재시도되어야 함";
+        << "should retry up to the maximum attempt count";
 }
 
 TEST(DeadLetterQueue, DlqActionSuccessSkipsDlq) {
-    // 성공 시에는 DLQ로 전송되지 않아야 함
+    // On success, items must not be sent to the DLQ
     auto dlq = std::make_shared<DeadLetterQueue<int>>();
 
     DlqAction<int,int> dlq_action{
@@ -701,11 +701,11 @@ TEST(DeadLetterQueue, DlqActionSuccessSkipsDlq) {
 
     ASSERT_EQ(results.size(), 1u);
     EXPECT_EQ(results[0], 10);
-    EXPECT_EQ(dlq->size(), 0u) << "성공한 항목은 DLQ에 들어가면 안 됨";
+    EXPECT_EQ(dlq->size(), 0u) << "successful items must not enter the DLQ";
 }
 
 TEST(DeadLetterQueue, DlqDrainReturnsAllLetters) {
-    // DeadLetterQueue::drain() 검증
+    // Verify DeadLetterQueue::drain()
     auto dlq = std::make_shared<DeadLetterQueue<std::string>>();
     dlq->push("msg1", {}, std::make_error_code(std::errc::io_error));
     dlq->push("msg2", {}, std::make_error_code(std::errc::timed_out));
@@ -715,18 +715,18 @@ TEST(DeadLetterQueue, DlqDrainReturnsAllLetters) {
 
     auto letters = dlq->drain();
     EXPECT_EQ(letters.size(), 3u);
-    EXPECT_EQ(dlq->size(), 0u) << "drain() 후 DLQ는 비어있어야 함";
+    EXPECT_EQ(dlq->size(), 0u) << "DLQ must be empty after drain()";
 }
 
 TEST(DeadLetterQueue, DlqMaxSizeDropsOldest) {
-    // max_size 초과 시 가장 오래된 항목 드롭
+    // Drop oldest items when max_size is exceeded
     DeadLetterQueue<int> dlq({.max_size = 3});
     for (int i = 1; i <= 5; ++i)
         dlq.push(i, {}, std::make_error_code(std::errc::io_error));
 
-    EXPECT_EQ(dlq.size(), 3u) << "max_size 초과분은 드롭되어야 함";
+    EXPECT_EQ(dlq.size(), 3u) << "items exceeding max_size must be dropped";
     auto letters = dlq.drain();
-    // 가장 오래된 1, 2가 드롭되고 3,4,5만 남아야 함
+    // oldest items 1, 2 are dropped; only 3, 4, 5 remain
     ASSERT_EQ(letters.size(), 3u);
     EXPECT_EQ(letters[0].item, 3);
     EXPECT_EQ(letters[1].item, 4);
@@ -738,27 +738,27 @@ TEST(DeadLetterQueue, DlqMaxSizeDropsOldest) {
 // =============================================================================
 
 TEST(PeriodicPollingSource, PollsAtRegularIntervals) {
-    // Guide §7: 센서/하드웨어 레지스터 폴링 소스 패턴
-    // co_await sleep() + 채널 push 루프
+    // Guide §7: sensor/hardware register polling source pattern
+    // co_await sleep() + channel push loop
     auto poll_ch = std::make_shared<AsyncChannel<ContextualItem<int>>>(64);
     std::atomic<size_t> poll_count{0};
     std::atomic<bool>   stop_flag{false};
 
     RunGuard g;
 
-    // Periodic Source 코루틴 (가이드 §7 패턴)
+    // Periodic Source coroutine (guide §7 pattern)
     auto polling_source = [&]() -> Task<void> {
         while (!stop_flag.load(std::memory_order_acquire)) {
             int sensor_value = static_cast<int>(poll_count.fetch_add(1, std::memory_order_relaxed));
             poll_ch->try_send(ContextualItem<int>{sensor_value, {}});
-            // co_await qbuem::sleep(10ms) — 테스트 환경에서는 짧은 수동 대기로 대체
+            // co_await qbuem::sleep(10ms) — replaced with short manual wait in test environment
             co_await std::suspend_never{};
         }
     };
 
     g.dispatcher.spawn(polling_source());
 
-    // 최소 5개 폴링 이벤트 수집
+    // Collect at least 5 polling events
     auto deadline = std::chrono::steady_clock::now() + 3s;
     size_t received = 0;
     while (received < 5 && std::chrono::steady_clock::now() < deadline) {
@@ -769,16 +769,16 @@ TEST(PeriodicPollingSource, PollsAtRegularIntervals) {
 
     stop_flag.store(true, std::memory_order_release);
 
-    EXPECT_GE(received, 5u)    << "폴링 소스가 5회 이상 이벤트를 발생시켜야 함";
-    EXPECT_GE(poll_count.load(), received) << "폴링 카운터가 수신 수 이상이어야 함";
+    EXPECT_GE(received, 5u)    << "polling source must generate at least 5 events";
+    EXPECT_GE(poll_count.load(), received) << "poll counter must be at least the received count";
 }
 
 // =============================================================================
-// §7  Source Pinning — Dispatcher::spawn_on (코어 핀닝 API 검증)
+// §7  Source Pinning — Dispatcher::spawn_on (core pinning API validation)
 // =============================================================================
 
 TEST(PeriodicPollingSource, MultiSourceContextIsolation) {
-    // 두 개의 독립적인 소스 코루틴이 서로 다른 Context를 갖고 채널에 푸시
+    // Two independent source coroutines push to the channel with different Contexts
     struct Tagged { int val; std::string source_id; };
 
     auto ch = std::make_shared<AsyncChannel<ContextualItem<Tagged>>>(64);
@@ -818,16 +818,16 @@ TEST(PeriodicPollingSource, MultiSourceContextIsolation) {
         }
     }
 
-    EXPECT_GE(from_a, 1u) << "Source A에서 이벤트가 없음";
-    EXPECT_GE(from_b, 1u) << "Source B에서 이벤트가 없음";
+    EXPECT_GE(from_a, 1u) << "no events from Source A";
+    EXPECT_GE(from_b, 1u) << "no events from Source B";
 }
 
 // =============================================================================
-// §3-1  StaticPipeline — 컴파일 타임 타입 체인 추가 검증
+// §3-1  StaticPipeline — additional compile-time type chain validation
 // =============================================================================
 
 TEST(StaticPipeline, TypeChainIsCorrect) {
-    // 3단계 체인 타입 안전성 — pipeline_builder<>().add<>().build() 반환 타입 확인
+    // 3-stage chain type safety — verify return type of pipeline_builder<>().add<>().build()
     auto pipeline = pipeline_builder<int>()
         .add<std::string>([](int x) -> Task<Result<std::string>> {
             co_return std::to_string(x);
@@ -838,14 +838,14 @@ TEST(StaticPipeline, TypeChainIsCorrect) {
         .build();
 
     using P = StaticPipeline<int, size_t>;
-    static_assert(std::is_same_v<decltype(pipeline), P>, "타입 체인이 잘못됨");
+    static_assert(std::is_same_v<decltype(pipeline), P>, "type chain is incorrect");
 
     EXPECT_EQ(pipeline.state(), P::State::Created);
     ASSERT_NE(pipeline.output(), nullptr);
 }
 
 TEST(StaticPipeline, LiveEndToEndProcessing) {
-    // 실제 Dispatcher를 실행하고 결과를 수집하는 E2E 테스트
+    // E2E test running a real Dispatcher and collecting results
     auto pipeline = pipeline_builder<int>()
         .add<int>([](int x) -> Task<Result<int>> { co_return x * 3; })
         .add<int>([](int x) -> Task<Result<int>> { co_return x - 1; })
@@ -863,7 +863,7 @@ TEST(StaticPipeline, LiveEndToEndProcessing) {
 
     ASSERT_EQ(results.size(), kItems);
     for (int r : results) {
-        // x*3-1 범위: 1*3-1=2 ~ 8*3-1=23
+        // range of x*3-1: 1*3-1=2 to 8*3-1=23
         EXPECT_GE(r, 2);
         EXPECT_LE(r, 23);
     }

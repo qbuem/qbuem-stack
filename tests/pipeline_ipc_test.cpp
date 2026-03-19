@@ -1,6 +1,6 @@
 /**
  * @file tests/pipeline_ipc_test.cpp
- * @brief Pipeline ↔ MessageBus 연계 통합 테스트
+ * @brief Pipeline ↔ MessageBus integration tests
  */
 
 #include <qbuem/core/dispatcher.hpp>
@@ -21,7 +21,7 @@
 using namespace qbuem;
 using namespace std::chrono_literals;
 
-// ─── Yield: 코루틴을 한 번 yield해 같은 리액터의 다른 코루틴이 실행되도록 함 ──
+// ─── Yield: yield the coroutine once so other coroutines on the same reactor can run ──
 
 // Suspends the current coroutine once and re-schedules it on the same reactor.
 // Use this instead of std::this_thread::sleep_for inside a coroutine's
@@ -38,7 +38,7 @@ struct Yield {
     void await_resume() noexcept {}
 };
 
-// ─── 공통 RunGuard ───────────────────────────────────────────────────────────
+// ─── Common RunGuard ─────────────────────────────────────────────────────────
 
 struct RunGuard {
     Dispatcher dispatcher;
@@ -72,7 +72,7 @@ struct RunGuard {
     }
 };
 
-// ─── MessageBusSink: init() 는 ok, sink() 는 bus.publish() ───────────────────
+// ─── MessageBusSink: init() returns ok, sink() calls bus.publish() ───────────
 
 TEST(MessageBusSinkTest, InitAlwaysOk) {
     MessageBus bus;
@@ -109,7 +109,7 @@ TEST(MessageBusSinkTest, SinkPublishesToBus) {
     EXPECT_EQ(last_val->load(), 99);
 }
 
-// ─── MessageBusSource: init() 구독, next() 메시지 수신 ──────────────────────
+// ─── MessageBusSource: init() subscribes, next() receives messages ───────────
 
 TEST(MessageBusSourceTest, InitSubscribesStream) {
     RunGuard guard;
@@ -234,7 +234,7 @@ TEST(PipelineBuilderWithSourceTest, SourceFeedsDataIntoPipeline) {
     EXPECT_EQ(sum->load(), 60);
 }
 
-// ─── 통합: with_source + stages + with_sink ──────────────────────────────────
+// ─── Integration: with_source + stages + with_sink ───────────────────────────
 
 TEST(PipelineIpcIntegration, SourceStageSinkEndToEnd) {
     RunGuard guard;

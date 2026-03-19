@@ -67,8 +67,13 @@ EpollReactor::~EpollReactor() {
 }
 
 // Helper: add or modify an fd in the epoll instance based on current callbacks.
+// All I/O fds use EPOLLET (edge-triggered) + EPOLLONESHOT to:
+//   - Minimize spurious wakeups (edge-triggered delivers one event per transition).
+//   - Ensure at most one thread fires a given fd's callback (EPOLLONESHOT
+//     disarms the fd after the first event; the reactor re-arms via EPOLL_CTL_MOD
+//     in poll() after invoking the callback).
 void EpollReactor::update_epoll(int fd, bool add) {
-  uint32_t events = 0;
+  uint32_t events = EPOLLET | EPOLLONESHOT;
   auto it = fd_callbacks_.find(fd);
   if (it != fd_callbacks_.end()) {
     if (it->second.read_cb)
@@ -209,7 +214,9 @@ Result<int> EpollReactor::poll(int timeout_ms) {
       continue;
     }
 
-    // Regular I/O event – copy callbacks to avoid UAF if they self-unregister
+    // Regular I/O event — copy callbacks to avoid UAF if they self-unregister.
+    // After invoking the callback we must re-arm the fd via EPOLL_CTL_MOD
+    // because EPOLLONESHOT automatically disarms it after the first event.
     auto cb_it = fd_callbacks_.find(fd);
     if (cb_it == fd_callbacks_.end())
       continue;
@@ -220,6 +227,12 @@ Result<int> EpollReactor::poll(int timeout_ms) {
     }
     if ((ev & EPOLLOUT) && cbs.write_cb) {
       cbs.write_cb(fd);
+    }
+
+    // Re-arm: the fd may have been unregistered by the callback; only
+    // re-arm if it still has active callbacks.
+    if (fd_callbacks_.contains(fd)) {
+      update_epoll(fd, /*add=*/false);
     }
   }
 
@@ -240,5 +253,16 @@ void EpollReactor::post(std::function<void()> fn) {
 void EpollReactor::stop() { running_ = false; }
 
 bool EpollReactor::is_running() const { return running_; }
+
+Result<void> EpollReactor::register_signal(int /*sig*/,
+                                           std::function<void(int)> /*callback*/) {
+  // Signal handling via signalfd is not yet implemented in EpollReactor.
+  // Use the kqueue reactor on macOS or implement signalfd(2) on Linux.
+  return std::unexpected(std::make_error_code(std::errc::not_supported));
+}
+
+Result<void> EpollReactor::unregister_signal(int /*sig*/) {
+  return std::unexpected(std::make_error_code(std::errc::not_supported));
+}
 
 } // namespace qbuem

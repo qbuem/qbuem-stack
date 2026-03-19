@@ -13,7 +13,7 @@
 | **Zero Dependency** | 헤더 공개 API에서 외부 라이브러리 노출 금지. 구현부(`.cpp`) 내부 한정 허용 |
 | **Zero Copy** | recv → parse → send 경로에서 memcpy 금지. IOVec scatter-gather, sendfile, MSG_ZEROCOPY |
 | **Shared-Nothing** | Reactor 1개 = Thread 1개. 스레드 간 공유 자료구조 없음 |
-| **C++20 only** | Coroutines, Concepts, span, ranges. POSIX 시스템콜 직접 사용 |
+| **C++23 only** | Coroutines, Concepts, span, ranges, `std::expected`, `std::print`. Direct POSIX syscall usage. |
 | **Platform headers only** | `<sys/socket.h>`, `<sys/uio.h>`, `<linux/io_uring.h>` — 커널/libc 헤더만 |
 
 ---

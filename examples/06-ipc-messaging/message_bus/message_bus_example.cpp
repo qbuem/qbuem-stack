@@ -1,6 +1,6 @@
 /**
  * @file examples/message_bus_example.cpp
- * @brief MessageBus 예시 — Pub/Sub, ServerStream, ClientStream
+ * @brief MessageBus example — Pub/Sub, ServerStream, ClientStream
  */
 #include <qbuem/core/dispatcher.hpp>
 #include <qbuem/core/task.hpp>
@@ -9,14 +9,15 @@
 
 #include <atomic>
 #include <chrono>
-#include <iostream>
 #include <string>
 #include <thread>
+#include <qbuem/compat/print.hpp>
 
 using namespace qbuem;
 using namespace std::chrono_literals;
+using std::println;
 
-// ─── 도메인 이벤트 ──────────────────────────────────────────────────────────
+// ─── Domain events ────────────────────────────────────────────────────────────
 
 struct OrderEvent {
     int    order_id;
@@ -29,7 +30,7 @@ struct InventoryUpdate {
     int         quantity_delta;
 };
 
-// ─── Unary Pub/Sub 예시 ─────────────────────────────────────────────────────
+// ─── Unary Pub/Sub example ────────────────────────────────────────────────────
 
 Task<Result<void>> pubsub_example(Dispatcher& dispatcher) {
     MessageBus bus;
@@ -37,43 +38,41 @@ Task<Result<void>> pubsub_example(Dispatcher& dispatcher) {
 
     std::atomic<int> received{0};
 
-    // 구독 1: 주문 처리 핸들러
+    // Subscription 1: order processing handler
     auto sub1 = bus.subscribe("orders", [&](MessageBus::Msg msg, Context) -> Task<Result<void>> {
         auto& ev = std::any_cast<const OrderEvent&>(msg);
         received.fetch_add(1, std::memory_order_relaxed);
-        std::cout << "[bus] Sub1: order_id=" << ev.order_id
-                  << " amount=" << ev.amount
-                  << " status=" << ev.status << "\n";
+        println("[bus] Sub1: order_id={} amount={} status={}",
+                  ev.order_id, ev.amount, ev.status);
         co_return {};
     });
 
-    // 구독 2: 동일 토픽 — 라운드로빈 분산
+    // Subscription 2: same topic — round-robin distribution
     auto sub2 = bus.subscribe("orders", [&](MessageBus::Msg msg, Context) -> Task<Result<void>> {
         auto& ev = std::any_cast<const OrderEvent&>(msg);
         received.fetch_add(1, std::memory_order_relaxed);
-        std::cout << "[bus] Sub2: order_id=" << ev.order_id
-                  << " amount=" << ev.amount << "\n";
+        println("[bus] Sub2: order_id={} amount={}", ev.order_id, ev.amount);
         co_return {};
     });
 
-    // 발행
+    // Publish
     for (int i = 1; i <= 4; ++i) {
         co_await bus.publish("orders", OrderEvent{i, i * 99.9, "created"});
     }
 
-    // 수신 대기
+    // Wait for receipt
     auto deadline = std::chrono::steady_clock::now() + 3s;
     while (received.load() < 4 && std::chrono::steady_clock::now() < deadline) {
         co_await std::suspend_never{};
     }
 
-    std::cout << "[bus] Received " << received.load() << " events\n";
+    println("[bus] Received {} events", received.load());
 
-    // 구독 해제 (sub1, sub2 소멸 시 자동)
+    // Unsubscribe (automatic when sub1, sub2 are destroyed)
     co_return {};
 }
 
-// ─── try_publish (논블로킹) 예시 ────────────────────────────────────────────
+// ─── try_publish (non-blocking) example ──────────────────────────────────────
 
 Task<Result<void>> try_publish_example(Dispatcher& dispatcher) {
     MessageBus bus;
@@ -85,34 +84,33 @@ Task<Result<void>> try_publish_example(Dispatcher& dispatcher) {
         [&](MessageBus::Msg msg, Context) -> Task<Result<void>> {
             auto& upd = std::any_cast<const InventoryUpdate&>(msg);
             inv_count.fetch_add(1, std::memory_order_relaxed);
-            std::cout << "[bus] Inventory: sku=" << upd.sku
-                      << " delta=" << upd.quantity_delta << "\n";
+            println("[bus] Inventory: sku={} delta={}", upd.sku, upd.quantity_delta);
             co_return {};
         });
 
-    // 논블로킹 발행
+    // Non-blocking publish
     bool ok = bus.try_publish("inventory", InventoryUpdate{"SKU-001", +10});
-    std::cout << "[bus] try_publish SKU-001: " << ok << "\n";
+    println("[bus] try_publish SKU-001: {}", ok);
 
     ok = bus.try_publish("inventory", InventoryUpdate{"SKU-002", -5});
-    std::cout << "[bus] try_publish SKU-002: " << ok << "\n";
+    println("[bus] try_publish SKU-002: {}", ok);
 
-    // 구독자 수 조회
-    std::cout << "[bus] inventory subscribers: "
-              << bus.subscriber_count("inventory") << "\n";
+    // Query subscriber count
+    println("[bus] inventory subscribers: {}",
+              bus.subscriber_count("inventory"));
 
     auto deadline = std::chrono::steady_clock::now() + 2s;
     while (inv_count.load() < 2 && std::chrono::steady_clock::now() < deadline)
         co_await std::suspend_never{};
 
-    std::cout << "[bus] Inventory events received: " << inv_count.load() << "\n";
+    println("[bus] Inventory events received: {}", inv_count.load());
     co_return {};
 }
 
-// ─── main ────────────────────────────────────────────────────────────────────
+// ─── main ─────────────────────────────────────────────────────────────────────
 
 int main() {
-    std::cout << "=== MessageBus Pub/Sub ===\n";
+    println("=== MessageBus Pub/Sub ===");
 
     Dispatcher dispatcher(2);
     std::jthread run_th([&] { dispatcher.run(); });

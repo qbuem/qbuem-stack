@@ -6,7 +6,7 @@
 
 ## Overview
 
-The simplest possible qbuem-stack HTTP application. Demonstrates how to create an `App`, register middleware and route handlers, and bind to a TCP port — all in under 35 lines of C++20.
+The simplest possible qbuem-stack HTTP application. Demonstrates how to create an `App`, register middleware and route handlers, and bind to a TCP port — all in under 35 lines of C++23.
 
 ## Scenario
 

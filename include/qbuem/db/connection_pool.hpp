@@ -290,7 +290,7 @@ inline Task<Result<void>> LockFreeConnectionPool::warmup() noexcept {
         idle_count_.fetch_add(1, std::memory_order_relaxed);
         total_count_.fetch_add(1, std::memory_order_relaxed);
     }
-    co_return Result<void>::ok();
+    co_return Result<void>{};
 }
 
 inline Task<Result<std::unique_ptr<IConnection>>> LockFreeConnectionPool::acquire() {

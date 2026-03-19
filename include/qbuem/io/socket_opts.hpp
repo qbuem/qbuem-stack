@@ -113,7 +113,7 @@ namespace qbuem::io {
  *
  * @param sockfd  Server socket fd belonging to a SO_REUSEPORT group.
  * @param cpu_id  CPU number to accept from (logical CPU, 0-based).
- * @returns `Result<void>::ok()` on success.
+ * @returns `Result<void>{}` on success.
  *          `errc::not_supported` on non-Linux or `ENOPROTOOPT`.
  *          `std::system_category()` error_code for other errors.
  */
@@ -171,7 +171,7 @@ namespace qbuem::io {
  * @param sockfd     Socket file descriptor to attach the cBPF program to.
  *                   Any socket in the `SO_REUSEPORT` group can be used.
  * @param group_size Number of sockets in the `SO_REUSEPORT` group. Used as modulus.
- * @returns `Result<void>::ok()` on success.
+ * @returns `Result<void>{}` on success.
  *          `errc::not_supported` on non-Linux or `ENOPROTOOPT`.
  *          `std::system_category()` error_code for other errors.
  */
@@ -238,7 +238,7 @@ namespace qbuem::io {
  * @endcode
  *
  * @param sockfd TCP socket file descriptor to enable migration on.
- * @returns `Result<void>::ok()` on success.
+ * @returns `Result<void>{}` on success.
  *          `errc::not_supported` on non-Linux or `ENOPROTOOPT`.
  *          `std::system_category()` error_code for other errors.
  */
@@ -293,7 +293,7 @@ namespace qbuem::io {
  *
  * @param sockfd    TCP socket file descriptor to configure TFO on.
  * @param queue_len Maximum TFO pending connection queue length (default: 10).
- * @returns `Result<void>::ok()` on success.
+ * @returns `Result<void>{}` on success.
  *          `errc::not_supported` on non-Linux or `ENOPROTOOPT`.
  *          `std::system_category()` error_code for other errors.
  */
@@ -354,7 +354,7 @@ namespace qbuem::io {
  * @endcode
  *
  * @param sockfd Socket file descriptor to enable zero-copy on.
- * @returns `Result<void>::ok()` on success.
+ * @returns `Result<void>{}` on success.
  *          `errc::not_supported` on non-Linux or `ENOPROTOOPT`.
  *          `std::system_category()` error_code for other errors.
  */
@@ -387,7 +387,7 @@ namespace qbuem::io {
  * Use together with `SO_INCOMING_CPU` / `SO_ATTACH_REUSEPORT_CBPF`.
  *
  * @param sockfd Server socket file descriptor.
- * @returns `Result<void>::ok()` on success.
+ * @returns `Result<void>{}` on success.
  *          `errc::not_supported` on unsupported platforms.
  *          `std::system_category()` error_code for other errors.
  */
@@ -412,7 +412,7 @@ namespace qbuem::io {
  * Prevents `Address already in use` errors on server restart.
  *
  * @param sockfd Socket file descriptor.
- * @returns `Result<void>::ok()` on success.
+ * @returns `Result<void>{}` on success.
  *          `std::system_category()` error_code on failure.
  */
 [[nodiscard]] inline Result<void> set_reuseaddr(int sockfd) noexcept {

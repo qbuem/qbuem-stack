@@ -3,7 +3,7 @@
 #include <qbuem/http/router.hpp>
 
 #include <cstdint>
-#include <cstdio>
+#include <format>
 #include <random>
 #include <string>
 #include <string_view>
@@ -32,15 +32,12 @@ inline std::string uuid_v4() {
   // Set variant 10xx: bits 62–63 of clock_seq = 10
   lo = (lo & 0x3FFFFFFFFFFFFFFFULL) | 0x8000000000000000ULL;
 
-  char buf[37];
-  std::snprintf(buf, sizeof(buf),
-                "%08x-%04x-%04x-%04x-%012llx",
-                static_cast<uint32_t>(hi >> 32),
-                static_cast<uint16_t>(hi >> 16),
-                static_cast<uint16_t>(hi),
-                static_cast<uint16_t>(lo >> 48),
-                static_cast<unsigned long long>(lo & 0x0000FFFFFFFFFFFFULL));
-  return buf;
+  return std::format("{:08x}-{:04x}-{:04x}-{:04x}-{:012x}",
+                     static_cast<uint32_t>(hi >> 32),
+                     static_cast<uint16_t>(hi >> 16),
+                     static_cast<uint16_t>(hi),
+                     static_cast<uint16_t>(lo >> 48),
+                     lo & 0x0000FFFFFFFFFFFFULL);
 }
 
 } // namespace detail

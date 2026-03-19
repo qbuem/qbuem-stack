@@ -1,21 +1,21 @@
 /**
  * @file db_session_example.cpp
- * @brief DB 연결 풀 + 세션 저장소 예제.
+ * @brief DB connection pool + session store example.
  *
- * ## 커버리지 — db/connection_pool.hpp
- * - IConnection                — 연결 인터페이스 (query, prepare, ping)
- * - IConnectionPool            — 풀 인터페이스 (acquire, active_count, idle_count)
- * - LockFreeConnectionPool     — Lock-free O(1) 연결 풀
- * - PoolConfig                 — 풀 설정 (min_size/max_size/idle_timeout_ms)
- * - LockFreeConnectionPool::acquire()  — 연결 획득
- * - PooledConnection           — RAII 연결 소유권
+ * ## Coverage — db/connection_pool.hpp
+ * - IConnection                — connection interface (query, prepare, ping)
+ * - IConnectionPool            — pool interface (acquire, active_count, idle_count)
+ * - LockFreeConnectionPool     — lock-free O(1) connection pool
+ * - PoolConfig                 — pool configuration (min_size/max_size/idle_timeout_ms)
+ * - LockFreeConnectionPool::acquire()  — connection acquisition
+ * - PooledConnection           — RAII connection ownership
  *
- * ## 커버리지 — core/session_store.hpp
- * - ISessionStore              — 세션 저장소 인터페이스
- * - ISessionStore::get()       — 세션 조회
- * - ISessionStore::set()       — 세션 저장 (TTL 포함)
- * - ISessionStore::del()       — 세션 삭제
- * - ISessionStore::touch()     — TTL 갱신
+ * ## Coverage — core/session_store.hpp
+ * - ISessionStore              — session store interface
+ * - ISessionStore::get()       — session lookup
+ * - ISessionStore::set()       — session storage (with TTL)
+ * - ISessionStore::del()       — session deletion
+ * - ISessionStore::touch()     — TTL renewal
  */
 
 #include <qbuem_json/qbuem_json.hpp>
@@ -23,10 +23,10 @@
 #include <qbuem/core/session_store.hpp>
 #include <qbuem/core/task.hpp>
 #include <qbuem/db/connection_pool.hpp>
+#include <qbuem/compat/print.hpp>
 
 #include <atomic>
 #include <chrono>
-#include <cstdio>
 #include <map>
 #include <mutex>
 #include <optional>
@@ -34,7 +34,7 @@
 #include <thread>
 #include <vector>
 
-/// 세션 페이로드 DTO — ISessionStore 에 저장되는 JSON 데이터.
+/// Session payload DTO — JSON data stored in ISessionStore.
 struct SessionData {
     int         user_id = 0;
     std::string role;
@@ -45,11 +45,11 @@ using namespace qbuem;
 using namespace qbuem::db;
 using namespace std::chrono_literals;
 
-// qbuem_json 포함 시 qbuem::Value(JSON)와 qbuem::db::Value 이름 충돌 방지
+// Prevent name collision between qbuem::Value (JSON) and qbuem::db::Value
 using DbValue = qbuem::db::Value;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// §1  Mock DB 연결 구현
+// §1  Mock DB connection implementation
 // ─────────────────────────────────────────────────────────────────────────────
 
 static std::atomic<int> g_conn_id_counter{0};
@@ -105,7 +105,7 @@ public:
 
     Task<Result<std::unique_ptr<IResultSet>>>
     execute(std::span<const DbValue> /*params*/ = {}) override {
-        std::printf("  [MockStmt#%d] execute: %s\n", conn_id_, sql_.c_str());
+        std::println("  [MockStmt#{}] execute: {}", conn_id_, sql_);
         std::vector<std::vector<std::string>> rows = {
             {"id", "name"},
             {"1",  "Alice"},
@@ -115,7 +115,7 @@ public:
 
     Task<Result<uint64_t>>
     execute_dml(std::span<const DbValue> /*params*/ = {}) override {
-        std::printf("  [MockStmt#%d] execute_dml: %s\n", conn_id_, sql_.c_str());
+        std::println("  [MockStmt#{}] execute_dml: {}", conn_id_, sql_);
         co_return uint64_t{1};
     }
 
@@ -127,10 +127,10 @@ private:
 class MockConnection final : public IConnection {
 public:
     explicit MockConnection(int id) : id_(id) {
-        std::printf("  [MockConn] #%d 연결 생성\n", id_);
+        std::println("  [MockConn] #{} connection created", id_);
     }
     ~MockConnection() override {
-        std::printf("  [MockConn] #%d 연결 해제\n", id_);
+        std::println("  [MockConn] #{} connection released", id_);
     }
 
     ConnectionState state() const noexcept override {
@@ -139,15 +139,13 @@ public:
 
     Task<Result<std::unique_ptr<IStatement>>>
     prepare(std::string_view sql) override {
-        std::printf("  [MockConn#%d] prepare: %.*s\n",
-                    id_, static_cast<int>(sql.size()), sql.data());
+        std::println("  [MockConn#{}] prepare: {}", id_, sql);
         co_return std::unique_ptr<IStatement>(std::make_unique<MockStatement>(id_, std::string(sql)));
     }
 
     Task<Result<std::unique_ptr<IResultSet>>>
     query(std::string_view sql, std::span<const DbValue> /*params*/ = {}) override {
-        std::printf("  [MockConn#%d] query: %.*s\n",
-                    id_, static_cast<int>(sql.size()), sql.data());
+        std::println("  [MockConn#{}] query: {}", id_, sql);
         std::vector<std::vector<std::string>> rows = {
             {"id", "name"},
             {"1",  "Alice"},
@@ -160,7 +158,7 @@ public:
         co_return unexpected(std::make_error_code(std::errc::not_supported));
     }
 
-    Task<Result<void>> close() override { co_return Result<void>::ok(); }
+    Task<Result<void>> close() override { co_return Result<void>{}; }
 
     Task<bool> ping() override { co_return true; }
 
@@ -171,15 +169,15 @@ private:
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// §2  LockFreeConnectionPool 데모
+// §2  LockFreeConnectionPool demo
 // ─────────────────────────────────────────────────────────────────────────────
 
 static std::atomic<bool> g_pool_done{false};
 
 static Task<void> demo_connection_pool_task() {
-    std::printf("── §2  LockFreeConnectionPool ──\n");
+    std::println("── §2  LockFreeConnectionPool ──");
 
-    // 연결 팩토리: MockConnection 생성
+    // Connection factory: creates MockConnection instances
     LockFreeConnectionPool pool(
         []() -> Task<Result<std::unique_ptr<IConnection>>> {
             int id = ++g_conn_id_counter;
@@ -191,19 +189,19 @@ static Task<void> demo_connection_pool_task() {
             .idle_timeout_ms = 5000,
         });
 
-    // 초기 연결 warm-up
+    // Initial connection warm-up
     auto init_r = co_await pool.warmup();
     if (!init_r)
-        std::printf("  warmup 실패: %s\n", init_r.error().message().c_str());
+        std::println("  warmup failed: {}", init_r.error().message());
     else
-        std::printf("  풀 초기화 완료: 유휴 %zu개 연결\n", pool.idle_count());
+        std::println("  pool initialized: {} idle connections", pool.idle_count());
 
-    // 연결 획득 → 쿼리 → 반납 (PooledConnection RAII)
+    // Acquire connection → query → return (PooledConnection RAII)
     {
         auto guard_r = co_await PooledConnection::acquire(pool);
         if (!guard_r) {
-            std::printf("  연결 획득 실패: %s\n",
-                        guard_r.error().message().c_str());
+            std::println("  connection acquire failed: {}",
+                        guard_r.error().message());
             co_return;
         }
 
@@ -215,17 +213,17 @@ static Task<void> demo_connection_pool_task() {
             while (auto* row = co_await rs->next()) {
                 ++row_count;
                 auto* mrow = static_cast<const MockResultSet::MockRow*>(row);
-                std::printf("   ");
+                std::print("   ");
                 for (auto& cell : mrow->cells())
-                    std::printf(" [%s]", cell.c_str());
-                std::printf("\n");
+                    std::print(" [{}]", cell);
+                std::println("");
             }
-            std::printf("  쿼리 결과 행 수: %zu\n", row_count);
+            std::println("  query result row count: {}", row_count);
         }
-        // guard 소멸 시 자동 반납
+        // guard destruction automatically returns the connection
     }
 
-    // prepare + execute_dml 테스트
+    // prepare + execute_dml test
     {
         auto guard_r = co_await PooledConnection::acquire(pool);
         if (guard_r) {
@@ -235,20 +233,20 @@ static Task<void> demo_connection_pool_task() {
             if (stmt_r) {
                 auto affected_r = co_await (*stmt_r)->execute_dml();
                 if (affected_r)
-                    std::printf("  execute_dml: %llu 행 영향\n",
+                    std::println("  execute_dml: {} rows affected",
                                 static_cast<unsigned long long>(*affected_r));
             }
         }
     }
 
-    std::printf("  풀 활성:%zu  유휴:%zu\n\n",
+    std::println("  pool active:{} idle:{}\n",
                 pool.active_count(), pool.idle_count());
     g_pool_done.store(true, std::memory_order_release);
     co_return;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// §3  ISessionStore (LocalSessionStore) 데모
+// §3  ISessionStore (LocalSessionStore) demo
 // ─────────────────────────────────────────────────────────────────────────────
 
 // Minimal in-process ISessionStore implementation for demonstration
@@ -268,20 +266,20 @@ public:
         std::chrono::seconds /*ttl*/ = std::chrono::seconds{3600}) override {
         std::lock_guard lock(mu_);
         data_[std::string(session_id)] = std::move(value);
-        co_return Result<void>::ok();
+        co_return Result<void>{};
     }
 
     Task<Result<void>> del(std::string_view session_id) override {
         std::lock_guard lock(mu_);
         data_.erase(std::string(session_id));
-        co_return Result<void>::ok();
+        co_return Result<void>{};
     }
 
     Task<Result<void>>
     touch(std::string_view /*session_id*/,
           std::chrono::seconds /*ttl*/ = std::chrono::seconds{3600}) override {
         // No real expiry tracking in this demo store — just succeed
-        co_return Result<void>::ok();
+        co_return Result<void>{};
     }
 
     size_t count() const {
@@ -297,42 +295,42 @@ private:
 static std::atomic<bool> g_session_done{false};
 
 static Task<void> demo_session_store_task() {
-    std::printf("── §3  LocalSessionStore ──\n");
+    std::println("── §3  LocalSessionStore ──");
 
     LocalSessionStore store;
 
-    // 세션 생성
+    // Create session
     auto set_r = co_await store.set(
         "sess-001", qbuem::write(SessionData{42, "admin"}), 3600s);
-    std::printf("  set(sess-001): %s\n",
-                set_r ? "ok" : set_r.error().message().c_str());
+    std::println("  set(sess-001): {}",
+                set_r ? "ok" : set_r.error().message());
 
-    // 세션 조회
+    // Retrieve session
     auto get_r = co_await store.get("sess-001");
     if (get_r && get_r->has_value())
-        std::printf("  get(sess-001): %s\n", get_r->value().c_str());
+        std::println("  get(sess-001): {}", get_r->value());
     else
-        std::printf("  get(sess-001): 없음\n");
+        std::println("  get(sess-001): not found");
 
-    // 존재하지 않는 세션 조회
+    // Retrieve non-existent session
     auto miss = co_await store.get("sess-999");
-    std::printf("  get(sess-999): %s\n",
-                (miss && !miss->has_value()) ? "nullopt (정상)" : "unexpected");
+    std::println("  get(sess-999): {}",
+                (miss && !miss->has_value()) ? "nullopt (expected)" : "unexpected");
 
-    // TTL 갱신
+    // Renew TTL
     auto touch_r = co_await store.touch("sess-001", 7200s);
-    std::printf("  touch(sess-001): %s\n", touch_r ? "ok" : "실패");
+    std::println("  touch(sess-001): {}", touch_r ? "ok" : "failed");
 
-    // 두 번째 세션 생성
+    // Create second session
     co_await store.set("sess-002", qbuem::write(SessionData{7, "user"}), 1800s);
 
-    // 세션 수 확인
-    std::printf("  세션 수: %zu\n", store.count());
+    // Check session count
+    std::println("  session count: {}", store.count());
 
-    // 세션 삭제
+    // Delete session
     auto del_r = co_await store.del("sess-001");
-    std::printf("  del(sess-001): %s\n", del_r ? "ok" : "실패");
-    std::printf("  세션 수 (삭제 후): %zu\n\n", store.count());
+    std::println("  del(sess-001): {}", del_r ? "ok" : "failed");
+    std::println("  session count (after delete): {}\n", store.count());
 
     g_session_done.store(true, std::memory_order_release);
     co_return;
@@ -343,7 +341,7 @@ static Task<void> demo_session_store_task() {
 // ─────────────────────────────────────────────────────────────────────────────
 
 int main() {
-    std::printf("=== qbuem DB 연결 풀 + 세션 저장소 예제 ===\n\n");
+    std::println("=== qbuem DB connection pool + session store example ===\n");
 
     Dispatcher disp(2);
     std::jthread t([&] { disp.run(); });
@@ -353,7 +351,7 @@ int main() {
 
     disp.spawn(pool_fn());
 
-    // 풀 데모 완료 후 세션 데모 실행
+    // Run session demo after pool demo completes
     auto deadline = std::chrono::steady_clock::now() + 5s;
     while (!g_pool_done.load() && std::chrono::steady_clock::now() < deadline)
         std::this_thread::sleep_for(10ms);
@@ -367,6 +365,6 @@ int main() {
     disp.stop();
     t.join();
 
-    std::printf("=== 완료 ===\n");
+    std::println("=== done ===");
     return 0;
 }

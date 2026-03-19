@@ -1,86 +1,86 @@
 /**
  * @file examples/game_server.cpp
- * @brief qbuem-stack 종합 게임 서버 예제 — 실시간 멀티플레이어 턴제 배틀
+ * @brief qbuem-stack comprehensive game server example — real-time multiplayer turn-based battle
  *
- * ## 시스템 구조
+ * ## System Architecture
  *
- *   [HTTP 클라이언트]
- *       │ POST /api/v1/rooms                    방 생성
- *       │ GET  /api/v1/rooms                    방 목록 조회
- *       │ POST /api/v1/rooms/:id/join           방 참가 (최대 2명)
- *       │ POST /api/v1/rooms/:id/action         게임 액션 제출
- *       │ GET  /api/v1/rooms/:id/events         방별 SSE 실시간 이벤트
- *       │ GET  /api/v1/leaderboard              플레이어 랭킹
- *       │ GET  /api/v1/stats                    서버 통계
- *       │ POST /api/v1/admin/scale              워커 스케일 조정
- *       │ POST /api/v1/admin/toggle             스테이지 활성/비활성
- *       │ GET  /health                          헬스체크
+ *   [HTTP Client]
+ *       │ POST /api/v1/rooms                    create room
+ *       │ GET  /api/v1/rooms                    list rooms
+ *       │ POST /api/v1/rooms/:id/join           join room (max 2 players)
+ *       │ POST /api/v1/rooms/:id/action         submit game action
+ *       │ GET  /api/v1/rooms/:id/events         per-room SSE real-time events
+ *       │ GET  /api/v1/leaderboard              player rankings
+ *       │ GET  /api/v1/stats                    server statistics
+ *       │ POST /api/v1/admin/scale              worker scale adjustment
+ *       │ POST /api/v1/admin/toggle             stage enable/disable
+ *       │ GET  /health                          health check
  *       ▼
- *   [App 미들웨어 체인]
+ *   [App Middleware Chain]
  *       ├─ CORS          (allow_origin=*)
- *       ├─ RateLimit     (60 req/s, burst=20)   ← 치트 방지
- *       ├─ RequestID     (X-Request-ID 헤더)
+ *       ├─ RateLimit     (60 req/s, burst=20)   ← anti-cheat
+ *       ├─ RequestID     (X-Request-ID header)
  *       ├─ HSTS          (max_age=31536000)
- *       └─ BearerAuth    (GameKeyVerifier → player_id 추출)
+ *       └─ BearerAuth    (GameKeyVerifier → extract player_id)
  *
- *   ┌── [StaticPipeline: 게임 액션 처리 체인] ──────────────────────────────┐
+ *   ┌── [StaticPipeline: game action processing chain] ─────────────────────┐
  *   │   Action<GameAction, ValidatedAction>  validate  {min=1, max=4, auto} │
  *   │   Action<ValidatedAction, StateUpdate> apply     {min=2, max=8, auto} │
  *   │   Action<StateUpdate, GameEvent>       finalize  {min=1, max=4, slo}  │
  *   └───────────────────────────────────────────────────────────────────────┘
- *       │ ContextualItem<GameEvent> (Context 보존 브릿지 코루틴)
+ *       │ ContextualItem<GameEvent> (context-preserving bridge coroutine)
  *       ▼
  *   ┌── [DynamicPipeline<GameEvent>] ───────────────────────────────────────┐
- *   │   Stage "persist"  (이벤트 히스토리 저장)   ← hot_swap 가능          │
- *   │   Stage "replay"   (리플레이 데이터 적재, set_enabled 가능)           │
- *   │   Stage "notify"   (ResponseChannel + MessageBus 발행)               │
+ *   │   Stage "persist"  (event history save)       ← hot_swap capable      │
+ *   │   Stage "replay"   (replay data load, set_enabled capable)            │
+ *   │   Stage "notify"   (ResponseChannel + MessageBus publish)             │
  *   └───────────────────────────────────────────────────────────────────────┘
  *       │
- *       ├─ ResponseChannel → HTTP 핸들러 co_await → JSON 응답
+ *       ├─ ResponseChannel → HTTP handler co_await → JSON response
  *       └─ MessageBus
- *           ├─ "room.{room_id}" → 방별 SSE 스트리밍
- *           └─ "leaderboard"   → 게임 종료 시 랭킹 갱신 SSE
+ *           ├─ "room.{room_id}" → per-room SSE streaming
+ *           └─ "leaderboard"   → ranking update SSE on game end
  *
- *   [자동 스케일러]
- *       └─ 500ms 주기로 validate/apply 큐 깊이 감시 → 부하 시 워커 추가
+ *   [Auto-scaler]
+ *       └─ polls validate/apply queue depth every 500ms → scale_out on load
  *
- * ## 게임 규칙
- *   - 방당 최대 2명, 선착순 참가, 턴제 진행 (HOST가 먼저)
- *   - 각 플레이어 시작 HP: 100
- *   - attack  : power 1~10, damage = power × 4 (방어 중이면 50% 감소)
- *   - defend  : 이번 턴 방어 준비 → 다음 피격 데미지 50% 감소
- *   - special : power 1~10, damage = power × 7, 쿨다운 3턴
- *   - 상대 HP가 0 이하 → 승패 확정, 방 상태 "finished"
+ * ## Game Rules
+ *   - max 2 players per room, first-come basis, turn-based (HOST goes first)
+ *   - each player starts with 100 HP
+ *   - attack  : power 1~10, damage = power × 4 (50% reduction if defending)
+ *   - defend  : prepare defense this turn → 50% reduction on next incoming hit
+ *   - special : power 1~10, damage = power × 7, 3-turn cooldown
+ *   - opponent HP ≤ 0 → victory determined, room state "finished"
  *
- * ## 테스트 커맨드
- *   # 방 생성
+ * ## Test Commands
+ *   # create room
  *   curl -H 'Authorization: Bearer game-key-alice' \
  *        -X POST http://localhost:8080/api/v1/rooms \
  *        -d '{"room_name":"arena-1"}'
  *
- *   # 방 참가 (room_id=1)
+ *   # join room (room_id=1)
  *   curl -H 'Authorization: Bearer game-key-bob' \
  *        -X POST http://localhost:8080/api/v1/rooms/1/join
  *
- *   # 공격 액션
+ *   # attack action
  *   curl -H 'Authorization: Bearer game-key-alice' \
  *        -X POST http://localhost:8080/api/v1/rooms/1/action \
  *        -d '{"action":"attack","power":8}'
  *
- *   # 방어 액션
+ *   # defend action
  *   curl -H 'Authorization: Bearer game-key-bob' \
  *        -X POST http://localhost:8080/api/v1/rooms/1/action \
  *        -d '{"action":"defend","power":0}'
  *
- *   # 스페셜 스킬
+ *   # special skill
  *   curl -H 'Authorization: Bearer game-key-alice' \
  *        -X POST http://localhost:8080/api/v1/rooms/1/action \
  *        -d '{"action":"special","power":10}'
  *
- *   # SSE 이벤트 스트리밍
+ *   # SSE event streaming
  *   curl -N http://localhost:8080/api/v1/rooms/1/events
  *
- *   # 리더보드
+ *   # leaderboard
  *   curl http://localhost:8080/api/v1/leaderboard
  */
 
@@ -113,7 +113,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
-#include <cstdio>
+#include <print>
 #include <cstring>
 #include <memory>
 #include <mutex>
@@ -128,21 +128,21 @@ using namespace qbuem::middleware;
 using namespace std::chrono_literals;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// §1. 게임 도메인 타입
+// §1. Game Domain Types
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// 게임 액션 유형
+/// Game action type
 enum class ActionType : uint8_t {
-    Attack  = 0,   ///< 공격 — damage = power × 4
-    Defend  = 1,   ///< 방어 — 다음 피격 데미지 50% 감소
-    Special = 2,   ///< 스페셜 — damage = power × 7, 쿨다운 3턴
+    Attack  = 0,   ///< attack — damage = power × 4
+    Defend  = 1,   ///< defend — 50% reduction on next incoming hit
+    Special = 2,   ///< special — damage = power × 7, 3-turn cooldown
 };
 
-/// HTTP 바디에서 파싱된 게임 액션 (Pipeline 입력 타입).
+/// Game action parsed from HTTP body (Pipeline input type).
 struct GameAction {
-    uint64_t    req_id    = 0;       ///< 요청 고유 번호 (Context 전파)
-    std::string player_id;           ///< 액션을 수행하는 플레이어
-    std::string room_id;             ///< 대상 방 ID
+    uint64_t    req_id    = 0;       ///< unique request ID (propagated via Context)
+    std::string player_id;           ///< player performing the action
+    std::string room_id;             ///< target room ID
     ActionType  type      = ActionType::Attack;
     int         power     = 5;       ///< 1~10
 
@@ -159,8 +159,8 @@ struct GameAction {
     }
 };
 
-/// Nexus Fusion ADL hook — "action" 문자열 → ActionType 변환.
-/// qbuem::fuse<GameAction>() 호출 시 사용 (zero-tape 직접 파싱).
+/// Nexus Fusion ADL hook — converts "action" string → ActionType.
+/// Used when calling qbuem::fuse<GameAction>() (zero-tape direct parsing).
 inline void nexus_pulse(std::string_view key, const char*& p, const char* end,
                         GameAction& g) {
     using namespace qbuem::json::detail;
@@ -177,15 +177,15 @@ inline void nexus_pulse(std::string_view key, const char*& p, const char* end,
     }
 }
 
-/// [Static Stage 1] 유효성 검증 결과.
+/// [Static Stage 1] Validation result.
 struct ValidatedAction {
     GameAction  action;
     bool        valid     = true;
     std::string error;
-    int         base_dmg  = 0;   ///< 계산된 기본 데미지
+    int         base_dmg  = 0;   ///< computed base damage
 };
 
-/// [Static Stage 2] 게임 상태 적용 결과.
+/// [Static Stage 2] Game state application result.
 struct StateUpdate {
     ValidatedAction validated;
     std::string     attacker_id;
@@ -197,7 +197,7 @@ struct StateUpdate {
     std::string     winner_id;
 };
 
-/// [Static Stage 3] 최종 게임 이벤트 (Static Pipeline 출력 + DynamicPipeline 입력).
+/// [Static Stage 3] Final game event (Static Pipeline output + DynamicPipeline input).
 struct GameEvent {
     uint64_t    event_id    = 0;
     std::string room_id;
@@ -219,10 +219,10 @@ QBUEM_JSON_FIELDS(GameEvent, event_id, room_id, attacker, defender, action,
                   game_over, winner, timestamp, success, message)
 
 // ─────────────────────────────────────────────────────────────────────────────
-// §2. HTTP DTO (qbuem-json Nexus 엔진 직렬화/역직렬화)
+// §2. HTTP DTO (qbuem-json Nexus engine serialization/deserialization)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// POST /api/v1/rooms 요청.
+/// POST /api/v1/rooms request.
 struct CreateRoomRequest {
     std::string room_name;
 
@@ -238,18 +238,18 @@ struct CreateRoomRequest {
 };
 QBUEM_JSON_FIELDS(CreateRoomRequest, room_name)
 
-/// GET /api/v1/rooms 응답 — 방 정보.
+/// GET /api/v1/rooms response — room info.
 struct RoomInfo {
     uint64_t                 room_id     = 0;
     std::string              room_name;
     std::vector<std::string> players;
     std::string              phase;        ///< "waiting" | "playing" | "finished"
-    std::string              current_turn; ///< 현재 턴 플레이어 ID
+    std::string              current_turn; ///< current turn player ID
     std::string              winner;
 };
 QBUEM_JSON_FIELDS(RoomInfo, room_id, room_name, players, phase, current_turn, winner)
 
-/// GET /api/v1/leaderboard 응답 항목.
+/// GET /api/v1/leaderboard response entry.
 struct PlayerScore {
     std::string player_id;
     int         wins         = 0;
@@ -259,7 +259,7 @@ struct PlayerScore {
 };
 QBUEM_JSON_FIELDS(PlayerScore, player_id, wins, losses, total_damage, win_rate)
 
-/// POST /api/v1/admin/scale 요청.
+/// POST /api/v1/admin/scale request.
 struct ScaleRequest {
     std::string stage;
     int         workers = 0;
@@ -274,7 +274,7 @@ struct ScaleRequest {
 };
 QBUEM_JSON_FIELDS(ScaleRequest, stage, workers)
 
-/// POST /api/v1/admin/toggle 요청.
+/// POST /api/v1/admin/toggle request.
 struct ToggleRequest {
     std::string stage;
     bool        enabled = true;
@@ -289,15 +289,15 @@ struct ToggleRequest {
 };
 QBUEM_JSON_FIELDS(ToggleRequest, stage, enabled)
 
-/// 에러 응답.
+/// Error response.
 struct ErrorResponse { std::string error; };
 QBUEM_JSON_FIELDS(ErrorResponse, error)
 
-/// 성공 메시지 응답.
+/// Success message response.
 struct OkResponse { std::string message; };
 QBUEM_JSON_FIELDS(OkResponse, message)
 
-/// GET /api/v1/stats 응답.
+/// GET /api/v1/stats response.
 struct StatsResponse {
     uint64_t    total_actions  = 0;
     uint64_t    total_games    = 0;
@@ -311,11 +311,11 @@ struct StatsResponse {
 QBUEM_JSON_FIELDS(StatsResponse, total_actions, total_games, active_rooms,
                   finished_rooms, validate_empty, apply_empty, dyn_stages, auto_scale)
 
-/// SSE 연결 확인 이벤트.
+/// SSE connection confirmation event.
 struct SseConnectedEvent { std::string message; std::string topic; };
 QBUEM_JSON_FIELDS(SseConnectedEvent, message, topic)
 
-/// Scale/Toggle 응답.
+/// Scale/Toggle response.
 struct ScaleResponse { std::string stage; int workers = 0; std::string message; };
 QBUEM_JSON_FIELDS(ScaleResponse, stage, workers, message)
 
@@ -323,46 +323,46 @@ struct ToggleResponse { std::string stage; bool enabled = false; bool success = 
 QBUEM_JSON_FIELDS(ToggleResponse, stage, enabled, success)
 
 // ─────────────────────────────────────────────────────────────────────────────
-// §3. Context 태그
+// §3. Context Tags
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// HTTP 응답 채널: DynamicPipeline 마지막 Stage에서 여기에 씁니다.
+/// HTTP response channel: the last DynamicPipeline Stage writes here.
 struct ResponseChannel {
     std::shared_ptr<AsyncChannel<GameEvent>> ch;
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// §4. 게임 상태 저장소 (thread-safe 인메모리)
+// §4. Game State Store (thread-safe in-memory)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// 플레이어 1명의 현재 상태 (방 내).
+/// Current state of one player (within a room).
 struct PlayerState {
     int  hp               = 100;
-    bool is_defending     = false;   ///< 이번 턴 방어 → 피격 시 50% 감소
-    int  special_cooldown = 0;       ///< 남은 쿨다운 (0이면 사용 가능)
+    bool is_defending     = false;   ///< defending this turn → 50% reduction on next hit
+    int  special_cooldown = 0;       ///< remaining cooldown (0 = usable)
 };
 
-/// 방(Room) 상태 머신.
+/// Room state machine.
 struct RoomState {
     uint64_t    room_id     = 0;
     std::string room_name;
-    std::string player_ids[2];       ///< [0]=호스트, [1]=참가자
-    PlayerState player_states[2];    ///< player_ids 와 1:1 대응
+    std::string player_ids[2];       ///< [0]=host, [1]=joiner
+    PlayerState player_states[2];    ///< 1:1 correspondence with player_ids
     int         player_count = 0;
-    int         current_turn = 0;    ///< 0 or 1 — 현재 액션 수행 플레이어 인덱스
+    int         current_turn = 0;    ///< 0 or 1 — index of the player acting this turn
     enum class Phase { Waiting, Playing, Finished } phase = Phase::Waiting;
     std::string winner_id;
-    uint64_t    event_counter = 0;   ///< 방 내 이벤트 순서 번호
+    uint64_t    event_counter = 0;   ///< event sequence number within this room
 };
 
-/// 플레이어 누적 전적.
+/// Cumulative player record.
 struct PlayerRecord {
     int    wins         = 0;
     int    losses       = 0;
     int    total_damage = 0;
 };
 
-/// 게임 이벤트 히스토리 레코드.
+/// Game event history record.
 struct EventRecord {
     uint64_t event_id = 0;
     GameEvent event;
@@ -370,7 +370,7 @@ struct EventRecord {
 
 class GameRegistry {
 public:
-    // ── 방 관리 ────────────────────────────────────────────────────────────
+    // ── Room management ────────────────────────────────────────────────────
 
     RoomInfo create_room(std::string_view name) {
         std::lock_guard lock(mtx_);
@@ -381,14 +381,14 @@ public:
         return to_info(r);
     }
 
-    /// 방 참가. 이미 2명이거나 finished 이면 빈 optional.
+    /// Join a room. Returns empty optional if already 2 players or room is finished.
     std::optional<RoomInfo> join_room(uint64_t room_id, std::string_view player_id) {
         std::lock_guard lock(mtx_);
         auto it = rooms_.find(room_id);
         if (it == rooms_.end()) return std::nullopt;
         auto& r = it->second;
 
-        // 이미 참가한 플레이어는 그냥 통과
+        // player already joined → pass through
         for (int i = 0; i < r.player_count; ++i)
             if (r.player_ids[i] == player_id) return to_info(r);
 
@@ -420,12 +420,12 @@ public:
         return to_info(it->second);
     }
 
-    // ── 게임 액션 적용 ─────────────────────────────────────────────────────
+    // ── Game action application ────────────────────────────────────────────
 
-    /// 검증 + 상태 적용 — 성공 시 StateUpdate 반환.
+    /// Validate + apply state — returns StateUpdate on success.
     std::optional<StateUpdate> apply_action(const ValidatedAction& va) {
         std::lock_guard lock(mtx_);
-        auto it = rooms_.find(0); // room_id 검색
+        auto it = rooms_.find(0); // search by room_id
         {
             uint64_t rid = 0;
             try { rid = std::stoull(va.action.room_id); } catch (...) {}
@@ -436,7 +436,7 @@ public:
 
         if (r.phase != RoomState::Phase::Playing) return std::nullopt;
 
-        // 현재 턴 플레이어 확인
+        // verify current turn player
         int atk_idx = r.current_turn;
         if (r.player_ids[atk_idx] != va.action.player_id) return std::nullopt;
         int def_idx = 1 - atk_idx;
@@ -449,23 +449,23 @@ public:
         su.attacker_id = r.player_ids[atk_idx];
         su.defender_id = r.player_ids[def_idx];
 
-        // 스페셜 쿨다운 감소 (매 턴)
+        // decrement special cooldown (every turn)
         if (atk.special_cooldown > 0) --atk.special_cooldown;
 
-        // 데미지 계산
+        // damage calculation
         int dmg = 0;
         if (va.action.type == ActionType::Defend) {
             atk.is_defending = true;
             dmg = 0;
         } else {
             dmg = va.base_dmg;
-            if (def.is_defending) dmg /= 2;   // 방어 중: 50% 감소
+            if (def.is_defending) dmg /= 2;   // defending: 50% reduction
             if (va.action.type == ActionType::Special)
-                atk.special_cooldown = 3;      // 쿨다운 설정
+                atk.special_cooldown = 3;      // set cooldown
             def.hp -= dmg;
         }
 
-        // 방어 상태 리셋 (피격 후)
+        // reset defending state (after being hit)
         if (va.action.type != ActionType::Defend)
             def.is_defending = false;
 
@@ -474,20 +474,20 @@ public:
         su.defender_hp  = std::max(0, def.hp);
         def.hp          = su.defender_hp;
 
-        // 승패 판정
+        // determine winner
         if (def.hp <= 0) {
             r.phase     = RoomState::Phase::Finished;
             r.winner_id = su.attacker_id;
             su.game_over = true;
             su.winner_id = su.attacker_id;
-            // 전적 업데이트
+            // update records
             records_[su.attacker_id].wins++;
             records_[su.attacker_id].total_damage += dmg;
             records_[su.defender_id].losses++;
             ++finished_rooms_;
         } else {
             records_[su.attacker_id].total_damage += dmg;
-            // 턴 전환
+            // switch turn
             r.current_turn = def_idx;
         }
 
@@ -495,7 +495,7 @@ public:
         return su;
     }
 
-    // ── 히스토리 ───────────────────────────────────────────────────────────
+    // ── History ────────────────────────────────────────────────────────────
 
     void save_event(const GameEvent& ev) {
         std::lock_guard lock(mtx_);
@@ -514,7 +514,7 @@ public:
         return result;
     }
 
-    // ── 리더보드 ───────────────────────────────────────────────────────────
+    // ── Leaderboard ────────────────────────────────────────────────────────
 
     std::vector<PlayerScore> leaderboard(size_t limit = 20) const {
         std::lock_guard lock(mtx_);
@@ -535,7 +535,7 @@ public:
         return scores;
     }
 
-    // ── 통계 ───────────────────────────────────────────────────────────────
+    // ── Statistics ─────────────────────────────────────────────────────────
 
     size_t room_count() const {
         std::lock_guard lock(mtx_);
@@ -579,13 +579,13 @@ private:
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// §5. 인증 토큰 검증기 (ITokenVerifier 구현)
+// §5. Auth Token Verifier (ITokenVerifier implementation)
 // ─────────────────────────────────────────────────────────────────────────────
 
 class GameKeyVerifier : public ITokenVerifier {
 public:
     std::optional<TokenClaims> verify(std::string_view token) noexcept override {
-        // 데모용: "game-key-{player_id}" 형식
+        // demo: "game-key-{player_id}" format
         // game-key-alice, game-key-bob, game-key-charlie, game-key-dave
         constexpr std::string_view prefix = "game-key-";
         if (token.substr(0, prefix.size()) != prefix) return std::nullopt;
@@ -603,15 +603,15 @@ public:
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// §6. Static Pipeline 스테이지 함수
+// §6. Static Pipeline Stage Functions
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Stage 1: 유효성 검증 — 방 존재, 플레이어 턴, 쿨다운 체크
+/// Stage 1: validation — room existence, player turn, cooldown check
 static Task<Result<ValidatedAction>> stage_validate(GameAction action, ActionEnv env) {
     ValidatedAction v;
     v.action = action;
 
-    // 기본 데미지 사전 계산 (apply stage에서 레지스트리 참조 없이 사용)
+    // pre-compute base damage (used in apply stage without registry lookup)
     switch (action.type) {
         case ActionType::Attack:  v.base_dmg = action.power * 4; break;
         case ActionType::Defend:  v.base_dmg = 0;                break;
@@ -621,11 +621,11 @@ static Task<Result<ValidatedAction>> stage_validate(GameAction action, ActionEnv
     const char* action_str = action.type == ActionType::Attack  ? "ATTACK"  :
                              action.type == ActionType::Defend  ? "DEFEND"  : "SPECIAL";
 
-    std::printf("  [validate #%02llu] worker=%zu player=%s room=%s action=%s power=%d base_dmg=%d\n",
+    std::println("  [validate #{:02}] worker={} player={} room={} action={} power={} base_dmg={}",
         static_cast<unsigned long long>(action.req_id),
         env.worker_idx,
-        action.player_id.c_str(),
-        action.room_id.c_str(),
+        action.player_id,
+        action.room_id,
         action_str,
         action.power,
         v.base_dmg);
@@ -633,30 +633,30 @@ static Task<Result<ValidatedAction>> stage_validate(GameAction action, ActionEnv
     co_return v;
 }
 
-/// Stage 2: 게임 상태 적용 — GameRegistry에 상태 변화 반영
+/// Stage 2: game state application — apply state changes to GameRegistry
 static Task<Result<StateUpdate>>
 stage_apply(ValidatedAction va, ActionEnv env,
             std::shared_ptr<GameRegistry> reg) {
-    // 실제 시스템: 여기서 레지스트리를 업데이트하고 결과를 반환
+    // real system: update registry here and return result
     auto su_opt = reg->apply_action(va);
     if (!su_opt) {
-        // 액션 적용 실패 (턴 불일치, 방 없음 등) → 오류 StateUpdate 생성
+        // action application failed (wrong turn, room not found, etc.) → error StateUpdate
         StateUpdate su;
         su.validated = va;
         su.validated.valid = false;
         su.validated.error = "invalid action: wrong turn or room not playing";
-        std::printf("  [apply    #%02llu] worker=%zu REJECTED: %s\n",
+        std::println("  [apply    #{:02}] worker={} REJECTED: {}",
             static_cast<unsigned long long>(va.action.req_id),
-            env.worker_idx, su.validated.error.c_str());
+            env.worker_idx, su.validated.error);
         co_return su;
     }
 
     auto& su = *su_opt;
-    std::printf("  [apply    #%02llu] worker=%zu %s→%s dmg=%d atk_hp=%d def_hp=%d %s\n",
+    std::println("  [apply    #{:02}] worker={} {}→{} dmg={} atk_hp={} def_hp={} {}",
         static_cast<unsigned long long>(va.action.req_id),
         env.worker_idx,
-        su.attacker_id.c_str(),
-        su.defender_id.c_str(),
+        su.attacker_id,
+        su.defender_id,
         su.damage_dealt,
         su.attacker_hp,
         su.defender_hp,
@@ -664,7 +664,7 @@ stage_apply(ValidatedAction va, ActionEnv env,
     co_return su;
 }
 
-/// Stage 3: 게임 이벤트 생성 — StateUpdate → GameEvent (SLO 추적 대상)
+/// Stage 3: game event generation — StateUpdate → GameEvent (SLO tracking target)
 static Task<Result<GameEvent>>
 stage_finalize(StateUpdate su, ActionEnv env,
                std::atomic<uint64_t>& event_counter) {
@@ -695,77 +695,77 @@ stage_finalize(StateUpdate su, ActionEnv env,
                    ? (su.game_over ? "Game over! " + su.winner_id + " wins!" : "Action applied")
                    : su.validated.error;
 
-    std::printf("  [finalize #%02llu] worker=%zu event_id=%llu %s\n",
+    std::println("  [finalize #{:02}] worker={} event_id={} {}",
         static_cast<unsigned long long>(su.validated.action.req_id),
         env.worker_idx,
         static_cast<unsigned long long>(ev.event_id),
-        ev.success ? "OK" : ev.message.c_str());
+        ev.success ? "OK" : ev.message);
 
     co_return ev;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// §7. Dynamic Pipeline 스테이지 함수
+// §7. Dynamic Pipeline Stage Functions
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Dynamic Stage "persist": 이벤트 히스토리 저장
+/// Dynamic Stage "persist": save event history
 static auto make_persist_stage(std::shared_ptr<GameRegistry> reg) {
     return [reg](GameEvent ev, ActionEnv env) -> Task<Result<GameEvent>> {
         reg->save_event(ev);
-        std::printf("  [persist  #%02llu] worker=%zu room=%s saved\n",
+        std::println("  [persist  #{:02}] worker={} room={} saved",
             static_cast<unsigned long long>(ev.event_id),
-            env.worker_idx, ev.room_id.c_str());
+            env.worker_idx, ev.room_id);
         co_return ev;
     };
 }
 
-/// Dynamic Stage "replay": 리플레이 버퍼 적재 (set_enabled 시연 — 비활성 시 패스스루)
+/// Dynamic Stage "replay": load replay buffer (demonstrates set_enabled — pass-through when disabled)
 static Task<Result<GameEvent>> stage_replay(GameEvent ev, ActionEnv env) {
-    // 실제 구현: 리플레이 버퍼에 기록 (여기서는 로그만)
-    std::printf("  [replay   #%02llu] worker=%zu [recorded for replay]\n",
+    // real implementation: write to replay buffer (logging only here)
+    std::println("  [replay   #{:02}] worker={} [recorded for replay]",
         static_cast<unsigned long long>(ev.event_id), env.worker_idx);
     co_return ev;
 }
 
-/// Dynamic Stage "notify": ResponseChannel 응답 + MessageBus 팬아웃
+/// Dynamic Stage "notify": ResponseChannel response + MessageBus fan-out
 static auto make_notify_stage(std::shared_ptr<MessageBus> bus,
                                std::atomic<uint64_t>& total_actions,
                                std::atomic<uint64_t>& total_games) {
     return [bus, &total_actions, &total_games]
            (GameEvent ev, ActionEnv env) -> Task<Result<GameEvent>> {
 
-        // ── 1) ResponseChannel에 HTTP 응답 전송 ───────────────────────────
+        // ── 1) send HTTP response to ResponseChannel ──────────────────────
         if (auto* rch = env.ctx.get_ptr<ResponseChannel>()) {
             rch->ch->try_send(ev);
         }
 
-        // ── 2) 통계 업데이트 ──────────────────────────────────────────────
+        // ── 2) update stats ───────────────────────────────────────────────
         total_actions.fetch_add(1, std::memory_order_relaxed);
         if (ev.game_over)
             total_games.fetch_add(1, std::memory_order_relaxed);
 
-        // ── 3) MessageBus 발행 (방별 + 전체 SSE 팬아웃) ──────────────────
+        // ── 3) MessageBus publish (per-room + global SSE fan-out) ─────────
         std::string room_topic = "room." + ev.room_id;
         bus->try_publish(room_topic, ev);
 
         if (ev.game_over) {
-            bus->try_publish("leaderboard", ev);  // 리더보드 갱신 트리거
+            bus->try_publish("leaderboard", ev);  // trigger leaderboard update
         }
 
-        std::printf("  [notify   #%02llu] worker=%zu → 응답+SSE 발행 (topic=%s)\n",
+        std::println("  [notify   #{:02}] worker={} → response+SSE published (topic={})",
             static_cast<unsigned long long>(ev.event_id),
-            env.worker_idx, room_topic.c_str());
+            env.worker_idx, room_topic);
 
         co_return ev;
     };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// §8. GameServer — 전체 상태 보유 구조체
+// §8. GameServer — struct holding all state
 // ─────────────────────────────────────────────────────────────────────────────
 
 struct GameServer {
-    // ── 인프라 ────────────────────────────────────────────────────────────
+    // ── Infrastructure ────────────────────────────────────────────────────
     std::shared_ptr<GameRegistry> reg = std::make_shared<GameRegistry>();
     std::shared_ptr<MessageBus>   bus = std::make_shared<MessageBus>();
 
@@ -778,13 +778,13 @@ struct GameServer {
     std::shared_ptr<AAction> apply_act;
     std::shared_ptr<FAction> finalize_act;
 
-    // Static Pipeline 최종 출력 채널
+    // final output channel of Static Pipeline
     std::shared_ptr<AsyncChannel<ContextualItem<GameEvent>>> finalize_out;
 
     // ── Dynamic Pipeline ──────────────────────────────────────────────────
     std::shared_ptr<DynamicPipeline<GameEvent>> dyn_pipe;
 
-    // ── 통계 ─────────────────────────────────────────────────────────────
+    // ── Statistics ───────────────────────────────────────────────────────
     std::atomic<uint64_t> total_actions{0};
     std::atomic<uint64_t> total_games{0};
     std::atomic<uint64_t> req_counter{0};
@@ -797,7 +797,7 @@ struct GameServer {
         disp = &d;
         bus->start(d);
 
-        // ── Stage 함수 바인딩 (레지스트리 캡처) ──────────────────────────
+        // ── Bind stage functions (capture registry) ───────────────────────
         auto bound_apply = [this](ValidatedAction va, ActionEnv env) {
             return stage_apply(std::move(va), env, this->reg);
         };
@@ -805,7 +805,7 @@ struct GameServer {
             return stage_finalize(std::move(su), env, this->event_counter);
         };
 
-        // ── Static Pipeline Actions 생성 ─────────────────────────────────
+        // ── Create Static Pipeline Actions ───────────────────────────────
         validate_act = std::make_shared<VAction>(
             stage_validate,
             VAction::Config{
@@ -841,13 +841,13 @@ struct GameServer {
                 .auto_scale  = true,
             });
 
-        // ── Static Actions 연결 및 시작 ──────────────────────────────────
+        // ── Connect and start Static Actions ─────────────────────────────
         finalize_out = std::make_shared<AsyncChannel<ContextualItem<GameEvent>>>(512);
         finalize_act->start(d, finalize_out);
         apply_act->start(d, finalize_act->input());
         validate_act->start(d, apply_act->input());
 
-        // ── Dynamic Pipeline 생성 ─────────────────────────────────────────
+        // ── Create Dynamic Pipeline ───────────────────────────────────────
         dyn_pipe = std::make_shared<DynamicPipeline<GameEvent>>(
             DynamicPipeline<GameEvent>::Config{
                 .default_channel_cap = 256,
@@ -860,13 +860,13 @@ struct GameServer {
 
         dyn_pipe->start(d);
 
-        // ── Static → Dynamic 브릿지 코루틴 ───────────────────────────────
+        // ── Static → Dynamic bridge coroutine ────────────────────────────
         d.spawn(run_bridge(finalize_out, dyn_pipe));
 
-        // ── 자동 스케일러 ─────────────────────────────────────────────────
+        // ── Auto-scaler ───────────────────────────────────────────────────
         d.spawn(run_autoscaler(this));
 
-        std::puts("[game-server] setup: static(3 actions) + dynamic(3 stages) + autoscaler");
+        std::println("[game-server] setup: static(3 actions) + dynamic(3 stages) + autoscaler");
     }
 
     static Task<void> run_bridge(
@@ -887,20 +887,20 @@ struct GameServer {
 
             if (s->validate_act->input()->size_approx() > 0) {
                 s->validate_act->scale_out(*s->disp);
-                std::puts("[autoscale] validate busy → scale_out");
+                std::println("[autoscale] validate busy → scale_out");
             } else {
                 s->validate_act->scale_in();
             }
             if (s->apply_act->input()->size_approx() > 0) {
                 s->apply_act->scale_out(*s->disp);
-                std::puts("[autoscale] apply busy → scale_out");
+                std::println("[autoscale] apply busy → scale_out");
             } else {
                 s->apply_act->scale_in();
             }
         }
     }
 
-    /// 게임 액션을 파이프라인에 제출. 응답 채널 반환 (nullptr=포화).
+    /// Submit a game action to the pipeline. Returns response channel (nullptr = saturated).
     std::shared_ptr<AsyncChannel<GameEvent>>
     submit_action(GameAction action, Context base_ctx) {
         auto resp_ch = std::make_shared<AsyncChannel<GameEvent>>(1);
@@ -913,15 +913,15 @@ struct GameServer {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// §9. HTTP 핸들러
+// §9. HTTP Handlers
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// POST /api/v1/rooms — 방 생성 (생성자는 자동 참가)
+/// POST /api/v1/rooms — create a room (creator joins automatically)
 static Handler make_post_room(GameServer& s) {
     return [&s](const Request& req, Response& res) {
         auto dto = CreateRoomRequest::from_json(req.body());
         auto info = s.reg->create_room(dto ? dto->room_name : "untitled");
-        // 방 생성자는 자동으로 참가
+        // creator joins automatically
         auto creator = res.get_header("X-Auth-Sub");
         if (!creator.empty()) {
             if (auto joined = s.reg->join_room(info.room_id, std::string(creator)))
@@ -933,7 +933,7 @@ static Handler make_post_room(GameServer& s) {
     };
 }
 
-/// GET /api/v1/rooms — 방 목록
+/// GET /api/v1/rooms — list rooms
 static Handler make_get_rooms(GameServer& s) {
     return [&s](const Request& /*req*/, Response& res) {
         auto rooms = s.reg->list_rooms();
@@ -943,7 +943,7 @@ static Handler make_get_rooms(GameServer& s) {
     };
 }
 
-/// GET /api/v1/rooms/:id — 방 상세
+/// GET /api/v1/rooms/:id — room details
 static Handler make_get_room(GameServer& s) {
     return [&s](const Request& req, Response& res) {
         uint64_t id = 0;
@@ -956,7 +956,7 @@ static Handler make_get_room(GameServer& s) {
     };
 }
 
-/// POST /api/v1/rooms/:id/join — 방 참가
+/// POST /api/v1/rooms/:id/join — join a room
 static Handler make_post_join(GameServer& s) {
     return [&s](const Request& req, Response& res) {
         uint64_t id = 0;
@@ -977,7 +977,7 @@ static Handler make_post_join(GameServer& s) {
     };
 }
 
-/// POST /api/v1/rooms/:id/action — 게임 액션 제출 (Pipeline 처리 후 응답)
+/// POST /api/v1/rooms/:id/action — submit game action (Pipeline processes then responds)
 static AsyncHandler make_post_action(GameServer& s) {
     return [&s](const Request& req, Response& res) -> Task<void> {
         uint64_t room_id = 0;
@@ -1027,7 +1027,7 @@ static AsyncHandler make_post_action(GameServer& s) {
     };
 }
 
-/// GET /api/v1/rooms/:id/events — 방별 SSE 실시간 이벤트 스트림
+/// GET /api/v1/rooms/:id/events — per-room SSE live event stream
 static AsyncHandler make_sse_room_events(GameServer& s) {
     return [&s](const Request& req, Response& res) -> Task<void> {
         uint64_t room_id = 0;
@@ -1039,7 +1039,7 @@ static AsyncHandler make_sse_room_events(GameServer& s) {
         SseStream sse(res);
         sse.send(qbuem::write(SseConnectedEvent{"connected", topic}), "connected");
 
-        // 최대 100개 이벤트 수신 (또는 게임 종료 시)
+        // receive up to 100 events (or until game over)
         for (int i = 0; i < 100; ++i) {
             auto ev = co_await stream->recv();
             if (!ev) break;
@@ -1050,10 +1050,10 @@ static AsyncHandler make_sse_room_events(GameServer& s) {
     };
 }
 
-/// GET /api/v1/leaderboard — 플레이어 랭킹 SSE + JSON
+/// GET /api/v1/leaderboard — player ranking SSE + JSON
 static AsyncHandler make_get_leaderboard(GameServer& s) {
     return [&s](const Request& req, Response& res) -> Task<void> {
-        // SSE 구독 여부 (Accept: text/event-stream)
+        // check for SSE mode (Accept: text/event-stream)
         bool is_sse = req.header("Accept") == "text/event-stream";
         if (!is_sse) {
             auto scores = s.reg->leaderboard(20);
@@ -1063,7 +1063,7 @@ static AsyncHandler make_get_leaderboard(GameServer& s) {
             co_return;
         }
 
-        // SSE 모드: 게임 종료 이벤트마다 리더보드 갱신 푸시
+        // SSE mode: push leaderboard update on each game-over event
         auto stream = s.bus->subscribe_stream<GameEvent>("leaderboard", 16);
         SseStream sse(res);
         sse.send(qbuem::write(s.reg->leaderboard(20)), "leaderboard");
@@ -1077,7 +1077,7 @@ static AsyncHandler make_get_leaderboard(GameServer& s) {
     };
 }
 
-/// GET /api/v1/stats — 서버 통계
+/// GET /api/v1/stats — server statistics
 static Handler make_get_stats(GameServer& s) {
     return [&s](const Request& /*req*/, Response& res) {
         StatsResponse st;
@@ -1095,7 +1095,7 @@ static Handler make_get_stats(GameServer& s) {
     };
 }
 
-/// POST /api/v1/admin/scale — 워커 스케일 조정
+/// POST /api/v1/admin/scale — adjust worker scale
 static Handler make_post_scale(GameServer& s) {
     return [&s](const Request& req, Response& res) {
         auto dto = ScaleRequest::from_json(req.body());
@@ -1116,7 +1116,7 @@ static Handler make_post_scale(GameServer& s) {
     };
 }
 
-/// POST /api/v1/admin/toggle — DynamicPipeline 스테이지 활성/비활성
+/// POST /api/v1/admin/toggle — enable/disable a DynamicPipeline stage
 static Handler make_post_toggle(GameServer& s) {
     return [&s](const Request& req, Response& res) {
         auto dto = ToggleRequest::from_json(req.body());
@@ -1124,43 +1124,42 @@ static Handler make_post_toggle(GameServer& s) {
             res.status(400).body(qbuem::write(ErrorResponse{"required: stage, enabled"})); return;
         }
         bool ok = s.dyn_pipe->set_enabled(dto->stage, dto->enabled);
-        std::printf("[toggle] stage=%s enabled=%s\n",
-                    dto->stage.c_str(), dto->enabled ? "true" : "false");
+        std::println("[toggle] stage={} enabled={}", dto->stage, dto->enabled ? "true" : "false");
         res.status(ok ? 200 : 404).header("Content-Type", "application/json")
            .body(qbuem::write(ToggleResponse{dto->stage, dto->enabled, ok}));
     };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// §10. 데모 시뮬레이션
+// §10. Demo Simulation
 // ─────────────────────────────────────────────────────────────────────────────
 
 static Task<void> run_demo(GameServer& s, Dispatcher& /*d*/) {
-    std::puts("\n╔══════════════════════════════════════════════════════════╗");
-    std::puts("║       qbuem-stack 게임 서버 데모 시작                    ║");
-    std::puts("╚══════════════════════════════════════════════════════════╝\n");
+    std::println("\n╔══════════════════════════════════════════════════════════╗");
+    std::println("║       qbuem-stack Game Server Demo Start                 ║");
+    std::println("╚══════════════════════════════════════════════════════════╝\n");
 
-    co_await qbuem::sleep(200);  // 파이프라인 워커 시작 대기
+    co_await qbuem::sleep(200);  // wait for pipeline workers to start
 
-    // ── Phase 1: 방 생성 및 참가 ─────────────────────────────────────────
-    std::puts("─── Phase 1: 방 생성 및 플레이어 참가 ────────────────────");
+    // ── Phase 1: Room creation and player join ────────────────────────────
+    std::println("─── Phase 1: Room Creation and Player Join ────────────────");
 
     auto room1 = s.reg->create_room("arena-alpha");
-    std::printf("  방 생성: room_id=%llu name=%s\n",
-        static_cast<unsigned long long>(room1.room_id), room1.room_name.c_str());
+    std::println("  room created: room_id={} name={}",
+        static_cast<unsigned long long>(room1.room_id), room1.room_name);
 
     s.reg->join_room(room1.room_id, "alice");
     s.reg->join_room(room1.room_id, "bob");
-    std::printf("  alice, bob 참가 완료. 게임 시작!\n\n");
+    std::println("  alice, bob joined. Game start!\n");
 
     auto room2 = s.reg->create_room("arena-beta");
     s.reg->join_room(room2.room_id, "charlie");
     s.reg->join_room(room2.room_id, "dave");
-    std::printf("  방 생성: room_id=%llu — charlie vs dave\n\n",
+    std::println("  room created: room_id={} — charlie vs dave\n",
         static_cast<unsigned long long>(room2.room_id));
 
-    // ── Phase 2: 게임 진행 (alice vs bob) ───────────────────────────────
-    std::puts("─── Phase 2: alice vs bob 배틀 ────────────────────────────");
+    // ── Phase 2: Game play (alice vs bob) ────────────────────────────────
+    std::println("─── Phase 2: alice vs bob Battle ──────────────────────────");
 
     struct DemoAction {
         std::string player;
@@ -1174,23 +1173,23 @@ static Task<void> run_demo(GameServer& s, Dispatcher& /*d*/) {
     std::string r2 = std::to_string(room2.room_id);
 
     DemoAction demo_actions[] = {
-        // alice vs bob — 7턴 배틀
-        {"alice",   room1.room_id, ActionType::Attack,  8,  "alice 공격 (power=8, dmg=32)"},
-        {"bob",     room1.room_id, ActionType::Defend,  0,  "bob 방어 준비"},
-        {"alice",   room1.room_id, ActionType::Special, 7,  "alice 스페셜 (power=7, dmg=49 but bob은 방어중→24)"},
-        {"bob",     room1.room_id, ActionType::Attack,  6,  "bob 공격 (power=6, dmg=24)"},
-        {"alice",   room1.room_id, ActionType::Attack,  9,  "alice 공격 (power=9, dmg=36)"},
-        {"bob",     room1.room_id, ActionType::Attack,  5,  "bob 공격 (power=5, dmg=20)"},
-        {"alice",   room1.room_id, ActionType::Attack,  10, "alice 공격 (power=10, dmg=40)"},
+        // alice vs bob — 7-turn battle
+        {"alice",   room1.room_id, ActionType::Attack,  8,  "alice attack (power=8, dmg=32)"},
+        {"bob",     room1.room_id, ActionType::Defend,  0,  "bob defend preparation"},
+        {"alice",   room1.room_id, ActionType::Special, 7,  "alice special (power=7, dmg=49 but bob defending→24)"},
+        {"bob",     room1.room_id, ActionType::Attack,  6,  "bob attack (power=6, dmg=24)"},
+        {"alice",   room1.room_id, ActionType::Attack,  9,  "alice attack (power=9, dmg=36)"},
+        {"bob",     room1.room_id, ActionType::Attack,  5,  "bob attack (power=5, dmg=20)"},
+        {"alice",   room1.room_id, ActionType::Attack,  10, "alice attack (power=10, dmg=40)"},
         // charlie vs dave (room2)
-        {"charlie", room2.room_id, ActionType::Special, 10, "charlie 스페셜 (power=10, dmg=70)"},
-        {"dave",    room2.room_id, ActionType::Attack,   3, "dave 공격 (power=3, dmg=12)"},
-        {"charlie", room2.room_id, ActionType::Attack,   8, "charlie 공격 (power=8, dmg=32)"},
+        {"charlie", room2.room_id, ActionType::Special, 10, "charlie special (power=10, dmg=70)"},
+        {"dave",    room2.room_id, ActionType::Attack,   3, "dave attack (power=3, dmg=12)"},
+        {"charlie", room2.room_id, ActionType::Attack,   8, "charlie attack (power=8, dmg=32)"},
     };
 
     for (size_t i = 0; i < std::size(demo_actions); ++i) {
         const auto& a = demo_actions[i];
-        std::printf("\n[demo %zu] %s\n", i + 1, a.desc);
+        std::println("\n[demo {}] {}", i + 1, a.desc);
 
         GameAction action;
         action.player_id = a.player;
@@ -1203,54 +1202,54 @@ static Task<void> run_demo(GameServer& s, Dispatcher& /*d*/) {
             .put(AuthSubject{a.player});
 
         auto resp_ch = s.submit_action(action, ctx);
-        if (!resp_ch) { std::puts("  → [ERROR] overloaded"); continue; }
+        if (!resp_ch) { std::println("  → [ERROR] overloaded"); continue; }
 
         auto ev = co_await resp_ch->recv();
-        if (!ev) { std::puts("  → [ERROR] no result"); continue; }
+        if (!ev) { std::println("  → [ERROR] no result"); continue; }
 
-        std::printf("  → %s vs %s: dmg=%d atk_hp=%d def_hp=%d %s\n",
-            ev->attacker.c_str(), ev->defender.c_str(),
+        std::println("  → {} vs {}: dmg={} atk_hp={} def_hp={} {}",
+            ev->attacker, ev->defender,
             ev->damage, ev->attacker_hp, ev->defender_hp,
-            ev->game_over ? ("★ GAME OVER! " + ev->winner + " wins!").c_str() : "");
+            ev->game_over ? ("★ GAME OVER! " + ev->winner + " wins!") : "");
     }
 
-    // ── Phase 3: 스케일 시연 ─────────────────────────────────────────────
-    std::puts("\n─── Phase 3: Manual Scale In/Out ───────────────────────────");
-    std::printf("[demo] validate scale_out: 1→2\n");
+    // ── Phase 3: Scale demonstration ─────────────────────────────────────
+    std::println("\n─── Phase 3: Manual Scale In/Out ───────────────────────────");
+    std::println("[demo] validate scale_out: 1→2");
     s.validate_act->scale_out(*s.disp);
-    std::printf("[demo] apply scale_to(4): 2→4\n");
+    std::println("[demo] apply scale_to(4): 2→4");
     s.apply_act->scale_to(4, *s.disp);
 
-    // ── Phase 4: DynamicPipeline replay 스테이지 비활성화 ────────────────
-    std::puts("\n─── Phase 4: stage toggle (replay OFF) ────────────────────");
+    // ── Phase 4: Disable DynamicPipeline replay stage ─────────────────────
+    std::println("\n─── Phase 4: stage toggle (replay OFF) ────────────────────");
     s.dyn_pipe->set_enabled("replay", false);
-    std::puts("  [toggle] replay disabled (pass-through)");
+    std::println("  [toggle] replay disabled (pass-through)");
 
-    // ── Phase 5: 리더보드 출력 ────────────────────────────────────────────
-    std::puts("\n─── Phase 5: 리더보드 ─────────────────────────────────────");
-    co_await qbuem::sleep(300);  // 파이프라인 완료 대기
+    // ── Phase 5: Print leaderboard ───────────────────────────────────────
+    std::println("\n─── Phase 5: Leaderboard ───────────────────────────────────");
+    co_await qbuem::sleep(300);  // wait for pipeline to complete
     auto scores = s.reg->leaderboard(10);
-    std::printf("  %-15s %5s %5s %12s %8s\n", "Player", "Wins", "Loss", "TotalDmg", "WinRate");
-    std::puts("  --------------------------------------------------");
+    std::println("  {:<15} {:>5} {:>5} {:>12} {:>8}", "Player", "Wins", "Loss", "TotalDmg", "WinRate");
+    std::println("  --------------------------------------------------");
     for (auto& sc : scores) {
-        std::printf("  %-15s %5d %5d %12d %7.1f%%\n",
-            sc.player_id.c_str(), sc.wins, sc.losses,
+        std::println("  {:<15} {:5} {:5} {:12} {:7.1f}%",
+            sc.player_id, sc.wins, sc.losses,
             sc.total_damage, sc.win_rate * 100.0);
     }
 
-    // ── Phase 6: 최종 통계 ───────────────────────────────────────────────
-    std::puts("\n─── Phase 6: 서버 통계 ─────────────────────────────────────");
-    std::printf("  총 액션: %llu  완료 게임: %llu  방 수: %zu\n",
+    // ── Phase 6: Final statistics ────────────────────────────────────────
+    std::println("\n─── Phase 6: Server Statistics ─────────────────────────────");
+    std::println("  total actions: {}  finished games: {}  rooms: {}",
         static_cast<unsigned long long>(s.total_actions.load()),
         static_cast<unsigned long long>(s.total_games.load()),
         s.reg->room_count());
 
-    std::puts("\n╔══════════════════════════════════════════════════════════╗");
-    std::puts("║       데모 완료. HTTP 서버 실행 중 (포트 8080)           ║");
-    std::puts("║       curl -H 'Authorization: Bearer game-key-alice' \\   ║");
-    std::puts("║         -X POST http://localhost:8080/api/v1/rooms \\     ║");
-    std::puts("║         -d '{\"room_name\":\"my-room\"}'                    ║");
-    std::puts("╚══════════════════════════════════════════════════════════╝\n");
+    std::println("\n╔══════════════════════════════════════════════════════════╗");
+    std::println("║       Demo complete. HTTP server running (port 8080)     ║");
+    std::println("║       curl -H 'Authorization: Bearer game-key-alice' \\   ║");
+    std::println("║         -X POST http://localhost:8080/api/v1/rooms \\     ║");
+    std::println("║         -d '{{\"room_name\":\"my-room\"}}'                   ║");
+    std::println("╚══════════════════════════════════════════════════════════╝\n");
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1258,18 +1257,18 @@ static Task<void> run_demo(GameServer& s, Dispatcher& /*d*/) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 int main() {
-    // ── Pipeline Dispatcher (별도 스레드 풀) ─────────────────────────────
+    // ── Pipeline Dispatcher (separate thread pool) ────────────────────────
     Dispatcher pipeline_disp(4);
     std::jthread pipeline_thread([&pipeline_disp] { pipeline_disp.run(); });
 
-    // ── GameServer 초기화 ─────────────────────────────────────────────────
+    // ── Initialize GameServer ─────────────────────────────────────────────
     GameServer server;
     server.setup(pipeline_disp);
 
-    // ── HTTP App 초기화 ───────────────────────────────────────────────────
+    // ── Initialize HTTP App ───────────────────────────────────────────────
     App app(2);
 
-    // ── 미들웨어 체인 ─────────────────────────────────────────────────────
+    // ── Middleware chain ──────────────────────────────────────────────────
     app.use(cors(CorsConfig{
         .allow_origin      = "*",
         .allow_methods     = "GET, POST, DELETE, OPTIONS",
@@ -1278,7 +1277,7 @@ int main() {
     }));
 
     app.use(rate_limit(RateLimitConfig{
-        .rate_per_sec = 60.0,    // 초당 60 요청 (치트 방지)
+        .rate_per_sec = 60.0,    // 60 requests per second (anti-cheat)
         .max_keys     = 10'000,
         .burst        = 20.0,
     }));
@@ -1286,12 +1285,12 @@ int main() {
     app.use(request_id("X-Request-ID"));
     app.use(hsts(31'536'000, /*include_subdomains=*/true));
 
-    // bearer_auth 미들웨어 — 공개(읽기전용) 경로는 인증 없이 통과
+    // bearer_auth middleware — public (read-only) paths pass without authentication
     static GameKeyVerifier verifier;
     auto auth_mw = bearer_auth(verifier);
     app.use([auth_mw](const Request& req, Response& res) -> bool {
         std::string_view path = req.path();
-        // 인증 없이 접근 가능한 공개 경로
+        // publicly accessible paths (no auth required)
         if (path == "/health") return true;
         if (req.method() == Method::Get) {
             if (path == "/api/v1/stats"    ||
@@ -1303,7 +1302,7 @@ int main() {
         return auth_mw(req, res);
     });
 
-    // ── 라우트 등록 ───────────────────────────────────────────────────────
+    // ── Register routes ───────────────────────────────────────────────────
     app.post("/api/v1/rooms",                make_post_room(server));
     app.get ("/api/v1/rooms",                make_get_rooms(server));
     app.get ("/api/v1/rooms/:id",            make_get_room(server));
@@ -1316,22 +1315,22 @@ int main() {
     app.post("/api/v1/admin/toggle",         make_post_toggle(server));
     app.health_check("/health");
 
-    // ── 전역 에러 핸들러 ─────────────────────────────────────────────────
+    // ── Global error handler ──────────────────────────────────────────────
     app.on_error([](std::exception_ptr ep, const Request& req, Response& res) {
         std::string msg;
         try { std::rethrow_exception(ep); }
         catch (const std::exception& e) { msg = e.what(); }
         catch (...)                     { msg = "unknown error"; }
-        std::fprintf(stderr, "[error] %s: %s\n", std::string(req.path()).c_str(), msg.c_str());
+        std::print(stderr, "[error] {}: {}\n", std::string(req.path()), msg);
         res.status(500)
            .header("Content-Type", "application/json")
            .body(qbuem::write(ErrorResponse{msg}));
     });
 
-    // ── 데모 시뮬레이션 실행 후 HTTP 서버 시작 ───────────────────────────
+    // ── Run demo simulation then start HTTP server ────────────────────────
     pipeline_disp.spawn(run_demo(server, pipeline_disp));
 
-    std::puts("[game-server] HTTP listening on :8080");
+    std::println("[game-server] HTTP listening on :8080");
     auto listen_result = app.listen(8080);
 
     pipeline_disp.stop();

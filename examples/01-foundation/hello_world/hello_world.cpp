@@ -1,13 +1,12 @@
 #include <qbuem/qbuem_stack.hpp>
-#include <iostream>
+#include <print>
 
 int main() {
   qbuem::App app;
 
   // Logging middleware
   app.use([](const qbuem::Request &req, qbuem::Response &) {
-    std::cout << "[LOG] " << (int)req.method() << " " << req.path()
-              << std::endl;
+    std::println("[LOG] {} {}", (int)req.method(), req.path());
     return true;
   });
 
@@ -23,8 +22,7 @@ int main() {
 
   auto res = app.listen(8080);
   if (!res) {
-    std::cerr << "Failed to start server: " << res.error().message()
-              << std::endl;
+    std::println(stderr, "Failed to start server: {}", res.error().message());
     return 1;
   }
 

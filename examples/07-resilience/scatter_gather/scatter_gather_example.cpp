@@ -1,32 +1,32 @@
 /**
  * @file scatter_gather_example.cpp
- * @brief ScatterGatherAction / DebounceAction / ThrottleAction 사용 예시.
+ * @brief ScatterGatherAction / DebounceAction / ThrottleAction usage example.
  *
- * 커버리지:
- * - ScatterGatherAction Config 설정 (max_parallel, channel_cap)
- * - try_push 성공/실패 (백프레셔)
- * - input() 채널 접근 + size_approx
- * - scatter / process / gather 람다 의미론
+ * Coverage:
+ * - ScatterGatherAction Config setup (max_parallel, channel_cap)
+ * - try_push success/failure (backpressure)
+ * - input() channel access + size_approx
+ * - scatter / process / gather lambda semantics
  * - DebounceAction Config + try_push
  * - ThrottleAction Config + try_push
  */
 
 #include <qbuem/pipeline/event_actions.hpp>
+#include <qbuem/compat/print.hpp>
 
 #include <cassert>
-#include <cstdio>
 #include <sstream>
 #include <string>
 #include <vector>
 
 using namespace qbuem;
 
-// ─── 1. ScatterGatherAction 설정 + try_push ──────────────────────────────────
+// ─── 1. ScatterGatherAction config + try_push ─────────────────────────────────
 
 static void demo_scatter_gather() {
-    std::puts("[ScatterGatherAction] config + try_push demo");
+    std::println("[ScatterGatherAction] config + try_push demo");
 
-    // 문자열을 단어들로 scatter → 각 단어 길이 process → max 길이 gather
+    // Scatter a sentence into words → process each word length → gather max length
     auto scatter_fn = [](std::string sentence) -> std::vector<std::string> {
         std::vector<std::string> words;
         std::istringstream iss(sentence);
@@ -46,7 +46,7 @@ static void demo_scatter_gather() {
         return mx;
     };
 
-    // max_parallel=3 으로 배치 실행 제한 설정
+    // Limit batch execution to max_parallel=3
     ScatterGatherAction<std::string, std::string, size_t, size_t> action(
         scatter_fn, process_fn, gather_fn,
         {.max_parallel = 3, .channel_cap = 16}
@@ -54,14 +54,14 @@ static void demo_scatter_gather() {
 
     assert(action.input() != nullptr);
 
-    // try_push 성공
+    // Successful try_push
     assert(action.try_push("hello world foo bar"));
     assert(action.try_push("the quick brown fox"));
     assert(action.input()->size_approx() == 2u);
-    std::printf("[ScatterGatherAction] input queue size=%zu\n",
+    std::println("[ScatterGatherAction] input queue size={}",
                 action.input()->size_approx());
 
-    // 채널 가득 찰 때 false
+    // Returns false when channel is full
     ScatterGatherAction<int, int, int, int> small(
         [](int n) -> std::vector<int> { return {n}; },
         [](int x, ActionEnv) -> Task<Result<int>> { co_return Result<int>(x); },
@@ -72,16 +72,16 @@ static void demo_scatter_gather() {
     assert(small.try_push(2));
     bool full_blocked = !small.try_push(3);
     assert(full_blocked);
-    std::puts("[ScatterGatherAction] backpressure: OK");
+    std::println("[ScatterGatherAction] backpressure: OK");
 
-    std::puts("[ScatterGatherAction] OK");
+    std::println("[ScatterGatherAction] OK");
 }
 
 // ─── 2. DebounceAction ────────────────────────────────────────────────────────
 
 static void demo_debounce() {
     using namespace std::chrono_literals;
-    std::puts("[DebounceAction] config + try_push demo");
+    std::println("[DebounceAction] config + try_push demo");
 
     DebounceAction<int> action({.gap = 50ms, .channel_cap = 32});
     assert(action.input() != nullptr);
@@ -90,17 +90,17 @@ static void demo_debounce() {
         action.try_push(i);
 
     assert(action.input()->size_approx() == 5u);
-    std::printf("[DebounceAction] input=%zu events queued\n",
+    std::println("[DebounceAction] input={} events queued",
                 action.input()->size_approx());
-    std::puts("[DebounceAction] OK");
+    std::println("[DebounceAction] OK");
 }
 
-// ─── 3. ThrottleAction ──────────────────────────────────────────────────────
+// ─── 3. ThrottleAction ───────────────────────────────────────────────────────
 
 static void demo_throttle() {
-    std::puts("[ThrottleAction] config + try_push demo");
+    std::println("[ThrottleAction] config + try_push demo");
 
-    // 초당 1000개, 버스트 10개
+    // 1000 items/second, burst of 10
     ThrottleAction<int> action({.rate_per_sec = 1000u, .burst = 10u, .channel_cap = 64u});
     assert(action.input() != nullptr);
 
@@ -108,15 +108,15 @@ static void demo_throttle() {
         action.try_push(i);
 
     assert(action.input()->size_approx() == 8u);
-    std::printf("[ThrottleAction] input=%zu items queued\n",
+    std::println("[ThrottleAction] input={} items queued",
                 action.input()->size_approx());
-    std::puts("[ThrottleAction] OK");
+    std::println("[ThrottleAction] OK");
 }
 
 int main() {
     demo_scatter_gather();
     demo_debounce();
     demo_throttle();
-    std::puts("scatter_gather_example: ALL OK");
+    std::println("scatter_gather_example: ALL OK");
     return 0;
 }

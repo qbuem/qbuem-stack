@@ -1,34 +1,34 @@
 /**
  * @file sensor_fusion_example.cpp
- * @brief 하드웨어 센서 퓨전 예제 — IMU + GPS + LiDAR → StaticPipeline 융합 상태 출력.
+ * @brief Hardware sensor fusion example — IMU + GPS + LiDAR → StaticPipeline fused state output.
  *
- * ## 개요
- * 실제 하드웨어 없이 모의(Mock) 센서 데이터를 생성하여
- * qbuem StaticPipeline + DynamicPipeline을 활용한 멀티센서 퓨전 시스템을 시연합니다.
+ * ## Overview
+ * Generates mock sensor data without real hardware to demonstrate a multi-sensor fusion system
+ * using qbuem StaticPipeline + DynamicPipeline.
  *
- * ## 아키텍처
+ * ## Architecture
  * ```
  * [MockIMU]  ─┐
  * [MockGPS]  ─┼─→ RawSensorFrame
  * [MockLiDAR]─┘         │
  *                        ▼
  *              StaticPipeline<RawSensorFrame, FusedState>
- *                ├─ Stage1: validate_frame()   — 유효성 검사
- *                ├─ Stage2: preprocess_frame() — 단위 변환 + LPF 노이즈 필터
- *                ├─ Stage3: fuse_sensors()     — GPS + IMU + LiDAR 가중 퓨전
- *                ├─ Stage4: smooth_state()     — 이동 평균 스무딩
- *                └─ (sink) FusionSink::sink()  — 로깅 + 통계
+ *                ├─ Stage1: validate_frame()   — validation
+ *                ├─ Stage2: preprocess_frame() — unit conversion + LPF noise filter
+ *                ├─ Stage3: fuse_sensors()     — GPS + IMU + LiDAR weighted fusion
+ *                ├─ Stage4: smooth_state()     — moving average smoothing
+ *                └─ (sink) FusionSink::sink()  — logging + statistics
  *
- *              DynamicPipeline<FusedState>  (별도 런타임 교체 데모)
- *                ├─ "alert_check" — 신뢰도 임계값 경보
- *                └─ 런타임 hot-swap → "alert_strict" 교체
+ *              DynamicPipeline<FusedState>  (separate runtime hot-swap demo)
+ *                ├─ "alert_check" — confidence threshold alert
+ *                └─ runtime hot-swap → replace with "alert_strict"
  * ```
  *
- * ## 커버리지
+ * ## Coverage
  * - StaticPipeline<In, Out> + PipelineBuilder + with_sink()
  * - DynamicPipeline<T> + add_stage() + replace_stage()
  * - Dispatcher + Task<T>
- * - 모든 센서는 Mock 구현 (실제 하드웨어 불필요)
+ * - All sensors use mock implementations (no real hardware required)
  */
 
 #include <qbuem/core/dispatcher.hpp>
@@ -41,7 +41,7 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
-#include <cstdio>
+#include <print>
 #include <memory>
 #include <string>
 #include <thread>
@@ -51,15 +51,15 @@ using namespace qbuem;
 using namespace std::chrono_literals;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// §0  센서 데이터 타입 정의
+// §0  Sensor data type definitions
 // ─────────────────────────────────────────────────────────────────────────────
 
 struct Vec3 { double x{0}, y{0}, z{0}; };
 struct Quaternion { double w{1}, x{0}, y{0}, z{0}; };
 
 struct ImuReading {
-    Vec3   accel{0, 0, 9.81};  ///< 가속도 (m/s²)
-    Vec3   gyro{};              ///< 각속도 (rad/s)
+    Vec3   accel{0, 0, 9.81};  ///< acceleration (m/s²)
+    Vec3   gyro{};              ///< angular velocity (rad/s)
     double temperature{25};
     uint64_t timestamp_us{0};
 };
@@ -88,15 +88,15 @@ struct RawSensorFrame {
 };
 
 struct FusedState {
-    Vec3       position;    ///< ENU 좌표 (m)
-    Vec3       velocity;    ///< 속도 벡터 (m/s)
+    Vec3       position;    ///< ENU coordinates (m)
+    Vec3       velocity;    ///< velocity vector (m/s)
     Quaternion orientation;
     double     confidence{0};
     uint64_t   frame_id{0};
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// §1  Mock 센서 — 실제 하드웨어 없이 시뮬레이션 데이터 생성
+// §1  Mock sensors — simulation data without real hardware
 // ─────────────────────────────────────────────────────────────────────────────
 
 struct MockIMU {
@@ -138,10 +138,10 @@ struct MockLiDAR {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// §2  StaticPipeline 스테이지 함수
+// §2  StaticPipeline stage functions
 // ─────────────────────────────────────────────────────────────────────────────
 
-// Stage 1: 유효성 검사
+// Stage 1: validation
 static Task<Result<RawSensorFrame>> validate_frame(RawSensorFrame f, ActionEnv) {
     if (f.gps.latitude < -90.0 || f.gps.latitude > 90.0)
         co_return unexpected(std::make_error_code(std::errc::invalid_argument));
@@ -151,7 +151,7 @@ static Task<Result<RawSensorFrame>> validate_frame(RawSensorFrame f, ActionEnv) 
     co_return f;
 }
 
-// Stage 2: 전처리 — 온도 보정 + 저역통과 필터 (α=0.1)
+// Stage 2: preprocessing — temperature correction + low-pass filter (α=0.1)
 static Vec3 g_accel_lpf{0, 0, 9.81};
 static Task<Result<RawSensorFrame>> preprocess_frame(RawSensorFrame f, ActionEnv) {
     double tf = 1.0 + 0.0001 * (f.imu.temperature - 25.0);
@@ -166,34 +166,34 @@ static Task<Result<RawSensorFrame>> preprocess_frame(RawSensorFrame f, ActionEnv
     co_return f;
 }
 
-// Stage 3: GPS + IMU + LiDAR 가중 퓨전
+// Stage 3: GPS + IMU + LiDAR weighted fusion
 static Task<Result<FusedState>> fuse_sensors(RawSensorFrame f, ActionEnv) {
     FusedState s;
     s.frame_id = f.frame_id;
-    // GPS → ENU (원점 37.5665°N, 126.9780°E)
+    // GPS → ENU (origin 37.5665°N, 126.9780°E)
     constexpr double kLat0 = 37.5665, kLon0 = 126.9780, kMpD = 111320.0;
     s.position.x = (f.gps.longitude - kLon0) * kMpD * std::cos(kLat0 * M_PI / 180.0);
     s.position.y = (f.gps.latitude  - kLat0) * kMpD;
     s.position.z = f.gps.altitude;
-    // IMU 속도 적분 (dt = 20ms)
+    // IMU velocity integration (dt = 20ms)
     s.velocity.x = f.imu.accel.x * 0.02;
     s.velocity.y = f.imu.accel.y * 0.02;
     s.velocity.z = 0.0;
-    // LiDAR 바닥면 법선 → 롤/피치 → 쿼터니언
+    // LiDAR floor normal → roll/pitch → quaternion
     double roll  = std::atan2(f.lidar.floor_normal.x, f.lidar.floor_normal.z);
     double pitch = std::atan2(f.lidar.floor_normal.y, f.lidar.floor_normal.z);
     s.orientation.w = std::cos(roll/2)*std::cos(pitch/2);
     s.orientation.x = std::sin(roll/2)*std::cos(pitch/2);
     s.orientation.y = std::cos(roll/2)*std::sin(pitch/2);
     s.orientation.z = 0.0;
-    // 신뢰도 = GPS 품질 * 0.6 + LiDAR 밀도 * 0.4
+    // confidence = GPS quality * 0.6 + LiDAR density * 0.4
     double gps_q   = std::max(0.0, 1.0 - (f.gps.hdop - 1.0) / 10.0);
     double lidar_q = std::min(1.0, f.lidar.point_count / 2048.0);
     s.confidence   = 0.6 * gps_q + 0.4 * lidar_q;
     co_return s;
 }
 
-// Stage 4: 이동 평균 스무딩 (윈도우 크기 5)
+// Stage 4: moving average smoothing (window size 5)
 static std::array<FusedState, 5> g_history{};
 static size_t g_hist_idx{0}, g_hist_n{0};
 
@@ -213,56 +213,56 @@ static Task<Result<FusedState>> smooth_state(FusedState s, ActionEnv) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// §3  Sink — StaticPipeline 최종 출력 수집
+// §3  Sink — StaticPipeline final output collector
 // ─────────────────────────────────────────────────────────────────────────────
 
 static std::atomic<int> g_sink_count{0};
 
 struct FusionSink {
     Result<void> init() {
-        std::printf("  [Sink] 초기화 완료\n");
+        std::println("  [Sink] initialized");
         return {};
     }
     Task<Result<void>> sink(const FusedState& s) {
-        std::printf(
-            "  [퓨전#%3llu] pos=(%.2f, %.2f, %.2f)m  "
-            "vel=(%.3f, %.3f)m/s  conf=%.2f\n",
-            static_cast<unsigned long long>(s.frame_id),
+        std::println(
+            "  [Fused#{:3}] pos=({:.2f}, {:.2f}, {:.2f})m  "
+            "vel=({:.3f}, {:.3f})m/s  conf={:.2f}",
+            s.frame_id,
             s.position.x, s.position.y, s.position.z,
             s.velocity.x, s.velocity.y, s.confidence);
         g_sink_count.fetch_add(1, std::memory_order_relaxed);
-        co_return Result<void>::ok();
+        co_return Result<void>{};
     }
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// §4  DynamicPipeline 스테이지 — 신뢰도 경보 (런타임 교체 데모)
+// §4  DynamicPipeline stage — confidence alert (runtime hot-swap demo)
 // ─────────────────────────────────────────────────────────────────────────────
 
 static std::atomic<int> g_alert_count{0};
 
-// 초기 스테이지: confidence < 0.5 경보
+// initial stage: alert when confidence < 0.5
 static Task<Result<FusedState>> alert_loose(FusedState s, ActionEnv) {
     if (s.confidence < 0.5) {
-        std::printf("  [경보-완화] 신뢰도 낮음: %.2f (프레임 #%llu)\n",
-                    s.confidence, static_cast<unsigned long long>(s.frame_id));
+        std::println("  [ALERT-LOOSE] Low confidence: {:.2f} (frame #{:})",
+                    s.confidence, s.frame_id);
         g_alert_count.fetch_add(1, std::memory_order_relaxed);
     }
     co_return s;
 }
 
-// hot-swap 후 스테이지: confidence < 0.7 경보
+// hot-swap stage: alert when confidence < 0.7
 static Task<Result<FusedState>> alert_strict(FusedState s, ActionEnv) {
     if (s.confidence < 0.7) {
-        std::printf("  [경보-엄격] 신뢰도 낮음: %.2f (프레임 #%llu)\n",
-                    s.confidence, static_cast<unsigned long long>(s.frame_id));
+        std::println("  [ALERT-STRICT] Low confidence: {:.2f} (frame #{:})",
+                    s.confidence, s.frame_id);
         g_alert_count.fetch_add(1, std::memory_order_relaxed);
     }
     co_return s;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// §5  메인 퓨전 루프 코루틴
+// §5  Main fusion loop coroutine
 // ─────────────────────────────────────────────────────────────────────────────
 
 static std::atomic<bool> g_fusion_done{false};
@@ -299,7 +299,7 @@ static Task<void> run_dynamic_demo(
 
     for (int i = 0; i < count; ++i) {
         uint64_t ts = static_cast<uint64_t>(i) * 20000ULL;
-        // 직접 FusedState를 만들어 DynamicPipeline에 푸시
+        // directly create FusedState and push to DynamicPipeline
         auto imu_r = imu.read(ts);
         auto gps_r = gps.read(ts);
         auto ldr_r = lidar.read(ts);
@@ -311,9 +311,9 @@ static Task<void> run_dynamic_demo(
         s.position   = {(double)i * 0.1, 0.0, 50.0};
         dp->try_push(s);
 
-        // 절반 지점에서 경보 기준 hot-swap
+        // hot-swap alert threshold at midpoint
         if (i == count / 2) {
-            std::printf("  [hot-swap] 'alert_check' → 'alert_strict' 교체\n");
+            std::println("  [hot-swap] 'alert_check' → 'alert_strict' replacement");
             dp->hot_swap("alert_check", alert_strict);
         }
     }
@@ -326,8 +326,8 @@ static Task<void> run_dynamic_demo(
 // ─────────────────────────────────────────────────────────────────────────────
 
 int main() {
-    std::printf("=== qbuem 하드웨어 센서 퓨전 예제 ===\n\n");
-    std::printf("주의: Mock IMU/GPS/LiDAR 데이터를 사용합니다 (실제 하드웨어 불필요).\n\n");
+    std::println("=== qbuem Hardware Sensor Fusion Example ===\n");
+    std::println("Note: Uses Mock IMU/GPS/LiDAR data (no real hardware required).\n");
 
     constexpr int kFrames = 10;
 
@@ -335,7 +335,7 @@ int main() {
     std::jthread worker([&] { disp.run(); });
 
     // ── §A  StaticPipeline: validate → preprocess → fuse → smooth → sink ──
-    std::printf("── §A  StaticPipeline 구성 ──\n");
+    std::println("── §A  StaticPipeline setup ──");
     auto static_pipe = std::make_shared<StaticPipeline<RawSensorFrame, FusedState>>(
         PipelineBuilder<RawSensorFrame>{}
             .add<RawSensorFrame>(validate_frame)
@@ -346,21 +346,21 @@ int main() {
             .build());
     static_pipe->start(disp);
 
-    std::printf("\n── §B  StaticPipeline 센서 퓨전 루프 (%d 프레임) ──\n", kFrames);
+    std::println("\n── §B  StaticPipeline sensor fusion loop ({} frames) ──", kFrames);
     disp.spawn(run_fusion_pipeline(static_pipe, kFrames));
 
-    // 완료 대기
+    // wait for completion
     {
         auto deadline = std::chrono::steady_clock::now() + 5s;
         while (!g_fusion_done.load(std::memory_order_acquire) &&
                std::chrono::steady_clock::now() < deadline)
             std::this_thread::sleep_for(10ms);
-        std::this_thread::sleep_for(200ms); // sink 처리 완료 대기
+        std::this_thread::sleep_for(200ms); // wait for sink processing to complete
     }
-    std::printf("  처리 완료: %d / %d 프레임\n", g_sink_count.load(), kFrames);
+    std::println("  Processing complete: {} / {} frames", g_sink_count.load(), kFrames);
 
     // ── §C  DynamicPipeline: alert_check + runtime hot-swap ──
-    std::printf("\n── §C  DynamicPipeline 경보 시스템 (런타임 hot-swap 데모) ──\n");
+    std::println("\n── §C  DynamicPipeline alert system (runtime hot-swap demo) ──");
     auto dp = std::make_shared<DynamicPipeline<FusedState>>();
     dp->add_stage("alert_check", alert_loose);
     dp->start(disp);
@@ -377,16 +377,16 @@ int main() {
     disp.stop();
     worker.join();
 
-    std::printf("\n── 결과 요약 ──\n");
-    std::printf("  StaticPipeline 처리 프레임: %d / %d\n", g_sink_count.load(), kFrames);
-    std::printf("  DynamicPipeline 경보 발생: %d 건\n", g_alert_count.load());
-    std::printf("  센서 퓨전 스테이지: validate → preprocess(LPF) → fuse → smooth\n");
-    std::printf("  DynamicPipeline: alert_loose → hot-swap → alert_strict\n");
+    std::println("\n── Results Summary ──");
+    std::println("  StaticPipeline frames processed: {} / {}", g_sink_count.load(), kFrames);
+    std::println("  DynamicPipeline alerts triggered: {} events", g_alert_count.load());
+    std::println("  Sensor fusion stages: validate → preprocess(LPF) → fuse → smooth");
+    std::println("  DynamicPipeline: alert_loose → hot-swap → alert_strict");
 
     if (g_sink_count.load() > 0)
-        std::printf("\nsensor_fusion_example: ALL OK\n");
+        std::println("\nsensor_fusion_example: ALL OK");
     else
-        std::printf("\nsensor_fusion_example: WARN — 출력 없음\n");
+        std::println("\nsensor_fusion_example: WARN — no output");
 
     return 0;
 }

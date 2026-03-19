@@ -1,6 +1,6 @@
 #include <qbuem/core/kqueue_reactor.hpp>
 #include <qbuem/buf/kqueue_buffer_pool.hpp>
-#include <iostream>
+#include <print>
 #include <chrono>
 #include <unistd.h>
 #include <fcntl.h>
@@ -11,7 +11,7 @@
 using namespace qbuem;
 
 int main() {
-    std::cout << "--- qbuem-stack kqueue Sophistication Demo ---" << std::endl;
+    std::println("--- qbuem-stack kqueue Sophistication Demo ---");
 
     qbuem::KqueueReactor reactor;
     qbuem::KqueueBufferPool pool(4096, 64);
@@ -26,19 +26,20 @@ int main() {
     reactor.register_event(pipe_fds[0], qbuem::EventType::Read, [&](int fd) {
         auto end_time = std::chrono::steady_clock::now();
         auto diff = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time);
-        std::cout << "[Event] Received data on fd " << fd << " in " << diff.count() << "us" << std::endl;
-        
+        std::println("[Event] Received data on fd {} in {}us", fd, diff.count());
+
         // Use User-space Buffer Ring
         auto buf = pool.acquire();
         if (buf.addr) {
             ssize_t n = read(fd, buf.addr, buf.len);
             if (n > 0) {
-                std::cout << "[Buffer] Read " << n << " bytes into buffer ID " << buf.bid << std::endl;
-                std::cout << "[Buffer] Content: " << std::string(static_cast<char*>(buf.addr), static_cast<size_t>(n)) << std::endl;
+                std::println("[Buffer] Read {} bytes into buffer ID {}", n, buf.bid);
+                std::println("[Buffer] Content: {}",
+                             std::string(static_cast<char*>(buf.addr), static_cast<size_t>(n)));
             }
             pool.release(buf.bid);
         }
-        
+
         reactor.stop();
     });
 
@@ -46,7 +47,7 @@ int main() {
     const char* msg = "Hello sophisticated kqueue!";
     write(pipe_fds[1], msg, 27);
 
-    std::cout << "[Main] Polling..." << std::endl;
+    std::println("[Main] Polling...");
     while (reactor.is_running()) {
         reactor.poll(100);
     }
@@ -55,10 +56,10 @@ int main() {
     close(pipe_fds[1]);
 
     // 2. Demonstrate Batching with multiple events
-    std::cout << "\n[Main] Demonstrating batching with timers..." << std::endl;
+    std::println("\n[Main] Demonstrating batching with timers...");
     for (int i = 0; i < 10; ++i) {
         reactor.register_timer(10 * (i + 1), [i](int id) {
-            std::cout << "[Timer] Timer " << i << " (id " << id << ") fired" << std::endl;
+            std::println("[Timer] Timer {} (id {}) fired", i, id);
         });
     }
 
@@ -70,7 +71,7 @@ int main() {
         }
     }
 
-    std::cout << "--- Demo completed ---" << std::endl;
+    std::println("--- Demo completed ---");
 
     return 0;
 }

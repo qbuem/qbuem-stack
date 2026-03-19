@@ -105,10 +105,10 @@ public:
    *
    * No handshake is required for plain TCP connections, so ok() is returned immediately.
    *
-   * @returns Always `Result<void>::ok()`.
+   * @returns Always `Result<void>{}`.
    */
   Task<Result<void>> handshake() override {
-    co_return Result<void>::ok();
+    co_return Result<void>{};
   }
 
   /**
@@ -117,11 +117,11 @@ public:
    * Terminates writes via `shutdown(SHUT_WR)` and then closes the fd.
    * Is a no-op if already closed.
    *
-   * @returns `Result<void>::ok()` on success, error code on failure.
+   * @returns `Result<void>{}` on success, error code on failure.
    */
   Task<Result<void>> close() override {
     if (fd_ < 0) {
-      co_return Result<void>::ok();
+      co_return Result<void>{};
     }
     int fd = fd_;
     fd_ = -1;
@@ -130,7 +130,7 @@ public:
     if (::close(fd) != 0) {
       co_return unexpected(std::error_code(errno, std::system_category()));
     }
-    co_return Result<void>::ok();
+    co_return Result<void>{};
   }
 
   /**

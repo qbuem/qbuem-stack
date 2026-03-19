@@ -146,7 +146,7 @@ public:
         if (upgrade_callback_) {
           keep_alive_ = false; // Terminate HTTP keep-alive loop after upgrade
           co_await upgrade_callback_(UpgradeRequest{std::move(frame), fd_});
-          co_return Result<void>::ok();
+          co_return Result<void>{};
         } else {
           // Upgrade callback not registered — return 426 Upgrade Required
           static constexpr std::string_view kUpgradeRequired =
@@ -156,7 +156,7 @@ public:
               "\r\n";
           write_all(fd_, kUpgradeRequired);
           keep_alive_ = false;
-          co_return Result<void>::ok();
+          co_return Result<void>{};
         }
       }
     }
@@ -228,7 +228,7 @@ public:
           std::error_code(errno, std::system_category()));
     }
 
-    co_return Result<void>::ok();
+    co_return Result<void>{};
   }
 
   /**

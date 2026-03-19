@@ -1,17 +1,17 @@
 /**
  * @file canary_test.cpp
- * @brief CanaryRouter 단위 테스트.
+ * @brief CanaryRouter unit tests.
  *
- * 커버리지:
+ * Coverage:
  * - CanaryMetrics: record_success / record_error / error_rate / avg_latency_us / reset
- * - CanaryRouter 초기 상태 (canary_pct=0)
+ * - CanaryRouter initial state (canary_pct=0)
  * - set_canary_percent / canary_percent
- * - 0% 카나리 → 모두 stable 라우팅
- * - 100% 카나리 → 모두 canary 라우팅
+ * - 0% canary → all routed to stable
+ * - 100% canary → all routed to canary
  * - rollback_to_stable → canary_pct=0
- * - push 반환값 (true=성공, false=fn 없음)
- * - stable_metrics / canary_metrics 지표 갱신
- * - SleepAwaiter 제거 + AsyncSleep 대체 확인 (컴파일만으로 검증)
+ * - push return value (true=success, false=no fn)
+ * - stable_metrics / canary_metrics metric updates
+ * - SleepAwaiter removal + AsyncSleep replacement check (verified by compilation only)
  */
 
 #include <qbuem/pipeline/canary.hpp>
@@ -55,7 +55,7 @@ TEST(CanaryMetrics, Reset) {
     EXPECT_EQ(m.avg_latency_us(), 0u);
 }
 
-// ─── CanaryRouter 기본 상태 ───────────────────────────────────────────────────
+// ─── CanaryRouter initial state ───────────────────────────────────────────────
 
 TEST(CanaryRouter, InitialCanaryPercentIsZero) {
     CanaryRouter<int> router;
@@ -68,7 +68,7 @@ TEST(CanaryRouter, SetCanaryPercentClampsAt100) {
     EXPECT_EQ(router.canary_percent(), 100u);
 }
 
-// ─── 라우팅 정확성 ───────────────────────────────────────────────────────────
+// ─── Routing correctness ──────────────────────────────────────────────────────
 
 TEST(CanaryRouter, ZeroPercentAllGoToStable) {
     CanaryRouter<int> router;
@@ -119,7 +119,7 @@ TEST(CanaryRouter, FiftyPercentApproxHalf) {
     EXPECT_LT(canary_count.load(), 700);
 }
 
-// ─── 롤백 ────────────────────────────────────────────────────────────────────
+// ─── Rollback ────────────────────────────────────────────────────────────────
 
 TEST(CanaryRouter, RollbackToStableSetsZeroPercent) {
     CanaryRouter<int> router;
@@ -147,11 +147,11 @@ TEST(CanaryRouter, AfterRollbackAllGoToStable) {
     EXPECT_EQ(canary_count, 0);
 }
 
-// ─── push 반환값 + 지표 자동 갱신 ───────────────────────────────────────────
+// ─── push return value + automatic metric updates ────────────────────────────
 
 TEST(CanaryRouter, PushReturnsFalseWhenNoFn) {
     CanaryRouter<int> router;
-    // fn 없음 → false
+    // no fn → false
     EXPECT_FALSE(router.push(1));
 }
 
@@ -168,7 +168,7 @@ TEST(CanaryRouter, StableMetricsUpdatedOnPush) {
     for (int i = 0; i < 5; ++i)
         router.push(i);
 
-    // stable 지표에 성공이 기록되어야 함 (latency는 sub-µs일 수 있어 0일 수 있음)
+    // stable metrics should have successes recorded (latency may be 0 for sub-µs ops)
     EXPECT_GT(router.stable_metrics().total.load(), 0u);
     EXPECT_GT(router.stable_metrics().latency_count.load(), 0u);
     EXPECT_DOUBLE_EQ(router.stable_metrics().error_rate(), 0.0);
@@ -192,6 +192,6 @@ TEST(CanaryRouter, MetricsErrorRateOnFailure) {
     for (int i = 0; i < 4; ++i)
         router.push(i);
 
-    // 모두 실패 → error_rate = 1.0
+    // all failures → error_rate = 1.0
     EXPECT_DOUBLE_EQ(router.stable_metrics().error_rate(), 1.0);
 }

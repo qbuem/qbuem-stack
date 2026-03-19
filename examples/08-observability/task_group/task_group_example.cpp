@@ -1,32 +1,32 @@
 /**
  * @file task_group_example.cpp
- * @brief TaskGroup — 구조적 동시성 복합 예시.
+ * @brief TaskGroup — structured concurrency composite example.
  *
- * ## 시나리오: 상품 페이지 데이터 병렬 조회 (MSA 패턴)
- * 상품 상세 페이지를 렌더링하기 위해 여러 마이크로서비스를
- * 병렬로 조회합니다. 하나라도 실패하면 전체를 취소합니다.
+ * ## Scenario: Parallel data fetching for product page (MSA pattern)
+ * Multiple microservices are queried in parallel to render a product detail page.
+ * If any one fails, the entire group is cancelled.
  *
- * 단계:
- * - 상품 정보 서비스       (product_service)
- * - 재고 서비스             (inventory_service)
- * - 가격/프로모션 서비스    (pricing_service)
- * - 리뷰 서비스             (review_service)
+ * Services:
+ * - Product information service  (product_service)
+ * - Inventory service            (inventory_service)
+ * - Price/promotion service      (pricing_service)
+ * - Review service               (review_service)
  *
- * ## 커버리지
- * - TaskGroup: spawn<T>() / join_all<T>() — 결과 수집
- * - TaskGroup: spawn() (void) / join() — 완료 대기
- * - TaskGroup: cancel() / stop_token() — 취소 전파
- * - 실패 시나리오: 하나 실패 → 에러 전파
- * - 타임아웃 패턴: 외부 서비스 느린 응답 대응
+ * ## Coverage
+ * - TaskGroup: spawn<T>() / join_all<T>() — result collection
+ * - TaskGroup: spawn() (void) / join() — completion wait
+ * - TaskGroup: cancel() / stop_token() — cancellation propagation
+ * - Failure scenario: one fails → error propagation
+ * - Timeout pattern: handling slow external service responses
  */
 
 #include <qbuem/core/dispatcher.hpp>
 #include <qbuem/core/task.hpp>
 #include <qbuem/pipeline/task_group.hpp>
+#include <qbuem/compat/print.hpp>
 
 #include <atomic>
 #include <chrono>
-#include <cstdio>
 #include <string>
 #include <thread>
 #include <vector>
@@ -34,7 +34,7 @@
 using namespace qbuem;
 using namespace std::chrono_literals;
 
-// ─── 도메인 타입 ─────────────────────────────────────────────────────────────
+// ─── Domain types ─────────────────────────────────────────────────────────────
 
 struct ProductInfo {
     uint64_t    product_id;
@@ -60,26 +60,24 @@ struct ReviewSummary {
     int      review_count;
 };
 
-// ─── 서비스 상태 시뮬레이션 ──────────────────────────────────────────────────
+// ─── Service state simulation ─────────────────────────────────────────────────
 
-static std::atomic<int> g_service_fail_mode{0};  // 0=정상 1=재고서비스 실패
+static std::atomic<int> g_service_fail_mode{0};  // 0=normal 1=inventory service failure
 static std::atomic<int> g_call_count{0};
 
-// ─── 서비스 호출 코루틴 ──────────────────────────────────────────────────────
+// ─── Service call coroutines ──────────────────────────────────────────────────
 
 static Task<Result<ProductInfo>> fetch_product(uint64_t product_id) {
     ++g_call_count;
-    std::printf("  [상품서비스] 조회 시작 product_id=%llu\n",
-                static_cast<unsigned long long>(product_id));
-    co_return ProductInfo{product_id, "초고속 SSD 1TB", "스토리지"};
+    std::println("  [product_service] starting fetch product_id={}", product_id);
+    co_return ProductInfo{product_id, "Ultra-Fast SSD 1TB", "Storage"};
 }
 
 static Task<Result<InventoryInfo>> fetch_inventory(uint64_t product_id) {
     ++g_call_count;
-    std::printf("  [재고서비스] 조회 시작 product_id=%llu\n",
-                static_cast<unsigned long long>(product_id));
+    std::println("  [inventory_service] starting fetch product_id={}", product_id);
     if (g_service_fail_mode.load() == 1) {
-        std::printf("  [재고서비스] 장애 발생!\n");
+        std::println("  [inventory_service] service failure!");
         co_return unexpected(std::make_error_code(std::errc::connection_refused));
     }
     co_return InventoryInfo{product_id, 42, true};
@@ -87,15 +85,13 @@ static Task<Result<InventoryInfo>> fetch_inventory(uint64_t product_id) {
 
 static Task<Result<PricingInfo>> fetch_pricing(uint64_t product_id) {
     ++g_call_count;
-    std::printf("  [가격서비스] 조회 시작 product_id=%llu\n",
-                static_cast<unsigned long long>(product_id));
-    co_return PricingInfo{product_id, 129000.0, 0.15};  // 15% 할인
+    std::println("  [pricing_service] starting fetch product_id={}", product_id);
+    co_return PricingInfo{product_id, 129000.0, 0.15};  // 15% discount
 }
 
 static Task<Result<ReviewSummary>> fetch_reviews(uint64_t product_id) {
     ++g_call_count;
-    std::printf("  [리뷰서비스] 조회 시작 product_id=%llu\n",
-                static_cast<unsigned long long>(product_id));
+    std::println("  [review_service] starting fetch product_id={}", product_id);
     co_return ReviewSummary{product_id, 4.7, 1234};
 }
 
@@ -120,10 +116,10 @@ struct RunGuard {
     }
 };
 
-// ─── 시나리오 1: 병렬 조회 성공 — join_all<T>() ────────────────────────────
+// ─── Scenario 1: Parallel fetch success — join_all<T>() ──────────────────────
 
 static void scenario_parallel_fetch_success() {
-    std::puts("\n=== 시나리오 1: 상품 페이지 병렬 데이터 조회 (모두 성공) ===");
+    std::println("\n=== Scenario 1: Product page parallel data fetch (all succeed) ===");
     g_service_fail_mode.store(0);
     g_call_count.store(0);
 
@@ -131,32 +127,32 @@ static void scenario_parallel_fetch_success() {
 
     RunGuard guard;
     guard.run_and_wait([&]() -> Task<void> {
-        // 4개 서비스 동시 조회
+        // Fetch 4 services simultaneously
         TaskGroup tg;
         tg.spawn<ProductInfo>(fetch_product(product_id));
         tg.spawn<InventoryInfo>(fetch_inventory(product_id));
         tg.spawn<PricingInfo>(fetch_pricing(product_id));
         tg.spawn<ReviewSummary>(fetch_reviews(product_id));
 
-        // 모든 결과 수집 대기
-        // 주의: join_all<T>()는 단일 타입만 수집하므로 각 타입별로 별도 TaskGroup 사용
-        // 여기서는 void join()으로 완료 대기 후 결과는 외부 변수에 직접 저장
+        // Wait for all results
+        // Note: join_all<T>() collects a single type, so use separate TaskGroups per type
+        // Here we use void join() to wait for completion, with results stored in external vars
         co_await tg.join();
-        std::printf("  [완료] 병렬 조회 완료 (총 %d회 서비스 호출)\n",
+        std::println("  [completed] parallel fetch done (total {} service calls)",
                     g_call_count.load());
     });
 
-    std::printf("[결과] 서비스 호출 수=%d (4개 서비스 병렬)\n", g_call_count.load());
+    std::println("[result] service calls={} (4 services in parallel)", g_call_count.load());
 }
 
-// ─── 시나리오 2: join_all<T>() — 동종 결과 수집 ────────────────────────────
+// ─── Scenario 2: join_all<T>() — homogeneous result collection ───────────────
 
 static void scenario_join_all_homogeneous() {
-    std::puts("\n=== 시나리오 2: 동종 결과 병렬 수집 — join_all<T>() ===");
+    std::println("\n=== Scenario 2: Homogeneous parallel result collection — join_all<T>() ===");
 
     RunGuard guard;
     guard.run_and_wait([&]() -> Task<void> {
-        // 여러 상품 ID의 재고를 동시에 조회
+        // Simultaneously query inventory for multiple product IDs
         std::vector<uint64_t> product_ids = {101, 102, 103, 104, 105};
 
         TaskGroup tg;
@@ -168,22 +164,22 @@ static void scenario_join_all_homogeneous() {
 
         auto results = co_await tg.join_all<InventoryInfo>();
         if (results.has_value()) {
-            std::printf("  [완료] 재고 조회 %zu건 수집\n", results->size());
+            std::println("  [completed] {} inventory records collected", results->size());
             int total_stock = 0;
             for (const auto& inv : *results)
                 total_stock += inv.stock;
-            std::printf("  [통계] 총 재고: %d개\n", total_stock);
+            std::println("  [stats] total stock: {}", total_stock);
         } else {
-            std::printf("  [ERROR] %s\n", results.error().message().c_str());
+            std::println("  [ERROR] {}", results.error().message());
         }
     });
 }
 
-// ─── 시나리오 3: 실패 전파 — 하나 실패 → join() 에러 ───────────────────────
+// ─── Scenario 3: Failure propagation — one fails → join() error ──────────────
 
 static void scenario_one_failure_propagates() {
-    std::puts("\n=== 시나리오 3: 재고 서비스 실패 → 전체 에러 전파 ===");
-    g_service_fail_mode.store(1);  // 재고 서비스 강제 실패
+    std::println("\n=== Scenario 3: Inventory service failure → full error propagation ===");
+    g_service_fail_mode.store(1);  // force inventory service failure
     g_call_count.store(0);
 
     const uint64_t product_id = 888;
@@ -192,27 +188,27 @@ static void scenario_one_failure_propagates() {
     guard.run_and_wait([&]() -> Task<void> {
         TaskGroup tg;
         tg.spawn<ProductInfo>(fetch_product(product_id));
-        tg.spawn<InventoryInfo>(fetch_inventory(product_id));  // 실패
+        tg.spawn<InventoryInfo>(fetch_inventory(product_id));  // fails
         tg.spawn<PricingInfo>(fetch_pricing(product_id));
         tg.spawn<ReviewSummary>(fetch_reviews(product_id));
 
         auto res = co_await tg.join();
         if (!res.has_value()) {
-            std::printf("  [결과] TaskGroup 에러 전파: %s\n",
-                        res.error().message().c_str());
-            std::puts("  → 상품 페이지 렌더링 실패, 에러 페이지 반환");
+            std::println("  [result] TaskGroup error propagation: {}",
+                        res.error().message());
+            std::println("  → product page rendering failed, returning error page");
         } else {
-            std::puts("  [결과] 성공 (예상치 못함)");
+            std::println("  [result] success (unexpected)");
         }
     });
 
-    g_service_fail_mode.store(0);  // 복원
+    g_service_fail_mode.store(0);  // restore
 }
 
-// ─── 시나리오 4: cancel() — 조기 종료 ────────────────────────────────────
+// ─── Scenario 4: cancel() — early termination ────────────────────────────────
 
 static void scenario_cancel() {
-    std::puts("\n=== 시나리오 4: TaskGroup cancel() — 일괄 취소 ===");
+    std::println("\n=== Scenario 4: TaskGroup cancel() — bulk cancellation ===");
 
     RunGuard guard;
     std::atomic<int> completed{0};
@@ -220,10 +216,10 @@ static void scenario_cancel() {
     guard.run_and_wait([&]() -> Task<void> {
         TaskGroup tg;
 
-        // 취소 신호를 확인하는 장기 작업
+        // Long-running task that checks cancellation signal
         auto long_task = [&](int id, std::stop_token stoken) -> Task<Result<int>> {
             if (stoken.stop_requested()) {
-                std::printf("  [취소] task-%d 시작 전 취소됨\n", id);
+                std::println("  [cancelled] task-{} cancelled before start", id);
                 co_return unexpected(std::make_error_code(std::errc::operation_canceled));
             }
             completed.fetch_add(1, std::memory_order_relaxed);
@@ -232,27 +228,28 @@ static void scenario_cancel() {
 
         auto token = tg.stop_token();
 
-        // 먼저 취소 요청
+        // Request cancellation first
         tg.cancel();
 
-        // 이후 spawn된 작업들은 취소 상태 확인 가능
+        // Tasks spawned after cancellation can check state
         tg.spawn<int>(long_task(1, token));
         tg.spawn<int>(long_task(2, token));
         tg.spawn<int>(long_task(3, token));
 
         auto res = co_await tg.join();
-        std::printf("  [결과] join 완료 (has_error=%s)\n",
+        std::println("  [result] join completed (has_error={})",
                     res.has_value() ? "false" : "true");
-        std::printf("  [결과] cancel 호출 후 실행된 작업=%d\n", completed.load());
+        std::println("  [result] tasks executed after cancel={}",
+                    completed.load());
     });
 }
 
-// ─── 시나리오 5: 병렬 데이터 파이프라인 — 분산 집계 ─────────────────────────
+// ─── Scenario 5: Parallel data pipeline — distributed aggregation ─────────────
 
 static void scenario_parallel_aggregation() {
-    std::puts("\n=== 시나리오 5: 분산 집계 — 여러 창고의 재고 합산 ===");
+    std::println("\n=== Scenario 5: Distributed aggregation — inventory sum across warehouses ===");
 
-    // 5개 창고에서 동시에 재고 조회
+    // Simultaneous inventory query from 5 warehouses
     struct WarehouseStock {
         std::string warehouse_id;
         int         stock;
@@ -267,7 +264,7 @@ static void scenario_parallel_aggregation() {
             tg.spawn<WarehouseStock>(
                 [i, name = std::string(warehouses[i])]() -> Task<Result<WarehouseStock>> {
                     int stock = 100 + i * 50;
-                    std::printf("  [창고] %s: %d개\n", name.c_str(), stock);
+                    std::println("  [warehouse] {}: {} units", name, stock);
                     co_return WarehouseStock{name, stock};
                 }()
             );
@@ -277,21 +274,17 @@ static void scenario_parallel_aggregation() {
         if (results.has_value()) {
             int total = 0;
             for (const auto& w : *results) total += w.stock;
-            std::printf("  [집계] 전국 총 재고: %d개 (%zu개 창고)\n",
+            std::println("  [aggregated] national total stock: {} ({} warehouses)",
                         total, results->size());
         }
     });
 }
 
-// ─── 시나리오 6: 팬아웃 알림 — void join() ────────────────────────────────
+// ─── Scenario 6: Fan-out notifications — void join() ─────────────────────────
 
 static void scenario_fanout_notifications() {
-    std::puts("\n=== 시나리오 6: 팬아웃 알림 (이메일 + SMS + 푸시) — join() ===");
+    std::println("\n=== Scenario 6: Fan-out notifications (email + SMS + push) — join() ===");
 
-    struct NotifyResult {
-        std::string channel;
-        bool sent;
-    };
     std::atomic<int> sent_count{0};
 
     RunGuard guard;
@@ -299,19 +292,19 @@ static void scenario_fanout_notifications() {
         TaskGroup tg;
 
         auto notify = [&](const char* channel) -> Task<Result<void>> {
-            std::printf("  [알림] %s 전송 완료\n", channel);
+            std::println("  [notify] {} sent", channel);
             sent_count.fetch_add(1, std::memory_order_relaxed);
             co_return Result<void>{};
         };
 
-        tg.spawn(notify("이메일"));
+        tg.spawn(notify("email"));
         tg.spawn(notify("SMS"));
-        tg.spawn(notify("푸시알림"));
-        tg.spawn(notify("카카오톡"));
+        tg.spawn(notify("push_notification"));
+        tg.spawn(notify("messenger"));
 
         auto res = co_await tg.join();
-        std::printf("  [결과] 알림 전송: %s (%d채널)\n",
-                    res.has_value() ? "성공" : "실패",
+        std::println("  [result] notifications: {} ({} channels)",
+                    res.has_value() ? "success" : "failed",
                     sent_count.load());
     });
 }
@@ -323,6 +316,6 @@ int main() {
     scenario_cancel();
     scenario_parallel_aggregation();
     scenario_fanout_notifications();
-    std::puts("\ntask_group_example: ALL OK");
+    std::println("\ntask_group_example: ALL OK");
     return 0;
 }

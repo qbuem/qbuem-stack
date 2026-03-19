@@ -1,13 +1,13 @@
 /**
  * @file db_value_test.cpp
- * @brief db::Value 힙-프리 variant 단위 테스트.
+ * @brief db::Value heap-free variant unit tests.
  *
- * 커버리지:
- * - 각 타입 생성자 및 타입 태그 확인
- * - get<T>() 값 추출
- * - 크기 제약 (≤32B)
- * - BoundParams 스택 바인딩
- * - 동등 비교 연산자
+ * Coverage:
+ * - Each type constructor and type tag check
+ * - get<T>() value extraction
+ * - Size constraint (≤32B)
+ * - BoundParams stack binding
+ * - Equality comparison operator
  */
 
 #include <qbuem/db/value.hpp>
@@ -15,7 +15,7 @@
 
 using namespace qbuem::db;
 
-// ─── 타입 생성 및 태그 ────────────────────────────────────────────────────────
+// ─── Type construction and tags ──────────────────────────────────────────────
 
 TEST(DbValue, NullDefault) {
     Value v;
@@ -83,13 +83,13 @@ TEST(DbValue, Blob) {
     EXPECT_EQ(out[0], 0x01);
 }
 
-// ─── 크기 제약 ───────────────────────────────────────────────────────────────
+// ─── Size constraint ─────────────────────────────────────────────────────────
 
 TEST(DbValue, SizeConstraint) {
     EXPECT_LE(sizeof(Value), 32u);
 }
 
-// ─── 동등 비교 ───────────────────────────────────────────────────────────────
+// ─── Equality comparison ─────────────────────────────────────────────────────
 
 TEST(DbValue, EqualityNull) {
     EXPECT_EQ(Value{}, Value{null});

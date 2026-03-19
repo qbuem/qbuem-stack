@@ -1,46 +1,46 @@
 /**
  * @file io_metrics_dashboard.cpp
- * @brief 초고속 IO 기반 실시간 데이터 메트릭스 대시보드
+ * @brief High-speed IO-based real-time data metrics dashboard
  *
- * ## 개요
- * qbuem의 lock-free 채널, StaticPipeline, MessageBus, HistogramMetrics를
- * 조합해 고처리량 IO 이벤트 스트림을 실시간으로 집계·출력하는
- * 데이터 메트릭스 대시보드를 구현합니다.
+ * ## Overview
+ * Combines qbuem's lock-free channel, StaticPipeline, MessageBus, and
+ * HistogramMetrics to implement a real-time data metrics dashboard that
+ * aggregates and displays a high-throughput IO event stream.
  *
- * ## 아키텍처
+ * ## Architecture
  * ```
- * ┌──────────── IO Event Producers (4 스레드, ~100k ev/s) ─────────────┐
+ * ┌──────────── IO Event Producers (4 threads, ~100k ev/s) ────────────┐
  * │  ProducerThread × 4  →  AsyncChannel<IOEvent>  (lock-free MPMC)   │
  * └──────────────────────────┬─────────────────────────────────────────┘
  *                             │ IOEvent (Read/Write/Accept/Connect/Error)
  *                             ▼
  *         ┌──────────────────────────────────────────────────┐
  *         │  StaticPipeline<IOEvent, MetricSnapshot>          │
- *         │  1. classify()    — 이벤트 타입 분류 + 바이트 계산  │
- *         │  2. measure()     — 레이턴시 기록 (HistogramMetrics) │
- *         │  3. aggregate()   — EWMA 처리량 + 슬라이딩 윈도우   │
- *         │  4. snapshot()    — MetricSnapshot 생성             │
+ *         │  1. classify()    — event type classification + byte counting  │
+ *         │  2. measure()     — latency recording (HistogramMetrics) │
+ *         │  3. aggregate()   — EWMA throughput + sliding window   │
+ *         │  4. snapshot()    — MetricSnapshot generation             │
  *         └──────────────────┬───────────────────────────────┘
  *                             │ MetricSnapshot
  *                      MessageBus("metrics")
  *                             │
- *                  DashboardPrinter (구독자)
- *                  AlertChecker     (구독자)
+ *                  DashboardPrinter (subscriber)
+ *                  AlertChecker     (subscriber)
  *
- * ## 메트릭 항목
- * - 처리량     : ops/s (EWMA α=0.1), bytes/s (rolling 1s 윈도우)
- * - 레이턴시   : p50 / p95 / p99 / p999 (HDR-style HistogramMetrics)
- * - 에러율     : error/total × 100%
- * - 큐 깊이    : AsyncChannel 점유율
- * - 이벤트 유형: Read / Write / Accept / Connect / Close / Error 비율
+ * ## Metric fields
+ * - Throughput   : ops/s (EWMA α=0.1), bytes/s (rolling 1s window)
+ * - Latency      : p50 / p95 / p99 / p999 (HDR-style HistogramMetrics)
+ * - Error rate   : error/total × 100%
+ * - Queue depth  : AsyncChannel occupancy
+ * - Event types  : Read / Write / Accept / Connect / Close / Error distribution
  *
- * ## 커버리지
- * - HistogramMetrics (observability.hpp) — p50/p95/p99 레이턴시 분포
+ * ## Coverage
+ * - HistogramMetrics (observability.hpp) — p50/p95/p99 latency distribution
  * - StaticPipeline<In, Out> + PipelineBuilder + with_sink()
- * - MessageBus: publish/subscribe (메트릭 fan-out)
- * - AsyncChannel<T>: MPMC 락-프리 큐
- * - std::atomic 카운터 + EWMA 처리량
- * - 4개 Producer 스레드 동시 실행
+ * - MessageBus: publish/subscribe (metrics fan-out)
+ * - AsyncChannel<T>: MPMC lock-free queue
+ * - std::atomic counters + EWMA throughput
+ * - 4 producer threads running concurrently
  */
 
 #include <qbuem/core/dispatcher.hpp>
@@ -55,7 +55,7 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
-#include <cstdio>
+#include <print>
 #include <cstdlib>
 #include <cstring>
 #include <memory>
@@ -69,7 +69,7 @@ using namespace std::chrono_literals;
 using Clock = std::chrono::steady_clock;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// §0  IO 이벤트 타입
+// §0  IO event types
 // ─────────────────────────────────────────────────────────────────────────────
 
 enum class IOEventType : uint8_t {
@@ -97,32 +97,32 @@ static const char* event_name(IOEventType t) {
 struct IOEvent {
     IOEventType type{IOEventType::Read};
     uint32_t    fd{0};
-    uint32_t    bytes{0};        ///< 전송 바이트 (Read/Write)
-    uint32_t    latency_us{0};   ///< 완료 레이턴시 (µs)
-    uint8_t     errno_code{0};   ///< Error 이벤트 시 errno
-    uint64_t    ts_us{0};        ///< 이벤트 발생 시각 (µs)
+    uint32_t    bytes{0};        ///< transferred bytes (Read/Write)
+    uint32_t    latency_us{0};   ///< completion latency (µs)
+    uint8_t     errno_code{0};   ///< errno for Error events
+    uint64_t    ts_us{0};        ///< event timestamp (µs)
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// §1  메트릭 스냅샷 (1초 집계 단위)
+// §1  Metric snapshot (1-second aggregation unit)
 // ─────────────────────────────────────────────────────────────────────────────
 
 struct MetricSnapshot {
     uint64_t  total_ops{0};
     uint64_t  total_bytes{0};
     uint64_t  error_count{0};
-    double    ops_per_sec{0};       ///< EWMA 처리량
+    double    ops_per_sec{0};       ///< EWMA throughput
     double    bytes_per_sec{0};
     double    error_rate_pct{0};
 
-    // 레이턴시 (µs)
+    // latency (µs)
     uint64_t  lat_p50{0};
     uint64_t  lat_p95{0};
     uint64_t  lat_p99{0};
     uint64_t  lat_p999{0};
     uint64_t  lat_max{0};
 
-    // 이벤트 유형별 카운트
+    // per-event-type counts
     uint64_t  type_count[static_cast<int>(IOEventType::_Count)]{};
 
     uint64_t  snapshot_id{0};
@@ -130,63 +130,64 @@ struct MetricSnapshot {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// §2  글로벌 집계 상태 (lock-free)
+// §2  Global aggregation state (lock-free)
 // ─────────────────────────────────────────────────────────────────────────────
 
-// 캐시라인 패딩 카운터 — classify() 가 여러 워커에서 동시에 다른 type_count 버킷을
-// 증가시킬 때 false sharing 을 방지합니다 (6개 × 8 B = 48 B → 2 캐시라인 공유).
+// Cache-line-padded counter — prevents false sharing when classify() increments
+// different type_count buckets concurrently across multiple workers
+// (6 × 8B = 48B → 2 shared cache lines).
 struct alignas(64) PaddedCounter {
     std::atomic<uint64_t> val{0};
 };
 
 struct GlobalStats {
-    // 전체 카운터
+    // total counters
     std::atomic<uint64_t> total_ops{0};
     std::atomic<uint64_t> total_bytes{0};
     std::atomic<uint64_t> error_count{0};
 
-    // 이벤트 유형별 카운터 — 각 버킷이 독립 캐시라인 점유
+    // per-event-type counters — each bucket occupies an independent cache line
     PaddedCounter type_count[static_cast<int>(IOEventType::_Count)]{};
 
-    // EWMA 처리량 (α = 0.15) — ewma_mtx 로 보호
-    // build_snapshot() 이 멀티워커 파이프라인에서 동시 호출될 수 있으므로 mutex 사용
+    // EWMA throughput (α = 0.15) — protected by ewma_mtx
+    // build_snapshot() may be called concurrently from multi-worker pipeline, so mutex is used
     mutable std::mutex ewma_mtx;
     double ewma_ops{0};
     double ewma_bytes{0};
 
-    // 슬라이딩 1초 윈도우
+    // sliding 1-second window
     std::atomic<uint64_t> window_ops{0};
     std::atomic<uint64_t> window_bytes{0};
-    // 비원자 time_point 대신 ns 단위 정수 atomic — ewma_mtx 보호 구간에서만 읽고 씀
+    // integer atomic in ns instead of non-atomic time_point — read/written only within ewma_mtx protected section
     uint64_t window_start_ns{static_cast<uint64_t>(
         std::chrono::duration_cast<std::chrono::nanoseconds>(
             Clock::now().time_since_epoch()).count())};
 
-    // 레이턴시 히스토그램 (1µs ~ 1s, 로그 스케일 버킷)
-    // 버킷 경계: 10, 50, 100, 500, 1000, 5000, 10000, 50000, 100000, 500000 µs
+    // latency histogram (1µs ~ 1s, log-scale buckets)
+    // bucket boundaries: 10, 50, 100, 500, 1000, 5000, 10000, 50000, 100000, 500000 µs
     HistogramMetrics latency_hist{
         {10, 50, 100, 500, 1000, 5000, 10000, 50000, 100000, 500000}
     };
 
-    // 최대 레이턴시
+    // maximum latency
     std::atomic<uint64_t> lat_max{0};
 
-    // 스냅샷 ID
+    // snapshot ID
     std::atomic<uint64_t> snap_id{0};
 };
 
 static GlobalStats g_stats{};
 
 // ─────────────────────────────────────────────────────────────────────────────
-// §3  백분위수 계산 (HistogramMetrics 버킷에서)
+// §3  Percentile computation (from HistogramMetrics buckets)
 // ─────────────────────────────────────────────────────────────────────────────
 
-// 버킷 경계: 10, 50, 100, 500, 1k, 5k, 10k, 50k, 100k, 500k µs → 11개 버킷
+// bucket boundaries: 10, 50, 100, 500, 1k, 5k, 10k, 50k, 100k, 500k µs → 11 buckets
 static const uint64_t kBounds[] = {10, 50, 100, 500, 1000, 5000, 10000, 50000, 100000, 500000};
 static const uint64_t kBoundMids[] = {5, 30, 75, 300, 750, 3000, 7500, 30000, 75000, 300000, 750000};
 
-// 4개 백분위를 버킷 배열 단일 패스로 동시 계산 — O(n) × 4 → O(n) × 1
-// 스택 배열(counts_buf)을 받아 벡터 할당도 없앰
+// compute 4 percentiles in a single pass over bucket array — O(n) × 4 → O(n) × 1
+// receives stack-allocated counts_buf to avoid vector heap allocation
 static void compute_percentiles(const uint64_t* counts, size_t n,
                                  uint64_t& p50, uint64_t& p95,
                                  uint64_t& p99, uint64_t& p999) noexcept {
@@ -214,10 +215,10 @@ static void compute_percentiles(const uint64_t* counts, size_t n,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// §4  StaticPipeline 스테이지
+// §4  StaticPipeline stages
 // ─────────────────────────────────────────────────────────────────────────────
 
-// Stage 1: 이벤트 분류 + 바이트/에러 전역 집계
+// Stage 1: event classification + global byte/error accumulation
 static Task<Result<IOEvent>> classify(IOEvent ev, ActionEnv) {
     int idx = static_cast<int>(ev.type);
     g_stats.type_count[idx].val.fetch_add(1, std::memory_order_relaxed);
@@ -226,16 +227,16 @@ static Task<Result<IOEvent>> classify(IOEvent ev, ActionEnv) {
         g_stats.total_bytes.fetch_add(ev.bytes, std::memory_order_relaxed);
     if (ev.type == IOEventType::Error)
         g_stats.error_count.fetch_add(1, std::memory_order_relaxed);
-    // 슬라이딩 윈도우
+    // sliding window
     g_stats.window_ops.fetch_add(1, std::memory_order_relaxed);
     g_stats.window_bytes.fetch_add(ev.bytes, std::memory_order_relaxed);
     co_return ev;
 }
 
-// Stage 2: 레이턴시 기록
+// Stage 2: latency recording
 static Task<Result<IOEvent>> measure(IOEvent ev, ActionEnv) {
     g_stats.latency_hist.observe(ev.latency_us);
-    // 최대 레이턴시: 단일 CAS — CAS 실패 시 이미 더 큰 값이 들어온 것이므로 재시도 불필요
+    // max latency: single CAS — no retry needed since CAS failure means a larger value was already written
     uint64_t cur = g_stats.lat_max.load(std::memory_order_relaxed);
     if (ev.latency_us > cur)
         g_stats.lat_max.compare_exchange_strong(
@@ -244,7 +245,7 @@ static Task<Result<IOEvent>> measure(IOEvent ev, ActionEnv) {
     co_return ev;
 }
 
-// Stage 3: EWMA 처리량 계산 + 스냅샷 트리거 여부 결정
+// Stage 3: EWMA throughput calculation + snapshot trigger check
 static std::atomic<uint64_t> g_processed_since_snap{0};
 
 static Task<Result<IOEvent>> aggregate(IOEvent ev, ActionEnv) {
@@ -253,13 +254,13 @@ static Task<Result<IOEvent>> aggregate(IOEvent ev, ActionEnv) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// §4b  Forward declarations (정의는 §6에)
+// §4b  Forward declarations (defined in §6)
 // ─────────────────────────────────────────────────────────────────────────────
 static std::atomic<int> g_snap_received{0};
 static void print_dashboard(const MetricSnapshot& s);
 
 // ─────────────────────────────────────────────────────────────────────────────
-// §4c  스냅샷 조립 헬퍼 (non-coroutine, 코루틴 프레임 외부에서 실행)
+// §4c  Snapshot assembly helper (non-coroutine, runs outside the coroutine frame)
 // ─────────────────────────────────────────────────────────────────────────────
 
 [[gnu::noinline]]
@@ -270,8 +271,8 @@ static MetricSnapshot build_snapshot() {
     snap.total_bytes  = g_stats.total_bytes.load(std::memory_order_relaxed);
     snap.error_count  = g_stats.error_count.load(std::memory_order_relaxed);
 
-    // 슬라이딩 윈도우 처리량 (EWMA) — ewma_mtx 로 race 방지
-    // (pipeline 멀티워커가 동시에 build_snapshot 호출 가능)
+    // sliding window throughput (EWMA) — ewma_mtx prevents data race
+    // (pipeline multi-workers may call build_snapshot concurrently)
     {
         auto now_ns = static_cast<uint64_t>(
             std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -293,13 +294,13 @@ static MetricSnapshot build_snapshot() {
     if (snap.total_ops > 0)
         snap.error_rate_pct = 100.0 * snap.error_count / snap.total_ops;
 
-    // fill_bucket_counts: 스택 버퍼 사용 — 벡터 힙 할당 없이 버킷 읽기
-    // bucket_count() = 11 (경계 10개 + overflow 1개)
+    // fill_bucket_counts: uses stack buffer — reads buckets without heap allocation
+    // bucket_count() = 11 (10 boundaries + 1 overflow)
     constexpr size_t kMaxBuckets = 16;
     uint64_t counts_buf[kMaxBuckets]{};
     size_t nbuckets = g_stats.latency_hist.fill_bucket_counts(counts_buf, kMaxBuckets);
 
-    // 4개 백분위 단일 패스 계산
+    // compute 4 percentiles in a single pass
     compute_percentiles(counts_buf, nbuckets,
                         snap.lat_p50, snap.lat_p95, snap.lat_p99, snap.lat_p999);
     snap.lat_max = g_stats.lat_max.load(std::memory_order_relaxed);
@@ -310,9 +311,9 @@ static MetricSnapshot build_snapshot() {
     return snap;
 }
 
-// Stage 4: Sink — N번째 이벤트마다 스냅샷 생성 + 대시보드 출력 + MessageBus 발행
+// Stage 4: Sink — generate snapshot every N events + print dashboard + publish to MessageBus
 static std::atomic<uint64_t> g_snap_trigger{0};
-static constexpr uint64_t kSnapInterval = 500;   ///< 500 이벤트마다 스냅샷
+static constexpr uint64_t kSnapInterval = 500;   ///< snapshot every 500 events
 
 struct SnapSink {
     MessageBus* bus{nullptr};
@@ -322,35 +323,35 @@ struct SnapSink {
     Task<Result<void>> sink(const IOEvent& /*ev*/) {
         uint64_t seq = g_snap_trigger.fetch_add(1, std::memory_order_relaxed);
         if ((seq % kSnapInterval) != 0) {
-            co_return Result<void>::ok();
+            co_return Result<void>{};
         }
 
-        // 스냅샷 조립 (helper 함수로 분리 — GCC coroutine 프레임 크기 최소화)
+        // assemble snapshot (split into helper function to minimize GCC coroutine frame size)
         MetricSnapshot snap = build_snapshot();
 
-        // 직접 대시보드 출력
+        // print dashboard directly
         print_dashboard(snap);
         g_snap_received.fetch_add(1, std::memory_order_relaxed);
 
-        // MessageBus fan-out: 경보 구독자에게도 전달
+        // MessageBus fan-out: also deliver to alert subscribers
         if (bus) co_await bus->publish("alerts", snap);
-        co_return Result<void>::ok();
+        co_return Result<void>{};
     }
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// §5  IO 이벤트 Mock 생성기 (4개 Producer 스레드)
+// §5  IO event mock generator (4 producer threads)
 // ─────────────────────────────────────────────────────────────────────────────
 
 struct MockIOProducer {
     int              thread_id{0};
-    int              target_ops{0};   ///< 생성할 이벤트 수
-    static constexpr double kErrorRate = 0.02;  ///< 2% 에러 비율
+    int              target_ops{0};   ///< number of events to generate
+    static constexpr double kErrorRate = 0.02;  ///< 2% error rate
 
     void run(StaticPipeline<IOEvent, IOEvent>& pipe) {
         std::mt19937 rng(static_cast<uint32_t>(thread_id * 1234567));
-        // 레이턴시 분포: 대부분 50~500µs, 꼬리 분포 있음
-        std::gamma_distribution<double> lat_dist(2.0, 150.0);    // 평균 300µs
+        // latency distribution: mostly 50~500µs with tail distribution
+        std::gamma_distribution<double> lat_dist(2.0, 150.0);    // mean ~300µs
         std::uniform_int_distribution<int> type_dist(0, 5);
         std::uniform_int_distribution<uint32_t> bytes_dist(64, 65536);
         std::uniform_int_distribution<uint32_t> fd_dist(3, 65535);
@@ -387,8 +388,8 @@ struct MockIOProducer {
                 .ts_us      = ts,
             };
 
-            // try_push (lock-free MPMC): 채널 포화 시 지수 백오프 재시도 (최대 8회)
-            // 고정 8µs 반복 대신 백오프로 불필요한 컨텍스트 스위치 절감
+            // try_push (lock-free MPMC): exponential backoff retry on channel saturation (max 8 retries)
+            // backoff instead of fixed 8µs spin reduces unnecessary context switches
             {
                 uint32_t backoff_us = 4;
                 for (int retry = 0; retry < 8; ++retry) {
@@ -397,89 +398,89 @@ struct MockIOProducer {
                     backoff_us = std::min(backoff_us * 2, uint32_t{256});
                 }
             }
-            ts += 10 + (rng() % 40);  // 10~50µs 간격
-            // 주기 pacing sleep 제거: 파이프라인은 backpressure 로 자율 조절
+            ts += 10 + (rng() % 40);  // 10~50µs interval
+            // periodic pacing sleep removed: pipeline self-regulates via backpressure
         }
     }
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// §6  대시보드 렌더러
+// §6  Dashboard renderer
 // ─────────────────────────────────────────────────────────────────────────────
 
 static void print_dashboard(const MetricSnapshot& s) {
-    std::printf(
+    std::print(
         "\n╔═══════════════════════════════════════════════════════════╗\n"
-        "║  IO 메트릭스 대시보드  [snap #%llu]\n"
+        "║  IO Metrics Dashboard  [snap #{}]\n"
         "╠═══════════════════════════════════════════════════════════╣\n"
-        "║  처리량    : %8.0f ops/s  |  %8.2f MB/s\n"
-        "║  총 이벤트 : %llu ops  |  에러율 %.2f%%\n"
-        "╠═════════════════ 레이턴시 분포 ═══════════════════════════╣\n"
-        "║  p50   : %6llu µs  (%5.2f ms)\n"
-        "║  p95   : %6llu µs  (%5.2f ms)\n"
-        "║  p99   : %6llu µs  (%5.2f ms)\n"
-        "║  p99.9 : %6llu µs  (%5.2f ms)\n"
-        "║  max   : %6llu µs  (%5.2f ms)\n"
-        "╠═════════════════ 이벤트 유형 비율 ════════════════════════╣\n",
-        (unsigned long long)s.snapshot_id,
+        "║  Throughput : {:8.0f} ops/s  |  {:8.2f} MB/s\n"
+        "║  Total events: {} ops  |  error rate {:.2f}%\n"
+        "╠═════════════════ Latency Distribution ════════════════════╣\n"
+        "║  p50   : {:6} µs  ({:5.2f} ms)\n"
+        "║  p95   : {:6} µs  ({:5.2f} ms)\n"
+        "║  p99   : {:6} µs  ({:5.2f} ms)\n"
+        "║  p99.9 : {:6} µs  ({:5.2f} ms)\n"
+        "║  max   : {:6} µs  ({:5.2f} ms)\n"
+        "╠═════════════════ Event Type Distribution ══════════════════╣\n",
+        s.snapshot_id,
         s.ops_per_sec, s.bytes_per_sec / (1024.0*1024.0),
-        (unsigned long long)s.total_ops, s.error_rate_pct,
-        (unsigned long long)s.lat_p50,  s.lat_p50  / 1000.0,
-        (unsigned long long)s.lat_p95,  s.lat_p95  / 1000.0,
-        (unsigned long long)s.lat_p99,  s.lat_p99  / 1000.0,
-        (unsigned long long)s.lat_p999, s.lat_p999 / 1000.0,
-        (unsigned long long)s.lat_max,  s.lat_max  / 1000.0);
+        s.total_ops, s.error_rate_pct,
+        s.lat_p50,  s.lat_p50  / 1000.0,
+        s.lat_p95,  s.lat_p95  / 1000.0,
+        s.lat_p99,  s.lat_p99  / 1000.0,
+        s.lat_p999, s.lat_p999 / 1000.0,
+        s.lat_max,  s.lat_max  / 1000.0);
 
     uint64_t total_ops = std::max(s.total_ops, uint64_t{1});
     for (int i = 0; i < static_cast<int>(IOEventType::_Count); ++i) {
         double pct = 100.0 * s.type_count[i] / total_ops;
         int bar = static_cast<int>(pct / 5.0);  // 5% per '#'
-        std::printf("║  %s : %6llu  (%5.1f%%)  ",
+        std::print("║  {} : {:6}  ({:5.1f}%)  ",
                     event_name(static_cast<IOEventType>(i)),
-                    (unsigned long long)s.type_count[i], pct);
-        for (int b = 0; b < bar; ++b) std::putchar('#');
-        std::putchar('\n');
+                    s.type_count[i], pct);
+        for (int b = 0; b < bar; ++b) std::print("{}", '#');
+        std::println("");
     }
-    std::printf("╚═══════════════════════════════════════════════════════════╝\n");
+    std::println("╚═══════════════════════════════════════════════════════════╝");
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// §7  메인
+// §7  Main
 // ─────────────────────────────────────────────────────────────────────────────
 
 int main() {
-    std::printf("=== 초고속 IO 기반 실시간 데이터 메트릭스 대시보드 ===\n");
-    std::printf("    4 Producer 스레드 × 20,000 이벤트 = 80,000 IO 이벤트\n");
-    std::printf("    StaticPipeline: classify → measure → aggregate → snap\n");
-    std::printf("    MessageBus: metrics 토픽으로 스냅샷 fan-out\n\n");
+    std::println("=== High-speed IO real-time data metrics dashboard ===");
+    std::println("    4 producer threads × 20,000 events = 80,000 IO events");
+    std::println("    StaticPipeline: classify → measure → aggregate → snap");
+    std::println("    MessageBus: snapshot fan-out via 'metrics' topic\n");
 
     constexpr int kProducers       = 4;
-    constexpr int kEventsPerThread = 20000;  // 총 80,000 이벤트
+    constexpr int kEventsPerThread = 20000;  // 80,000 events total
 
     Dispatcher disp(4);
     std::jthread worker([&] { disp.run(); });
 
-    // ── §A  MessageBus 설정 — "alerts" 토픽으로 경보 fan-out ──────────────────
+    // ── §A  MessageBus setup — alert fan-out via "alerts" topic ──────────────
     MessageBus bus;
     bus.start(disp);
 
-    // 경보 구독자: p99 > 50ms 또는 에러율 > 5% 시 경보 출력
+    // alert subscriber: print alert when p99 > 50ms or error rate > 5%
     auto sub_alert = bus.subscribe("alerts",
         [](MessageBus::Msg msg, Context) -> Task<Result<void>> {
             try {
                 auto& snap = std::any_cast<MetricSnapshot&>(msg);
                 if (snap.lat_p99 > 50000)
-                    std::printf("  [경보] p99 레이턴시 %.1fms 초과!\n",
+                    std::println("  [ALERT] p99 latency {:.1f}ms exceeded!",
                                 snap.lat_p99 / 1000.0);
                 if (snap.error_rate_pct > 5.0)
-                    std::printf("  [경보] 에러율 %.2f%% 임계값 초과!\n",
+                    std::println("  [ALERT] error rate {:.2f}% threshold exceeded!",
                                 snap.error_rate_pct);
             } catch (...) {}
-            co_return Result<void>::ok();
+            co_return Result<void>{};
         });
 
-    // ── §B  StaticPipeline 구성 ──────────────────────────────────────────────
-    std::printf("── §A  IO 메트릭 StaticPipeline 구성 ──\n\n");
+    // ── §B  StaticPipeline setup ─────────────────────────────────────────────
+    std::println("── §A  IO metrics StaticPipeline setup ──\n");
 
     SnapSink sink_obj;
     sink_obj.bus = &bus;
@@ -493,8 +494,8 @@ int main() {
             .build());
     pipe->start(disp);
 
-    // ── §C  4개 Producer 스레드 동시 실행 ────────────────────────────────────
-    std::printf("── §B  IO 이벤트 생성 시작 (%d 스레드 × %d 이벤트) ──\n\n",
+    // ── §C  4 producer threads running concurrently ──────────────────────────
+    std::println("── §B  Starting IO event generation ({} threads × {} events) ──\n",
                 kProducers, kEventsPerThread);
 
     auto t_start = Clock::now();
@@ -513,55 +514,55 @@ int main() {
 
     auto t_produce = Clock::now();
     double produce_sec = std::chrono::duration<double>(t_produce - t_start).count();
-    std::printf("\n  [생성 완료] %.3f초, %.0f ops/s (실제 생성 처리량)\n",
+    std::println("\n  [Production complete] {:.3f}s, {:.0f} ops/s (actual production throughput)",
                 produce_sec,
                 (kProducers * kEventsPerThread) / produce_sec);
 
-    // 파이프라인 처리 완료 대기
+    // wait for pipeline processing to complete
     std::this_thread::sleep_for(1s);
 
     disp.stop();
     worker.join();
 
-    // ── §D  최종 결과 요약 ────────────────────────────────────────────────────
+    // ── §D  Final results summary ─────────────────────────────────────────────
     uint64_t final_ops    = g_stats.total_ops.load(std::memory_order_relaxed);
     uint64_t final_bytes  = g_stats.total_bytes.load(std::memory_order_relaxed);
     uint64_t final_errors = g_stats.error_count.load(std::memory_order_relaxed);
-    // 최종 요약: fill_bucket_counts 로 heap 할당 없이 읽기
+    // final summary: read via fill_bucket_counts without heap allocation
     constexpr size_t kSummaryBuckets = 16;
     uint64_t summary_buf[kSummaryBuckets]{};
     size_t summary_n = g_stats.latency_hist.fill_bucket_counts(summary_buf, kSummaryBuckets);
     uint64_t fp50{}, fp95{}, fp99{}, fp999{};
     compute_percentiles(summary_buf, summary_n, fp50, fp95, fp99, fp999);
 
-    std::printf("\n══════════════════════════════════════════════════════\n");
-    std::printf("  IO 메트릭스 최종 요약\n");
-    std::printf("══════════════════════════════════════════════════════\n");
-    std::printf("  총 이벤트     : %llu\n",   (unsigned long long)final_ops);
-    std::printf("  총 데이터     : %.2f MB\n", final_bytes / (1024.0*1024.0));
-    std::printf("  에러 수       : %llu (%.2f%%)\n",
-                (unsigned long long)final_errors,
+    std::println("\n══════════════════════════════════════════════════════");
+    std::println("  IO Metrics Final Summary");
+    std::println("══════════════════════════════════════════════════════");
+    std::println("  Total events  : {}", final_ops);
+    std::println("  Total data    : {:.2f} MB", final_bytes / (1024.0*1024.0));
+    std::println("  Error count   : {} ({:.2f}%)",
+                final_errors,
                 final_ops > 0 ? 100.0 * final_errors / final_ops : 0.0);
-    std::printf("  스냅샷 수신   : %d 회\n", g_snap_received.load());
-    std::printf("  p50 레이턴시  : %llu µs\n",  (unsigned long long)fp50);
-    std::printf("  p95 레이턴시  : %llu µs\n",  (unsigned long long)fp95);
-    std::printf("  p99 레이턴시  : %llu µs\n",  (unsigned long long)fp99);
-    std::printf("  p99.9 레이턴시: %llu µs\n",  (unsigned long long)fp999);
-    std::printf("  최대 레이턴시 : %llu µs\n",
-                (unsigned long long)g_stats.lat_max.load(std::memory_order_relaxed));
-    std::printf("──────────────────────────────────────────────────────\n");
+    std::println("  Snapshots recv: {}", g_snap_received.load());
+    std::println("  p50 latency   : {} µs",  fp50);
+    std::println("  p95 latency   : {} µs",  fp95);
+    std::println("  p99 latency   : {} µs",  fp99);
+    std::println("  p99.9 latency : {} µs",  fp999);
+    std::println("  max latency   : {} µs",
+                g_stats.lat_max.load(std::memory_order_relaxed));
+    std::println("──────────────────────────────────────────────────────");
 
-    // 이벤트 유형 분포
-    std::printf("  이벤트 분포:\n");
+    // event type distribution
+    std::println("  Event distribution:");
     for (int i = 0; i < static_cast<int>(IOEventType::_Count); ++i) {
         uint64_t c = g_stats.type_count[i].val.load(std::memory_order_relaxed);
         double   p = final_ops > 0 ? 100.0 * c / final_ops : 0.0;
-        std::printf("    %s %6llu  (%.1f%%)\n",
+        std::println("    {} {:6}  ({:.1f}%)",
                     event_name(static_cast<IOEventType>(i)),
-                    (unsigned long long)c, p);
+                    c, p);
     }
 
     bool ok = (final_ops > 0 && g_snap_received.load() > 0);
-    std::printf("\nio_metrics_dashboard: %s\n", ok ? "ALL OK" : "WARN — 출력 없음");
+    std::println("\nio_metrics_dashboard: {}", ok ? "ALL OK" : "WARN — no output");
     return 0;
 }

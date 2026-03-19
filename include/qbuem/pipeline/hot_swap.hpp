@@ -128,7 +128,7 @@ public:
    * @param new_action        Replacement action.
    * @param drain_timeout_ms  Maximum time (ms) to wait for in-flight items.
    *
-   * @returns `Result<void>::ok()` on success, or one of:
+   * @returns `Result<void>{}` on success, or one of:
    *   - `errc::operation_not_permitted` — not Running.
    *   - `errc::timed_out`              — drain exceeded timeout.
    *   - `errc::invalid_argument`       — schema mismatch.
@@ -170,7 +170,7 @@ public:
    * version is available the call returns `errc::no_such_process`.
    *
    * @param action_name  Name of the action stage to roll back.
-   * @returns `Result<void>::ok()` on success, or an error code.
+   * @returns `Result<void>{}` on success, or an error code.
    */
   Task<Result<void>> rollback(std::string_view action_name) {
     // Walk history in reverse to find the most recent successful swap.

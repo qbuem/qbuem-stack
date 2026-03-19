@@ -55,12 +55,12 @@ Result<void> KqueueReactor::register_event(int fd, EventType type,
     changelist_.push_back(ev);
     entry->active = true;
 
-    return Result<void>::ok();
+    return Result<void>{};
 }
 
 Result<void> KqueueReactor::unregister_event(int fd, EventType type) {
     if (static_cast<size_t>(fd) >= entry_map_.size() || !entry_map_[fd]) {
-        return Result<void>::ok();
+        return Result<void>{};
     }
 
     auto* entry = entry_map_[fd];
@@ -77,7 +77,7 @@ Result<void> KqueueReactor::unregister_event(int fd, EventType type) {
         entry->active = false;
     }
 
-    return Result<void>::ok();
+    return Result<void>{};
 }
 
 Result<int> KqueueReactor::register_timer(int timeout_ms,
@@ -96,7 +96,7 @@ Result<int> KqueueReactor::register_timer(int timeout_ms,
     });
 
     if (ctx->id == TimerWheel::kInvalid) {
-        return Result<int>::err(std::make_error_code(std::errc::not_enough_memory));
+        return std::unexpected(std::make_error_code(std::errc::not_enough_memory));
     }
     
     return static_cast<int>(ctx->id);
@@ -113,12 +113,12 @@ Result<void> KqueueReactor::register_signal(int sig, std::function<void(int)> ca
     changelist_.push_back(ev);
     entry->active = true;
 
-    return Result<void>::ok();
+    return Result<void>{};
 }
 
 Result<void> KqueueReactor::unregister_signal(int sig) {
     if (static_cast<size_t>(sig) >= entry_map_.size() || !entry_map_[sig]) {
-        return Result<void>::ok();
+        return Result<void>{};
     }
 
     auto* entry = entry_map_[sig];
@@ -131,12 +131,12 @@ Result<void> KqueueReactor::unregister_signal(int sig) {
         entry->active = false;
     }
 
-    return Result<void>::ok();
+    return Result<void>{};
 }
 
 Result<void> KqueueReactor::unregister_timer(int timer_id) {
     timer_wheel_.cancel(static_cast<TimerWheel::TimerId>(timer_id));
-    return Result<void>::ok();
+    return Result<void>{};
 }
 
 Result<int> KqueueReactor::poll(int timeout_ms) {
@@ -159,8 +159,8 @@ Result<int> KqueueReactor::poll(int timeout_ms) {
 
     int n = kevent(kq_fd_, nullptr, 0, events_.data(), events_.size(), ts_ptr);
     if (n < 0) {
-        if (errno == EINTR) return Result<int>::ok(0);
-        return Result<int>::err(std::error_code(errno, std::system_category()));
+        if (errno == EINTR) return Result<int>{0};
+        return std::unexpected(std::error_code(errno, std::system_category()));
     }
 
     // 2. Dispatch events
@@ -211,7 +211,7 @@ Result<int> KqueueReactor::poll(int timeout_ms) {
         last_tick_ms_ = now_ms;
     }
 
-    return Result<int>::ok(n);
+    return Result<int>{n};
 }
 
 void KqueueReactor::stop() {

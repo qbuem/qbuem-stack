@@ -42,7 +42,7 @@
  *               .send(st);
  *
  * // Monadic chaining works identically to fetch()
- * auto body = r2.map([](const FetchResponse& r){ return std::string(r.body()); })
+ * auto body = r2.transform([](const FetchResponse& r){ return std::string(r.body()); })
  *               .value_or("(error)");
  * @endcode
  *

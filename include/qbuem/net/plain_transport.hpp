@@ -43,7 +43,7 @@ namespace qbuem {
  * Owns a `TcpStream` and delegates all `ITransport` virtual methods to it.
  *
  * ### handshake()
- * No TLS handshake — returns `Result<void>::ok()` immediately.
+ * No TLS handshake — returns `Result<void>{}` immediately.
  *
  * ### close()
  * Terminates the write side with `shutdown(SHUT_WR)`, then closes the socket.
@@ -99,10 +99,10 @@ public:
   /**
    * @brief No handshake required for plain TCP — returns success immediately.
    *
-   * @returns Always `Result<void>::ok()`.
+   * @returns Always `Result<void>{}`.
    */
   Task<Result<void>> handshake() override {
-    co_return Result<void>::ok();
+    co_return Result<void>{};
   }
 
   /**
@@ -110,18 +110,18 @@ public:
    *
    * If the socket is already closed (`fd() < 0`), returns ok immediately.
    *
-   * @returns `Result<void>::ok()` on success, or an error code on failure.
+   * @returns `Result<void>{}` on success, or an error code on failure.
    */
   Task<Result<void>> close() override {
     int fd = stream_.fd();
     if (fd < 0) {
-      co_return Result<void>::ok();
+      co_return Result<void>{};
     }
     ::shutdown(fd, SHUT_WR);
     // Move-destruct TcpStream so its destructor calls ::close(fd)
     TcpStream tmp = std::move(stream_);
     (void)tmp; // destructor calls ::close(fd)
-    co_return Result<void>::ok();
+    co_return Result<void>{};
   }
 
   /**

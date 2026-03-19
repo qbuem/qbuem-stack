@@ -1,58 +1,58 @@
 /**
  * @file examples/trading_platform.cpp
- * @brief qbuem-stack 종합 플랫폼 예제 — 실시간 주문 처리 거래 서버
+ * @brief qbuem-stack comprehensive platform example — real-time order processing trading server
  *
- * ## 시스템 구조 (전체 연계)
+ * ## System Architecture
  *
- *   [HTTP 클라이언트]
+ *   [HTTP Client]
  *       │ POST /api/v1/orders  {account_id, symbol, price, quantity, type, side}
  *       ▼
- *   [App 미들웨어 체인]
+ *   [App Middleware Chain]
  *       ├─ CORS          (allow_origin=*)
  *       ├─ RateLimit     (100 req/s, burst=20)
- *       ├─ RequestID     (X-Request-ID 헤더)
+ *       ├─ RequestID     (X-Request-ID header)
  *       ├─ HSTS          (max_age=31536000)
  *       └─ BearerAuth    (DemoKeyVerifier: "demo-key" → user:alice)
  *       │
- *       ▼ JSON 파싱 → OrderCmd + ResponseChannel Context
+ *       ▼ JSON parse → OrderCmd + ResponseChannel Context
  *
- *   ┌── [StaticPipeline: Action 체인] ─────────────────────────────────────┐
+ *   ┌── [StaticPipeline: Action Chain] ────────────────────────────────────┐
  *   │   Action<OrderCmd, ValidatedOrder>   validate  {min=1, max=3, auto}  │
  *   │   Action<ValidatedOrder, EnrichedOrder> enrich  {min=2, max=4, auto} │
  *   │   Action<EnrichedOrder, RiskResult>  risk_check {min=1, max=6, slo}  │
  *   └──────────────────────────────────────────────────────────────────────┘
- *       │ ContextualItem<RiskResult> (Context 보존 브릿지 코루틴)
+ *       │ ContextualItem<RiskResult> (context-preserving bridge coroutine)
  *       ▼
  *   ┌── [DynamicPipeline<RiskResult>] ─────────────────────────────────────┐
- *   │   Stage "persist"  (MockDB 저장, order_id 생성)   ← hot_swap 가능    │
- *   │   Stage "enrich2"  (추가 계산, set_enabled 가능)                     │
- *   │   Stage "notify"   (ResponseChannel 기록 + MessageBus 발행)          │
+ *   │   Stage "persist"  (MockDB save, order_id generation) ← hot_swap     │
+ *   │   Stage "enrich2"  (additional calculation, set_enabled capable)     │
+ *   │   Stage "notify"   (ResponseChannel write + MessageBus publish)      │
  *   └──────────────────────────────────────────────────────────────────────┘
  *       │
  *       ├─ ctx.get<ResponseChannel>() → resp_ch.try_send(OrderResult)
  *       │   ↑
- *       │   └── HTTP 핸들러 co_await resp_ch->recv() → JSON 응답 반환
+ *       │   └── HTTP handler co_await resp_ch->recv() → return JSON response
  *       │
  *       └─ MessageBus.publish("order.completed") → fan-out
- *           ├─ GET /api/v1/events  (SSE 스트림, 실시간 이벤트)
- *           └─ Stats 카운터 업데이트
+ *           ├─ GET /api/v1/events  (SSE stream, real-time events)
+ *           └─ Stats counter update
  *
- *   [자동 스케일러 코루틴]
- *       └─ 500ms 주기로 validate/enrich/risk input queue 깊이 감시
+ *   [Auto-scaler coroutine]
+ *       └─ polls validate/enrich/risk input queue depth every 500ms
  *           → queue > 50 → scale_out(dispatcher)
  *           → queue <  5 → scale_in()
  *
- * ## API 엔드포인트
- *   POST   /api/v1/orders              주문 제출 (pipeline 처리 후 응답)
- *   GET    /api/v1/orders              전체 주문 목록 (mock DB)
- *   GET    /api/v1/orders/:id          주문 조회
- *   DELETE /api/v1/orders/:id          주문 취소
- *   GET    /api/v1/events              SSE 실시간 이벤트 스트림
- *   GET    /api/v1/stats               파이프라인 상태 / 워커 수 / 큐 깊이
- *   POST   /api/v1/admin/scale         수동 스케일 조정
- *   POST   /api/v1/admin/hotswap       DynamicPipeline 스테이지 교체
- *   POST   /api/v1/admin/toggle        DynamicPipeline 스테이지 활성/비활성
- *   GET    /health                     헬스체크
+ * ## API Endpoints
+ *   POST   /api/v1/orders              submit order (respond after pipeline processing)
+ *   GET    /api/v1/orders              list all orders (mock DB)
+ *   GET    /api/v1/orders/:id          get order
+ *   DELETE /api/v1/orders/:id          cancel order
+ *   GET    /api/v1/events              SSE real-time event stream
+ *   GET    /api/v1/stats               pipeline status / worker count / queue depth
+ *   POST   /api/v1/admin/scale         manual scale adjustment
+ *   POST   /api/v1/admin/hotswap       DynamicPipeline stage replacement
+ *   POST   /api/v1/admin/toggle        DynamicPipeline stage enable/disable
+ *   GET    /health                     health check
  */
 
 // ─── Includes ─────────────────────────────────────────────────────────────────
@@ -84,7 +84,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
-#include <cstdio>
+#include <print>
 #include <cstring>
 #include <memory>
 #include <mutex>
@@ -100,21 +100,21 @@ using namespace qbuem::middleware;
 using namespace std::chrono_literals;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// §2. 도메인 타입 + HTTP DTO (qbuem-json Nexus 엔진 직렬화/역직렬화)
+// §2. Domain Types + HTTP DTO (qbuem-json Nexus engine serialization/deserialization)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// HTTP로 들어온 주문 명령 (Pipeline 입력 타입).
+/// Incoming HTTP order command (Pipeline input type).
 struct OrderCmd {
-    uint64_t    req_id    = 0;       ///< HTTP 요청 고유 번호 (Context에서도 전파)
+    uint64_t    req_id    = 0;       ///< unique HTTP request ID (also propagated via Context)
     std::string account_id;
     std::string symbol;
     double      price     = 0.0;
     int         quantity  = 0;
-    bool        is_market = false;   ///< true=시장가, false=지정가
-    bool        is_buy    = true;    ///< true=매수, false=매도
+    bool        is_market = false;   ///< true=market order, false=limit order
+    bool        is_buy    = true;    ///< true=buy, false=sell
 
-    /// HTTP body(JSON)에서 역직렬화 — Nexus qbuem::fuse<OrderCmd>() 사용.
-    /// 필수 필드 누락 시 std::nullopt 반환.
+    /// Deserialize from HTTP body (JSON) — uses Nexus qbuem::fuse<OrderCmd>().
+    /// Returns std::nullopt if required fields are missing.
     static std::optional<OrderCmd> from_json(std::string_view body) {
         try {
             auto cmd = qbuem::fuse<OrderCmd>(std::string(body));
@@ -125,8 +125,8 @@ struct OrderCmd {
     }
 };
 
-/// Nexus Fusion ADL hook — JSON "type"/"side" 키를 is_market/is_buy 로 매핑.
-/// qbuem::fuse<OrderCmd>() 호출 시 사용 (zero-tape 직접 파싱).
+/// Nexus Fusion ADL hook — maps JSON "type"/"side" keys to is_market/is_buy.
+/// Used when calling qbuem::fuse<OrderCmd>() (zero-tape direct parsing).
 inline void nexus_pulse(std::string_view key, const char*& p, const char* end, OrderCmd& o) {
     using namespace qbuem::json::detail;
     switch (fnv1a_hash(key)) {
@@ -148,7 +148,7 @@ inline void nexus_pulse(std::string_view key, const char*& p, const char* end, O
     }
 }
 
-/// [Static Stage 1] 유효성 검증 결과.
+/// [Static Stage 1] Validation result.
 struct ValidatedOrder {
     OrderCmd    cmd;
     bool        valid     = true;
@@ -156,25 +156,25 @@ struct ValidatedOrder {
     double      notional  = 0.0;     ///< price × quantity
 };
 
-/// [Static Stage 2] 계좌/시장 데이터 보강 결과.
+/// [Static Stage 2] Account/market data enrichment result.
 struct EnrichedOrder {
     ValidatedOrder validated;
-    // 유효한 경우에만 채워짐:
+    // populated only when valid:
     std::string    account_name;
     double         account_balance = 0.0;
-    double         market_price    = 0.0;   ///< 현재 시장가
-    double         slippage_bps    = 0.0;   ///< 예상 슬리피지 (basis points)
+    double         market_price    = 0.0;   ///< current market price
+    double         slippage_bps    = 0.0;   ///< estimated slippage (basis points)
 };
 
-/// [Static Stage 3] 리스크 평가 결과 (Static Pipeline 최종 출력).
+/// [Static Stage 3] Risk evaluation result (Static Pipeline final output).
 struct RiskResult {
     EnrichedOrder enriched;
     bool          risk_ok     = false;
     std::string   risk_reason;
-    double        var_1d      = 0.0;     ///< 1일 VaR 추정액 (KRW)
+    double        var_1d      = 0.0;     ///< 1-day VaR estimate (KRW)
 };
 
-/// Mock DB 저장 레코드.
+/// Mock DB storage record.
 struct OrderRecord {
     uint64_t    order_id    = 0;
     std::string account_id;
@@ -186,12 +186,12 @@ struct OrderRecord {
     std::string status;                  ///< "filled" | "rejected" | "cancelled"
     double      exec_price  = 0.0;
     std::string created_at;
-    std::string reason;                  ///< 거부/취소 사유
+    std::string reason;                  ///< rejection/cancellation reason
 };
 QBUEM_JSON_FIELDS(OrderRecord, order_id, account_id, symbol, price, quantity,
                   side, type, status, exec_price, created_at, reason)
 
-/// HTTP 응답 DTO (Pipeline → HTTP 핸들러).
+/// HTTP response DTO (Pipeline → HTTP handler).
 struct OrderResult {
     uint64_t    order_id   = 0;
     std::string status;
@@ -201,7 +201,7 @@ struct OrderResult {
 };
 QBUEM_JSON_FIELDS(OrderResult, order_id, status, exec_price, message, success)
 
-/// MessageBus 이벤트 (SSE 스트리밍용).
+/// MessageBus event (for SSE streaming).
 struct OrderEvent {
     uint64_t    order_id   = 0;
     std::string account_id;
@@ -213,19 +213,19 @@ struct OrderEvent {
 QBUEM_JSON_FIELDS(OrderEvent, order_id, account_id, symbol, status, exec_price, reason)
 
 // ─────────────────────────────────────────────────────────────────────────────
-// §3. Context 태그 — Pipeline 전 레이어를 통과하는 메타데이터
+// §3. Context Tags — metadata that passes through all pipeline layers
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// HTTP 응답 채널: 마지막 Pipeline Stage가 결과를 여기에 씁니다.
+/// HTTP response channel: the last Pipeline Stage writes the result here.
 struct ResponseChannel {
     std::shared_ptr<AsyncChannel<OrderResult>> ch;
 };
 
-// RequestId, AuthSubject는 context.hpp에 이미 정의된 내장 타입 사용
+// RequestId, AuthSubject: use built-in types already defined in context.hpp
 
-// ── 어드민 요청 DTO ──────────────────────────────────────────────────────────
+// ── Admin Request DTOs ───────────────────────────────────────────────────────
 
-/// POST /api/v1/admin/scale 요청.
+/// POST /api/v1/admin/scale request.
 struct ScaleRequest {
     std::string stage;
     int         workers = 0;
@@ -240,7 +240,7 @@ struct ScaleRequest {
 };
 QBUEM_JSON_FIELDS(ScaleRequest, stage, workers)
 
-/// POST /api/v1/admin/hotswap 요청.
+/// POST /api/v1/admin/hotswap request.
 struct HotswapRequest {
     std::string stage;
     std::string mode;
@@ -255,7 +255,7 @@ struct HotswapRequest {
 };
 QBUEM_JSON_FIELDS(HotswapRequest, stage, mode)
 
-/// POST /api/v1/admin/toggle 요청.
+/// POST /api/v1/admin/toggle request.
 /// Body: {"stage": "enrich2", "enabled": true|false}
 struct ToggleRequest {
     std::string stage;
@@ -271,29 +271,29 @@ struct ToggleRequest {
 };
 QBUEM_JSON_FIELDS(ToggleRequest, stage, enabled)
 
-// ── HTTP 응답 DTO ────────────────────────────────────────────────────────────
+// ── HTTP Response DTOs ───────────────────────────────────────────────────────
 
-/// 에러 응답.
+/// Error response.
 struct ErrorResponse {
     std::string error;
 };
 QBUEM_JSON_FIELDS(ErrorResponse, error)
 
-/// DELETE /api/v1/orders/:id 응답.
+/// DELETE /api/v1/orders/:id response.
 struct CancelResponse {
     uint64_t    order_id = 0;
     std::string status;
 };
 QBUEM_JSON_FIELDS(CancelResponse, order_id, status)
 
-/// SSE 연결 확인 이벤트.
+/// SSE connection confirmation event.
 struct SseConnectedEvent {
     std::string message;
     std::string topic;
 };
 QBUEM_JSON_FIELDS(SseConnectedEvent, message, topic)
 
-/// POST /api/v1/admin/scale 응답.
+/// POST /api/v1/admin/scale response.
 struct ScaleResponse {
     std::string stage;
     int         workers = 0;
@@ -301,7 +301,7 @@ struct ScaleResponse {
 };
 QBUEM_JSON_FIELDS(ScaleResponse, stage, workers, message)
 
-/// POST /api/v1/admin/hotswap 응답.
+/// POST /api/v1/admin/hotswap response.
 struct HotswapResponse {
     std::string stage;
     std::string mode;
@@ -309,7 +309,7 @@ struct HotswapResponse {
 };
 QBUEM_JSON_FIELDS(HotswapResponse, stage, mode, success)
 
-/// POST /api/v1/admin/toggle 응답.
+/// POST /api/v1/admin/toggle response.
 struct ToggleResponse {
     std::string stage;
     bool        enabled = false;
@@ -317,15 +317,15 @@ struct ToggleResponse {
 };
 QBUEM_JSON_FIELDS(ToggleResponse, stage, enabled, success)
 
-/// GET /api/v1/orders 응답 (목록).
+/// GET /api/v1/orders response (list).
 struct OrderListResponse {
     std::vector<OrderRecord> orders;
 
-    /// Nexus: OrderRecord 에 QBUEM_JSON_FIELDS 가 있으므로 vector 직접 직렬화.
+    /// Nexus: OrderRecord has QBUEM_JSON_FIELDS so the vector is serialized directly.
     std::string to_json() const { return qbuem::write(orders); }
 };
 
-/// GET /api/v1/stats 응답.
+/// GET /api/v1/stats response.
 struct StatsResponse {
     uint64_t                 submitted      = 0;
     uint64_t                 filled         = 0;
@@ -343,7 +343,7 @@ QBUEM_JSON_FIELDS(StatsResponse, submitted, filled, rejected, db_total,
                   dyn_stage_names, auto_scale)
 
 // ─────────────────────────────────────────────────────────────────────────────
-// §4. Mock DB (thread-safe 인메모리 저장소)
+// §4. Mock DB (thread-safe in-memory storage)
 // ─────────────────────────────────────────────────────────────────────────────
 
 class MockDB {
@@ -401,7 +401,7 @@ private:
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// §5. Mock 시장 데이터
+// §5. Mock Market Data
 // ─────────────────────────────────────────────────────────────────────────────
 
 struct MockAccount {
@@ -413,7 +413,7 @@ static const std::unordered_map<std::string, MockAccount> kAccounts = {
     {"ACC001", {"Alice",   100'000'000.0}},
     {"ACC002", {"Bob",      50'000'000.0}},
     {"ACC003", {"Charlie",  10'000'000.0}},
-    {"ACC004", {"Dave",      1'000'000.0}},  // 잔고 부족 테스트용
+    {"ACC004", {"Dave",      1'000'000.0}},  // low balance for testing insufficient funds
 };
 
 static const std::unordered_map<std::string, double> kMarketPrices = {
@@ -428,13 +428,13 @@ static const std::unordered_map<std::string, double> kMarketPrices = {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// §6. 인증 토큰 검증기 (ITokenVerifier 구현)
+// §6. Auth Token Verifier (ITokenVerifier implementation)
 // ─────────────────────────────────────────────────────────────────────────────
 
 class DemoKeyVerifier : public ITokenVerifier {
 public:
     std::optional<TokenClaims> verify(std::string_view token) noexcept override {
-        // 데모용: "demo-key" 허용, "demo-key-dave" → Dave 계정
+        // demo: allow "demo-key", "demo-key-dave" → Dave account
         if (token == "demo-key") {
             return TokenClaims{
                 .subject  = "ACC001",
@@ -462,10 +462,10 @@ public:
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// §7. Static Pipeline 스테이지 함수
+// §7. Static Pipeline Stage Functions
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Stage 1: 유효성 검증 (포맷/범위 체크)
+/// Stage 1: validation (format/range check)
 static Task<Result<ValidatedOrder>> stage_validate(OrderCmd cmd, ActionEnv env) {
     ValidatedOrder v;
     v.cmd = cmd;
@@ -499,11 +499,11 @@ static Task<Result<ValidatedOrder>> stage_validate(OrderCmd cmd, ActionEnv env) 
     double price = cmd.is_market ? kMarketPrices.at(cmd.symbol) : cmd.price;
     v.notional = price * cmd.quantity;
 
-    std::printf("  [validate #%02llu] worker=%zu %s %s %s qty=%d notional=%.0f\n",
+    std::println("  [validate #{:02}] worker={} {} {} {} qty={} notional={:.0f}",
         static_cast<unsigned long long>(cmd.req_id),
         env.worker_idx,
         cmd.is_buy ? "BUY" : "SELL",
-        cmd.symbol.c_str(),
+        cmd.symbol,
         cmd.is_market ? "MARKET" : "LIMIT",
         cmd.quantity,
         v.notional);
@@ -511,12 +511,12 @@ static Task<Result<ValidatedOrder>> stage_validate(OrderCmd cmd, ActionEnv env) 
     co_return v;
 }
 
-/// Stage 2: 계좌/시장 데이터 보강 — 외부 데이터 조회 시뮬레이션
+/// Stage 2: account/market data enrichment — simulates external data lookup
 static Task<Result<EnrichedOrder>> stage_enrich(ValidatedOrder v, ActionEnv env) {
     EnrichedOrder e;
     e.validated = v;
 
-    if (!v.valid) co_return e;  // 이미 실패 → 패스스루
+    if (!v.valid) co_return e;  // already failed → pass-through
 
     auto acct_it = kAccounts.find(v.cmd.account_id);
     if (acct_it == kAccounts.end()) {
@@ -529,21 +529,21 @@ static Task<Result<EnrichedOrder>> stage_enrich(ValidatedOrder v, ActionEnv env)
     e.account_balance = acct_it->second.balance;
     e.market_price    = kMarketPrices.at(v.cmd.symbol);
 
-    // 슬리피지 계산 (지정가 주문: 시장가 대비 편차)
+    // slippage calculation (limit order: deviation from market price)
     if (!v.cmd.is_market) {
         e.slippage_bps = std::abs(v.cmd.price - e.market_price) / e.market_price * 10000.0;
     }
 
-    // 잔고 부족 체크 (매수 시)
+    // insufficient balance check (buy side)
     if (v.cmd.is_buy && v.notional > e.account_balance) {
         e.validated.valid     = false;
         e.validated.error_msg = "insufficient balance";
     }
 
-    std::printf("  [enrich   #%02llu] worker=%zu acct=%s balance=%.0f mkt_price=%.0f slippage=%.1fbps\n",
+    std::println("  [enrich   #{:02}] worker={} acct={} balance={:.0f} mkt_price={:.0f} slippage={:.1f}bps",
         static_cast<unsigned long long>(v.cmd.req_id),
         env.worker_idx,
-        e.account_name.c_str(),
+        e.account_name,
         e.account_balance,
         e.market_price,
         e.slippage_bps);
@@ -551,7 +551,7 @@ static Task<Result<EnrichedOrder>> stage_enrich(ValidatedOrder v, ActionEnv env)
     co_return e;
 }
 
-/// Stage 3: 리스크 평가 — VaR 추정, 한도 체크
+/// Stage 3: risk evaluation — VaR estimation, limit check
 static Task<Result<RiskResult>> stage_risk_check(EnrichedOrder e, ActionEnv env) {
     RiskResult r;
     r.enriched = e;
@@ -562,12 +562,12 @@ static Task<Result<RiskResult>> stage_risk_check(EnrichedOrder e, ActionEnv env)
         co_return r;
     }
 
-    // 1일 VaR 추정: 간이 공식 (2% 일변동성 가정)
+    // 1-day VaR estimate: simplified formula (assuming 2% daily volatility)
     r.var_1d = e.validated.notional * 0.02;
 
-    // 리스크 한도 체크
-    constexpr double kMaxNotional = 50'000'000.0;   // 5천만원
-    constexpr double kMaxVaR      =    500'000.0;   //   50만원
+    // risk limit check
+    constexpr double kMaxNotional = 50'000'000.0;   // 50M KRW
+    constexpr double kMaxVaR      =    500'000.0;   // 500K KRW
 
     if (e.validated.notional > kMaxNotional) {
         r.risk_ok     = false;
@@ -579,22 +579,22 @@ static Task<Result<RiskResult>> stage_risk_check(EnrichedOrder e, ActionEnv env)
         r.risk_ok = true;
     }
 
-    std::printf("  [risk     #%02llu] worker=%zu var1d=%.0f ok=%s %s\n",
+    std::println("  [risk     #{:02}] worker={} var1d={:.0f} ok={} {}",
         static_cast<unsigned long long>(e.validated.cmd.req_id),
         env.worker_idx,
         r.var_1d,
         r.risk_ok ? "YES" : "NO",
-        r.risk_ok ? "" : r.risk_reason.c_str());
+        r.risk_ok ? "" : r.risk_reason);
 
     co_return r;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// §8. Dynamic Pipeline 스테이지 함수
+// §8. Dynamic Pipeline Stage Functions
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Dynamic Stage "persist": MockDB 저장, order_id 생성
-/// — hot_swap 대상 (persist_fast 버전으로 교체 가능)
+/// Dynamic Stage "persist": MockDB save, order_id generation
+/// — hot_swap target (can be replaced with persist_fast version)
 static auto make_persist_stage(std::shared_ptr<MockDB> db) {
     return [db](RiskResult risk, ActionEnv env) -> Task<Result<RiskResult>> {
         const auto& cmd = risk.enriched.validated.cmd;
@@ -615,27 +615,26 @@ static auto make_persist_stage(std::shared_ptr<MockDB> db) {
             rec.reason = risk.risk_reason;
         } else {
             rec.status     = "filled";
-            rec.exec_price = risk.enriched.market_price;  // 시장가로 체결
+            rec.exec_price = risk.enriched.market_price;  // filled at market price
         }
 
         uint64_t oid = db->save(rec);
 
-        // order_id를 RiskResult에 주입 (notify stage에서 사용)
-        // Context에 넣는 대신 단순히 cmd.req_id → order_id 매핑 저장
-        // (여기서는 간단히 risk_reason에 encode)
-        risk.enriched.validated.cmd.req_id = oid;  // 재활용: order_id로 덮어씀
+        // inject order_id into RiskResult (used by notify stage)
+        // instead of storing in Context, simply overwrite cmd.req_id with order_id
+        risk.enriched.validated.cmd.req_id = oid;  // reuse field: overwrite with order_id
 
-        std::printf("  [persist  #%02llu] worker=%zu status=%s exec_price=%.0f\n",
+        std::println("  [persist  #{:02}] worker={} status={} exec_price={:.0f}",
             static_cast<unsigned long long>(oid),
             env.worker_idx,
-            rec.status.c_str(),
+            rec.status,
             rec.exec_price);
 
         co_return risk;
     };
 }
 
-/// Dynamic Stage "persist_fast": hot_swap 교체 대상 (간소화 버전)
+/// Dynamic Stage "persist_fast": hot_swap replacement target (simplified version)
 static auto make_persist_fast_stage(std::shared_ptr<MockDB> db) {
     return [db](RiskResult risk, ActionEnv env) -> Task<Result<RiskResult>> {
         const auto& cmd = risk.enriched.validated.cmd;
@@ -653,35 +652,35 @@ static auto make_persist_fast_stage(std::shared_ptr<MockDB> db) {
         uint64_t oid = db->save(rec);
         risk.enriched.validated.cmd.req_id = oid;
 
-        std::printf("  [persist★ #%02llu] worker=%zu [FAST MODE] status=%s\n",
-            static_cast<unsigned long long>(oid), env.worker_idx, rec.status.c_str());
+        std::println("  [persist★ #{:02}] worker={} [FAST MODE] status={}",
+            static_cast<unsigned long long>(oid), env.worker_idx, rec.status);
 
         co_return risk;
     };
 }
 
-/// Dynamic Stage "enrich2": 추가 계산 (set_enabled 시연 — 비활성 시 패스스루)
+/// Dynamic Stage "enrich2": additional calculation (demonstrates set_enabled — pass-through when disabled)
 static Task<Result<RiskResult>> stage_enrich2(RiskResult risk, ActionEnv env) {
-    // 슬리피지 비용 추가 계산 (선택적 스테이지)
+    // additional slippage cost calculation (optional stage)
     if (risk.enriched.validated.valid) {
         double slippage_cost = risk.enriched.validated.notional
                                * risk.enriched.slippage_bps / 10000.0;
-        std::printf("  [enrich2  #%02llu] worker=%zu slippage_cost=%.2f KRW\n",
+        std::println("  [enrich2  #{:02}] worker={} slippage_cost={:.2f} KRW",
             static_cast<unsigned long long>(risk.enriched.validated.cmd.req_id),
             env.worker_idx, slippage_cost);
     }
     co_return risk;
 }
 
-/// Dynamic Stage "notify": ResponseChannel에 결과 쓰기 + MessageBus 발행
+/// Dynamic Stage "notify": write result to ResponseChannel + publish to MessageBus
 static auto make_notify_stage(std::shared_ptr<MessageBus> bus,
                                std::atomic<uint64_t>& filled,
                                std::atomic<uint64_t>& rejected) {
     return [bus, &filled, &rejected](RiskResult risk, ActionEnv env) -> Task<Result<RiskResult>> {
-        uint64_t oid = risk.enriched.validated.cmd.req_id;  // persist stage에서 설정
+        uint64_t oid = risk.enriched.validated.cmd.req_id;  // set by persist stage
         bool success = risk.enriched.validated.valid && risk.risk_ok;
 
-        // ── 1) ResponseChannel에 HTTP 응답 데이터 전송 ─────────────────────
+        // ── 1) send HTTP response data to ResponseChannel ───────────────────
         if (auto* rch = env.ctx.get_ptr<ResponseChannel>()) {
             OrderResult result;
             result.order_id   = oid;
@@ -692,16 +691,16 @@ static auto make_notify_stage(std::shared_ptr<MessageBus> bus,
                                             ? risk.risk_reason
                                             : risk.enriched.validated.error_msg);
             result.success    = success;
-            rch->ch->try_send(result);  // HTTP 핸들러의 co_await recv()를 깨움
+            rch->ch->try_send(result);  // wakes up HTTP handler's co_await recv()
         }
 
-        // ── 2) 통계 업데이트 ───────────────────────────────────────────────
+        // ── 2) update stats ────────────────────────────────────────────────
         if (success)
             filled.fetch_add(1, std::memory_order_relaxed);
         else
             rejected.fetch_add(1, std::memory_order_relaxed);
 
-        // ── 3) MessageBus 발행 (SSE 팬아웃) ───────────────────────────────
+        // ── 3) MessageBus publish (SSE fan-out) ───────────────────────────
         OrderEvent event{
             .order_id   = oid,
             .account_id = risk.enriched.validated.cmd.account_id,
@@ -714,7 +713,7 @@ static auto make_notify_stage(std::shared_ptr<MessageBus> bus,
         };
         bus->try_publish("order.completed", event);
 
-        std::printf("  [notify   #%02llu] worker=%zu → HTTP응답 전송, event 발행\n",
+        std::println("  [notify   #{:02}] worker={} → HTTP response sent, event published",
             static_cast<unsigned long long>(oid), env.worker_idx);
 
         co_return risk;
@@ -722,16 +721,16 @@ static auto make_notify_stage(std::shared_ptr<MessageBus> bus,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// §9. TradingPlatform — 전체 상태 보유 구조체
+// §9. TradingPlatform — struct holding all state
 // ─────────────────────────────────────────────────────────────────────────────
 
 struct TradingPlatform {
-    // ── 인프라 ────────────────────────────────────────────────────────────
+    // ── Infrastructure ────────────────────────────────────────────────────
     std::shared_ptr<MockDB>     db  = std::make_shared<MockDB>();
     std::shared_ptr<MessageBus> bus = std::make_shared<MessageBus>();
 
-    // ── Static Pipeline Actions (스케일 제어를 위해 직접 보유) ───────────
-    // 타입 별칭
+    // ── Static Pipeline Actions (held directly for scale control) ─────────
+    // type aliases
     using VAction = Action<OrderCmd, ValidatedOrder>;
     using EAction = Action<ValidatedOrder, EnrichedOrder>;
     using RAction = Action<EnrichedOrder, RiskResult>;
@@ -740,7 +739,7 @@ struct TradingPlatform {
     std::shared_ptr<EAction> enrich_act;
     std::shared_ptr<RAction> risk_act;
 
-    // Static Pipeline의 최종 출력 채널 (브릿지 코루틴에서 읽음)
+    // final output channel of Static Pipeline (read by bridge coroutine)
     std::shared_ptr<AsyncChannel<ContextualItem<RiskResult>>> risk_out;
 
     // ── Dynamic Pipeline ──────────────────────────────────────────────────
@@ -753,15 +752,15 @@ struct TradingPlatform {
     std::atomic<bool>     auto_scale_on{true};
     std::atomic<uint64_t> req_counter{0};
 
-    // ── Dispatcher ref (scale_out 호출에 필요) ────────────────────────────
+    // ── Dispatcher ref (needed for scale_out calls) ───────────────────────
     Dispatcher* disp = nullptr;
 
-    /// 모든 파이프라인과 버스를 시작합니다.
+    /// Start all pipelines and buses.
     void setup(Dispatcher& d) {
         disp = &d;
         bus->start(d);
 
-        // ── Static Pipeline Actions 생성 ─────────────────────────────────
+        // ── Create Static Pipeline Actions ───────────────────────────────
 
         validate_act = std::make_shared<VAction>(
             stage_validate,
@@ -798,14 +797,14 @@ struct TradingPlatform {
                 },
             });
 
-        // ── Static Actions 수동 연결 및 시작 ────────────────────────────
-        // 시작 순서: 마지막 Action부터 (출력 채널 필요)
+        // ── Connect and start Static Actions manually ────────────────────
+        // startup order: last Action first (output channel must exist)
         risk_out = std::make_shared<AsyncChannel<ContextualItem<RiskResult>>>(512);
         risk_act->start(d, risk_out);                        // risk → risk_out
         enrich_act->start(d, risk_act->input());             // enrich → risk input
         validate_act->start(d, enrich_act->input());         // validate → enrich input
 
-        // ── Dynamic Pipeline 생성 ─────────────────────────────────────────
+        // ── Create Dynamic Pipeline ───────────────────────────────────────
         dyn_pipe = std::make_shared<DynamicPipeline<RiskResult>>(
             DynamicPipeline<RiskResult>::Config{
                 .default_channel_cap = 256,
@@ -818,20 +817,20 @@ struct TradingPlatform {
 
         dyn_pipe->start(d);
 
-        // ── Static → Dynamic 브릿지 코루틴 (Context 보존) ─────────────
-        // NOTE: coroutine lambda 대신 static member function 사용
-        //       (GCC 13 coroutine lambda lifetime bug 회피)
+        // ── Static → Dynamic bridge coroutine (preserves Context) ────────
+        // NOTE: uses static member function instead of coroutine lambda
+        //       (workaround for GCC 13 coroutine lambda lifetime bug)
         d.spawn(run_bridge(risk_out, dyn_pipe));
 
-        // ── 자동 스케일러 코루틴 ─────────────────────────────────────────
+        // ── Auto-scaler coroutine ─────────────────────────────────────────
         d.spawn(run_autoscaler(this));
 
-        std::puts("[platform] setup complete: static(3 actions) + dynamic(3 stages) + autoscaler");
+        std::println("[platform] setup complete: static(3 actions) + dynamic(3 stages) + autoscaler");
     }
 
-    // ── Static Member Coroutines (GCC 13 lambda lifetime bug 회피) ────────
+    // ── Static Member Coroutines (workaround for GCC 13 lambda lifetime bug) ────
 
-    /// Static → Dynamic 브릿지: Context 보존하며 양쪽 파이프라인 연결
+    /// Static → Dynamic bridge: connect both pipelines while preserving Context
     static Task<void> run_bridge(
         std::shared_ptr<AsyncChannel<ContextualItem<RiskResult>>> risk_out,
         std::shared_ptr<DynamicPipeline<RiskResult>> dyn_pipe)
@@ -843,48 +842,48 @@ struct TradingPlatform {
         }
     }
 
-    /// 자동 스케일러: 큐 깊이 기반 scale_out/scale_in
+    /// Auto-scaler: scale_out/scale_in based on queue depth
     static Task<void> run_autoscaler(TradingPlatform* p) {
         for (;;) {
             co_await qbuem::sleep(500);
 
             if (!p->auto_scale_on.load()) continue;
 
-            // AsyncChannel size_approx() == 0 로 과부하 여부 감지
+            // detect overload via AsyncChannel size_approx() > 0
             bool v_busy = p->validate_act->input()->size_approx() > 0;
             bool e_busy = p->enrich_act->input()->size_approx() > 0;
             bool r_busy = p->risk_act->input()->size_approx() > 0;
 
             if (v_busy) {
                 p->validate_act->scale_out(*p->disp);
-                std::puts("[autoscale] validate busy → scale_out");
+                std::println("[autoscale] validate busy → scale_out");
             } else {
                 p->validate_act->scale_in();
             }
             if (e_busy) {
                 p->enrich_act->scale_out(*p->disp);
-                std::puts("[autoscale] enrich busy → scale_out");
+                std::println("[autoscale] enrich busy → scale_out");
             } else {
                 p->enrich_act->scale_in();
             }
             if (r_busy) {
                 p->risk_act->scale_out(*p->disp);
-                std::puts("[autoscale] risk busy → scale_out");
+                std::println("[autoscale] risk busy → scale_out");
             } else {
                 p->risk_act->scale_in();
             }
         }
     }
 
-    /// 주문을 파이프라인에 제출합니다.
-    /// @returns 결과를 받을 채널 (co_await recv()로 대기)
+    /// Submit an order to the pipeline.
+    /// @returns channel to receive the result (await with co_await recv())
     std::shared_ptr<AsyncChannel<OrderResult>>
     begin_order(OrderCmd cmd, Context base_ctx) {
         auto resp_ch = std::make_shared<AsyncChannel<OrderResult>>(1);
         auto ctx = base_ctx
             .put(ResponseChannel{resp_ch});
         cmd.req_id = ++req_counter;
-        // non-blocking try: 포화 시 nullptr 반환 (호출자가 503 처리)
+        // non-blocking try: returns nullptr when saturated (caller handles 503)
         if (!validate_act->try_push(cmd, ctx))
             return nullptr;
         submitted.fetch_add(1, std::memory_order_relaxed);
@@ -893,10 +892,10 @@ struct TradingPlatform {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// §10. HTTP 핸들러
+// §10. HTTP Handlers
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// POST /api/v1/orders — 주문 제출 (Pipeline 처리 후 응답)
+/// POST /api/v1/orders — submit order (respond after pipeline processing)
 static AsyncHandler make_post_order(TradingPlatform& p) {
     return [&p](const Request& req, Response& res) -> Task<void> {
         auto cmd = OrderCmd::from_json(req.body());
@@ -907,12 +906,12 @@ static AsyncHandler make_post_order(TradingPlatform& p) {
             co_return;
         }
 
-        // 인증 정보를 Context에 주입
+        // inject auth info into Context
         auto ctx = Context{}
             .put(RequestId{std::string(req.header("X-Request-ID"))})
             .put(AuthSubject{std::string(req.header("X-Auth-Sub"))});
 
-        // Pipeline에 제출 (비동기)
+        // submit to Pipeline (async)
         auto resp_ch = p.begin_order(*cmd, ctx);
         if (!resp_ch) {
             res.status(503)
@@ -921,7 +920,7 @@ static AsyncHandler make_post_order(TradingPlatform& p) {
             co_return;
         }
 
-        // Pipeline 처리 완료 대기 (cross-reactor safe)
+        // wait for pipeline processing to complete (cross-reactor safe)
         auto result = co_await resp_ch->recv();
         if (!result) {
             res.status(500)
@@ -936,7 +935,7 @@ static AsyncHandler make_post_order(TradingPlatform& p) {
     };
 }
 
-/// GET /api/v1/orders — 전체 주문 목록
+/// GET /api/v1/orders — list all orders
 static Handler make_get_orders(TradingPlatform& p) {
     return [&p](const Request& /*req*/, Response& res) {
         res.status(200)
@@ -945,7 +944,7 @@ static Handler make_get_orders(TradingPlatform& p) {
     };
 }
 
-/// GET /api/v1/orders/:id — 단일 주문 조회
+/// GET /api/v1/orders/:id — get single order
 static Handler make_get_order(TradingPlatform& p) {
     return [&p](const Request& req, Response& res) {
         uint64_t id = 0;
@@ -965,7 +964,7 @@ static Handler make_get_order(TradingPlatform& p) {
     };
 }
 
-/// DELETE /api/v1/orders/:id — 주문 취소
+/// DELETE /api/v1/orders/:id — cancel order
 static Handler make_cancel_order(TradingPlatform& p) {
     return [&p](const Request& req, Response& res) {
         uint64_t id = 0;
@@ -984,16 +983,16 @@ static Handler make_cancel_order(TradingPlatform& p) {
     };
 }
 
-/// GET /api/v1/events — SSE 실시간 이벤트 스트림
+/// GET /api/v1/events — SSE real-time event stream
 static AsyncHandler make_sse_events(TradingPlatform& p) {
     return [&p](const Request& /*req*/, Response& res) -> Task<void> {
-        // MessageBus "order.completed" 구독 (스트리밍)
+        // subscribe to MessageBus "order.completed" (streaming)
         auto stream = p.bus->subscribe_stream<OrderEvent>("order.completed", 64);
 
         SseStream sse(res);
         sse.send(qbuem::write(SseConnectedEvent{"connected", "order.completed"}), "connected");
 
-        // 최대 30개 이벤트 수신 후 종료 (데모용)
+        // stop after at most 30 events (demo)
         for (int i = 0; i < 30; ++i) {
             auto ev = co_await stream->recv();
             if (!ev) break;
@@ -1003,7 +1002,7 @@ static AsyncHandler make_sse_events(TradingPlatform& p) {
     };
 }
 
-/// GET /api/v1/stats — 파이프라인 상태 및 워커 수
+/// GET /api/v1/stats — pipeline status and worker counts
 static Handler make_get_stats(TradingPlatform& p) {
     return [&p](const Request& /*req*/, Response& res) {
         StatsResponse s;
@@ -1024,7 +1023,7 @@ static Handler make_get_stats(TradingPlatform& p) {
     };
 }
 
-/// POST /api/v1/admin/scale — 수동 스케일 조정
+/// POST /api/v1/admin/scale — manual scale adjustment
 /// Body: {"stage": "validate"|"enrich"|"risk", "workers": N}
 static Handler make_post_scale(TradingPlatform& p) {
     return [&p](const Request& req, Response& res) {
@@ -1049,7 +1048,7 @@ static Handler make_post_scale(TradingPlatform& p) {
     };
 }
 
-/// POST /api/v1/admin/hotswap — DynamicPipeline "persist" 스테이지 교체
+/// POST /api/v1/admin/hotswap — DynamicPipeline "persist" stage replacement
 /// Body: {"stage": "persist", "mode": "fast"|"normal"}
 static Handler make_post_hotswap(TradingPlatform& p) {
     return [&p](const Request& req, Response& res) {
@@ -1065,10 +1064,10 @@ static Handler make_post_hotswap(TradingPlatform& p) {
         bool ok;
         if (req_dto->mode == "fast") {
             ok = p.dyn_pipe->hot_swap("persist", make_persist_fast_stage(p.db));
-            std::puts("[hotswap] persist → FAST mode");
+            std::println("[hotswap] persist → FAST mode");
         } else if (req_dto->mode == "normal") {
             ok = p.dyn_pipe->hot_swap("persist", make_persist_stage(p.db));
-            std::puts("[hotswap] persist → NORMAL mode");
+            std::println("[hotswap] persist → NORMAL mode");
         } else {
             res.status(400).body(qbuem::write(ErrorResponse{"mode must be: fast|normal"})); return;
         }
@@ -1079,7 +1078,7 @@ static Handler make_post_hotswap(TradingPlatform& p) {
     };
 }
 
-/// POST /api/v1/admin/toggle — DynamicPipeline 스테이지 활성/비활성
+/// POST /api/v1/admin/toggle — DynamicPipeline stage enable/disable
 /// Body: {"stage": "enrich2", "enabled": "true"|"false"}
 static Handler make_post_toggle(TradingPlatform& p) {
     return [&p](const Request& req, Response& res) {
@@ -1089,8 +1088,8 @@ static Handler make_post_toggle(TradingPlatform& p) {
         }
 
         bool ok = p.dyn_pipe->set_enabled(req_dto->stage, req_dto->enabled);
-        std::printf("[toggle] stage=%s enabled=%s\n",
-                    req_dto->stage.c_str(), req_dto->enabled ? "true" : "false");
+        std::println("[toggle] stage={} enabled={}",
+                    req_dto->stage, req_dto->enabled ? "true" : "false");
 
         res.status(ok ? 200 : 404)
            .header("Content-Type", "application/json")
@@ -1099,7 +1098,7 @@ static Handler make_post_toggle(TradingPlatform& p) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// §11. 데모 시뮬레이션
+// §11. Demo Simulation
 // ─────────────────────────────────────────────────────────────────────────────
 
 struct DemoOrder {
@@ -1113,36 +1112,36 @@ struct DemoOrder {
 };
 
 static const DemoOrder kDemoOrders[] = {
-    // 정상 지정가 매수
-    {"ACC001", "SAMSUNG",  72000.0, 10, false, true,  "지정가 매수 (정상)"},
-    // 정상 시장가 매도
-    {"ACC002", "SKHYNIX",      0.0,  5, true,  false, "시장가 매도 (정상)"},
-    // 잔고 부족 (Dave: 100만원, notional=2350만원)
-    {"ACC004", "KRAFTON", 235000.0, 100, false, true, "잔고 부족 → 거부"},
-    // 미지원 심볼
-    {"ACC001", "TESLA",    100.0,    1, false, true,  "미지원 심볼 → 거부"},
-    // 리스크 한도 초과 (notional=39,500만원)
-    {"ACC001", "LGCHEM",  395000.0,1000,false, true,  "리스크 한도 초과 → 거부"},
-    // 정상 매수 여러 건
-    {"ACC002", "NAVER",   210000.0,  5, false, true,  "지정가 매수 (정상)"},
-    {"ACC003", "KAKAO",    55000.0, 20, true,  true,  "시장가 매수 (정상)"},
-    {"ACC001", "HYUNDAI", 205000.0,  3, false, false, "지정가 매도 (정상)"},
+    // normal limit buy
+    {"ACC001", "SAMSUNG",  72000.0, 10, false, true,  "limit buy (normal)"},
+    // normal market sell
+    {"ACC002", "SKHYNIX",      0.0,  5, true,  false, "market sell (normal)"},
+    // insufficient balance (Dave: 1M KRW, notional=23.5M KRW)
+    {"ACC004", "KRAFTON", 235000.0, 100, false, true, "insufficient balance → rejected"},
+    // unsupported symbol
+    {"ACC001", "TESLA",    100.0,    1, false, true,  "unsupported symbol → rejected"},
+    // risk limit exceeded (notional=395M KRW)
+    {"ACC001", "LGCHEM",  395000.0,1000,false, true,  "risk limit exceeded → rejected"},
+    // several normal buy orders
+    {"ACC002", "NAVER",   210000.0,  5, false, true,  "limit buy (normal)"},
+    {"ACC003", "KAKAO",    55000.0, 20, true,  true,  "market buy (normal)"},
+    {"ACC001", "HYUNDAI", 205000.0,  3, false, false, "limit sell (normal)"},
 };
 
 static Task<void> run_demo(TradingPlatform& p, Dispatcher& d) {
-    std::puts("\n╔══════════════════════════════════════════════════════════╗");
-    std::puts("║       qbuem-stack 거래 플랫폼 데모 시작                  ║");
-    std::puts("╚══════════════════════════════════════════════════════════╝\n");
+    std::println("\n╔══════════════════════════════════════════════════════════╗");
+    std::println("║       qbuem-stack Trading Platform Demo Start            ║");
+    std::println("╚══════════════════════════════════════════════════════════╝\n");
 
-    // 잠시 대기 (파이프라인 워커 완전 시작 대기)
+    // brief wait for pipeline workers to fully start
     co_await qbuem::sleep(200);
 
-    // ── Phase 1: 정상 주문 처리 ─────────────────────────────────────────
-    std::puts("─── Phase 1: 주문 제출 (8건) ───────────────────────────────");
+    // ── Phase 1: process normal orders ──────────────────────────────────
+    std::println("─── Phase 1: Order Submission (8 orders) ───────────────────");
 
     for (size_t i = 0; i < std::size(kDemoOrders); ++i) {
         const auto& demo = kDemoOrders[i];
-        std::printf("\n[demo %zu] %s\n", i + 1, demo.desc);
+        std::println("\n[demo {}] {}", i + 1, demo.desc);
 
         OrderCmd cmd;
         cmd.account_id = demo.account_id;
@@ -1158,37 +1157,37 @@ static Task<void> run_demo(TradingPlatform& p, Dispatcher& d) {
 
         auto resp_ch = p.begin_order(cmd, ctx);
         if (!resp_ch) {
-            std::puts("  → [ERROR] pipeline overloaded");
+            std::println("  → [ERROR] pipeline overloaded");
             continue;
         }
 
         auto result = co_await resp_ch->recv();
         if (!result) {
-            std::puts("  → [ERROR] no result");
+            std::println("  → [ERROR] no result");
             continue;
         }
 
-        std::printf("  → order_id=%llu status=%s exec_price=%.0f msg=%s\n",
+        std::println("  → order_id={} status={} exec_price={:.0f} msg={}",
             static_cast<unsigned long long>(result->order_id),
-            result->status.c_str(),
+            result->status,
             result->exec_price,
-            result->message.c_str());
+            result->message);
     }
 
-    // ── Phase 2: 스케일 in/out 시연 ─────────────────────────────────────
-    std::puts("\n─── Phase 2: Manual Scale In/Out ──────────────────────────");
-    std::printf("[demo] validate workers (scale_out): 1→2\n");
+    // ── Phase 2: scale in/out demo ───────────────────────────────────────
+    std::println("\n─── Phase 2: Manual Scale In/Out ──────────────────────────");
+    std::println("[demo] validate workers (scale_out): 1→2");
     p.validate_act->scale_out(d);
-    std::printf("[demo] enrich workers (scale_to 3): 2→3\n");
+    std::println("[demo] enrich workers (scale_to 3): 2→3");
     p.enrich_act->scale_to(3, d);
-    std::printf("[demo] risk workers (scale_in): back to min\n");
+    std::println("[demo] risk workers (scale_in): back to min");
     p.risk_act->scale_in();
 
     // ── Phase 3: DynamicPipeline hot_swap ───────────────────────────────
-    std::puts("\n─── Phase 3: DynamicPipeline hot_swap (persist → fast) ────");
+    std::println("\n─── Phase 3: DynamicPipeline hot_swap (persist → fast) ────");
     p.dyn_pipe->hot_swap("persist", make_persist_fast_stage(p.db));
 
-    // hot_swap 후 주문 처리
+    // process order after hot_swap
     {
         OrderCmd cmd{.account_id="ACC002", .symbol="POSCO", .price=382000.0,
                      .quantity=1, .is_market=false, .is_buy=true};
@@ -1196,15 +1195,15 @@ static Task<void> run_demo(TradingPlatform& p, Dispatcher& d) {
         auto rch = p.begin_order(cmd, ctx);
         if (rch) {
             auto r = co_await rch->recv();
-            if (r) std::printf("  [hotswap] order_id=%llu status=%s (fast mode)\n",
-                static_cast<unsigned long long>(r->order_id), r->status.c_str());
+            if (r) std::println("  [hotswap] order_id={} status={} (fast mode)",
+                static_cast<unsigned long long>(r->order_id), r->status);
         }
     }
 
-    // ── Phase 4: DynamicPipeline stage toggle (enrich2 비활성화) ─────────
-    std::puts("\n─── Phase 4: DynamicPipeline stage toggle (enrich2 OFF) ───");
+    // ── Phase 4: DynamicPipeline stage toggle (disable enrich2) ──────────
+    std::println("\n─── Phase 4: DynamicPipeline stage toggle (enrich2 OFF) ───");
     p.dyn_pipe->set_enabled("enrich2", false);
-    std::puts("  [toggle] enrich2 disabled (pass-through mode)");
+    std::println("  [toggle] enrich2 disabled (pass-through mode)");
 
     {
         OrderCmd cmd{.account_id="ACC001", .symbol="SAMSUNG", .price=73000.0,
@@ -1213,28 +1212,28 @@ static Task<void> run_demo(TradingPlatform& p, Dispatcher& d) {
         auto rch = p.begin_order(cmd, ctx);
         if (rch) {
             auto r = co_await rch->recv();
-            if (r) std::printf("  [toggle] order_id=%llu status=%s (enrich2 skipped)\n",
-                static_cast<unsigned long long>(r->order_id), r->status.c_str());
+            if (r) std::println("  [toggle] order_id={} status={} (enrich2 skipped)",
+                static_cast<unsigned long long>(r->order_id), r->status);
         }
     }
 
-    p.dyn_pipe->set_enabled("enrich2", true);  // 재활성화
-    std::puts("  [toggle] enrich2 re-enabled");
+    p.dyn_pipe->set_enabled("enrich2", true);  // re-enable
+    std::println("  [toggle] enrich2 re-enabled");
 
-    // ── Phase 5: 통계 출력 ───────────────────────────────────────────────
-    std::puts("\n─── Phase 5: 최종 통계 ─────────────────────────────────────");
-    std::printf("  제출: %llu  체결: %llu  거부: %llu  DB총: %zu\n",
+    // ── Phase 5: print statistics ────────────────────────────────────────
+    std::println("\n─── Phase 5: Final Statistics ──────────────────────────────");
+    std::println("  submitted: {}  filled: {}  rejected: {}  DB total: {}",
         static_cast<unsigned long long>(p.submitted.load()),
         static_cast<unsigned long long>(p.filled.load()),
         static_cast<unsigned long long>(p.rejected.load()),
         p.db->count());
 
-    std::printf("  큐상태: validate=%s enrich=%s risk=%s\n",
+    std::println("  queue status: validate={} enrich={} risk={}",
         p.validate_act->input()->size_approx() == 0 ? "empty" : "pending",
         p.enrich_act->input()->size_approx() == 0   ? "empty" : "pending",
         p.risk_act->input()->size_approx() == 0     ? "empty" : "pending");
 
-    std::printf("  DynamicPipeline stages: %zu (%s)\n",
+    std::println("  DynamicPipeline stages: {} ({})",
         p.dyn_pipe->stage_count(),
         [&]() {
             std::string s;
@@ -1243,16 +1242,16 @@ static Task<void> run_demo(TradingPlatform& p, Dispatcher& d) {
                 s += n;
             }
             return s;
-        }().c_str());
+        }());
 
-    std::puts("\n╔══════════════════════════════════════════════════════════╗");
-    std::puts("║       데모 완료. HTTP 서버 실행 중...                    ║");
-    std::puts("║       curl -H 'Authorization: Bearer demo-key' \\        ║");
-    std::puts("║         -X POST http://localhost:8080/api/v1/orders \\   ║");
-    std::puts("║         -d '{\"account_id\":\"ACC001\",\"symbol\":\"SAMSUNG\",\\  ║");
-    std::puts("║              \"price\":72000,\"quantity\":5,              \\  ║");
-    std::puts("║              \"type\":\"limit\",\"side\":\"buy\"}'            ║");
-    std::puts("╚══════════════════════════════════════════════════════════╝\n");
+    std::println("\n╔══════════════════════════════════════════════════════════╗");
+    std::println("║       Demo complete. HTTP server running...              ║");
+    std::println("║       curl -H 'Authorization: Bearer demo-key' \\        ║");
+    std::println("║         -X POST http://localhost:8080/api/v1/orders \\   ║");
+    std::println("║         -d '{{\"account_id\":\"ACC001\",\"symbol\":\"SAMSUNG\",\\  ║");
+    std::println("║              \"price\":72000,\"quantity\":5,              \\  ║");
+    std::println("║              \"type\":\"limit\",\"side\":\"buy\"}}' ║");
+    std::println("╚══════════════════════════════════════════════════════════╝\n");
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1260,18 +1259,18 @@ static Task<void> run_demo(TradingPlatform& p, Dispatcher& d) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 int main() {
-    // ── Pipeline Dispatcher (HTTP App과 분리된 별도 스레드 풀) ───────────
+    // ── Pipeline Dispatcher (separate thread pool, isolated from HTTP App) ──
     Dispatcher pipeline_disp(4);
     std::jthread pipeline_thread([&pipeline_disp] { pipeline_disp.run(); });
 
-    // ── Trading Platform 초기화 ──────────────────────────────────────────
+    // ── Initialize TradingPlatform ───────────────────────────────────────
     TradingPlatform platform;
     platform.setup(pipeline_disp);
 
-    // ── HTTP App 초기화 ─────────────────────────────────────────────────
-    App app(2);  // HTTP 리액터 스레드 2개
+    // ── Initialize HTTP App ──────────────────────────────────────────────
+    App app(2);  // 2 HTTP reactor threads
 
-    // ── 미들웨어 체인 등록 ───────────────────────────────────────────────
+    // ── Register middleware chain ────────────────────────────────────────
     app.use(cors(CorsConfig{
         .allow_origin      = "*",
         .allow_methods     = "GET, POST, PUT, DELETE, OPTIONS",
@@ -1289,11 +1288,11 @@ int main() {
 
     app.use(hsts(31'536'000, /*include_subdomains=*/true));
 
-    // Bearer 인증 (모든 /api/v1/* 에 적용)
+    // Bearer auth (applied to all /api/v1/* routes)
     static DemoKeyVerifier verifier;
     app.use(bearer_auth(verifier));
 
-    // ── 라우트 등록 ─────────────────────────────────────────────────────
+    // ── Register routes ──────────────────────────────────────────────────
     app.post("/api/v1/orders",          make_post_order(platform));
     app.get ("/api/v1/orders",          make_get_orders(platform));
     app.get ("/api/v1/orders/:id",      make_get_order(platform));
@@ -1305,35 +1304,35 @@ int main() {
     app.post("/api/v1/admin/toggle",    make_post_toggle(platform));
     app.health_check("/health");
 
-    // ── 전역 에러 핸들러 ─────────────────────────────────────────────────
+    // ── Global error handler ─────────────────────────────────────────────
     app.on_error([](std::exception_ptr ep, const Request& req, Response& res) {
         std::string msg;
         try { std::rethrow_exception(ep); }
         catch (const std::exception& e) { msg = e.what(); }
         catch (...)                     { msg = "unknown error"; }
-        std::fprintf(stderr, "[error] %s %s: %s\n",
-            std::string(req.path()).c_str(),
-            std::string(req.path()).c_str(), msg.c_str());
+        std::print(stderr, "[error] {} {}: {}\n",
+            std::string(req.path()),
+            std::string(req.path()), msg);
         res.status(500)
            .header("Content-Type", "application/json")
            .body(qbuem::write(ErrorResponse{msg}));
     });
 
-    // ── 데모 시뮬레이션 코루틴 시작 ─────────────────────────────────────
+    // ── Launch demo simulation coroutine ─────────────────────────────────
     pipeline_disp.spawn(run_demo(platform, pipeline_disp));
 
-    // ── HTTP 서버 시작 (blocking) ────────────────────────────────────────
-    std::puts("[server] listening on :8080");
+    // ── Start HTTP server (blocking) ─────────────────────────────────────
+    std::println("[server] listening on :8080");
     auto res = app.listen(8080);
     if (!res) {
-        std::fprintf(stderr, "[fatal] listen failed: %s\n",
-                     res.error().message().c_str());
+        std::print(stderr, "[fatal] listen failed: {}\n",
+                     res.error().message());
         pipeline_disp.stop();
         pipeline_thread.join();
         return 1;
     }
 
-    // ── 종료 처리 ────────────────────────────────────────────────────────
+    // ── Shutdown ──────────────────────────────────────────────────────────
     pipeline_disp.stop();
     pipeline_thread.join();
     return 0;

@@ -595,19 +595,19 @@ public:
 
             case Http2FrameType::WINDOW_UPDATE:
                 // Flow control not implemented — ignore on receipt
-                co_return Result<void>::ok();
+                co_return Result<void>{};
 
             case Http2FrameType::PRIORITY:
                 // Priority frame not implemented — ignore on receipt
-                co_return Result<void>::ok();
+                co_return Result<void>{};
 
             case Http2FrameType::PUSH_PROMISE:
                 // Clients do not send PUSH_PROMISE — ignore
-                co_return Result<void>::ok();
+                co_return Result<void>{};
 
             default:
                 // Unknown frame type — RFC 7540 section 4.1: ignore
-                co_return Result<void>::ok();
+                co_return Result<void>{};
         }
     }
 
@@ -652,7 +652,7 @@ public:
             }
         }
 
-        co_return Result<void>::ok();
+        co_return Result<void>{};
     }
 
     /**
@@ -689,7 +689,7 @@ public:
             }
         }
 
-        co_return Result<void>::ok();
+        co_return Result<void>{};
     }
 
     // ─── Pending frame collection ─────────────────────────────────────────────
@@ -819,7 +819,7 @@ public:
     Task<Result<void>> send_connection_preface() {
         // Server connection preface: send initial SETTINGS frame
         co_await send_settings(false);
-        co_return Result<void>::ok();
+        co_return Result<void>{};
     }
 
     // ─── Serialization utilities (static) ────────────────────────────────────
@@ -877,19 +877,19 @@ private:
             // SETTINGS must have stream_id == 0 (PROTOCOL_ERROR)
             co_await send_goaway(last_stream_id_, 0x1 /* PROTOCOL_ERROR */,
                                  "SETTINGS with non-zero stream ID");
-            co_return Result<void>::err(
+            co_return std::unexpected(
                 std::make_error_code(std::errc::protocol_error));
         }
 
         if (frame.flags & HTTP2_FLAG_ACK) {
             // ACK SETTINGS received — ignore
-            co_return Result<void>::ok();
+            co_return Result<void>{};
         }
 
         // Process peer SETTINGS parameters (currently ignored, minimal implementation)
         // Send ACK response
         co_await send_settings(true);
-        co_return Result<void>::ok();
+        co_return Result<void>{};
     }
 
     /**
@@ -903,7 +903,7 @@ private:
     Task<Result<void>> handle_ping(const Http2Frame& frame) {
         if (frame.flags & HTTP2_FLAG_ACK) {
             // ACK PING received — ignore (RTT measurement etc. not implemented)
-            co_return Result<void>::ok();
+            co_return Result<void>{};
         }
 
         // Echo back the received opaque_data
@@ -914,7 +914,7 @@ private:
             }
         }
         co_await send_ping(true, opaque);
-        co_return Result<void>::ok();
+        co_return Result<void>{};
     }
 
     /**
@@ -928,7 +928,7 @@ private:
     Task<Result<void>> handle_goaway(const Http2Frame& /*frame*/) {
         // Peer GOAWAY received: clean up in-progress streams and close connection
         // Minimal implementation: notify upper layer by returning an error code
-        co_return Result<void>::err(
+        co_return std::unexpected(
             std::make_error_code(std::errc::connection_aborted));
     }
 
@@ -948,7 +948,7 @@ private:
             // HEADERS must have stream_id != 0
             co_await send_goaway(last_stream_id_, 0x1 /* PROTOCOL_ERROR */,
                                  "HEADERS with stream_id == 0");
-            co_return Result<void>::err(
+            co_return std::unexpected(
                 std::make_error_code(std::errc::protocol_error));
         }
 
@@ -964,7 +964,7 @@ private:
         uint8_t pad_length = 0;
         if (frame.flags & HTTP2_FLAG_PADDED) {
             if (frame.payload.empty()) {
-                co_return Result<void>::err(
+                co_return std::unexpected(
                     std::make_error_code(std::errc::protocol_error));
             }
             pad_length = frame.payload[0];
@@ -973,12 +973,12 @@ private:
 
         // Extract header block fragment
         if (header_block_offset > frame.payload.size()) {
-            co_return Result<void>::err(
+            co_return std::unexpected(
                 std::make_error_code(std::errc::protocol_error));
         }
         size_t payload_end = frame.payload.size() - pad_length;
         if (payload_end < header_block_offset) {
-            co_return Result<void>::err(
+            co_return std::unexpected(
                 std::make_error_code(std::errc::protocol_error));
         }
 
@@ -1015,7 +1015,7 @@ private:
         }
 
         last_stream_id_ = sid;
-        co_return Result<void>::ok();
+        co_return Result<void>{};
     }
 
     /**
@@ -1034,7 +1034,7 @@ private:
             // Unexpected CONTINUATION — protocol error
             co_await send_goaway(last_stream_id_, 0x1 /* PROTOCOL_ERROR */,
                                  "Unexpected CONTINUATION frame");
-            co_return Result<void>::err(
+            co_return std::unexpected(
                 std::make_error_code(std::errc::protocol_error));
         }
 
@@ -1056,7 +1056,7 @@ private:
             continuation_buffer_.erase(it);
         }
 
-        co_return Result<void>::ok();
+        co_return Result<void>{};
     }
 
     /**
@@ -1074,7 +1074,7 @@ private:
             // DATA must have stream_id != 0
             co_await send_goaway(last_stream_id_, 0x1 /* PROTOCOL_ERROR */,
                                  "DATA with stream_id == 0");
-            co_return Result<void>::err(
+            co_return std::unexpected(
                 std::make_error_code(std::errc::protocol_error));
         }
 
@@ -1082,7 +1082,7 @@ private:
         if (it == streams_.end()) {
             // Unknown stream — respond with RST_STREAM
             co_await send_rst_stream(sid, 0x1 /* PROTOCOL_ERROR */);
-            co_return Result<void>::ok();
+            co_return Result<void>{};
         }
 
         auto& stream = it->second;
@@ -1092,13 +1092,13 @@ private:
         size_t data_end    = frame.payload.size();
         if (frame.flags & HTTP2_FLAG_PADDED) {
             if (frame.payload.empty()) {
-                co_return Result<void>::err(
+                co_return std::unexpected(
                     std::make_error_code(std::errc::protocol_error));
             }
             uint8_t pad = frame.payload[0];
             data_offset = 1;
             if (data_end < static_cast<size_t>(pad) + 1) {
-                co_return Result<void>::err(
+                co_return std::unexpected(
                     std::make_error_code(std::errc::protocol_error));
             }
             data_end -= pad;
@@ -1121,7 +1121,7 @@ private:
             }
         }
 
-        co_return Result<void>::ok();
+        co_return Result<void>{};
     }
 
     /**
@@ -1137,7 +1137,7 @@ private:
         if (auto it = streams_.find(sid); it != streams_.end()) {
             it->second->state = Http2Stream::State::CLOSED;
         }
-        co_return Result<void>::ok();
+        co_return Result<void>{};
     }
 
     /**

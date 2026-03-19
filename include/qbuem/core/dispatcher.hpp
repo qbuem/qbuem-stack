@@ -103,7 +103,7 @@ public:
    *
    * @param fd       File descriptor to watch (usually a listening socket).
    * @param callback Callback to invoke when an event occurs on fd.
-   * @returns `Result<void>::ok()` on success, or an error code on failure.
+   * @returns `Result<void>{}` on success, or an error code on failure.
    *
    * @note Register before calling `run()` to have the fd watched from the
    *       moment the event loop starts.
@@ -138,7 +138,7 @@ public:
    * @param fd          File descriptor to watch (listening socket).
    * @param reactor_idx Worker index to register with (0 ~ thread_count()-1).
    * @param callback    Callback to invoke when an event occurs.
-   * @returns `Result<void>::ok()` on success, or an error code on failure.
+   * @returns `Result<void>{}` on success, or an error code on failure.
    */
   Result<void> register_listener_at(int fd, size_t reactor_idx,
                                     std::function<void(int)> callback);

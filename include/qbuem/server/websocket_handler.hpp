@@ -140,7 +140,7 @@ public:
    *
    * @param fd  Connected socket file descriptor.
    * @param req Original HTTP request that initiated the upgrade.
-   * @returns `Result<void>::ok()` on success, or an error code for an invalid request.
+   * @returns `Result<void>{}` on success, or an error code for an invalid request.
    */
   Task<Result<void>> upgrade(int fd, const Request& req) {
     std::string_view ws_key = req.header("Sec-WebSocket-Key");
@@ -170,7 +170,7 @@ public:
           std::error_code(errno, std::system_category()));
     }
 
-    co_return Result<void>::ok();
+    co_return Result<void>{};
   }
 
   // ── Frame send/receive loop ─────────────────────────────────────────────
@@ -255,7 +255,7 @@ public:
    *
    * @param fd   Target socket file descriptor.
    * @param text UTF-8 text to send.
-   * @returns `Result<void>::ok()` on success, or an error code on send failure.
+   * @returns `Result<void>{}` on success, or an error code on send failure.
    */
   Task<Result<void>> send_text(int fd, std::string_view text) {
     WsFrame frame;
@@ -272,7 +272,7 @@ public:
       co_return unexpected(
           std::error_code(errno, std::system_category()));
     }
-    co_return Result<void>::ok();
+    co_return Result<void>{};
   }
 
   /**
@@ -280,7 +280,7 @@ public:
    *
    * @param fd   Target socket file descriptor.
    * @param data Raw bytes to send.
-   * @returns `Result<void>::ok()` on success, or an error code on send failure.
+   * @returns `Result<void>{}` on success, or an error code on send failure.
    */
   Task<Result<void>> send_binary(int fd, std::span<const uint8_t> data) {
     WsFrame frame;
@@ -295,7 +295,7 @@ public:
       co_return unexpected(
           std::error_code(errno, std::system_category()));
     }
-    co_return Result<void>::ok();
+    co_return Result<void>{};
   }
 
   /**
@@ -303,7 +303,7 @@ public:
    *
    * @param fd   Target socket file descriptor.
    * @param code Status code defined in RFC 6455 §7.4.1. Default 1000 = normal closure.
-   * @returns `Result<void>::ok()` on success, or an error code on send failure.
+   * @returns `Result<void>{}` on success, or an error code on send failure.
    */
   Task<Result<void>> send_close(int fd, uint16_t code = 1000) {
     WsFrame frame;
@@ -320,14 +320,14 @@ public:
       co_return unexpected(
           std::error_code(errno, std::system_category()));
     }
-    co_return Result<void>::ok();
+    co_return Result<void>{};
   }
 
   /**
    * @brief Sends a Ping frame.
    *
    * @param fd Target socket file descriptor.
-   * @returns `Result<void>::ok()` on success, or an error code on send failure.
+   * @returns `Result<void>{}` on success, or an error code on send failure.
    */
   Task<Result<void>> send_ping(int fd) {
     WsFrame frame;
@@ -341,7 +341,7 @@ public:
       co_return unexpected(
           std::error_code(errno, std::system_category()));
     }
-    co_return Result<void>::ok();
+    co_return Result<void>{};
   }
 
   // ── Static utilities (public for testing and examples) ──────────────────

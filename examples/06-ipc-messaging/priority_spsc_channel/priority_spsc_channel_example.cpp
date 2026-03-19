@@ -1,20 +1,20 @@
 /**
  * @file priority_spsc_channel_example.cpp
- * @brief PriorityChannel + SpscChannel 예제.
+ * @brief PriorityChannel + SpscChannel example.
  *
- * ## 커버리지
+ * ## Coverage
  * - Priority enum (High, Normal, Low)
- * - PriorityChannel<T>         — 3단계 우선순위 MPMC 채널
- * - PriorityChannel::try_send()— 우선순위 지정 송신
- * - PriorityChannel::try_recv()— High → Normal → Low 순서 수신
- * - PriorityChannel::recv()    — 비동기 블로킹 수신
- * - PriorityChannel::close()   — 채널 닫기
- * - SpscChannel<T>             — SPSC 락-프리 링 버퍼 채널
- * - SpscChannel::try_send()    — 논블로킹 송신
- * - SpscChannel::try_recv()    — 논블로킹 수신
- * - SpscChannel::send()        — 비동기 블로킹 송신
- * - SpscChannel::recv()        — 비동기 블로킹 수신
- * - SpscChannel::capacity()    — 채널 용량
+ * - PriorityChannel<T>         — 3-level priority MPMC channel
+ * - PriorityChannel::try_send()— priority-tagged send
+ * - PriorityChannel::try_recv()— receive in High → Normal → Low order
+ * - PriorityChannel::recv()    — async blocking receive
+ * - PriorityChannel::close()   — close channel
+ * - SpscChannel<T>             — SPSC lock-free ring buffer channel
+ * - SpscChannel::try_send()    — non-blocking send
+ * - SpscChannel::try_recv()    — non-blocking receive
+ * - SpscChannel::send()        — async blocking send
+ * - SpscChannel::recv()        — async blocking receive
+ * - SpscChannel::capacity()    — channel capacity
  */
 
 #include <qbuem/core/dispatcher.hpp>
@@ -24,16 +24,18 @@
 
 #include <atomic>
 #include <cassert>
-#include <cstdio>
 #include <string>
 #include <thread>
 #include <vector>
+#include <qbuem/compat/print.hpp>
 
 using namespace qbuem;
 using namespace std::chrono_literals;
+using std::println;
+using std::print;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// §1  PriorityChannel — 우선순위 기반 메시지 처리
+// §1  PriorityChannel — priority-based message processing
 // ─────────────────────────────────────────────────────────────────────────────
 
 struct Message {
@@ -42,40 +44,40 @@ struct Message {
 };
 
 static void demo_priority_channel() {
-    std::printf("── §1  PriorityChannel ──\n");
+    println("── §1  PriorityChannel ──");
 
-    // 각 우선순위 레벨당 용량 32
+    // Capacity 32 per priority level
     PriorityChannel<Message> chan(32);
 
-    // 다양한 우선순위로 메시지 투입
-    chan.try_send(Message{"결제 처리",    1}, Priority::High);
-    chan.try_send(Message{"로그 수집",    2}, Priority::Low);
-    chan.try_send(Message{"주문 확인",    3}, Priority::Normal);
-    chan.try_send(Message{"경보 알림",    4}, Priority::High);
-    chan.try_send(Message{"보고서 생성",  5}, Priority::Low);
-    chan.try_send(Message{"재고 확인",    6}, Priority::Normal);
-    chan.try_send(Message{"긴급 롤백",    7}, Priority::High);
+    // Push messages with various priorities
+    chan.try_send(Message{"payment processing",  1}, Priority::High);
+    chan.try_send(Message{"log collection",       2}, Priority::Low);
+    chan.try_send(Message{"order confirmation",   3}, Priority::Normal);
+    chan.try_send(Message{"alert notification",   4}, Priority::High);
+    chan.try_send(Message{"report generation",    5}, Priority::Low);
+    chan.try_send(Message{"inventory check",      6}, Priority::Normal);
+    chan.try_send(Message{"emergency rollback",   7}, Priority::High);
 
-    std::printf("  채널 크기 합계: %zu\n", chan.size_approx());
-    std::printf("  수신 순서 (High → Normal → Low):\n");
+    println("  total channel size: {}", chan.size_approx());
+    println("  receive order (High -> Normal -> Low):");
 
     std::vector<Message> received;
     while (auto item = chan.try_recv()) {
         received.push_back(*item);
-        std::printf("    [%s] id=%d\n", item->content.c_str(), item->id);
+        println("    [{}] id={}", item->content, item->id);
     }
 
-    // 우선순위 순서 검증: 처음 3개는 High (id 1, 4, 7)
+    // Priority order verification: first 3 should be High (id 1, 4, 7)
     if (received.size() >= 3) {
         bool high_first = (received[0].id == 1 || received[0].id == 4 || received[0].id == 7);
-        std::printf("  High 우선순위 먼저 처리: %s\n", high_first ? "yes" : "no");
+        println("  High priority processed first: {}", high_first ? "yes" : "no");
     }
 
-    std::printf("\n");
+    println("");
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// §2  PriorityChannel — 비동기 recv (코루틴)
+// §2  PriorityChannel — async recv (coroutine)
 // ─────────────────────────────────────────────────────────────────────────────
 
 static std::atomic<int>  g_priority_received{0};
@@ -92,7 +94,7 @@ static Task<void> priority_consumer(
 
 static Task<void> priority_producer(
     std::shared_ptr<PriorityChannel<int>> chan) {
-    // 다양한 우선순위로 숫자 투입
+    // Push numbers with various priorities
     for (int i = 1; i <= 5; ++i) {
         auto prio = (i % 3 == 0) ? Priority::High :
                     (i % 3 == 1) ? Priority::Normal : Priority::Low;
@@ -103,7 +105,7 @@ static Task<void> priority_producer(
 }
 
 static void demo_priority_async() {
-    std::printf("── §2  PriorityChannel 비동기 recv ──\n");
+    println("── §2  PriorityChannel async recv ──");
 
     auto chan = std::make_shared<PriorityChannel<int>>(16);
 
@@ -128,51 +130,50 @@ static void demo_priority_async() {
     disp.stop();
     t.join();
 
-    std::printf("  수신된 아이템: %d / 5\n\n",
-                g_priority_received.load());
+    println("  items received: {} / 5\n", g_priority_received.load());
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// §3  SpscChannel — 단일 생산자/소비자 락-프리 채널
+// §3  SpscChannel — single producer/consumer lock-free channel
 // ─────────────────────────────────────────────────────────────────────────────
 
 static void demo_spsc_channel() {
-    std::printf("── §3  SpscChannel (try_send/try_recv) ──\n");
+    println("── §3  SpscChannel (try_send/try_recv) ──");
 
-    SpscChannel<int> chan(16);  // 16개 용량 (2의 거듭제곱으로 올림)
+    SpscChannel<int> chan(16);  // capacity 16 (rounded up to power of two)
 
-    std::printf("  채널 용량: %zu\n", chan.capacity());
+    println("  channel capacity: {}", chan.capacity());
 
-    // 생산자: try_send
+    // Producer: try_send
     for (int i = 0; i < 8; ++i)
         chan.try_send(i * 10);
 
-    std::printf("  채널 크기: %zu\n", chan.size_approx());
+    println("  channel size: {}", chan.size_approx());
 
-    // 소비자: try_recv
+    // Consumer: try_recv
     std::vector<int> results;
     while (auto item = chan.try_recv()) {
         results.push_back(*item);
     }
 
-    std::printf("  수신한 값:");
-    for (int v : results) std::printf(" %d", v);
-    std::printf("\n\n");
+    print("  received values:");
+    for (int v : results) print(" {}", v);
+    println("\n");
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// §4  SpscChannel — 비동기 send/recv (코루틴, 크로스-스레드)
+// §4  SpscChannel — async send/recv (coroutine, cross-thread)
 // ─────────────────────────────────────────────────────────────────────────────
 
 static std::atomic<int> g_spsc_sum{0};
 
 static void demo_spsc_async() {
-    std::printf("── §4  SpscChannel 비동기 (크로스-리액터) ──\n");
+    println("── §4  SpscChannel async (cross-reactor) ──");
 
     auto chan = std::make_shared<SpscChannel<int>>(8);
     constexpr int N = 20;
 
-    // 생산자 코루틴
+    // Producer coroutine
     auto producer = [chan]() -> Task<void> {
         for (int i = 1; i <= N; ++i) {
             co_await chan->send(i);
@@ -181,7 +182,7 @@ static void demo_spsc_async() {
         co_return;
     };
 
-    // 소비자 코루틴
+    // Consumer coroutine
     auto consumer = [chan]() -> Task<void> {
         for (;;) {
             auto v = co_await chan->recv();
@@ -205,24 +206,24 @@ static void demo_spsc_async() {
     disp.stop();
     t.join();
 
-    std::printf("  sum(1..%d) = %d (기대: 210)\n\n", N, g_spsc_sum.load());
+    println("  sum(1..{}) = {} (expected: 210)\n", N, g_spsc_sum.load());
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// §5  SpscChannel vs AsyncChannel 비교
+// §5  SpscChannel capacity round-up
 // ─────────────────────────────────────────────────────────────────────────────
 
 static void demo_spsc_capacity() {
-    std::printf("── §5  SpscChannel 용량 자동 올림 ──\n");
+    println("── §5  SpscChannel capacity auto round-up ──");
 
-    // 요청 용량이 2의 거듭제곱으로 올림 처리됨
+    // Requested capacity is rounded up to the next power of two
     SpscChannel<int> c7(7);    // → 8
     SpscChannel<int> c10(10);  // → 16
     SpscChannel<int> c100(100);// → 128
 
-    std::printf("  cap(7) = %zu\n", c7.capacity());
-    std::printf("  cap(10) = %zu\n", c10.capacity());
-    std::printf("  cap(100) = %zu\n\n", c100.capacity());
+    println("  cap(7) = {}", c7.capacity());
+    println("  cap(10) = {}", c10.capacity());
+    println("  cap(100) = {}\n", c100.capacity());
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -230,7 +231,7 @@ static void demo_spsc_capacity() {
 // ─────────────────────────────────────────────────────────────────────────────
 
 int main() {
-    std::printf("=== qbuem PriorityChannel + SpscChannel 예제 ===\n\n");
+    println("=== qbuem PriorityChannel + SpscChannel Example ===\n");
 
     demo_priority_channel();
     demo_priority_async();
@@ -238,6 +239,6 @@ int main() {
     demo_spsc_async();
     demo_spsc_capacity();
 
-    std::printf("=== 완료 ===\n");
+    println("=== Done ===");
     return 0;
 }

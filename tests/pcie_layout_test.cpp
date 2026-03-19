@@ -1,6 +1,6 @@
 /**
  * @file tests/pcie_layout_test.cpp
- * @brief v1.6.0: PCIe/VFIO, MSI-X Reactor, UDS Advanced API 레이아웃/기본 테스트.
+ * @brief v1.6.0: PCIe/VFIO, MSI-X Reactor, UDS Advanced API layout/basic tests.
  */
 
 #include <gtest/gtest.h>
@@ -100,7 +100,7 @@ TEST(UdsAdvanced, RecvFdsResultFields) {
 }
 
 TEST(UdsAdvanced, SendFdsReturnTypeCheck) {
-    // send_fds / recv_fds 는 qbuem::Result<ssize_t> / Result<RecvFdsResult> 반환 (noexcept)
+    // send_fds / recv_fds return qbuem::Result<ssize_t> / Result<RecvFdsResult> (noexcept)
     using F1 = qbuem::Result<ssize_t>(*)(int, std::span<const int>, std::span<const uint8_t>) noexcept;
     using F2 = qbuem::Result<qbuem::uds::RecvFdsResult>(*)(int, std::span<int>, std::span<uint8_t>) noexcept;
     EXPECT_TRUE((std::is_same_v<F1, decltype(&qbuem::uds::send_fds)>));

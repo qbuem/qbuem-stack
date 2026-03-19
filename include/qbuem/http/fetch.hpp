@@ -32,7 +32,7 @@
  *         if (!r.ok()) return unexpected(std::make_error_code(std::errc::protocol_error));
  *         return std::string(r.body());
  *     })
- *     .map([](const std::string& body) { return "got: " + body; })
+ *     .transform([](const std::string& body) { return "got: " + body; })
  *     .value_or("(error)");
  *
  * // POST with body
@@ -720,7 +720,7 @@ private:
  *     .timeout(std::chrono::seconds{5})
  *     .send(st);
  *
- * int code = status.map([](const FetchResponse& r){ return r.status(); })
+ * int code = status.transform([](const FetchResponse& r){ return r.status(); })
  *                  .value_or(-1);
  * @endcode
  */

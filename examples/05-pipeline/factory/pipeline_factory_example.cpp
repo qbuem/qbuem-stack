@@ -1,23 +1,23 @@
 /**
  * @file pipeline_factory_example.cpp
- * @brief Config-driven 파이프라인 팩토리 예제 (qbuem-json 기반).
+ * @brief Config-driven pipeline factory example (qbuem-json based).
  *
- * ## 커버리지
- * - PipelineFactory<T>                — 팩토리 생성
- * - PipelineFactory::register_plugin()— 이름 → 액션 함수 매핑
- * - PipelineFactory::from_json()      — JSON 설정으로 DynamicPipeline 생성
- * - PipelineFactory::graph_from_json()— JSON 설정으로 PipelineGraph 생성
- * - detail::Json::value(key, default) — qbuem-json 으로 config 필드 파싱
- * - DynamicPipeline::start()          — 파이프라인 시작
- * - DynamicPipeline::try_push()       — 아이템 투입
- * - DynamicPipeline::output()         — 출력 채널
+ * ## Coverage
+ * - PipelineFactory<T>                — factory creation
+ * - PipelineFactory::register_plugin()— name → action function mapping
+ * - PipelineFactory::from_json()      — build DynamicPipeline from JSON config
+ * - PipelineFactory::graph_from_json()— build PipelineGraph from JSON config
+ * - detail::Json::value(key, default) — parse config fields with qbuem-json
+ * - DynamicPipeline::start()          — start pipeline
+ * - DynamicPipeline::try_push()       — push item
+ * - DynamicPipeline::output()         — output channel
  *
- * ## JSON config 파싱 흐름
+ * ## JSON config parsing flow
  *   from_json(json_str)
- *     → pipeline_factory.hpp 내부에서 qbuem_json 으로 파싱
- *     → 각 stage 의 "config" 서브-오브젝트를 detail::Json 으로 래핑
- *     → register_plugin 콜백(detail::Json& cfg) 전달
- *     → cfg.value("factor", 2)  ← qbuem_json Value::as<int>() 사용
+ *     → parse internally with qbuem_json inside pipeline_factory.hpp
+ *     → wrap each stage "config" sub-object as detail::Json
+ *     → pass register_plugin callback(detail::Json& cfg)
+ *     → cfg.value("factor", 2)  ← uses qbuem_json Value::as<int>()
  */
 
 #include <qbuem_json/qbuem_json.hpp>
@@ -27,53 +27,55 @@
 #include <qbuem/pipeline/pipeline_factory.hpp>
 
 #include <atomic>
-#include <cstdio>
 #include <string>
 #include <thread>
 #include <vector>
+#include <qbuem/compat/print.hpp>
 
 using namespace qbuem;
 using namespace std::chrono_literals;
+using std::println;
+using std::print;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// §1  선형 파이프라인 팩토리 — "config" 값을 qbuem-json 으로 파싱
+// §1  Linear pipeline factory — parse "config" values with qbuem-json
 // ─────────────────────────────────────────────────────────────────────────────
 
 static void demo_linear_factory() {
-    std::printf("── §1  선형 PipelineFactory (qbuem-json config 파싱) ──\n");
+    println("── §1  Linear PipelineFactory (qbuem-json config parsing) ──");
 
     PipelineFactory<int> factory;
 
-    // 플러그인 등록: "multiplier" — cfg.value("factor", 2) 로 배수 결정
+    // Register plugin "multiplier" — multiplier determined by cfg.value("factor", 2)
     factory.register_plugin("multiplier", [](const detail::Json& cfg) {
-        int factor = cfg.value("factor", 2);   // JSON "config":{"factor":3} 파싱
-        std::printf("  [multiplier] factor=%d (from config)\n", factor);
+        int factor = cfg.value("factor", 2);   // parse JSON "config":{"factor":3}
+        println("  [multiplier] factor={} (from config)", factor);
         return [factor](int x, ActionEnv) -> Task<Result<int>> {
             co_return x * factor;
         };
     });
 
-    // 플러그인 등록: "adder" — cfg.value("offset", 10) 로 덧셈 값 결정
+    // Register plugin "adder" — addend determined by cfg.value("offset", 10)
     factory.register_plugin("adder", [](const detail::Json& cfg) {
-        int offset = cfg.value("offset", 10);  // JSON "config":{"offset":5} 파싱
-        std::printf("  [adder]      offset=%d (from config)\n", offset);
+        int offset = cfg.value("offset", 10);  // parse JSON "config":{"offset":5}
+        println("  [adder]      offset={} (from config)", offset);
         return [offset](int x, ActionEnv) -> Task<Result<int>> {
             co_return x + offset;
         };
     });
 
-    // 플러그인 등록: "logger" — config 없음
+    // Register plugin "logger" — no config
     factory.register_plugin("logger", [](const detail::Json&) {
         return [](int x, ActionEnv) -> Task<Result<int>> {
-            std::printf("  [logger] 값: %d\n", x);
+            println("  [logger] value: {}", x);
             co_return x;
         };
     });
 
-    // JSON config 으로 파이프라인 조립.
-    //   multiplier: factor=3  (기본값 2 가 아닌 3 이 사용돼야 함)
-    //   adder:      offset=5  (기본값 10 이 아닌 5 가 사용돼야 함)
-    //   → 입력 1,2,3 → 출력 1*3+5=8, 2*3+5=11, 3*3+5=14
+    // Assemble pipeline from JSON config.
+    //   multiplier: factor=3  (should use 3, not default 2)
+    //   adder:      offset=5  (should use 5, not default 10)
+    //   → input 1,2,3 → output 1*3+5=8, 2*3+5=11, 3*3+5=14
     auto dp = factory.from_json(R"({
         "type": "linear",
         "stages": [
@@ -84,7 +86,7 @@ static void demo_linear_factory() {
     })");
 
     if (!dp) {
-        std::printf("  팩토리에서 파이프라인 생성 실패\n\n");
+        println("  Failed to build pipeline from factory\n");
         return;
     }
 
@@ -93,11 +95,11 @@ static void demo_linear_factory() {
 
     dp->start(disp);
 
-    // 입력: 1, 2, 3 → 기대 출력: 8, 11, 14 (factor=3, offset=5)
+    // Input: 1, 2, 3 → expected output: 8, 11, 14 (factor=3, offset=5)
     for (int i = 1; i <= 3; ++i)
         dp->try_push(i);
 
-    // 출력 수집
+    // Collect output
     auto out = dp->output();
     std::vector<int> results;
     auto deadline = std::chrono::steady_clock::now() + 2s;
@@ -113,17 +115,17 @@ static void demo_linear_factory() {
     disp.stop();
     t.join();
 
-    std::printf("  결과: ");
-    for (int r : results) std::printf("%d ", r);
-    std::printf("  (기대값: 8 11 14)\n\n");
+    print("  results:");
+    for (int r : results) print(" {}", r);
+    println("  (expected: 8 11 14)\n");
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// §2  플러그인 목록 조회 + string config 파싱
+// §2  Plugin registry + string config parsing
 // ─────────────────────────────────────────────────────────────────────────────
 
 static void demo_plugin_registry() {
-    std::printf("── §2  플러그인 레지스트리 + string config ──\n");
+    println("── §2  Plugin Registry + string config ──");
 
     PipelineFactory<std::string> factory;
 
@@ -143,21 +145,21 @@ static void demo_plugin_registry() {
         };
     });
 
-    // "prefix" 플러그인 — config 에서 "text" 키로 접두사 결정
+    // "prefix" plugin — prefix text determined by config "text" key
     factory.register_plugin("prefix", [](const detail::Json& cfg) {
         std::string text = cfg.value("text", std::string{"[qbuem] "});
-        std::printf("  [prefix] text=\"%s\" (from config)\n", text.c_str());
+        println("  [prefix] text=\"{}\" (from config)", text);
         return [text](std::string s, ActionEnv) -> Task<Result<std::string>> {
             co_return text + s;
         };
     });
 
-    std::printf("  플러그인 존재 확인: trim=%s upper=%s prefix=%s\n",
+    println("  plugin presence: trim={} upper={} prefix={}",
                 factory.has_plugin("trim") ? "yes" : "no",
                 factory.has_plugin("upper") ? "yes" : "no",
                 factory.has_plugin("prefix") ? "yes" : "no");
 
-    // "prefix" 의 config text 를 JSON 으로 주입
+    // Inject config text for "prefix" via JSON
     auto dp = factory.from_json(R"({
         "type": "linear",
         "stages": [
@@ -169,7 +171,7 @@ static void demo_plugin_registry() {
     })");
 
     if (!dp) {
-        std::printf("  파이프라인 생성 실패\n\n");
+        println("  Failed to build pipeline\n");
         return;
     }
 
@@ -194,23 +196,23 @@ static void demo_plugin_registry() {
     disp.stop();
     t.join();
 
-    std::printf("  입력: \"  hello world  \"\n");
-    std::printf("  출력: \"%s\"\n\n", result.c_str());
+    println("  input:  \"  hello world  \"");
+    println("  output: \"{}\"\n", result);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// §3  PipelineGraph 팩토리 — numeric config 파싱
+// §3  PipelineGraph factory — numeric config parsing
 // ─────────────────────────────────────────────────────────────────────────────
 
 static void demo_graph_factory() {
-    std::printf("── §3  PipelineGraph 팩토리 (numeric config) ──\n");
+    println("── §3  PipelineGraph Factory (numeric config) ──");
 
     PipelineFactory<int> factory;
 
-    // "threshold" config 로 유효성 범위를 설정
+    // Set validation range via "threshold" config
     factory.register_plugin("validator", [](const detail::Json& cfg) {
         int min_val = cfg.value("min", 0);
-        std::printf("  [validator] min=%d (from config)\n", min_val);
+        println("  [validator] min={} (from config)", min_val);
         return [min_val](int x, ActionEnv) -> Task<Result<int>> {
             if (x < min_val) co_return unexpected(
                 std::make_error_code(std::errc::invalid_argument));
@@ -218,10 +220,10 @@ static void demo_graph_factory() {
         };
     });
 
-    // "scale" config 로 배수 결정
+    // Multiplier determined by "scale" config
     factory.register_plugin("doubler", [](const detail::Json& cfg) {
         int scale = cfg.value("scale", 2);
-        std::printf("  [doubler]   scale=%d (from config)\n", scale);
+        println("  [doubler]   scale={} (from config)", scale);
         return [scale](int x, ActionEnv) -> Task<Result<int>> {
             co_return x * scale;
         };
@@ -229,7 +231,7 @@ static void demo_graph_factory() {
 
     factory.register_plugin("sink_print", [](const detail::Json&) {
         return [](int x, ActionEnv) -> Task<Result<int>> {
-            std::printf("  [graph-sink] 값: %d\n", x);
+            println("  [graph-sink] value: {}", x);
             co_return x;
         };
     });
@@ -248,7 +250,7 @@ static void demo_graph_factory() {
     })");
 
     if (!graph) {
-        std::printf("  그래프 파이프라인 생성 실패\n\n");
+        println("  Failed to build graph pipeline\n");
         return;
     }
 
@@ -256,7 +258,7 @@ static void demo_graph_factory() {
     std::jthread t([&] { disp.run(); });
     graph->start(disp);
 
-    // 입력: -1(거부), 1, 2, 3 → sink 출력: 3, 6, 9 (scale=3)
+    // Input: -1 (rejected), 1, 2, 3 → sink output: 3, 6, 9 (scale=3)
     for (int i = -1; i <= 3; ++i)
         graph->try_push(i);
 
@@ -266,7 +268,7 @@ static void demo_graph_factory() {
     disp.stop();
     t.join();
 
-    std::printf("  그래프 파이프라인 완료 (scale=3 → 출력: 3 6 9)\n\n");
+    println("  Graph pipeline done (scale=3 → output: 3 6 9)\n");
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -274,12 +276,12 @@ static void demo_graph_factory() {
 // ─────────────────────────────────────────────────────────────────────────────
 
 int main() {
-    std::printf("=== qbuem PipelineFactory 예제 (qbuem-json config 파싱) ===\n\n");
+    println("=== qbuem PipelineFactory Example (qbuem-json config parsing) ===\n");
 
     demo_linear_factory();
     demo_plugin_registry();
     demo_graph_factory();
 
-    std::printf("=== 완료 ===\n");
+    println("=== Done ===");
     return 0;
 }

@@ -167,7 +167,7 @@ struct SocketAddr {
    *
    * @param[out] out sockaddr_storage structure to fill.
    * @param[out] len Actual size of the filled structure.
-   * @returns `Result<void>::ok()` on success, or an error code on failure.
+   * @returns `Result<void>{}` on success, or an error code on failure.
    */
   Result<void> to_sockaddr(sockaddr_storage &out, socklen_t &len) const noexcept {
     __builtin_memset(&out, 0, sizeof(out));
@@ -178,7 +178,7 @@ struct SocketAddr {
       sa->sin_port   = htons(port_);
       sa->sin_addr   = addr_.ipv4_;
       len = sizeof(sockaddr_in);
-      return Result<void>::ok();
+      return Result<void>{};
     }
     case Family::IPv6: {
       auto *sa = reinterpret_cast<sockaddr_in6 *>(&out);
@@ -186,7 +186,7 @@ struct SocketAddr {
       sa->sin6_port   = htons(port_);
       sa->sin6_addr   = addr_.ipv6_;
       len = sizeof(sockaddr_in6);
-      return Result<void>::ok();
+      return Result<void>{};
     }
     case Family::Unix: {
       auto *sa = reinterpret_cast<sockaddr_un *>(&out);
@@ -194,7 +194,7 @@ struct SocketAddr {
       __builtin_strncpy(sa->sun_path, addr_.unix_, sizeof(sa->sun_path) - 1);
       len = static_cast<socklen_t>(
           offsetof(sockaddr_un, sun_path) + __builtin_strlen(addr_.unix_) + 1);
-      return Result<void>::ok();
+      return Result<void>{};
     }
     }
     return unexpected(std::make_error_code(std::errc::address_family_not_supported));

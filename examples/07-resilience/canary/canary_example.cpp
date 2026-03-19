@@ -1,8 +1,8 @@
 /**
  * @file canary_example.cpp
- * @brief CanaryRouter — 점진적 카나리 배포 예시.
+ * @brief CanaryRouter — gradual canary deployment example.
  *
- * 커버리지:
+ * Coverage:
  * - CanaryRouter::set_stable / set_canary / push / canary_percent
  * - set_canary_percent / rollback_to_stable
  * - CanaryMetrics record_success / record_error / error_rate / avg_latency_us
@@ -10,9 +10,9 @@
  */
 
 #include <qbuem/pipeline/canary.hpp>
+#include <qbuem/compat/print.hpp>
 
 #include <cassert>
-#include <cstdio>
 #include <string>
 #include <vector>
 
@@ -24,9 +24,9 @@ struct Request {
 };
 
 int main() {
-    std::puts("[CanaryRouter] basic routing demo");
+    std::println("[CanaryRouter] basic routing demo");
 
-    // ─── 1. 기본 라우팅 설정 ──────────────────────────────────────────────────
+    // ─── 1. Basic routing setup ───────────────────────────────────────────────
     CanaryRouter<Request> router;
 
     std::vector<Request> stable_received;
@@ -41,7 +41,7 @@ int main() {
         return true;
     });
 
-    // 초기: canary_pct=0 → 모두 stable
+    // Initial: canary_pct=0 → all go to stable
     assert(router.canary_percent() == 0u);
 
     for (int i = 0; i < 10; ++i)
@@ -49,29 +49,29 @@ int main() {
 
     assert(stable_received.size() == 10u);
     assert(canary_received.empty());
-    std::printf("[CanaryRouter] 0%% canary: stable=%zu canary=%zu\n",
+    std::println("[CanaryRouter] 0% canary: stable={} canary={}",
                 stable_received.size(), canary_received.size());
 
-    // ─── 2. 카나리 50%% ──────────────────────────────────────────────────────
+    // ─── 2. Canary 50% ───────────────────────────────────────────────────────
     router.set_canary_percent(50);
     assert(router.canary_percent() == 50u);
 
     stable_received.clear();
     canary_received.clear();
 
-    // 1000번 push → 대략 50% canary 분배
+    // 1000 pushes → roughly 50% canary distribution
     for (int i = 0; i < 1000; ++i)
         router.push(Request{i, true});
 
     size_t total = stable_received.size() + canary_received.size();
     assert(total == 1000u);
-    // 50% ± 15% 허용 (랜덤이므로)
+    // Allow 50% ± 15% (random)
     assert(canary_received.size() > 300u);
     assert(canary_received.size() < 700u);
-    std::printf("[CanaryRouter] 50%% canary: stable=%zu canary=%zu\n",
+    std::println("[CanaryRouter] 50% canary: stable={} canary={}",
                 stable_received.size(), canary_received.size());
 
-    // ─── 3. 수동 롤백 ──────────────────────────────────────────────────────
+    // ─── 3. Manual rollback ──────────────────────────────────────────────────
     router.rollback_to_stable();
     assert(router.canary_percent() == 0u);
     stable_received.clear();
@@ -80,7 +80,7 @@ int main() {
         router.push(Request{i, true});
     assert(stable_received.size() == 10u);
     assert(canary_received.empty());
-    std::puts("[CanaryRouter] rollback_to_stable: OK");
+    std::println("[CanaryRouter] rollback_to_stable: OK");
 
     // ─── 4. CanaryMetrics ────────────────────────────────────────────────────
     CanaryMetrics metrics;
@@ -93,11 +93,11 @@ int main() {
     uint64_t avg_lat = metrics.avg_latency_us();
     assert(avg_lat == 150u);  // (100+200)/2
 
-    std::printf("[CanaryMetrics] error_rate=%.3f avg_latency=%llu us\n",
-                err_rate, static_cast<unsigned long long>(avg_lat));
-    std::puts("[CanaryMetrics] OK");
+    std::println("[CanaryMetrics] error_rate={:.3f} avg_latency={} us",
+                err_rate, avg_lat);
+    std::println("[CanaryMetrics] OK");
 
-    // ─── 5. 100%% canary ────────────────────────────────────────────────────
+    // ─── 5. 100% canary ──────────────────────────────────────────────────────
     router.set_canary_percent(100);
     stable_received.clear();
     canary_received.clear();
@@ -105,8 +105,8 @@ int main() {
         router.push(Request{i, true});
     assert(canary_received.size() == 10u);
     assert(stable_received.empty());
-    std::puts("[CanaryRouter] 100% canary: OK");
+    std::println("[CanaryRouter] 100% canary: OK");
 
-    std::puts("canary_example: ALL OK");
+    std::println("canary_example: ALL OK");
     return 0;
 }

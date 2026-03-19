@@ -1,41 +1,41 @@
 /**
  * @file hardware_io_example.cpp
- * @brief 하드웨어 I/O 고급 기능 예제 — PCIe, RDMA, eBPF, SPDK/NVMe, kTLS.
+ * @brief Hardware I/O advanced features example — PCIe, RDMA, eBPF, SPDK/NVMe, kTLS.
  *
- * ## 커버리지 — pcie/pcie_device.hpp
- * - PCIeDevice::open()         — VFIO 기반 PCIe 디바이스 열기
- * - PCIeDevice::map_bar()      — MMIO BAR 영역 매핑
- * - PCIeDevice::read_mmio32()  — 32비트 MMIO 레지스터 읽기
- * - PCIeDevice::write_mmio32() — 32비트 MMIO 레지스터 쓰기
- * - PCIeBar                    — BAR(Base Address Register) 매핑
+ * ## Coverage — pcie/pcie_device.hpp
+ * - PCIeDevice::open()         — open PCIe device via VFIO
+ * - PCIeDevice::map_bar()      — map MMIO BAR region
+ * - PCIeDevice::read_mmio32()  — read 32-bit MMIO register
+ * - PCIeDevice::write_mmio32() — write 32-bit MMIO register
+ * - PCIeBar                    — BAR (Base Address Register) mapping
  *
- * ## 커버리지 — rdma/rdma_channel.hpp
- * - RDMAContext::open()        — HCA 컨텍스트 열기
- * - RDMAChannel::setup()       — QP 생성 + 메모리 등록
- * - RDMAChannel::local_info()  — 연결 핸드셰이크 정보
- * - RDMAChannel::connect()     — OOB 교환 후 연결 완료
+ * ## Coverage — rdma/rdma_channel.hpp
+ * - RDMAContext::open()        — open HCA context
+ * - RDMAChannel::setup()       — create QP + register memory
+ * - RDMAChannel::local_info()  — connection handshake info
+ * - RDMAChannel::connect()     — complete connection after OOB exchange
  * - RDMAChannel::write()       — RDMA Write (zero-copy)
  *
- * ## 커버리지 — ebpf/ebpf_tracer.hpp
- * - EBPFTracer::create()       — BPF 오브젝트 로드
- * - EBPFTracer::enable_all()   — 모든 이벤트 활성화
- * - EBPFTracer::poll()         — 이벤트 링 버퍼 읽기
- * - TraceEvent                 — BPF 이벤트 구조체 (헤더 전용)
+ * ## Coverage — ebpf/ebpf_tracer.hpp
+ * - EBPFTracer::create()       — load BPF object
+ * - EBPFTracer::enable_all()   — enable all events
+ * - EBPFTracer::poll()         — read event ring buffer
+ * - TraceEvent                 — BPF event struct (header only)
  *
- * ## 커버리지 — spdk/nvme_io.hpp
- * - NVMeIOContext::open()      — NVMe 캐릭터 디바이스 열기
- * - NVMeIOContext::alloc_dma() — DMA 정렬 버퍼 할당
- * - NVMeIOContext::read()      — io_uring passthrough NVMe 읽기
- * - NVMeIOContext::write()     — io_uring passthrough NVMe 쓰기
+ * ## Coverage — spdk/nvme_io.hpp
+ * - NVMeIOContext::open()      — open NVMe character device
+ * - NVMeIOContext::alloc_dma() — allocate DMA-aligned buffer
+ * - NVMeIOContext::read()      — io_uring passthrough NVMe read
+ * - NVMeIOContext::write()     — io_uring passthrough NVMe write
  *
- * ## 커버리지 — io/ktls.hpp
- * - KtlsSessionParams          — TLS 세션 파라미터 (키, IV, 시퀀스)
- * - enable_tx()                — 커널 TLS 송신 활성화 (인라인 함수)
- * - enable_rx()                — 커널 TLS 수신 활성화 (인라인 함수)
+ * ## Coverage — io/ktls.hpp
+ * - KtlsSessionParams          — TLS session parameters (key, IV, sequence)
+ * - enable_tx()                — enable kernel TLS TX (inline function)
+ * - enable_rx()                — enable kernel TLS RX (inline function)
  *
- * @note 실제 하드웨어(VFIO, InfiniBand, BPF, NVMe 캐릭터 디바이스)가 없으면
- *       open()/create() 등이 에러를 반환합니다. 이 예제는 API 사용 패턴을
- *       보여주며, 하드웨어 없이도 컴파일되고 graceful하게 동작합니다.
+ * @note Without real hardware (VFIO, InfiniBand, BPF, NVMe character device),
+ *       open()/create() will return errors. This example demonstrates the API
+ *       usage patterns and compiles and runs gracefully without hardware.
  */
 
 #include <qbuem/core/dispatcher.hpp>
@@ -45,9 +45,9 @@
 #include <qbuem/pcie/pcie_device.hpp>
 #include <qbuem/rdma/rdma_channel.hpp>
 #include <qbuem/spdk/nvme_io.hpp>
+#include <qbuem/compat/print.hpp>
 
 #include <atomic>
-#include <cstdio>
 #include <string>
 #include <thread>
 
@@ -57,66 +57,69 @@ using namespace qbuem::ebpf;
 using namespace std::chrono_literals;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// §1  PCIe (VFIO) 디바이스 접근
+// §1  PCIe (VFIO) device access
 // ─────────────────────────────────────────────────────────────────────────────
 
 static void demo_pcie() {
-    std::printf("── §1  PCIe (VFIO) ──\n");
-    std::printf("  사용 패턴:\n");
-    std::printf("    // 디바이스 열기 (VFIO UIO 필요)\n");
-    std::printf("    auto dev = qbuem::pcie::PCIeDevice::open(\"0000:03:00.0\");\n");
-    std::printf("    //         → Result<unique_ptr<PCIeDevice>>\n");
-    std::printf("    if (!dev) { /* 오류 처리 */ return; }\n");
-    std::printf("    // BAR0 MMIO 매핑\n");
-    std::printf("    auto bar = (*dev)->map_bar(0);  // Result<BarMapping>\n");
-    std::printf("    // 32비트 레지스터 읽기/쓰기\n");
-    std::printf("    uint32_t vid = (*dev)->read_mmio32(0x00);   // Vendor ID\n");
-    std::printf("    (*dev)->write_mmio32(0x04, 0x00000006);      // Bus Master Enable\n\n");
+    std::println("── §1  PCIe (VFIO) ──");
+    std::println("  Usage pattern:");
+    std::println("    // Open device (requires VFIO UIO)");
+    std::println("    auto dev = qbuem::pcie::PCIeDevice::open(\"0000:03:00.0\");");
+    std::println("    //         -> Result<unique_ptr<PCIeDevice>>");
+    std::println("    if (!dev) {{ /* error handling */ return; }}");
+    std::println("    // Map BAR0 MMIO region");
+    std::println("    auto bar = (*dev)->map_bar(0);  // Result<BarMapping>");
+    std::println("    // Read/write 32-bit register");
+    std::println("    uint32_t vid = (*dev)->read_mmio32(0x00);   // Vendor ID");
+    std::println("    (*dev)->write_mmio32(0x04, 0x00000006);      // Bus Master Enable");
+    std::println("");
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// §2  RDMA 채널
+// §2  RDMA channel
 // ─────────────────────────────────────────────────────────────────────────────
 
 static std::atomic<bool> g_rdma_done{false};
 
 static Task<void> demo_rdma_task() {
-    std::printf("── §2  RDMA 채널 ──\n");
-    std::printf("  사용 패턴:\n");
-    std::printf("    // Step1: HCA 컨텍스트 열기 (libibverbs 필요)\n");
-    std::printf("    auto ctx = qbuem::rdma::RDMAContext::open(\"mlx5_0\");\n");
-    std::printf("    //         → Result<unique_ptr<RDMAContext>>\n");
-    std::printf("    // Step2: 채널(QP) 생성 및 설정\n");
-    std::printf("    qbuem::rdma::RDMAChannel ch(**ctx);  // RDMAChannel(RDMAContext&)\n");
-    std::printf("    ch.setup();             // QP INIT 전환\n");
-    std::printf("    // Step3: OOB 교환 후 연결\n");
-    std::printf("    auto local = ch.local_info(); // QPInfo{qpn, lid, gid}\n");
-    std::printf("    ch.connect(remote_info);      // RTR → RTS\n");
-    std::printf("    // Step4: RDMA Write (zero-copy, CPU 개입 없음)\n");
-    std::printf("    auto mr = ctx->register_mr(buf, size);\n");
-    std::printf("    co_await ch.write(remote_addr, remote_rkey, mr->lkey, buf, size);\n\n");
+    std::println("── §2  RDMA channel ──");
+    std::println("  Usage pattern:");
+    std::println("    // Step1: open HCA context (requires libibverbs)");
+    std::println("    auto ctx = qbuem::rdma::RDMAContext::open(\"mlx5_0\");");
+    std::println("    //         -> Result<unique_ptr<RDMAContext>>");
+    std::println("    // Step2: create and configure channel (QP)");
+    std::println("    qbuem::rdma::RDMAChannel ch(**ctx);  // RDMAChannel(RDMAContext&)");
+    std::println("    ch.setup();             // transition QP to INIT");
+    std::println("    // Step3: connect after OOB exchange");
+    std::println("    auto local = ch.local_info(); // QPInfo{{qpn, lid, gid}}");
+    std::println("    ch.connect(remote_info);      // RTR -> RTS");
+    std::println("    // Step4: RDMA Write (zero-copy, no CPU involvement)");
+    std::println("    auto mr = ctx->register_mr(buf, size);");
+    std::println("    co_await ch.write(remote_addr, remote_rkey, mr->lkey, buf, size);");
+    std::println("");
     g_rdma_done.store(true);
     co_return;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// §3  eBPF 트레이서
+// §3  eBPF tracer
 // ─────────────────────────────────────────────────────────────────────────────
 
 static void demo_ebpf() {
-    std::printf("── §3  eBPF 트레이서 ──\n");
+    std::println("── §3  eBPF tracer ──");
 
-    // TraceEvent는 헤더 전용 구조체 — 항상 접근 가능
-    std::printf("  TraceEvent 크기: %zu 바이트 (캐시라인 정렬 = 64B)\n",
+    // TraceEvent is a header-only struct — always accessible
+    std::println("  TraceEvent size: {} bytes (cache-line aligned = 64B)",
                 sizeof(TraceEvent));
 
-    std::printf("  사용 패턴 (libbpf 필요):\n");
-    std::printf("    auto t = EBPFTracer::create(\"trace.bpf.o\"); // Result<unique_ptr<EBPFTracer>>\n");
-    std::printf("    t->enable_all();                              // 모든 이벤트 활성화\n");
-    std::printf("    t->enable(EventType::Syscall);                // 특정 이벤트만 활성화\n");
-    std::printf("    std::array<TraceEvent, 64> buf;\n");
-    std::printf("    size_t n = t->poll(buf, 100 /*ms*/);          // 폴링\n");
-    std::printf("    t->subscribe([](TraceEvent e){ ... });         // 콜백 등록\n\n");
+    std::println("  Usage pattern (requires libbpf):");
+    std::println("    auto t = EBPFTracer::create(\"trace.bpf.o\"); // Result<unique_ptr<EBPFTracer>>");
+    std::println("    t->enable_all();                              // enable all events");
+    std::println("    t->enable(EventType::Syscall);                // enable specific event only");
+    std::println("    std::array<TraceEvent, 64> buf;");
+    std::println("    size_t n = t->poll(buf, 100 /*ms*/);          // poll");
+    std::println("    t->subscribe([](TraceEvent e){{ ... }});       // register callback");
+    std::println("");
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -126,15 +129,16 @@ static void demo_ebpf() {
 static std::atomic<bool> g_nvme_done{false};
 
 static Task<void> demo_nvme_task() {
-    std::printf("── §4  NVMe I/O (io_uring passthrough) ──\n");
-    std::printf("  사용 패턴 (Linux 6.0+, /dev/ng0n1 필요):\n");
-    std::printf("    // NVMeIOContext::open() 은 동기 (Result, not Task)\n");
-    std::printf("    auto ctx = qbuem::spdk::NVMeIOContext::open(\"/dev/ng0n1\");\n");
-    std::printf("    //          → Result<unique_ptr<NVMeIOContext>>\n");
-    std::printf("    auto dma = (*ctx)->alloc_dma(4096);                  // DMA 정렬 버퍼\n");
-    std::printf("    auto r   = co_await (*ctx)->read(*dma.value(), 0, 1); // LBA 0, 1 섹터\n");
-    std::printf("    co_await (*ctx)->write(*dma.value(), 0, 1);\n");
-    std::printf("    co_await (*ctx)->flush();                             // Write Cache Sync\n\n");
+    std::println("── §4  NVMe I/O (io_uring passthrough) ──");
+    std::println("  Usage pattern (Linux 6.0+, requires /dev/ng0n1):");
+    std::println("    // NVMeIOContext::open() is synchronous (Result, not Task)");
+    std::println("    auto ctx = qbuem::spdk::NVMeIOContext::open(\"/dev/ng0n1\");");
+    std::println("    //          -> Result<unique_ptr<NVMeIOContext>>");
+    std::println("    auto dma = (*ctx)->alloc_dma(4096);                  // DMA-aligned buffer");
+    std::println("    auto r   = co_await (*ctx)->read(*dma.value(), 0, 1); // LBA 0, 1 sector");
+    std::println("    co_await (*ctx)->write(*dma.value(), 0, 1);");
+    std::println("    co_await (*ctx)->flush();                             // Write Cache Sync");
+    std::println("");
     g_nvme_done.store(true);
     co_return;
 }
@@ -144,27 +148,28 @@ static Task<void> demo_nvme_task() {
 // ─────────────────────────────────────────────────────────────────────────────
 
 static void demo_ktls() {
-    std::printf("── §5  Kernel TLS (kTLS) ──\n");
+    std::println("── §5  Kernel TLS (kTLS) ──");
 
-    // KtlsSessionParams는 헤더 전용 구조체 — 항상 접근 가능
+    // KtlsSessionParams is a header-only struct — always accessible
     KtlsSessionParams params{};
-    std::printf("  KtlsSessionParams 구조체 (헤더 전용):\n");
-    std::printf("    key 크기: %zu 바이트 (AES-128)\n", params.key.size());
-    std::printf("    iv  크기: %zu 바이트 (GCM nonce)\n", params.iv.size());
-    std::printf("    seq 크기: %zu 바이트 (레코드 시퀀스)\n", params.seq.size());
+    std::println("  KtlsSessionParams struct (header only):");
+    std::println("    key size: {} bytes (AES-128)", params.key.size());
+    std::println("    iv  size: {} bytes (GCM nonce)", params.iv.size());
+    std::println("    seq size: {} bytes (record sequence)", params.seq.size());
 
-    // enable_tx()는 인라인 함수 — 실제 호출 가능 (fd=-1이므로 실패 예상)
+    // enable_tx() is an inline function — can actually be called (fake_fd=-1 expected to fail)
     int fake_fd = -1;
     auto tx_r = enable_tx(fake_fd, params);
-    std::printf("  enable_tx(fake_fd=-1): %s (fd 유효하지 않음)\n",
-                tx_r ? "성공" : tx_r.error().message().c_str());
+    std::println("  enable_tx(fake_fd=-1): {} (fd not valid)",
+                tx_r ? "success" : tx_r.error().message());
 
-    std::printf("  kTLS 사용 패턴 (Linux 4.13+ CONFIG_TLS 필요):\n");
-    std::printf("    // TLS 핸드셰이크 완료 후:\n");
-    std::printf("    qbuem::io::KtlsSessionParams sp = extract_from_tls_ctx(ctx);\n");
-    std::printf("    qbuem::io::enable_tx(conn_fd, sp);  // 송신 암호화 커널 위임\n");
-    std::printf("    qbuem::io::enable_rx(conn_fd, sp);  // 수신 복호화 커널 위임\n");
-    std::printf("    // 이후 send()/recv() → 커널이 직접 AES-128-GCM 암호화\n\n");
+    std::println("  kTLS usage pattern (Linux 4.13+ CONFIG_TLS required):");
+    std::println("    // After TLS handshake completes:");
+    std::println("    qbuem::io::KtlsSessionParams sp = extract_from_tls_ctx(ctx);");
+    std::println("    qbuem::io::enable_tx(conn_fd, sp);  // delegate TX encryption to kernel");
+    std::println("    qbuem::io::enable_rx(conn_fd, sp);  // delegate RX decryption to kernel");
+    std::println("    // Subsequent send()/recv() -> kernel performs AES-128-GCM directly");
+    std::println("");
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -172,14 +177,14 @@ static void demo_ktls() {
 // ─────────────────────────────────────────────────────────────────────────────
 
 int main() {
-    std::printf("=== qbuem 하드웨어 I/O 고급 기능 예제 ===\n\n");
-    std::printf("주의: 실제 하드웨어 없이 API 패턴을 보여줍니다.\n\n");
+    std::println("=== qbuem hardware I/O advanced features example ===\n");
+    std::println("Note: demonstrates API patterns without real hardware.\n");
 
     demo_pcie();
     demo_ebpf();
     demo_ktls();
 
-    // 코루틴 기반 데모 (RDMA, NVMe)
+    // Coroutine-based demos (RDMA, NVMe)
     Dispatcher disp(1);
     std::jthread t([&] { disp.run(); });
 
@@ -196,6 +201,6 @@ int main() {
     disp.stop();
     t.join();
 
-    std::printf("hardware_io_example: ALL OK\n");
+    std::println("hardware_io_example: ALL OK");
     return 0;
 }

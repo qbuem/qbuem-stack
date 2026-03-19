@@ -1,18 +1,18 @@
 /**
  * @file subpipeline_migration_example.cpp
- * @brief SubpipelineAction + MigrationAction + DlqReprocessor 예제.
+ * @brief SubpipelineAction + MigrationAction + DlqReprocessor example.
  *
- * ## 커버리지
- * - SubpipelineAction<In,Out>   — StaticPipeline을 Action으로 래핑
- * - MigrationAction<OldT,NewT> — 인라인 타입 변환 액션
- * - DlqReprocessor<T>          — DLQ 메시지 재처리
- * - DlqReprocessor::register_migration() — 마이그레이션 함수 등록
- * - DlqReprocessor::reprocess()          — DLQ 항목 재처리 실행
+ * ## Coverage
+ * - SubpipelineAction<In,Out>   — wrap StaticPipeline as an Action
+ * - MigrationAction<OldT,NewT> — inline type conversion action
+ * - DlqReprocessor<T>          — reprocess DLQ messages
+ * - DlqReprocessor::register_migration() — register migration function
+ * - DlqReprocessor::reprocess()          — execute DLQ item reprocessing
  *
- * ## 시나리오
- * 이벤트 스키마를 V1 → V2로 점진적으로 마이그레이션합니다.
- * - MigrationAction: 파이프라인에 V1→V2 변환 스테이지 삽입
- * - DLQ에 쌓인 V1 이벤트를 DlqReprocessor로 V2로 재처리
+ * ## Scenario
+ * Gradually migrate event schema from V1 → V2.
+ * - MigrationAction: insert a V1→V2 conversion stage in the pipeline
+ * - DlqReprocessor: reprocess accumulated V1 DLQ events as V2
  */
 
 #include <qbuem/core/dispatcher.hpp>
@@ -26,25 +26,26 @@
 
 #include <atomic>
 #include <cassert>
-#include <cstdio>
 #include <string>
 #include <thread>
 #include <vector>
+#include <qbuem/compat/print.hpp>
 
 using namespace qbuem;
 using namespace std::chrono_literals;
+using std::println;
 
-// ─── 스키마 버전 ──────────────────────────────────────────────────────────────
+// ─── Schema versions ──────────────────────────────────────────────────────────
 
 struct EventV1 {
     int         id;
-    std::string data;   // V1: 단순 문자열
+    std::string data;   // V1: simple string
 };
 
 struct EventV2 {
     int         id;
-    std::string payload;    // V2: "data" → "payload" 리네임
-    std::string source;     // V2: 새 필드 추가
+    std::string payload;    // V2: "data" renamed to "payload"
+    std::string source;     // V2: new field added
     int         version{2};
 };
 
@@ -54,144 +55,143 @@ struct ProcessedEvent {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// §1  SubpipelineAction — StaticPipeline을 Action으로 재사용
+// §1  SubpipelineAction — reuse StaticPipeline as an Action
 // ─────────────────────────────────────────────────────────────────────────────
 
 static void demo_subpipeline() {
-    std::printf("── §1  SubpipelineAction ──\n");
+    println("── §1  SubpipelineAction ──");
 
-    // 내부 파이프라인: EventV2 → ProcessedEvent (2단계)
+    // Inner pipeline: EventV2 → ProcessedEvent (2 stages)
     auto inner = pipeline_builder<EventV2>()
         .add<EventV2>([](EventV2 e, ActionEnv) -> Task<Result<EventV2>> {
-            // 정규화 스테이지
+            // Normalization stage
             e.source = "normalized";
             co_return e;
         })
         .add<ProcessedEvent>([](EventV2 e, ActionEnv) -> Task<Result<ProcessedEvent>> {
-            // 변환 스테이지
+            // Transformation stage
             co_return ProcessedEvent{e.id, "processed:" + e.payload};
         })
         .build();
 
-    // StaticPipeline은 atomic 멤버 때문에 move 불가 → shared_ptr로 보관
+    // StaticPipeline cannot be moved (has atomic members) — store via shared_ptr
     auto sub_action = std::make_shared<SubpipelineAction<EventV2, ProcessedEvent>>(std::move(inner));
 
     Dispatcher disp(2);
     std::jthread t([&] { disp.run(); });
 
-    // 내부 파이프라인 시작 (SubpipelineAction 내부 파이프라인)
+    // Start inner pipeline (inside SubpipelineAction)
     sub_action->inner().start(disp);
 
-    // 외부 파이프라인: EventV1 처리 (DynamicPipeline은 동종 T→T 스테이지만 허용)
+    // Outer pipeline: process EventV1 (DynamicPipeline only allows same-type T→T stages)
     DynamicPipeline<EventV1> outer;
 
-    // 처리 결과 수집용 채널
+    // Result collection channel
     std::vector<ProcessedEvent> results;
     std::mutex results_mtx;
 
-    // V1 수신 후 V2로 변환하여 SubpipelineAction을 호출하는 단일 스테이지
-    // DynamicPipeline<EventV1>은 EventV1→EventV1 시그니처 필요 —
-    // 내부적으로 V2 변환과 SubpipelineAction 호출을 수행하고 원래 EventV1을 반환
+    // Single stage: receive V1, convert to V2, call SubpipelineAction, return V1 passthrough
+    // DynamicPipeline<EventV1> requires EventV1→EventV1 signature —
+    // internally performs V2 conversion and SubpipelineAction invocation,
+    // then returns the original EventV1
     outer.add_stage("process", [sub_action](EventV1 e, ActionEnv env)
             -> Task<Result<EventV1>> {
-        // V1 → V2 변환
+        // V1 → V2 conversion
         EventV2 v2{e.id, e.data, "outer-pipeline"};
-        // SubpipelineAction을 직접 호출
+        // Invoke SubpipelineAction directly
         auto r = co_await (*sub_action)(v2, env);
         if (!r) co_return unexpected(r.error());
-        // ProcessedEvent 결과를 로그 (EventV1을 패스스루)
-        std::printf("  내부 파이프라인 결과: id=%d result=%s\n",
-                    r->id, r->result.c_str());
+        // Log ProcessedEvent result (pass through EventV1)
+        println("  inner pipeline result: id={} result={}", r->id, r->result);
         co_return e;
     });
 
     outer.start(disp);
 
-    // 이벤트 투입
+    // Push events
     for (int i = 1; i <= 3; ++i)
         outer.try_push(EventV1{i, "data_" + std::to_string(i)});
 
-    // 잠시 처리 대기
+    // Brief wait for processing
     std::this_thread::sleep_for(200ms);
 
     outer.stop();
     disp.stop();
     t.join();
 
-    std::printf("  SubpipelineAction 처리 완료 (외부 파이프라인 3건)\n\n");
+    println("  SubpipelineAction done (3 items in outer pipeline)\n");
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// §2  MigrationAction — V1 → V2 인라인 변환
+// §2  MigrationAction — V1 → V2 inline conversion
 // ─────────────────────────────────────────────────────────────────────────────
 
 static Task<void> demo_migration_task() {
-    std::printf("── §2  MigrationAction ──\n");
+    println("── §2  MigrationAction ──");
 
-    // V1 → V2 마이그레이션 액션 생성
+    // Create V1 → V2 migration action
     MigrationAction<EventV1, EventV2> migration(
-        "v1→v2",
+        "v1->v2",
         [](EventV1 old) -> Result<EventV2> {
             return EventV2{old.id, old.data, "migrated"};
         });
 
-    std::printf("  마이그레이션 이름: %s\n",
-                std::string(migration.name()).c_str());
+    println("  migration name: {}",
+                std::string(migration.name()));
 
-    // 단일 아이템 변환 테스트
+    // Single item conversion test
     auto result = co_await migration.process(EventV1{42, "hello"});
     if (result) {
-        std::printf("  V1{id=42, data=hello} → V2{id=%d, payload=%s, source=%s}\n",
-                    result->id, result->payload.c_str(), result->source.c_str());
+        println("  V1{{id=42, data=hello}} -> V2{{id={}, payload={}, source={}}}",
+                    result->id, result->payload, result->source);
     }
 
-    std::printf("\n");
+    println("");
     co_return;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// §3  DlqReprocessor — DLQ 메시지 재처리
+// §3  DlqReprocessor — reprocess DLQ messages
 // ─────────────────────────────────────────────────────────────────────────────
 
 static Task<void> demo_dlq_reprocessor() {
-    std::printf("── §3  DlqReprocessor ──\n");
+    println("── §3  DlqReprocessor ──");
 
-    // DLQ에 V1 이벤트 적재 (실패한 처리 항목 시뮬레이션)
+    // Load V1 events into DLQ (simulating previously failed items)
     DeadLetterQueue<EventV1> dlq(DeadLetterQueue<EventV1>::Config{.max_size = 100});
     auto dummy_err = std::make_error_code(std::errc::io_error);
     dlq.push(EventV1{1, "failed_order_001"}, {}, dummy_err);
     dlq.push(EventV1{2, "failed_order_002"}, {}, dummy_err);
     dlq.push(EventV1{3, "failed_order_003"}, {}, dummy_err);
-    std::printf("  DLQ 크기: %zu\n", dlq.size());
+    println("  DLQ size: {}", dlq.size());
 
-    // 새 파이프라인 (V2 이벤트를 받는 채널 시뮬레이션)
+    // New pipeline (channel that receives V2 events — simulated)
     std::vector<EventV2> migrated_events;
     std::mutex mtx;
 
-    // DlqReprocessor: V1 → V2 마이그레이션 등록
+    // DlqReprocessor: register V1 → V2 migration
     DlqReprocessor<EventV1> reprocessor;
     reprocessor.register_migration<EventV2>(
-        "v1→v2",
+        "v1->v2",
         [](EventV1 old) -> Result<EventV2> {
-            // 변환 로직
+            // Conversion logic
             return EventV2{old.id, old.data, "reprocessed"};
         },
         [&migrated_events, &mtx](EventV2 v2) -> bool {
             std::lock_guard lock(mtx);
-            std::printf("  재처리: V2{id=%d, payload=%s}\n",
-                        v2.id, v2.payload.c_str());
+            println("  reprocessed: V2{{id={}, payload={}}}", v2.id, v2.payload);
             migrated_events.push_back(std::move(v2));
             return true;
         });
 
-    std::printf("  등록된 마이그레이션 수: %zu\n",
+    println("  registered migration count: {}",
                 reprocessor.migration_count());
 
-    // 재처리 실행
+    // Execute reprocessing
     auto summary = co_await reprocessor.reprocess(dlq);
-    std::printf("  재처리 결과: migrated=%zu failed=%zu skipped=%zu\n",
+    println("  reprocess result: migrated={} failed={} skipped={}",
                 summary.migrated, summary.failed, summary.skipped);
-    std::printf("  DLQ 남은 수: %zu\n\n", dlq.size());
+    println("  remaining DLQ size: {}\n", dlq.size());
 
     co_return;
 }
@@ -201,11 +201,11 @@ static Task<void> demo_dlq_reprocessor() {
 // ─────────────────────────────────────────────────────────────────────────────
 
 int main() {
-    std::printf("=== qbuem SubpipelineAction + Migration 예제 ===\n\n");
+    println("=== qbuem SubpipelineAction + Migration Example ===\n");
 
     demo_subpipeline();
 
-    // 마이그레이션 데모는 코루틴이므로 간단한 동기 실행
+    // Migration demos are coroutine-based; run with simple synchronous execution
     Dispatcher disp(1);
     std::jthread t([&] { disp.run(); });
 
@@ -227,6 +227,6 @@ int main() {
     disp.stop();
     t.join();
 
-    std::printf("=== 완료 ===\n");
+    println("=== Done ===");
     return 0;
 }

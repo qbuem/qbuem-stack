@@ -74,7 +74,7 @@ public:
    * @param pipeline_name  Pipeline identifier.
    * @param offset         Cumulative offset of processed items.
    * @param metadata_json  User-defined metadata JSON string.
-   * @returns `Result<void>::ok()` on success, or an error.
+   * @returns `Result<void>{}` on success, or an error.
    */
   virtual Task<Result<void>> save(std::string_view pipeline_name,
                                    uint64_t offset,
@@ -107,7 +107,7 @@ public:
    * @param pipeline_name  Pipeline identifier.
    * @param offset         Cumulative offset of processed items.
    * @param metadata_json  User-defined metadata JSON string.
-   * @returns Always `Result<void>::ok()`.
+   * @returns Always `Result<void>{}`.
    */
   Task<Result<void>> save(std::string_view pipeline_name,
                            uint64_t offset,
@@ -121,7 +121,7 @@ public:
       std::lock_guard lock(mutex_);
       store_[std::string(pipeline_name)] = std::move(data);
     }
-    co_return Result<void>::ok();
+    co_return Result<void>{};
   }
 
   /**
@@ -262,7 +262,7 @@ public:
    * @param item          Item to submit.
    * @param ctx           Item context (default: empty Context).
    * @param metadata_json Checkpoint metadata JSON (default: empty string).
-   * @returns `Result<void>::ok()` or a push/checkpoint error.
+   * @returns `Result<void>{}` or a push/checkpoint error.
    */
   Task<Result<void>> push_counted(T item,
                                    Context ctx = {},
@@ -292,7 +292,7 @@ public:
       }
     }
 
-    co_return Result<void>::ok();
+    co_return Result<void>{};
   }
 
   // ─── Manual checkpoint operations ────────────────────────────────────────
@@ -301,7 +301,7 @@ public:
    * @brief Immediately save the current offset and metadata to the store.
    *
    * @param metadata_json User metadata JSON string to save (default: empty string).
-   * @returns `Result<void>::ok()` on success, or an error.
+   * @returns `Result<void>{}` on success, or an error.
    */
   Task<Result<void>> save_checkpoint(std::string_view metadata_json = "") {
     uint64_t offset = items_processed_.load(std::memory_order_acquire);
@@ -314,7 +314,7 @@ public:
    * The restored offset can be queried via `items_processed()` and used as the
    * starting point for retransmission from an external source (e.g., Kafka, file).
    *
-   * @returns `Result<void>::ok()` on success, or an error if no data exists or loading fails.
+   * @returns `Result<void>{}` on success, or an error if no data exists or loading fails.
    */
   Task<Result<void>> resume_from_checkpoint() {
     auto result = co_await store_->load(name_);
@@ -322,7 +322,7 @@ public:
       co_return unexpected(result.error());
     }
     items_processed_.store(result->offset, std::memory_order_release);
-    co_return Result<void>::ok();
+    co_return Result<void>{};
   }
 
   // ─── Queries ──────────────────────────────────────────────────────────────

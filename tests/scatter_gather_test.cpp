@@ -1,12 +1,12 @@
 /**
  * @file scatter_gather_test.cpp
- * @brief ScatterGatherAction 단위 테스트.
+ * @brief ScatterGatherAction unit tests.
  *
- * 커버리지:
- * - ScatterGatherAction 생성 (scatter/process/gather λ)
- * - try_push: 성공 / 용량 초과 false
- * - input() 채널 접근
- * - max_parallel 설정 반영 (Config::max_parallel)
+ * Coverage:
+ * - ScatterGatherAction construction (scatter/process/gather λ)
+ * - try_push: success / false when over capacity
+ * - input() channel access
+ * - max_parallel config applied (Config::max_parallel)
  * - DebounceAction Config: gap / channel_cap
  * - ThrottleAction Config: rate_per_sec / burst / channel_cap
  */
@@ -20,7 +20,7 @@
 
 using namespace qbuem;
 
-// ─── 헬퍼 ────────────────────────────────────────────────────────────────────
+// ─── Helpers ─────────────────────────────────────────────────────────────────
 
 static std::vector<int> split_ints(int n, int count) {
     std::vector<int> v;
@@ -28,7 +28,7 @@ static std::vector<int> split_ints(int n, int count) {
     return v;
 }
 
-// ─── ScatterGatherAction 생성 검증 ────────────────────────────────────────────
+// ─── ScatterGatherAction construction validation ──────────────────────────────
 
 TEST(ScatterGatherAction, ConstructionDoesNotThrow) {
     // EXPECT_NO_THROW doesn't work with commas in template args; just construct directly
@@ -89,7 +89,7 @@ TEST(ScatterGatherAction, InputChannelSizeApproxMatchesPushCount) {
     EXPECT_EQ(action.input()->size_approx(), 5u);
 }
 
-// ─── Config 필드 검증 ─────────────────────────────────────────────────────────
+// ─── Config field validation ──────────────────────────────────────────────────
 
 TEST(ScatterGatherAction, DefaultMaxParallelIs8) {
     ScatterGatherAction<int, int, int, int>::Config cfg;
@@ -111,10 +111,10 @@ TEST(ScatterGatherAction, CustomConfig) {
     EXPECT_EQ(cfg.channel_cap, 64u);
 }
 
-// ─── ScatterGather 함수 의미론 검증 ──────────────────────────────────────────
+// ─── ScatterGather function semantics validation ──────────────────────────────
 
 TEST(ScatterGatherAction, ScatterFnCanReturnEmptyVector) {
-    // scatter → empty → gather 호출, 빈 SubOut 전달
+    // scatter → empty → gather called with empty SubOut
     std::vector<int> gathered;
     ScatterGatherAction<int, int, int, int> action(
         [](int) -> std::vector<int> { return {}; },  // empty scatter
@@ -125,7 +125,7 @@ TEST(ScatterGatherAction, ScatterFnCanReturnEmptyVector) {
         },
         {.max_parallel = 4, .channel_cap = 4}
     );
-    // Reactor 없이 worker_loop를 직접 실행하지 않으므로 채널 레벨만 검증
+    // Not running worker_loop directly without a Reactor, so verify at channel level only
     EXPECT_TRUE(action.try_push(42));
 }
 

@@ -6,10 +6,10 @@ cmake_minimum_required(VERSION 3.20)
 project(qbuem-stack
     VERSION 1.0.0
     LANGUAGES CXX
-    DESCRIPTION "qbuem-stack: zero-dependency C++20 async server framework (HTTP/1.1, HTTP/2, WebSocket, gRPC, Pipeline)"
+    DESCRIPTION "qbuem-stack: zero-dependency C++23 async server framework (HTTP/1.1, HTTP/2, WebSocket, gRPC, Pipeline)"
 )
 
-set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
@@ -34,8 +34,8 @@ option(QBUEM_INSTALL        "Generate install rules" ON)
 # Usage:
 #   cmake -DQBUEM_XDP=ON [-DQBUEM_XDP_LIBBPF=ON] ..
 #
-# QBUEM_XDP=ON        : 헤더/타겟 노출, QBUEM_HAS_XDP 정의
-# QBUEM_XDP_LIBBPF=ON : libbpf 연동 (xsk_umem__create 등 실제 구현 활성화)
+# QBUEM_XDP=ON        : expose headers/targets, define QBUEM_HAS_XDP
+# QBUEM_XDP_LIBBPF=ON : link libbpf (enables real implementation such as xsk_umem__create)
 option(QBUEM_XDP        "Enable AF_XDP support (Linux 4.18+)"           OFF)
 option(QBUEM_XDP_LIBBPF "Link libbpf for AF_XDP (requires QBUEM_XDP=ON)" OFF)
 
@@ -70,7 +70,7 @@ endif()
 # cmake -DQBUEM_SANITIZE=asan   (ASan + UBSan + LSan)
 # cmake -DQBUEM_SANITIZE=tsan   (TSan)
 # cmake -DQBUEM_SANITIZE=msan   (MSan, clang only)
-# ASan 과 TSan 은 동시 사용 불가.
+# ASan and TSan cannot be used simultaneously.
 set(QBUEM_SANITIZE "" CACHE STRING "Sanitizer preset: asan | tsan | msan")
 
 if(QBUEM_SANITIZE STREQUAL "asan")
@@ -143,20 +143,20 @@ set(QBUEM_INSTALL_INCLUDE $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
 add_library(qbuem_result INTERFACE)
 add_library(qbuem-stack::result ALIAS qbuem_result)
 target_include_directories(qbuem_result INTERFACE ${QBUEM_INCLUDE_DIR} ${QBUEM_INSTALL_INCLUDE})
-target_compile_features(qbuem_result INTERFACE cxx_std_20)
+target_compile_features(qbuem_result INTERFACE cxx_std_23)
 
 # qbuem::arena — Arena, FixedPoolResource, MmapArena, HugePages
 add_library(qbuem_arena INTERFACE)
 add_library(qbuem-stack::arena ALIAS qbuem_arena)
 target_include_directories(qbuem_arena INTERFACE ${QBUEM_INCLUDE_DIR} ${QBUEM_INSTALL_INCLUDE})
-target_compile_features(qbuem_arena INTERFACE cxx_std_20)
+target_compile_features(qbuem_arena INTERFACE cxx_std_23)
 target_link_libraries(qbuem_arena INTERFACE qbuem_result)
 
 # qbuem::crypto — CSPRNG, constant_time_equal, csrf_token
 add_library(qbuem_crypto INTERFACE)
 add_library(qbuem-stack::crypto ALIAS qbuem_crypto)
 target_include_directories(qbuem_crypto INTERFACE ${QBUEM_INCLUDE_DIR} ${QBUEM_INSTALL_INCLUDE})
-target_compile_features(qbuem_crypto INTERFACE cxx_std_20)
+target_compile_features(qbuem_crypto INTERFACE cxx_std_23)
 target_link_libraries(qbuem_crypto INTERFACE qbuem_result)
 
 # ============================================================================
@@ -167,7 +167,7 @@ target_link_libraries(qbuem_crypto INTERFACE qbuem_result)
 add_library(qbuem_task INTERFACE)
 add_library(qbuem-stack::task ALIAS qbuem_task)
 target_include_directories(qbuem_task INTERFACE ${QBUEM_INCLUDE_DIR} ${QBUEM_INSTALL_INCLUDE})
-target_compile_features(qbuem_task INTERFACE cxx_std_20)
+target_compile_features(qbuem_task INTERFACE cxx_std_23)
 target_link_libraries(qbuem_task INTERFACE qbuem_result)
 
 # qbuem::reactor — Reactor interface + TimerWheel + Dispatcher (static lib)
@@ -196,7 +196,7 @@ add_library(qbuem_reactor STATIC ${CORE_SOURCES})
 add_library(qbuem-stack::reactor ALIAS qbuem_reactor)
 target_include_directories(qbuem_reactor
     PUBLIC ${QBUEM_INCLUDE_DIR} ${QBUEM_INSTALL_INCLUDE})
-target_compile_features(qbuem_reactor PUBLIC cxx_std_20)
+target_compile_features(qbuem_reactor PUBLIC cxx_std_23)
 target_link_libraries(qbuem_reactor PUBLIC qbuem_task qbuem_arena qbuem_crypto)
 qbuem_compile_options(qbuem_reactor)
 
@@ -222,22 +222,36 @@ add_library(qbuem-stack::iouring ALIAS qbuem_reactor)
 add_library(qbuem_buf INTERFACE)
 add_library(qbuem-stack::buf ALIAS qbuem_buf)
 target_include_directories(qbuem_buf INTERFACE ${QBUEM_INCLUDE_DIR} ${QBUEM_INSTALL_INCLUDE})
-target_compile_features(qbuem_buf INTERFACE cxx_std_20)
+target_compile_features(qbuem_buf INTERFACE cxx_std_23)
 target_link_libraries(qbuem_buf INTERFACE qbuem_result)
 
 # qbuem::net — SocketAddr, TcpListener, TcpStream, UdpSocket, UnixSocket
 add_library(qbuem_net INTERFACE)
 add_library(qbuem-stack::net ALIAS qbuem_net)
 target_include_directories(qbuem_net INTERFACE ${QBUEM_INCLUDE_DIR} ${QBUEM_INSTALL_INCLUDE})
-target_compile_features(qbuem_net INTERFACE cxx_std_20)
+target_compile_features(qbuem_net INTERFACE cxx_std_23)
 target_link_libraries(qbuem_net INTERFACE qbuem_reactor qbuem_buf)
 
-# qbuem::io — AsyncFile, ZeroCopy, SocketOpts, kTLS, io_uring ops
+# qbuem::io — AsyncFile, DirectFile, ZeroCopy, SocketOpts, kTLS, io_uring ops
 add_library(qbuem_io INTERFACE)
 add_library(qbuem-stack::io ALIAS qbuem_io)
 target_include_directories(qbuem_io INTERFACE ${QBUEM_INCLUDE_DIR} ${QBUEM_INSTALL_INCLUDE})
-target_compile_features(qbuem_io INTERFACE cxx_std_20)
+target_compile_features(qbuem_io INTERFACE cxx_std_23)
 target_link_libraries(qbuem_io INTERFACE qbuem_reactor qbuem_buf qbuem_net)
+
+# qbuem::pcie — PCIeDevice (VFIO), MSIXReactor, DmaBuffer
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    add_library(qbuem_pcie STATIC src/pcie/pcie_device.cpp)
+    add_library(qbuem-stack::pcie ALIAS qbuem_pcie)
+    target_include_directories(qbuem_pcie PUBLIC ${QBUEM_INCLUDE_DIR} ${QBUEM_INSTALL_INCLUDE})
+    target_compile_features(qbuem_pcie PUBLIC cxx_std_23)
+    target_link_libraries(qbuem_pcie PUBLIC qbuem_result qbuem_reactor)
+    qbuem_compile_options(qbuem_pcie)
+else()
+    add_library(qbuem_pcie INTERFACE)
+    add_library(qbuem-stack::pcie ALIAS qbuem_pcie)
+    target_include_directories(qbuem_pcie INTERFACE ${QBUEM_INCLUDE_DIR} ${QBUEM_INSTALL_INCLUDE})
+endif()
 
 # ============================================================================
 # ── Level 4: Transport + Codec + Server (header-only) ───────────────────────
@@ -247,21 +261,21 @@ target_link_libraries(qbuem_io INTERFACE qbuem_reactor qbuem_buf qbuem_net)
 add_library(qbuem_transport INTERFACE)
 add_library(qbuem-stack::transport ALIAS qbuem_transport)
 target_include_directories(qbuem_transport INTERFACE ${QBUEM_INCLUDE_DIR} ${QBUEM_INSTALL_INCLUDE})
-target_compile_features(qbuem_transport INTERFACE cxx_std_20)
+target_compile_features(qbuem_transport INTERFACE cxx_std_23)
 target_link_libraries(qbuem_transport INTERFACE qbuem_net qbuem_task qbuem_result)
 
 # qbuem::codec — IFrameCodec, LengthPrefixCodec, LineCodec, Http1Codec
 add_library(qbuem_codec INTERFACE)
 add_library(qbuem-stack::codec ALIAS qbuem_codec)
 target_include_directories(qbuem_codec INTERFACE ${QBUEM_INCLUDE_DIR} ${QBUEM_INSTALL_INCLUDE})
-target_compile_features(qbuem_codec INTERFACE cxx_std_20)
+target_compile_features(qbuem_codec INTERFACE cxx_std_23)
 target_link_libraries(qbuem_codec INTERFACE qbuem_buf qbuem_result)
 
 # qbuem::server-base — ConnectionHandler base, connection lifecycle
 add_library(qbuem_server_base INTERFACE)
 add_library(qbuem-stack::server-base ALIAS qbuem_server_base)
 target_include_directories(qbuem_server_base INTERFACE ${QBUEM_INCLUDE_DIR} ${QBUEM_INSTALL_INCLUDE})
-target_compile_features(qbuem_server_base INTERFACE cxx_std_20)
+target_compile_features(qbuem_server_base INTERFACE cxx_std_23)
 target_link_libraries(qbuem_server_base INTERFACE
     qbuem_net qbuem_transport qbuem_codec qbuem_reactor qbuem_arena)
 
@@ -284,7 +298,7 @@ qbuem_compile_options(qbuem_http)
 add_library(qbuem_http_server INTERFACE)
 add_library(qbuem-stack::http-server ALIAS qbuem_http_server)
 target_include_directories(qbuem_http_server INTERFACE ${QBUEM_INCLUDE_DIR} ${QBUEM_INSTALL_INCLUDE})
-target_compile_features(qbuem_http_server INTERFACE cxx_std_20)
+target_compile_features(qbuem_http_server INTERFACE cxx_std_23)
 target_link_libraries(qbuem_http_server INTERFACE
     qbuem_http qbuem_server_base qbuem_transport qbuem_arena)
 
@@ -296,21 +310,21 @@ target_link_libraries(qbuem_http_server INTERFACE
 add_library(qbuem_context INTERFACE)
 add_library(qbuem-stack::context ALIAS qbuem_context)
 target_include_directories(qbuem_context INTERFACE ${QBUEM_INCLUDE_DIR} ${QBUEM_INSTALL_INCLUDE})
-target_compile_features(qbuem_context INTERFACE cxx_std_20)
+target_compile_features(qbuem_context INTERFACE cxx_std_23)
 target_link_libraries(qbuem_context INTERFACE qbuem_task qbuem_result)
 
 # qbuem::channel — AsyncChannel<T> (MPMC), SpscChannel, PriorityChannel, Stream<T>, TaskGroup
 add_library(qbuem_channel INTERFACE)
 add_library(qbuem-stack::channel ALIAS qbuem_channel)
 target_include_directories(qbuem_channel INTERFACE ${QBUEM_INCLUDE_DIR} ${QBUEM_INSTALL_INCLUDE})
-target_compile_features(qbuem_channel INTERFACE cxx_std_20)
+target_compile_features(qbuem_channel INTERFACE cxx_std_23)
 target_link_libraries(qbuem_channel INTERFACE qbuem_task qbuem_reactor qbuem_context)
 
 # qbuem::pipeline — Action<In,Out>, StaticPipeline, DynamicPipeline, PipelineBuilder
 add_library(qbuem_pipeline INTERFACE)
 add_library(qbuem-stack::pipeline ALIAS qbuem_pipeline)
 target_include_directories(qbuem_pipeline INTERFACE ${QBUEM_INCLUDE_DIR} ${QBUEM_INSTALL_INCLUDE})
-target_compile_features(qbuem_pipeline INTERFACE cxx_std_20)
+target_compile_features(qbuem_pipeline INTERFACE cxx_std_23)
 target_link_libraries(qbuem_pipeline INTERFACE qbuem_channel qbuem_context qbuem_reactor)
 
 # ============================================================================
@@ -321,7 +335,7 @@ target_link_libraries(qbuem_pipeline INTERFACE qbuem_channel qbuem_context qbuem
 add_library(qbuem_pipeline_graph INTERFACE)
 add_library(qbuem-stack::pipeline-graph ALIAS qbuem_pipeline_graph)
 target_include_directories(qbuem_pipeline_graph INTERFACE ${QBUEM_INCLUDE_DIR} ${QBUEM_INSTALL_INCLUDE})
-target_compile_features(qbuem_pipeline_graph INTERFACE cxx_std_20)
+target_compile_features(qbuem_pipeline_graph INTERFACE cxx_std_23)
 target_link_libraries(qbuem_pipeline_graph INTERFACE qbuem_pipeline)
 
 # qbuem::resilience — RetryPolicy, CircuitBreaker, DeadLetterQueue,
@@ -330,21 +344,21 @@ target_link_libraries(qbuem_pipeline_graph INTERFACE qbuem_pipeline)
 add_library(qbuem_resilience INTERFACE)
 add_library(qbuem-stack::resilience ALIAS qbuem_resilience)
 target_include_directories(qbuem_resilience INTERFACE ${QBUEM_INCLUDE_DIR} ${QBUEM_INSTALL_INCLUDE})
-target_compile_features(qbuem_resilience INTERFACE cxx_std_20)
+target_compile_features(qbuem_resilience INTERFACE cxx_std_23)
 target_link_libraries(qbuem_resilience INTERFACE qbuem_pipeline qbuem_context)
 
 # qbuem::tracing — W3C TraceContext, Span, Sampler, SpanExporter, PipelineTracer
 add_library(qbuem_tracing INTERFACE)
 add_library(qbuem-stack::tracing ALIAS qbuem_tracing)
 target_include_directories(qbuem_tracing INTERFACE ${QBUEM_INCLUDE_DIR} ${QBUEM_INSTALL_INCLUDE})
-target_compile_features(qbuem_tracing INTERFACE cxx_std_20)
+target_compile_features(qbuem_tracing INTERFACE cxx_std_23)
 target_link_libraries(qbuem_tracing INTERFACE qbuem_context)
 
 # qbuem::metrics — ActionMetrics, PipelineMetrics, PipelineObserver
 add_library(qbuem_metrics INTERFACE)
 add_library(qbuem-stack::metrics ALIAS qbuem_metrics)
 target_include_directories(qbuem_metrics INTERFACE ${QBUEM_INCLUDE_DIR} ${QBUEM_INSTALL_INCLUDE})
-target_compile_features(qbuem_metrics INTERFACE cxx_std_20)
+target_compile_features(qbuem_metrics INTERFACE cxx_std_23)
 target_link_libraries(qbuem_metrics INTERFACE qbuem_pipeline qbuem_context)
 
 # ============================================================================
@@ -355,21 +369,21 @@ target_link_libraries(qbuem_metrics INTERFACE qbuem_pipeline qbuem_context)
 add_library(qbuem_ws INTERFACE)
 add_library(qbuem-stack::ws ALIAS qbuem_ws)
 target_include_directories(qbuem_ws INTERFACE ${QBUEM_INCLUDE_DIR} ${QBUEM_INSTALL_INCLUDE})
-target_compile_features(qbuem_ws INTERFACE cxx_std_20)
+target_compile_features(qbuem_ws INTERFACE cxx_std_23)
 target_link_libraries(qbuem_ws INTERFACE qbuem_http_server qbuem_server_base qbuem_buf)
 
 # qbuem::http2 — Http2Handler (HPACK encoder/decoder, stream multiplexing)
 add_library(qbuem_http2 INTERFACE)
 add_library(qbuem-stack::http2 ALIAS qbuem_http2)
 target_include_directories(qbuem_http2 INTERFACE ${QBUEM_INCLUDE_DIR} ${QBUEM_INSTALL_INCLUDE})
-target_compile_features(qbuem_http2 INTERFACE cxx_std_20)
+target_compile_features(qbuem_http2 INTERFACE cxx_std_23)
 target_link_libraries(qbuem_http2 INTERFACE qbuem_http_server qbuem_server_base qbuem_buf qbuem_arena)
 
 # qbuem::grpc — GrpcHandler<Req,Res> (Unary/Server/Client/Bidi streaming)
 add_library(qbuem_grpc INTERFACE)
 add_library(qbuem-stack::grpc ALIAS qbuem_grpc)
 target_include_directories(qbuem_grpc INTERFACE ${QBUEM_INCLUDE_DIR} ${QBUEM_INSTALL_INCLUDE})
-target_compile_features(qbuem_grpc INTERFACE cxx_std_20)
+target_compile_features(qbuem_grpc INTERFACE cxx_std_23)
 target_link_libraries(qbuem_grpc INTERFACE qbuem_http2 qbuem_pipeline qbuem_channel)
 
 # ============================================================================
@@ -380,7 +394,7 @@ target_link_libraries(qbuem_grpc INTERFACE qbuem_http2 qbuem_pipeline qbuem_chan
 add_library(qbuem_xdp INTERFACE)
 add_library(qbuem-stack::xdp ALIAS qbuem_xdp)
 target_include_directories(qbuem_xdp INTERFACE ${QBUEM_INCLUDE_DIR} ${QBUEM_INSTALL_INCLUDE})
-target_compile_features(qbuem_xdp INTERFACE cxx_std_20)
+target_compile_features(qbuem_xdp INTERFACE cxx_std_23)
 target_link_libraries(qbuem_xdp INTERFACE qbuem_result qbuem_arena)
 
 if(QBUEM_XDP)
@@ -447,18 +461,19 @@ target_link_libraries(qbuem PUBLIC
     qbuem_result
 )
 # SHMChannel uses shm_open/shm_unlink — link librt on Linux (glibc < 2.17 requires it)
+# qbuem_pcie provides VFIO-based PCIe user-space control on Linux.
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-    target_link_libraries(qbuem PUBLIC rt)
+    target_link_libraries(qbuem PUBLIC rt qbuem_pcie)
 endif()
 qbuem_compile_options(qbuem)
 
 # ============================================================================
 # ── Backward-compatible alias targets ────────────────────────────────────────
-# 기존 CMake 코드를 변경하지 않아도 동작하도록 alias 유지.
+# Maintain aliases so that existing CMake consumers need no changes.
 #
 #   qbuem-stack::core    →  qbuem-stack::reactor  (IO core layer)
-#   qbuem-stack::stack   →  qbuem-stack::qbuem    (전체 스택)
-#   qbuem-stack::net     (이미 qbuem_net ALIAS로 등록됨)
+#   qbuem-stack::stack   →  qbuem-stack::qbuem    (full stack)
+#   qbuem-stack::net     (already registered as qbuem_net ALIAS)
 # ============================================================================
 add_library(qbuem_core_compat INTERFACE)
 target_link_libraries(qbuem_core_compat INTERFACE qbuem_reactor)
@@ -498,6 +513,7 @@ if(QBUEM_INSTALL)
         qbuem_http2
         qbuem_grpc
         qbuem_xdp
+        qbuem_pcie
         qbuem
         qbuem_core_compat
         qbuem_stack_compat
