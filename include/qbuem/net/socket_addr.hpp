@@ -25,6 +25,7 @@
 
 #include <cstdint>
 #include <cstring>
+#include <format>
 
 namespace qbuem {
 
@@ -214,19 +215,26 @@ struct SocketAddr {
    * @returns Number of characters written (excluding null terminator). -1 if buffer too small.
    */
   int to_chars(char *buf, size_t n) const noexcept {
+    if (n == 0) return -1;
     switch (family_) {
     case Family::IPv4: {
       char ip[INET_ADDRSTRLEN];
       inet_ntop(AF_INET, &addr_.ipv4_, ip, sizeof(ip));
-      return __builtin_snprintf(buf, n, "%s:%u", ip, static_cast<unsigned>(port_));
+      auto r = std::format_to_n(buf, n - 1, "{}:{}", ip, static_cast<unsigned>(port_));
+      *r.out = '\0';
+      return static_cast<int>(r.out - buf);
     }
     case Family::IPv6: {
       char ip[INET6_ADDRSTRLEN];
       inet_ntop(AF_INET6, &addr_.ipv6_, ip, sizeof(ip));
-      return __builtin_snprintf(buf, n, "[%s]:%u", ip, static_cast<unsigned>(port_));
+      auto r = std::format_to_n(buf, n - 1, "[{}]:{}", ip, static_cast<unsigned>(port_));
+      *r.out = '\0';
+      return static_cast<int>(r.out - buf);
     }
     case Family::Unix: {
-      return __builtin_snprintf(buf, n, "unix:%s", addr_.unix_);
+      auto r = std::format_to_n(buf, n - 1, "unix:{}", addr_.unix_);
+      *r.out = '\0';
+      return static_cast<int>(r.out - buf);
     }
     }
     return -1;
