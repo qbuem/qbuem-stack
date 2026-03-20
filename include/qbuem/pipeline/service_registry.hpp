@@ -36,6 +36,7 @@
  * @{
  */
 
+#include <exception>     // std::terminate
 #include <functional>
 #include <memory>
 #include <mutex>

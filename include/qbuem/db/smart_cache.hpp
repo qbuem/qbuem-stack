@@ -245,7 +245,13 @@ public:
                 if (gen1 & 1) {
                     // Write in progress — spin briefly
                     stats_.seqlock_retries.fetch_add(1, std::memory_order_relaxed);
-                    for (int i = 0; i < 16; ++i) __builtin_ia32_pause();
+                    for (int i = 0; i < 16; ++i) {
+#if defined(__x86_64__) || defined(__i386__)
+                        __builtin_ia32_pause();
+#elif defined(__aarch64__) || defined(__ARM_ARCH)
+                        __asm__ volatile("yield" ::: "memory");
+#endif
+                    }
                     continue;
                 }
 

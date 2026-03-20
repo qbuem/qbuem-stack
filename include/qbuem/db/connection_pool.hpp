@@ -202,7 +202,7 @@ private:
 
     // Waiter list
     std::mutex            waiter_mutex_;
-    Waiter*               waiter_head_{nullptr};
+    [[maybe_unused]] Waiter* waiter_head_{nullptr};
     std::atomic<uint32_t> waiter_count_{0};
 
     std::atomic<bool>     draining_{false};

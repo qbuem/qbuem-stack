@@ -31,9 +31,11 @@
 #include <string_view>
 
 #ifdef __linux__
-#  include <sys/random.h>  // getrandom
+#  include <cerrno>         // errno, EINTR
+#  include <sys/syscall.h>  // SYS_getrandom — available on all Linux ≥ 3.17
+#  include <unistd.h>       // syscall()
 #else
-#  include <cstdlib>       // arc4random_buf
+#  include <cstdlib>        // arc4random_buf
 #endif
 
 // RDRAND / RDSEED (x86-64, requires -mrdrnd flag or __RDRND__ defined)
@@ -48,6 +50,14 @@
 #if defined(__ARM_NEON)
 #  include <arm_neon.h>
 #  define QBUEM_CRYPTO_NEON 1
+#endif
+
+// x86-64 SIMD capability defines for constant-time comparison
+// (<immintrin.h> already pulled in by the RDRAND guard above on x86)
+#if defined(__AVX2__)
+#  define QBUEM_CRYPTO_AVX2 1
+#elif defined(__SSE2__)
+#  define QBUEM_CRYPTO_SSE2 1
 #endif
 
 namespace qbuem {
@@ -85,25 +95,60 @@ namespace qbuem {
   const auto*  pa = reinterpret_cast<const uint8_t*>(a.data());
   const auto*  pb = reinterpret_cast<const uint8_t*>(b.data());
 
-#if defined(QBUEM_CRYPTO_NEON)
+#if defined(QBUEM_CRYPTO_AVX2)
+  // AVX2: 32 bytes/iteration, branchless OR-accumulate.
+  // Fold 256→128 bits, then 128→64→8 branchless (mirrors vmaxvq_u8 pattern).
+  __m256i acc256 = _mm256_setzero_si256();
+  size_t i = 0;
+  for (; i + 32 <= n; i += 32) {
+    __m256i va = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(pa + i));
+    __m256i vb = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(pb + i));
+    acc256 = _mm256_or_si256(acc256, _mm256_xor_si256(va, vb));
+  }
+  // Fold 256→128→64→8 bits
+  __m128i lo128  = _mm256_castsi256_si128(acc256);
+  __m128i hi128  = _mm256_extracti128_si256(acc256, 1);
+  __m128i acc128 = _mm_or_si128(lo128, hi128);
+  uint64_t v0    = static_cast<uint64_t>(_mm_cvtsi128_si64(acc128));
+  uint64_t v1    = static_cast<uint64_t>(_mm_cvtsi128_si64(_mm_srli_si128(acc128, 8)));
+  uint64_t fold  = v0 | v1;
+  fold |= fold >> 32; fold |= fold >> 16; fold |= fold >> 8;
+  diff |= static_cast<uint8_t>(fold & 0xFF);
+  for (; i < n; ++i) diff |= pa[i] ^ pb[i];
+
+#elif defined(QBUEM_CRYPTO_SSE2)
+  // SSE2: 16 bytes/iteration, branchless OR-accumulate.
+  __m128i acc = _mm_setzero_si128();
+  size_t i = 0;
+  for (; i + 16 <= n; i += 16) {
+    __m128i va = _mm_loadu_si128(reinterpret_cast<const __m128i*>(pa + i));
+    __m128i vb = _mm_loadu_si128(reinterpret_cast<const __m128i*>(pb + i));
+    acc = _mm_or_si128(acc, _mm_xor_si128(va, vb));
+  }
+  // Fold 128→64→8 bits (pure SSE2, no SSE4.1 dependency)
+  uint64_t v0   = static_cast<uint64_t>(_mm_cvtsi128_si64(acc));
+  uint64_t v1   = static_cast<uint64_t>(_mm_cvtsi128_si64(_mm_srli_si128(acc, 8)));
+  uint64_t fold = v0 | v1;
+  fold |= fold >> 32; fold |= fold >> 16; fold |= fold >> 8;
+  diff |= static_cast<uint8_t>(fold & 0xFF);
+  for (; i < n; ++i) diff |= pa[i] ^ pb[i];
+
+#elif defined(QBUEM_CRYPTO_NEON)
   // AArch64 NEON path: process 16 bytes per iteration.
   // vorrq_u8 accumulates all XOR differences; vmaxvq_u8 collapses to scalar.
-  // The volatile write at the end prevents optimisation across the barrier.
   uint8x16_t acc = vdupq_n_u8(0);
   size_t i = 0;
   for (; i + 16 <= n; i += 16) {
     const uint8x16_t va = vld1q_u8(pa + i);
     const uint8x16_t vb = vld1q_u8(pb + i);
-    acc = vorrq_u8(acc, veorq_u8(va, vb)); // OR-accumulate all XOR differences
+    acc = vorrq_u8(acc, veorq_u8(va, vb));
   }
   // Collapse 16-byte accumulator to a single byte (UMAXV on AArch64)
   diff |= vmaxvq_u8(acc);
-  // Scalar tail
-  for (; i < n; ++i)
-    diff |= pa[i] ^ pb[i];
+  for (; i < n; ++i) diff |= pa[i] ^ pb[i];
+
 #else
-  for (size_t i = 0; i < n; ++i)
-    diff |= pa[i] ^ pb[i];
+  for (size_t i = 0; i < n; ++i) diff |= pa[i] ^ pb[i];
 #endif
 
   return diff == 0;
@@ -125,7 +170,7 @@ inline void random_fill(void *buf, size_t len) {
   size_t done = 0;
   auto *ptr = static_cast<uint8_t *>(buf);
   while (done < len) {
-    ssize_t n = ::getrandom(ptr + done, len - done, 0);
+    ssize_t n = static_cast<ssize_t>(syscall(SYS_getrandom, ptr + done, len - done, 0));
     if (n < 0) {
       if (errno == EINTR) continue;
       throw std::runtime_error("getrandom failed");

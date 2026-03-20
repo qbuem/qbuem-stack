@@ -348,7 +348,7 @@ private:
     }
 
     LifecycleTracer<>*          tracer_;
-    CliServer*                  cli_;
+    [[maybe_unused]] CliServer* cli_;
     uint16_t                    port_;
     JourneyCollector            collector_;
     std::atomic<uint32_t>       active_journeys_{0};

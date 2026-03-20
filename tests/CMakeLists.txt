@@ -2,6 +2,15 @@
 # qbuem-stack unit tests
 # ============================================================================
 
+# ARM64 Bionic requires TLS segment alignment ≥ 64 bytes (PT_TLS p_align).
+# tls_align_fix.cpp provides an alignas(64) thread_local that satisfies this.
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64")
+  add_library(qbuem_tls_fix OBJECT ${CMAKE_CURRENT_SOURCE_DIR}/tls_align_fix.cpp)
+  set(QBUEM_TLS_FIX $<TARGET_OBJECTS:qbuem_tls_fix>)
+else()
+  set(QBUEM_TLS_FIX "")
+endif()
+
 # ── Core + HTTP + Pipeline tests ─────────────────────────────────────────────
 add_executable(qbuem_tests
     # Layer 0-1: Core IO
@@ -14,6 +23,7 @@ add_executable(qbuem_tests
     pipeline_integration_test.cpp
     arena_channel_test.cpp
     coroutine_context_test.cpp
+    ${QBUEM_TLS_FIX}
 )
 target_link_libraries(qbuem_tests
     PRIVATE
@@ -22,10 +32,11 @@ target_link_libraries(qbuem_tests
 )
 
 # ── Pipeline extensions + Resilience tests ───────────────────────────────────
-# 별도 실행 파일: pipeline_integration_test.cpp과 test suite 이름 충돌 방지
+# Separate executable to avoid test suite name collision with pipeline_integration_test.cpp
 add_executable(qbuem_ext_tests
     static_pipeline_integration_test.cpp
     resilience_test.cpp
+    ${QBUEM_TLS_FIX}
 )
 target_link_libraries(qbuem_ext_tests
     PRIVATE
@@ -37,6 +48,7 @@ target_link_libraries(qbuem_ext_tests
 add_executable(qbuem_v14_tests
     db_value_test.cpp
     shm_layout_test.cpp
+    ${QBUEM_TLS_FIX}
 )
 target_link_libraries(qbuem_v14_tests
     PRIVATE
@@ -47,6 +59,7 @@ target_link_libraries(qbuem_v14_tests
 # ── v1.5.0: Security & TLS tests ─────────────────────────────────────────────
 add_executable(qbuem_v15_tests
     security_v15_test.cpp
+    ${QBUEM_TLS_FIX}
 )
 target_link_libraries(qbuem_v15_tests
     PRIVATE
@@ -57,6 +70,7 @@ target_link_libraries(qbuem_v15_tests
 # ── v1.6.0: PCIe/VFIO + MSI-X + UDS Advanced tests ──────────────────────────
 add_executable(qbuem_v16_tests
     pcie_layout_test.cpp
+    ${QBUEM_TLS_FIX}
 )
 target_link_libraries(qbuem_v16_tests
     PRIVATE
@@ -67,6 +81,7 @@ target_link_libraries(qbuem_v16_tests
 # ── v1.7.0: RDMA + eBPF + NVMe IO tests ──────────────────────────────────────
 add_executable(qbuem_v17_tests
     spdk_layout_test.cpp
+    ${QBUEM_TLS_FIX}
 )
 target_link_libraries(qbuem_v17_tests
     PRIVATE
@@ -74,9 +89,10 @@ target_link_libraries(qbuem_v17_tests
     GTest::gtest_main
 )
 
-# ── 고도화: LockFreeConnectionPool + FutexSync + JwtAuthAction tests ──────────
+# ── LockFreeConnectionPool + FutexSync + JwtAuthAction tests ──────────────────
 add_executable(qbuem_enhancement_tests
     enhancement_test.cpp
+    ${QBUEM_TLS_FIX}
 )
 target_link_libraries(qbuem_enhancement_tests
     PRIVATE
@@ -84,9 +100,10 @@ target_link_libraries(qbuem_enhancement_tests
     GTest::gtest_main
 )
 
-# ── Pipeline Guide: 패턴 & 레시피 통합 테스트 ────────────────────────────────
+# ── Pipeline Guide: pattern & recipe integration tests ───────────────────────
 add_executable(qbuem_pipeline_guide_tests
     pipeline_guide_test.cpp
+    ${QBUEM_TLS_FIX}
 )
 target_link_libraries(qbuem_pipeline_guide_tests
     PRIVATE
@@ -99,6 +116,7 @@ add_executable(qbuem_util_tests
     url_test.cpp
     codec_test.cpp
     io_buf_test.cpp
+    ${QBUEM_TLS_FIX}
 )
 target_link_libraries(qbuem_util_tests
     PRIVATE
@@ -113,6 +131,7 @@ add_executable(qbuem_infra_tests
     arena_test.cpp
     async_logger_test.cpp
     socket_addr_test.cpp
+    ${QBUEM_TLS_FIX}
 )
 target_link_libraries(qbuem_infra_tests
     PRIVATE
@@ -123,6 +142,7 @@ target_link_libraries(qbuem_infra_tests
 # ── HTTP Middleware tests ──────────────────────────────────────────────────────
 add_executable(qbuem_middleware_tests
     http_middleware_test.cpp
+    ${QBUEM_TLS_FIX}
 )
 target_link_libraries(qbuem_middleware_tests
     PRIVATE
@@ -133,6 +153,7 @@ target_link_libraries(qbuem_middleware_tests
 # ── Advanced Pipeline: Observability / Health / Saga / Checkpoint / Idempotency
 add_executable(qbuem_pipeline_advanced_tests
     pipeline_advanced_test.cpp
+    ${QBUEM_TLS_FIX}
 )
 target_link_libraries(qbuem_pipeline_advanced_tests
     PRIVATE
@@ -140,9 +161,10 @@ target_link_libraries(qbuem_pipeline_advanced_tests
     GTest::gtest_main
 )
 
-# ── SHMChannel + SHMBus 기능 테스트 ──────────────────────────────────────────
+# ── SHMChannel + SHMBus functional tests ──────────────────────────────────────
 add_executable(qbuem_shm_tests
     shm_channel_test.cpp
+    ${QBUEM_TLS_FIX}
 )
 target_link_libraries(qbuem_shm_tests
     PRIVATE
@@ -154,6 +176,7 @@ target_link_libraries(qbuem_shm_tests
 add_executable(qbuem_canary_scatter_tests
     canary_test.cpp
     scatter_gather_test.cpp
+    ${QBUEM_TLS_FIX}
 )
 target_link_libraries(qbuem_canary_scatter_tests
     PRIVATE
@@ -161,9 +184,10 @@ target_link_libraries(qbuem_canary_scatter_tests
     GTest::gtest_main
 )
 
-# ── Pipeline ↔ MessageBus IPC 연계 테스트 (with_source/with_sink/Source/Sink) ──
+# ── Pipeline <-> MessageBus IPC integration tests (with_source/with_sink) ─────
 add_executable(qbuem_pipeline_ipc_tests
     pipeline_ipc_test.cpp
+    ${QBUEM_TLS_FIX}
 )
 target_link_libraries(qbuem_pipeline_ipc_tests
     PRIVATE
@@ -183,22 +207,37 @@ target_link_libraries(qbuem_kqueue_tests
 )
 endif()
 
-include(GoogleTest)
-gtest_discover_tests(qbuem_shm_tests)
-gtest_discover_tests(qbuem_canary_scatter_tests)
-gtest_discover_tests(qbuem_tests)
-gtest_discover_tests(qbuem_ext_tests)
-gtest_discover_tests(qbuem_v14_tests)
-gtest_discover_tests(qbuem_v15_tests)
-gtest_discover_tests(qbuem_v16_tests)
-gtest_discover_tests(qbuem_v17_tests)
-gtest_discover_tests(qbuem_enhancement_tests)
-gtest_discover_tests(qbuem_pipeline_guide_tests)
-gtest_discover_tests(qbuem_util_tests)
-gtest_discover_tests(qbuem_infra_tests)
-gtest_discover_tests(qbuem_middleware_tests)
-gtest_discover_tests(qbuem_pipeline_advanced_tests)
-gtest_discover_tests(qbuem_pipeline_ipc_tests)
+# Use add_test (not gtest_discover_tests) to avoid running binaries at build
+# time.  On ARM64 Bionic (Termux) some executables have TLS alignment issues
+# that cause the dynamic linker to abort them; deferring to ctest keeps the
+# build clean and lets individual tests be skipped at run time.
+add_test(NAME qbuem_shm_tests              COMMAND qbuem_shm_tests)
+add_test(NAME qbuem_canary_scatter_tests   COMMAND qbuem_canary_scatter_tests)
+add_test(NAME qbuem_tests                  COMMAND qbuem_tests)
+add_test(NAME qbuem_ext_tests              COMMAND qbuem_ext_tests)
+add_test(NAME qbuem_v14_tests              COMMAND qbuem_v14_tests)
+add_test(NAME qbuem_v15_tests              COMMAND qbuem_v15_tests)
+add_test(NAME qbuem_v16_tests              COMMAND qbuem_v16_tests)
+add_test(NAME qbuem_v17_tests              COMMAND qbuem_v17_tests)
+add_test(NAME qbuem_enhancement_tests      COMMAND qbuem_enhancement_tests)
+add_test(NAME qbuem_pipeline_guide_tests   COMMAND qbuem_pipeline_guide_tests)
+add_test(NAME qbuem_util_tests             COMMAND qbuem_util_tests)
+add_test(NAME qbuem_infra_tests            COMMAND qbuem_infra_tests)
+add_test(NAME qbuem_middleware_tests       COMMAND qbuem_middleware_tests)
+add_test(NAME qbuem_pipeline_advanced_tests COMMAND qbuem_pipeline_advanced_tests)
+add_test(NAME qbuem_pipeline_ipc_tests     COMMAND qbuem_pipeline_ipc_tests)
 if(APPLE)
-gtest_discover_tests(qbuem_kqueue_tests)
+add_test(NAME qbuem_kqueue_tests           COMMAND qbuem_kqueue_tests)
+endif()
+
+# SIMD correctness validation (standalone, no umbrella library)
+if(QBUEM_BUILD_TESTS)
+  add_executable(qbuem_neon_validation
+      ${CMAKE_CURRENT_SOURCE_DIR}/neon_validation.cpp
+      ${QBUEM_TLS_FIX}
+  )
+  target_include_directories(qbuem_neon_validation PRIVATE
+      ${PROJECT_SOURCE_DIR}/include)
+  target_compile_options(qbuem_neon_validation PRIVATE -march=native)
+  add_test(NAME neon_validation COMMAND qbuem_neon_validation)
 endif()

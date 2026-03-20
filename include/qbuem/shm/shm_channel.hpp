@@ -47,6 +47,7 @@
 #include <memory>
 #include <optional>
 #include <string_view>
+#include <qbuem/shm/shm_compat.hpp>  // shm_open/shm_unlink (Android compat)
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -346,20 +347,20 @@ inline Result<SHMSegment> SHMSegment::create(std::string_view name,
     if (name.empty() || name[0] != '/') shm_name += '/';
     shm_name.append(name.data(), name.size());
 
-    int fd = ::shm_open(shm_name.c_str(), O_CREAT | O_RDWR | O_TRUNC, 0600);
+    int fd = shm_open(shm_name.c_str(), O_CREAT | O_RDWR | O_TRUNC, 0600);
     if (fd < 0)
         return unexpected(std::make_error_code(std::errc::io_error));
 
     if (::ftruncate(fd, static_cast<off_t>(size)) < 0) {
         ::close(fd);
-        ::shm_unlink(shm_name.c_str());
+        shm_unlink(shm_name.c_str());
         return unexpected(std::make_error_code(std::errc::io_error));
     }
 
     void* base = ::mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
     if (base == MAP_FAILED) {
         ::close(fd);
-        ::shm_unlink(shm_name.c_str());
+        shm_unlink(shm_name.c_str());
         return unexpected(std::make_error_code(std::errc::io_error));
     }
 
@@ -376,7 +377,7 @@ inline Result<SHMSegment> SHMSegment::open(std::string_view name) noexcept {
     if (name.empty() || name[0] != '/') shm_name += '/';
     shm_name.append(name.data(), name.size());
 
-    int fd = ::shm_open(shm_name.c_str(), O_RDWR, 0600);
+    int fd = shm_open(shm_name.c_str(), O_RDWR, 0600);
     if (fd < 0)
         return unexpected(std::make_error_code(std::errc::no_such_file_or_directory));
 
@@ -494,7 +495,7 @@ Result<void> SHMChannel<T>::unlink(std::string_view name) noexcept {
     if (name.empty() || name[0] != '/') shm_name += '/';
     shm_name.append(name.data(), name.size());
 
-    if (::shm_unlink(shm_name.c_str()) < 0 && errno != ENOENT)
+    if (shm_unlink(shm_name.c_str()) < 0 && errno != ENOENT)
         return unexpected(std::make_error_code(std::errc::no_such_file_or_directory));
     return Result<void>{};
 }

@@ -65,7 +65,8 @@
 #include <system_error>
 #include <type_traits>
 
-// POSIX SHM
+// POSIX SHM (shm_open/shm_unlink with Android compat)
+#include <qbuem/shm/shm_compat.hpp>
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
@@ -300,7 +301,7 @@ private:
 
   void create_segment() {
     compute_layout();
-    const int fd = ::shm_open(name_.c_str(), O_CREAT | O_RDWR | O_TRUNC, 0600);
+    const int fd = shm_open(name_.c_str(), O_CREAT | O_RDWR | O_TRUNC, 0600);
     if (fd < 0)
       throw std::system_error(errno, std::system_category(), "shm_open(create)");
 
@@ -328,7 +329,7 @@ private:
 
   void attach_segment() {
     // Open existing segment and read its header to discover capacity
-    const int fd = ::shm_open(name_.c_str(), O_RDWR, 0600);
+    const int fd = shm_open(name_.c_str(), O_RDWR, 0600);
     if (fd < 0)
       throw std::system_error(errno, std::system_category(), "shm_open(attach)");
 

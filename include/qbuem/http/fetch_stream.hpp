@@ -160,8 +160,8 @@ public:
 
     FetchStream(const FetchStream&)            = delete;
     FetchStream& operator=(const FetchStream&) = delete;
-    FetchStream(FetchStream&&)                 = default;
-    FetchStream& operator=(FetchStream&&)      = default;
+    FetchStream(FetchStream&&)                 = delete;
+    FetchStream& operator=(FetchStream&&)      = delete;
 
     ~FetchStream() {
         chan_.close();
@@ -274,7 +274,13 @@ private:
             size_t n = free_count_.load(std::memory_order_acquire);
             if (n == 0) {
                 // Pool exhausted — spin briefly (consumer is behind)
-                for (int i = 0; i < 128; ++i) __builtin_ia32_pause();
+                for (int i = 0; i < 128; ++i) {
+#if defined(__x86_64__) || defined(__i386__)
+                    __builtin_ia32_pause();
+#elif defined(__aarch64__) || defined(__ARM_ARCH)
+                    __asm__ volatile("yield" ::: "memory");
+#endif
+                }
                 continue;
             }
             if (free_count_.compare_exchange_weak(n, n - 1,

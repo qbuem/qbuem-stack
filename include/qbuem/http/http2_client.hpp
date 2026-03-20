@@ -666,7 +666,7 @@ private:
     TcpStream stream_;                        ///< Underlying TCP connection
     std::string host_;                        ///< Target host (for :authority)
     uint32_t next_stream_id_{1};              ///< Next client stream ID (odd, +2)
-    bool goaway_{false};                      ///< Server sent GOAWAY
+    [[maybe_unused]] bool goaway_{false};     ///< Server sent GOAWAY
 
     friend class Http2Client;
 };

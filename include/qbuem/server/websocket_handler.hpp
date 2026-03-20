@@ -42,8 +42,14 @@
 #include <utility>
 #include <vector>
 
-// ARM NEON: vectorised XOR masking
-#if defined(__ARM_NEON)
+// x86 AVX2/SSE2 or ARM NEON: vectorised XOR masking
+#if defined(__AVX2__)
+#  include <immintrin.h>
+#  define QBUEM_WS_AVX2 1
+#elif defined(__SSE2__)
+#  include <emmintrin.h>
+#  define QBUEM_WS_SSE2 1
+#elif defined(__ARM_NEON)
 #  include <arm_neon.h>
 #  define QBUEM_WS_NEON 1
 #endif
@@ -367,23 +373,57 @@ public:
    */
   static void xor_mask(const uint8_t* src, uint8_t* dst, size_t len,
                        const std::array<uint8_t, 4>& key) noexcept {
-#if defined(QBUEM_WS_NEON)
-    // Expand 4-byte key to 16 bytes: key repeated 4 times
+#if defined(QBUEM_WS_AVX2)
+    // Broadcast 4-byte RFC 6455 key to 32 bytes; process 32 bytes/iteration.
+    const uint32_t key32 = key[0]
+        | (static_cast<uint32_t>(key[1]) <<  8)
+        | (static_cast<uint32_t>(key[2]) << 16)
+        | (static_cast<uint32_t>(key[3]) << 24);
+    const __m256i vkey256 = _mm256_set1_epi32(static_cast<int>(key32));
+    size_t i = 0;
+    for (; i + 32 <= len; i += 32) {
+      const __m256i chunk = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(src + i));
+      _mm256_storeu_si256(reinterpret_cast<__m256i*>(dst + i),
+                          _mm256_xor_si256(chunk, vkey256));
+    }
+    // 16-byte tail: extract lower 128 bits (zero-cost cast, no instruction emitted)
+    const __m128i vkey128 = _mm256_castsi256_si128(vkey256);
+    for (; i + 16 <= len; i += 16) {
+      const __m128i chunk = _mm_loadu_si128(reinterpret_cast<const __m128i*>(src + i));
+      _mm_storeu_si128(reinterpret_cast<__m128i*>(dst + i),
+                       _mm_xor_si128(chunk, vkey128));
+    }
+    for (; i < len; ++i) dst[i] = src[i] ^ key[i & 3];
+
+#elif defined(QBUEM_WS_SSE2)
+    // Broadcast 4-byte RFC 6455 key to 16 bytes; process 16 bytes/iteration.
+    const uint32_t key32 = key[0]
+        | (static_cast<uint32_t>(key[1]) <<  8)
+        | (static_cast<uint32_t>(key[2]) << 16)
+        | (static_cast<uint32_t>(key[3]) << 24);
+    const __m128i vkey = _mm_set1_epi32(static_cast<int>(key32));
+    size_t i = 0;
+    for (; i + 16 <= len; i += 16) {
+      const __m128i chunk = _mm_loadu_si128(reinterpret_cast<const __m128i*>(src + i));
+      _mm_storeu_si128(reinterpret_cast<__m128i*>(dst + i),
+                       _mm_xor_si128(chunk, vkey));
+    }
+    for (; i < len; ++i) dst[i] = src[i] ^ key[i & 3];
+
+#elif defined(QBUEM_WS_NEON)
+    // AArch64 NEON: expand 4-byte key to 16 bytes; process 16 bytes/iteration.
     alignas(16) uint8_t key16[16];
     for (int i = 0; i < 16; ++i) key16[i] = key[i & 3];
     const uint8x16_t vkey = vld1q_u8(key16);
-
     size_t i = 0;
     for (; i + 16 <= len; i += 16) {
       const uint8x16_t chunk = vld1q_u8(src + i);
       vst1q_u8(dst + i, veorq_u8(chunk, vkey));
     }
-    // Scalar tail
-    for (; i < len; ++i)
-      dst[i] = src[i] ^ key[i & 3];
+    for (; i < len; ++i) dst[i] = src[i] ^ key[i & 3];
+
 #else
-    for (size_t i = 0; i < len; ++i)
-      dst[i] = src[i] ^ key[i % 4];
+    for (size_t i = 0; i < len; ++i) dst[i] = src[i] ^ key[i % 4];
 #endif
   }
 
