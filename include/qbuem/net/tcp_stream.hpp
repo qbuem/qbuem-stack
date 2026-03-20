@@ -290,7 +290,7 @@ public:
    *
    * @param v true to enable TCP_NODELAY, false to disable.
    */
-  void set_nodelay(bool v) noexcept {
+  void set_nodelay(bool v) const noexcept {
     int flag = v ? 1 : 0;
     ::setsockopt(fd_, IPPROTO_TCP, TCP_NODELAY, &flag, sizeof(flag));
   }
@@ -302,7 +302,7 @@ public:
    *
    * @param v true to enable keepalive, false to disable.
    */
-  void set_keepalive(bool v) noexcept {
+  void set_keepalive(bool v) const noexcept {
     int flag = v ? 1 : 0;
     ::setsockopt(fd_, SOL_SOCKET, SO_KEEPALIVE, &flag, sizeof(flag));
   }

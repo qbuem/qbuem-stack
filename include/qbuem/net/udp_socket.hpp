@@ -151,11 +151,11 @@ public:
       ssize_t result_ = -1;
       int err_ = 0;
 
-      bool await_ready() const noexcept { return false; }
+      [[nodiscard]] bool await_ready() const noexcept { return false; }
 
       void await_suspend(std::coroutine_handle<> handle) {
         auto *reactor = Reactor::current();
-        if (!reactor) { handle.resume(); return; }
+        if (reactor == nullptr) { handle.resume(); return; }
         reactor->register_event(fd_, EventType::Write, [handle, this](int f) {
           result_ = ::sendto(f, data_, size_, 0,
                              reinterpret_cast<const sockaddr *>(ss_), sslen_);
@@ -196,11 +196,11 @@ public:
       ssize_t result_ = -1;
       int err_ = 0;
 
-      bool await_ready() const noexcept { return false; }
+      [[nodiscard]] bool await_ready() const noexcept { return false; }
 
       void await_suspend(std::coroutine_handle<> handle) {
         auto *reactor = Reactor::current();
-        if (!reactor) { handle.resume(); return; }
+        if (reactor == nullptr) { handle.resume(); return; }
         reactor->register_event(fd_, EventType::Read, [handle, this](int f) {
           result_ = ::recvfrom(f, data_, size_, 0,
                                reinterpret_cast<sockaddr *>(&from_), &fromlen_);
@@ -243,7 +243,7 @@ public:
    * @brief Returns the underlying file descriptor.
    * @returns Socket fd. -1 if invalid.
    */
-  int fd() const noexcept { return fd_; }
+  [[nodiscard]] int fd() const noexcept { return fd_; }
 
 private:
   /** @brief The managed UDP socket file descriptor. */

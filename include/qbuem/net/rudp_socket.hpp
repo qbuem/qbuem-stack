@@ -130,7 +130,7 @@ struct RudpHeader {
     std::array<uint32_t, kRudpMaxNacks> nacks{}; ///< Selective NACK sequence numbers
 
     /** @brief Serialise into wire format. Returns bytes written. */
-    size_t encode(std::span<std::byte> out) const noexcept {
+    [[nodiscard]] size_t encode(std::span<std::byte> out) const noexcept {
         if (out.size() < kRudpHeaderBase) return 0;
         auto store32 = [&](size_t off, uint32_t v) {
             out[off+0] = std::byte((v >> 24) & 0xFF);
@@ -456,7 +456,7 @@ private:
 
     // ── Control frames ────────────────────────────────────────────────────────
 
-    Task<Result<void>> send_ctrl(uint8_t flags, const std::stop_token& st) {
+    Task<Result<void>> send_ctrl(uint8_t flags, const std::stop_token& st) const {
         (void)st; // stop_token reserved for future send cancellation
         RudpHeader hdr;
         hdr.seq    = send_seq_;
@@ -475,7 +475,7 @@ private:
         co_await send_ctrl(RudpFlags::Ack, st);
     }
 
-    Task<void> send_nack(const std::stop_token& st) {
+    Task<void> send_nack(const std::stop_token& st) const {
         (void)st; // stop_token reserved for future send cancellation
         RudpHeader hdr;
         hdr.seq    = send_seq_;
@@ -507,7 +507,7 @@ private:
         remote_window_ = hdr.window;
     }
 
-    void process_nack(const RudpHeader& hdr, std::stop_token /*st*/) {
+    void process_nack(const RudpHeader& hdr, const std::stop_token& /*st*/) {
         // Mark segments listed in the NACK for immediate retransmission
         for (size_t i = 0; i < hdr.nack_count && i < kRudpMaxNacks; ++i) {
             for (auto& seg : retransmit_q_) {

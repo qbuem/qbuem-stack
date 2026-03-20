@@ -295,7 +295,7 @@ public:
      * @brief Async read with transparent retry on transient errors.
      */
     [[nodiscard]] Task<Result<size_t>>
-    read(uint64_t lba, std::span<std::byte> buf, const std::stop_token& st) {
+    read(uint64_t lba, std::span<std::byte> buf, const std::stop_token& st) const {
         for (int attempt = 0; attempt <= max_retries_; ++attempt) {
             auto r = co_await transport_->read(lba, buf, st);
             if (r) {
@@ -313,7 +313,7 @@ public:
      * @brief Async write with transparent retry on transient errors.
      */
     [[nodiscard]] Task<Result<size_t>>
-    write(uint64_t lba, std::span<const std::byte> buf, const std::stop_token& st) {
+    write(uint64_t lba, std::span<const std::byte> buf, const std::stop_token& st) const {
         for (int attempt = 0; attempt <= max_retries_; ++attempt) {
             auto r = co_await transport_->write(lba, buf, st);
             if (r) {

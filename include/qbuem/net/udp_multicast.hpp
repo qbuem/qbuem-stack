@@ -255,7 +255,7 @@ public:
      * @returns `Result<void>` — ok on success.
      */
     [[nodiscard]] Result<void>
-    leave_group(SocketAddr group, std::string_view iface = "") noexcept {
+    leave_group(SocketAddr group, std::string_view iface = "") const noexcept {
         if (group.family() == SocketAddr::Family::IPv6) {
             ipv6_mreq mreq{};
             mreq.ipv6mr_multiaddr = group.addr_.ipv6_;

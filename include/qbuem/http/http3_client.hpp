@@ -365,9 +365,9 @@ public:
      * @returns `Http3Response` on success, or error.
      */
     [[nodiscard]] Task<Result<Http3Response>> get(
-            std::string url, const std::stop_token& st,
+            const std::string& url, const std::stop_token& st,
             std::vector<std::pair<std::string,std::string>> hdrs = {}) {
-        Http3Request req{.method="GET", .url=std::move(url), .body={}, .headers=std::move(hdrs)};
+        Http3Request req{.method="GET", .url=url, .body={}, .headers=std::move(hdrs)};
         co_return co_await transport_->send_request(req, st);
     }
 
@@ -381,10 +381,10 @@ public:
      * @returns `Http3Response` on success, or error.
      */
     [[nodiscard]] Task<Result<Http3Response>> post(
-            std::string url, std::string body, const std::stop_token& st,
+            const std::string& url, const std::string& body, const std::stop_token& st,
             std::vector<std::pair<std::string,std::string>> hdrs = {}) {
-        Http3Request req{.method="POST", .url=std::move(url),
-                         .body=std::move(body), .headers=std::move(hdrs)};
+        Http3Request req{.method="POST", .url=url,
+                         .body=body, .headers=std::move(hdrs)};
         co_return co_await transport_->send_request(req, st);
     }
 

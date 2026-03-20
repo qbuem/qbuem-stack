@@ -71,9 +71,9 @@ public:
    * if (!addr) co_return unexpected(addr.error());
    * @endcode
    */
-  [[nodiscard]] static Task<Result<SocketAddr>> resolve(std::string host,
+  [[nodiscard]] static Task<Result<SocketAddr>> resolve(const std::string& host,
                                                          uint16_t port) {
-    co_return co_await Awaiter{std::move(host), port};
+    co_return co_await Awaiter{host, port};
   }
 
 private:
@@ -107,7 +107,7 @@ private:
       return false; // needs async resolution
     }
 
-    void await_suspend(std::coroutine_handle<> handle) {
+    void await_suspend(std::coroutine_handle<> handle) const {
       // Capture reactor pointer before spawning — Reactor::current() is
       // thread-local and only valid on the reactor thread.
       Reactor* reactor = Reactor::current();
@@ -115,7 +115,7 @@ private:
 
       // Move host into the lambda to avoid an extra string copy.
       // port is a struct member — capture by value via explicit init-capture.
-      std::jthread([host = std::move(host),
+      std::jthread([host = host,
                    port = port,
                    st,
                    handle,

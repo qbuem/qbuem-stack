@@ -272,7 +272,7 @@ public:
             [[nodiscard]] bool await_ready() const noexcept { return false; }
             void await_suspend(std::coroutine_handle<> h) {
                 auto* r = Reactor::current();
-                if (!r) { ready_ = true; h.resume(); return; }
+                if (r == nullptr) { ready_ = true; h.resume(); return; }
                 r->register_event(fd_, EventType::Read, [h, this](int f) {
                     ready_ = true;
                     Reactor::current()->unregister_event(f, EventType::Read);
