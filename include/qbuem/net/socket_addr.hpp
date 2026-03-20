@@ -66,7 +66,7 @@ struct SocketAddr {
   union {
     in_addr  ipv4_;         ///< IPv4 address storage
     in6_addr ipv6_;         ///< IPv6 address storage
-    char     unix_[108];    ///< Unix domain socket path (max sun_path size)
+    char     unix_[108];    // NOLINT(modernize-avoid-c-arrays) ///< Unix domain socket path (max sun_path size)
   } addr_{};
 
   // ─── Factory Methods ────────────────────────────────────────────────────────
@@ -218,14 +218,14 @@ struct SocketAddr {
     if (n == 0) return -1;
     switch (family_) {
     case Family::IPv4: {
-      char ip[INET_ADDRSTRLEN];
+      char ip[INET_ADDRSTRLEN]; // NOLINT(modernize-avoid-c-arrays)
       inet_ntop(AF_INET, &addr_.ipv4_, ip, sizeof(ip));
       auto r = std::format_to_n(buf, n - 1, "{}:{}", ip, static_cast<unsigned>(port_));
       *r.out = '\0';
       return static_cast<int>(r.out - buf);
     }
     case Family::IPv6: {
-      char ip[INET6_ADDRSTRLEN];
+      char ip[INET6_ADDRSTRLEN]; // NOLINT(modernize-avoid-c-arrays)
       inet_ntop(AF_INET6, &addr_.ipv6_, ip, sizeof(ip));
       auto r = std::format_to_n(buf, n - 1, "[{}]:{}", ip, static_cast<unsigned>(port_));
       *r.out = '\0';
@@ -243,13 +243,13 @@ struct SocketAddr {
   // ─── Accessors ──────────────────────────────────────────────────────────────
 
   /** @brief Returns the socket address family. */
-  Family family() const noexcept { return family_; }
+  [[nodiscard]] Family family() const noexcept { return family_; }
 
   /**
    * @brief Returns the port number in host byte order.
    * @returns Port number for IPv4/IPv6, 0 for Unix domain.
    */
-  uint16_t port() const noexcept { return port_; }
+  [[nodiscard]] uint16_t port() const noexcept { return port_; }
 };
 
 } // namespace qbuem

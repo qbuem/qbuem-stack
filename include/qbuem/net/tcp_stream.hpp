@@ -141,11 +141,11 @@ public:
       int fd_;
       int err_ = 0;
 
-      bool await_ready() const noexcept { return false; }
+      [[nodiscard]] bool await_ready() const noexcept { return false; }
 
       void await_suspend(std::coroutine_handle<> handle) {
         auto *reactor = Reactor::current();
-        if (!reactor) {
+        if (reactor == nullptr) {
           handle.resume();
           return;
         }
@@ -159,7 +159,7 @@ public:
         });
       }
 
-      int await_resume() const noexcept { return err_; }
+      [[nodiscard]] int await_resume() const noexcept { return err_; }
     };
 
     int so_err = co_await ConnectAwaiter{fd};
@@ -219,11 +219,11 @@ public:
       int iovcnt_;
       ssize_t result_ = -1;
 
-      bool await_ready() const noexcept { return false; }
+      [[nodiscard]] bool await_ready() const noexcept { return false; }
 
       void await_suspend(std::coroutine_handle<> handle) {
         auto *reactor = Reactor::current();
-        if (!reactor) { handle.resume(); return; }
+        if (reactor == nullptr) { handle.resume(); return; }
         reactor->register_event(fd_, EventType::Read, [handle, this](int f) {
           result_ = ::readv(f, iov_, iovcnt_);
           Reactor::current()->unregister_event(f, EventType::Read);
@@ -231,7 +231,7 @@ public:
         });
       }
 
-      ssize_t await_resume() const noexcept { return result_; }
+      [[nodiscard]] ssize_t await_resume() const noexcept { return result_; }
     };
 
     ssize_t n = co_await ReadvAwaiter{fd_, bufs.data(),
@@ -257,11 +257,11 @@ public:
       int iovcnt_;
       ssize_t result_ = -1;
 
-      bool await_ready() const noexcept { return false; }
+      [[nodiscard]] bool await_ready() const noexcept { return false; }
 
       void await_suspend(std::coroutine_handle<> handle) {
         auto *reactor = Reactor::current();
-        if (!reactor) { handle.resume(); return; }
+        if (reactor == nullptr) { handle.resume(); return; }
         reactor->register_event(fd_, EventType::Write, [handle, this](int f) {
           result_ = ::writev(f, iov_, iovcnt_);
           Reactor::current()->unregister_event(f, EventType::Write);
@@ -269,7 +269,7 @@ public:
         });
       }
 
-      ssize_t await_resume() const noexcept { return result_; }
+      [[nodiscard]] ssize_t await_resume() const noexcept { return result_; }
     };
 
     ssize_t n = co_await WritevAwaiter{fd_, bufs.data(),
@@ -313,7 +313,7 @@ public:
    * @brief Returns the underlying file descriptor.
    * @returns Socket fd. -1 if invalid.
    */
-  int fd() const noexcept { return fd_; }
+  [[nodiscard]] int fd() const noexcept { return fd_; }
 
 private:
   /** @brief The managed TCP socket file descriptor. */

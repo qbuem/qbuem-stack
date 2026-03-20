@@ -261,7 +261,7 @@ public:
      *          cancellation. error_code on syscall failure.
      */
     [[nodiscard]] Task<Result<RecvBatch<kDefaultBatch, kDefaultBufSize>>>
-    recv_batch(std::stop_token st) {
+    recv_batch(const std::stop_token& st) {
         if (st.stop_requested())
             co_return unexpected(std::make_error_code(std::errc::operation_canceled));
 
@@ -269,7 +269,7 @@ public:
         struct ReadyAwaiter {
             int fd_;
             bool ready_{false};
-            bool await_ready() const noexcept { return false; }
+            [[nodiscard]] bool await_ready() const noexcept { return false; }
             void await_suspend(std::coroutine_handle<> h) {
                 auto* r = Reactor::current();
                 if (!r) { ready_ = true; h.resume(); return; }
@@ -353,7 +353,7 @@ public:
      */
     template<size_t MaxBatch>
     [[nodiscard]] Task<Result<size_t>>
-    send_batch(const SendBatch<MaxBatch>& batch, std::stop_token st) {
+    send_batch(const SendBatch<MaxBatch>& batch, const std::stop_token& st) {
         if (batch.empty()) co_return size_t{0};
         if (st.stop_requested())
             co_return unexpected(std::make_error_code(std::errc::operation_canceled));

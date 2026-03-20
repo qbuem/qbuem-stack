@@ -93,7 +93,7 @@ private:
 
     // ── Try fast-path: numeric IP literal ────────────────────────────────
 
-    bool await_ready() noexcept {
+    [[nodiscard]] bool await_ready() noexcept {
       // Try IPv4 literal
       {
         auto r = SocketAddr::from_ipv4(host.c_str(), port);
@@ -160,7 +160,7 @@ private:
         }
 
         // ── Resume coroutine on the reactor thread ────────────────────────
-        if (reactor) {
+        if (reactor != nullptr) {
           reactor->post([handle]() mutable { handle.resume(); });
         } else {
           handle.resume(); // no reactor (e.g. unit test context)
@@ -168,7 +168,7 @@ private:
       }).detach();
     }
 
-    Result<SocketAddr> await_resume() {
+    [[nodiscard]] Result<SocketAddr> await_resume() {
       return std::move(state->result);
     }
   };

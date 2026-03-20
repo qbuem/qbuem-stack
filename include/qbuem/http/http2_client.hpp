@@ -621,7 +621,7 @@ private:
         while (p < end) {
             uint8_t first = std::to_underlying(*p);
 
-            if (first & 0x80) {
+            if ((first & 0x80u) != 0u) {
                 // Indexed representation — look up static table :status
                 uint8_t idx = first & 0x7F;
                 ++p;
@@ -699,7 +699,7 @@ public:
      * @returns Shared pointer to a ready `Http2Connection`, or error.
      */
     [[nodiscard]] Task<Result<std::shared_ptr<Http2Connection>>>
-    connect(std::string url, std::stop_token st) {
+    connect(std::string url, const std::stop_token& st) {
         auto parsed = ParsedUrl::parse(url);
         if (!parsed) co_return unexpected(std::make_error_code(std::errc::invalid_argument));
 

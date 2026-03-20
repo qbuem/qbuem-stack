@@ -159,7 +159,7 @@ struct NvmeOfAddr {
             uint16_t p = 0;
             std::from_chars(hostport.data() + colon + 1,
                             hostport.data() + hostport.size(), p);
-            if (p) addr.port = p;
+            if (p != 0u) addr.port = p;
         } else {
             addr.host = std::string(hostport);
         }
@@ -205,7 +205,7 @@ public:
      * @returns `Result<void>` — ok when I/O queues are ready.
      */
     [[nodiscard]] virtual Task<Result<void>>
-    connect(const NvmeOfAddr& addr, std::stop_token st) = 0;
+    connect(const NvmeOfAddr& addr, const std::stop_token& st) = 0;
 
     /**
      * @brief Read `buf.size()` bytes starting at logical block `lba`.
@@ -216,7 +216,7 @@ public:
      * @returns Bytes read on success, or error.
      */
     [[nodiscard]] virtual Task<Result<size_t>>
-    read(uint64_t lba, std::span<std::byte> buf, std::stop_token st) = 0;
+    read(uint64_t lba, std::span<std::byte> buf, const std::stop_token& st) = 0;
 
     /**
      * @brief Write `buf.size()` bytes starting at logical block `lba`.
@@ -227,7 +227,7 @@ public:
      * @returns Bytes written on success, or error.
      */
     [[nodiscard]] virtual Task<Result<size_t>>
-    write(uint64_t lba, std::span<const std::byte> buf, std::stop_token st) = 0;
+    write(uint64_t lba, std::span<const std::byte> buf, const std::stop_token& st) = 0;
 
     /**
      * @brief Flush all volatile write data to persistent storage.
@@ -236,7 +236,7 @@ public:
      * @returns `Result<void>` — ok when all data is durable.
      */
     [[nodiscard]] virtual Task<Result<void>>
-    flush(std::stop_token st) = 0;
+    flush(const std::stop_token& st) = 0;
 
     /**
      * @brief TRIM / deallocate an LBA range (hole punch).
@@ -246,7 +246,7 @@ public:
      * @param st    Cancellation token.
      */
     [[nodiscard]] virtual Task<Result<void>>
-    trim(uint64_t lba, uint32_t count, std::stop_token st) = 0;
+    trim(uint64_t lba, uint32_t count, const std::stop_token& st) = 0;
 
     /**
      * @brief Scatter-gather read — fills multiple discontiguous buffers.
@@ -259,7 +259,7 @@ public:
     [[nodiscard]] virtual Task<Result<size_t>>
     read_scatter(uint64_t lba,
                  std::span<std::span<std::byte>> bufs,
-                 std::stop_token st) = 0;
+                 const std::stop_token& st) = 0;
 
     /** @brief True if the connection is open. */
     [[nodiscard]] virtual bool is_connected() const noexcept = 0;
@@ -271,7 +271,7 @@ public:
      * @brief Gracefully disconnect from the target.
      * @param st Cancellation token.
      */
-    virtual Task<void> disconnect(std::stop_token st) = 0;
+    virtual Task<void> disconnect(const std::stop_token& st) = 0;
 };
 
 // ─── NvmeOfConnection ────────────────────────────────────────────────────────
@@ -295,7 +295,7 @@ public:
      * @brief Async read with transparent retry on transient errors.
      */
     [[nodiscard]] Task<Result<size_t>>
-    read(uint64_t lba, std::span<std::byte> buf, std::stop_token st) {
+    read(uint64_t lba, std::span<std::byte> buf, const std::stop_token& st) {
         for (int attempt = 0; attempt <= max_retries_; ++attempt) {
             auto r = co_await transport_->read(lba, buf, st);
             if (r) {
@@ -313,7 +313,7 @@ public:
      * @brief Async write with transparent retry on transient errors.
      */
     [[nodiscard]] Task<Result<size_t>>
-    write(uint64_t lba, std::span<const std::byte> buf, std::stop_token st) {
+    write(uint64_t lba, std::span<const std::byte> buf, const std::stop_token& st) {
         for (int attempt = 0; attempt <= max_retries_; ++attempt) {
             auto r = co_await transport_->write(lba, buf, st);
             if (r) {
@@ -330,18 +330,18 @@ public:
     [[nodiscard]] Task<Result<size_t>>
     read_scatter(uint64_t lba,
                  std::span<std::span<std::byte>> bufs,
-                 std::stop_token st) {
+                 const std::stop_token& st) {
         co_return co_await transport_->read_scatter(lba, bufs, st);
     }
 
     /** @brief Flush to persistent storage. */
-    [[nodiscard]] Task<Result<void>> flush(std::stop_token st) {
+    [[nodiscard]] Task<Result<void>> flush(const std::stop_token& st) {
         co_return co_await transport_->flush(st);
     }
 
     /** @brief TRIM / deallocate range. */
     [[nodiscard]] Task<Result<void>>
-    trim(uint64_t lba, uint32_t count, std::stop_token st) {
+    trim(uint64_t lba, uint32_t count, const std::stop_token& st) {
         co_return co_await transport_->trim(lba, count, st);
     }
 
@@ -352,7 +352,7 @@ public:
 
     /** @brief True if still connected. */
     [[nodiscard]] bool is_connected() const noexcept {
-        return transport_ && transport_->is_connected();
+        return transport_ != nullptr && transport_->is_connected();
     }
 
 private:
@@ -394,7 +394,7 @@ public:
     [[nodiscard]] static Task<Result<std::unique_ptr<NvmeOfConnection>>>
     connect(std::string_view url_or_nqn,
             std::unique_ptr<INvmeOfTransport> transport,
-            std::stop_token st) {
+            const std::stop_token& st) {
         auto addr = NvmeOfAddr::parse(url_or_nqn);
         if (!addr) co_return unexpected(
             std::make_error_code(std::errc::invalid_argument));

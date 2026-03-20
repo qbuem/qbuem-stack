@@ -226,7 +226,7 @@ public:
                    [](unsigned char c) { return std::tolower(c); });
     headers_[std::move(key)] = std::string(v);
   }
-  void set_body(std::string b) { body_ = std::move(b); }
+  void set_body(std::string_view b) { body_ = b; }
   void append_body(std::string_view chunk) { body_ += chunk; }
 
 private:

@@ -145,8 +145,8 @@ struct BearerAuthOptions {
  *   app.use(qbuem::middleware::bearer_auth(v));
  */
 inline Middleware bearer_auth(std::shared_ptr<ITokenVerifier> verifier,
-                               BearerAuthOptions opts = {}) {
-  return [verifier = std::move(verifier), opts = std::move(opts)](
+                               const BearerAuthOptions& opts = BearerAuthOptions{}) {
+  return [verifier = std::move(verifier), opts](
              const Request &req, Response &res) -> bool {
     std::string_view auth = req.header("Authorization");
     static constexpr std::string_view kBearer = "Bearer ";
@@ -203,8 +203,8 @@ inline Middleware bearer_auth(std::shared_ptr<ITokenVerifier> verifier,
  *   });
  */
 inline Middleware bearer_auth(ITokenVerifier &verifier,
-                               BearerAuthOptions opts = {}) {
-  return [&verifier, opts = std::move(opts)](const Request &req,
+                               const BearerAuthOptions& opts = BearerAuthOptions{}) {
+  return [&verifier, opts](const Request &req,
                                               Response &res) -> bool {
     std::string_view auth = req.header("Authorization");
 

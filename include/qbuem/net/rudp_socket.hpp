@@ -219,7 +219,7 @@ public:
      * @returns Connected `RudpSocket`, or error.
      */
     [[nodiscard]] static Task<Result<std::unique_ptr<RudpSocket>>>
-    connect(SocketAddr local, SocketAddr remote, std::stop_token st) {
+    connect(SocketAddr local, SocketAddr remote, const std::stop_token& st) {
         auto udp = UdpSocket::bind(local);
         if (!udp) co_return unexpected(udp.error());
 
@@ -239,7 +239,7 @@ public:
         (void)from;
         RudpHeader hdr;
         hdr.decode(buf);
-        if (!(hdr.flags & RudpFlags::Ack))
+        if ((hdr.flags & RudpFlags::Ack) == 0u)
             co_return unexpected(std::make_error_code(std::errc::connection_refused));
 
         sock->remote_window_ = hdr.window;
@@ -256,7 +256,7 @@ public:
      * @returns `RudpSocket` for the first incoming connection.
      */
     [[nodiscard]] static Task<Result<std::unique_ptr<RudpSocket>>>
-    listen(SocketAddr local, std::stop_token st) {
+    listen(SocketAddr local, const std::stop_token& st) {
         auto udp = UdpSocket::bind(local);
         if (!udp) co_return unexpected(udp.error());
 
@@ -270,7 +270,7 @@ public:
             RudpHeader hdr;
             size_t hlen = hdr.decode(std::span<const std::byte>(buf.data(), n));
             if (hlen == 0) continue;
-            if (!(hdr.flags & RudpFlags::Syn)) continue;
+            if ((hdr.flags & RudpFlags::Syn) == 0u) continue;
 
             // Found SYN — create socket
             auto sock = std::make_unique<RudpSocket>(std::move(*udp), from);
@@ -297,7 +297,7 @@ public:
      * @returns Number of application bytes sent, or error.
      */
     [[nodiscard]] Task<Result<size_t>>
-    send(std::span<const std::byte> data, std::stop_token st) {
+    send(std::span<const std::byte> data, const std::stop_token& st) {
         size_t total = 0;
         while (!data.empty()) {
             if (st.stop_requested())
@@ -331,7 +331,7 @@ public:
      * @returns Number of bytes written into `out`, or error.
      */
     [[nodiscard]] Task<Result<size_t>>
-    recv(std::span<std::byte> out, std::stop_token st) {
+    recv(std::span<std::byte> out, const std::stop_token& st) {
         while (!st.stop_requested()) {
             // Check in-order receive buffer first
             if (auto it = recv_buf_.find(recv_seq_); it != recv_buf_.end()) {
@@ -355,19 +355,19 @@ public:
             if (hlen == 0 || n < hlen) continue;
 
             // Process ACK
-            if (hdr.flags & RudpFlags::Ack) process_ack(hdr);
+            if ((hdr.flags & RudpFlags::Ack) != 0u) process_ack(hdr);
 
             // Process NACK
-            if (hdr.flags & RudpFlags::Nack) process_nack(hdr, st);
+            if ((hdr.flags & RudpFlags::Nack) != 0u) process_nack(hdr, st);
 
             // FIN — connection close
-            if (hdr.flags & RudpFlags::Fin) {
+            if ((hdr.flags & RudpFlags::Fin) != 0u) {
                 co_await send_ctrl(RudpFlags::Fin | RudpFlags::Ack, st);
                 co_return size_t{0};
             }
 
             // Data segment
-            if (hdr.flags & RudpFlags::Data) {
+            if ((hdr.flags & RudpFlags::Data) != 0u) {
                 size_t payload_len = n - hlen;
                 std::vector<std::byte> payload(
                     buf.data() + hlen, buf.data() + hlen + payload_len);
@@ -396,7 +396,7 @@ public:
      * @brief Gracefully close the RUDP connection (sends FIN).
      * @param st Cancellation token.
      */
-    Task<void> close(std::stop_token st) {
+    Task<void> close(const std::stop_token& st) {
         co_await send_ctrl(RudpFlags::Fin, st);
     }
 
@@ -433,7 +433,7 @@ private:
 
     // ── Transmit / retransmit ─────────────────────────────────────────────────
 
-    Task<Result<void>> transmit(RudpSegment& seg, std::stop_token st) {
+    Task<Result<void>> transmit(RudpSegment& seg, const std::stop_token& st) {
         (void)st; // stop_token reserved for future retransmit cancellation
         std::array<std::byte, kRudpHeaderMax + kRudpMtu> frame{};
         size_t hlen = seg.header.encode(frame);
@@ -448,7 +448,7 @@ private:
         co_return {};
     }
 
-    Task<void> drain_acks(std::stop_token st) {
+    Task<void> drain_acks(const std::stop_token& st) {
         // Non-blocking drain: just yield once to let reactor process events
         co_await udp_.recv_from(std::span<std::byte>{});
         (void)st;
@@ -456,7 +456,7 @@ private:
 
     // ── Control frames ────────────────────────────────────────────────────────
 
-    Task<Result<void>> send_ctrl(uint8_t flags, std::stop_token st) {
+    Task<Result<void>> send_ctrl(uint8_t flags, const std::stop_token& st) {
         (void)st; // stop_token reserved for future send cancellation
         RudpHeader hdr;
         hdr.seq    = send_seq_;
@@ -471,11 +471,11 @@ private:
         co_return {};
     }
 
-    Task<void> send_ack(std::stop_token st) {
+    Task<void> send_ack(const std::stop_token& st) {
         co_await send_ctrl(RudpFlags::Ack, st);
     }
 
-    Task<void> send_nack(std::stop_token st) {
+    Task<void> send_nack(const std::stop_token& st) {
         (void)st; // stop_token reserved for future send cancellation
         RudpHeader hdr;
         hdr.seq    = send_seq_;

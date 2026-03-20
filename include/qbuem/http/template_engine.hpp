@@ -257,7 +257,7 @@ private:
 
         } else if constexpr (std::is_same_v<SType, SegEachBlock>) {
           const auto* list = ctx.get_list(s.key);
-          if (list) {
+          if (list != nullptr) {
             for (const auto& item : *list)
               render_segments(s.body, ctx, out, item);
           }

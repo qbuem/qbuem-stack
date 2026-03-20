@@ -205,9 +205,9 @@ private:
  */
 class TlsFetchRequest {
 public:
-  TlsFetchRequest(std::string url, TlsSessionParams session)
+  TlsFetchRequest(std::string url, const TlsSessionParams& session)
       : url_(std::move(url))
-      , stream_(std::make_unique<TlsStream>(std::move(session))) {}
+      , stream_(std::make_unique<TlsStream>(session)) {}
 
   /** @brief Set the HTTP method (default: GET). */
   TlsFetchRequest &method(Method m)                  { method_ = m; return *this; }
@@ -357,8 +357,8 @@ private:
  * @endcode
  */
 [[nodiscard]] inline TlsFetchRequest fetch_tls(std::string_view url,
-                                                TlsSessionParams session) {
-  return TlsFetchRequest(std::string(url), std::move(session));
+                                                const TlsSessionParams& session) {
+  return TlsFetchRequest(std::string(url), session);
 }
 
 } // namespace qbuem

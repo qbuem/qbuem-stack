@@ -352,10 +352,10 @@ public:
             ssize_t result_{-1};
             int     err_{0};
 
-            bool await_ready() const noexcept { return false; }
+            [[nodiscard]] bool await_ready() const noexcept { return false; }
             void await_suspend(std::coroutine_handle<> h) {
                 auto* rx = Reactor::current();
-                if (!rx) { h.resume(); return; }
+                if (rx == nullptr) { h.resume(); return; }
                 rx->register_event(fd_, EventType::Write, [h, this](int f) {
                     result_ = ::sendto(f, data_, size_, 0,
                                        reinterpret_cast<const sockaddr*>(ss_), sslen_);
@@ -382,7 +382,7 @@ public:
      * @returns Pair of (bytes received, sender address), or error.
      */
     [[nodiscard]] Task<Result<std::pair<size_t, SocketAddr>>>
-    recv_from(std::span<std::byte> buf, std::stop_token st) {
+    recv_from(std::span<std::byte> buf, const std::stop_token& st) {
         if (st.stop_requested())
             co_return unexpected(std::make_error_code(std::errc::operation_canceled));
 
@@ -395,10 +395,10 @@ public:
             ssize_t result_{-1};
             int err_{0};
 
-            bool await_ready() const noexcept { return false; }
+            [[nodiscard]] bool await_ready() const noexcept { return false; }
             void await_suspend(std::coroutine_handle<> h) {
                 auto* rx = Reactor::current();
-                if (!rx) { h.resume(); return; }
+                if (rx == nullptr) { h.resume(); return; }
                 rx->register_event(fd_, EventType::Read, [h, this](int f) {
                     result_ = ::recvfrom(f, data_, size_, 0,
                                          reinterpret_cast<sockaddr*>(&from_), &fromlen_);

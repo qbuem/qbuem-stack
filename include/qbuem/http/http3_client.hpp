@@ -161,7 +161,7 @@ struct Http3Response {
     int         status{0};   ///< HTTP status code
     std::string headers;     ///< Decoded headers (name: value\r\n …)
     std::string body;        ///< Response body
-    bool ok() const noexcept { return status >= 200 && status < 300; }
+    [[nodiscard]] bool ok() const noexcept { return status >= 200 && status < 300; }
 };
 
 // ─── IHttp3Transport — injection interface ────────────────────────────────────
@@ -197,7 +197,7 @@ public:
      * @returns `Result<void>` — ok when the connection is ready.
      */
     [[nodiscard]] virtual Task<Result<void>>
-    connect(std::string_view host, uint16_t port, std::stop_token st) = 0;
+    connect(std::string_view host, uint16_t port, const std::stop_token& st) = 0;
 
     /**
      * @brief Send a single HTTP/3 request and return the complete response.
@@ -207,14 +207,14 @@ public:
      * @returns `Http3Response` on success, or error.
      */
     [[nodiscard]] virtual Task<Result<Http3Response>>
-    send_request(const Http3Request& req, std::stop_token st) = 0;
+    send_request(const Http3Request& req, const std::stop_token& st) = 0;
 
     /**
      * @brief Gracefully close the QUIC connection (sends GOAWAY frame).
      *
      * @param st Cancellation token.
      */
-    virtual Task<void> close(std::stop_token st) = 0;
+    virtual Task<void> close(const std::stop_token& st) = 0;
 
     /**
      * @brief Returns true if the connection is still usable.
@@ -338,7 +338,7 @@ public:
      * @returns `this` (for chaining), or error.
      */
     [[nodiscard]] Task<Result<Http3Client*>>
-    connect(std::string url, std::stop_token st) {
+    connect(std::string url, const std::stop_token& st) {
         auto parsed = ParsedUrl::parse(url);
         if (!parsed)
             co_return unexpected(std::make_error_code(std::errc::invalid_argument));
@@ -348,7 +348,7 @@ public:
             uint16_t p = 0;
             std::from_chars(parsed->port_str().data(),
                             parsed->port_str().data() + parsed->port_str().size(), p);
-            if (p) port = p;
+            if (p != 0u) port = p;
         }
 
         auto r = co_await transport_->connect(parsed->host, port, st);
@@ -365,7 +365,7 @@ public:
      * @returns `Http3Response` on success, or error.
      */
     [[nodiscard]] Task<Result<Http3Response>> get(
-            std::string url, std::stop_token st,
+            std::string url, const std::stop_token& st,
             std::vector<std::pair<std::string,std::string>> hdrs = {}) {
         Http3Request req{.method="GET", .url=std::move(url), .body={}, .headers=std::move(hdrs)};
         co_return co_await transport_->send_request(req, st);
@@ -381,7 +381,7 @@ public:
      * @returns `Http3Response` on success, or error.
      */
     [[nodiscard]] Task<Result<Http3Response>> post(
-            std::string url, std::string body, std::stop_token st,
+            std::string url, std::string body, const std::stop_token& st,
             std::vector<std::pair<std::string,std::string>> hdrs = {}) {
         Http3Request req{.method="POST", .url=std::move(url),
                          .body=std::move(body), .headers=std::move(hdrs)};
@@ -392,14 +392,14 @@ public:
      * @brief True if the underlying transport is connected.
      */
     [[nodiscard]] bool is_connected() const noexcept {
-        return transport_ && transport_->is_connected();
+        return transport_ != nullptr && transport_->is_connected();
     }
 
     /**
      * @brief Gracefully close the connection.
      */
-    Task<void> close(std::stop_token st) {
-        if (transport_) co_await transport_->close(st);
+    Task<void> close(const std::stop_token& st) {
+        if (transport_ != nullptr) co_await transport_->close(st);
     }
 
 private:
