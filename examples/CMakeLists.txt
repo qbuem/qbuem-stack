@@ -243,6 +243,11 @@ add_executable(spatial_fusion_example
     11-advanced-apps/spatial_fusion/spatial_fusion_example.cpp)
 target_link_libraries(spatial_fusion_example PRIVATE qbuem-stack::qbuem)
 
+# Open-World spatial index: TiledBitset infinite map + radius/raycast/box queries
+add_executable(open_world_example
+    11-advanced-apps/open_world/open_world_example.cpp)
+target_link_libraries(open_world_example PRIVATE qbuem-stack::qbuem)
+
 # ── qbuem-json dependent examples ────────────────────────────────────────────
 # Fetches qbuem-json via FetchContent; skipped if unavailable or no network.
 
