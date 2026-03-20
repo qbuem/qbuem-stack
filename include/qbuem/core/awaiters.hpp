@@ -32,11 +32,11 @@ struct AsyncRead {
   size_t count;
   ssize_t result = -1;
 
-  bool await_ready() const noexcept { return false; }
+  [[nodiscard]] bool await_ready() const noexcept { return false; }
 
   void await_suspend(std::coroutine_handle<> handle) {
     auto *reactor = Reactor::current();
-    if (!reactor) {
+    if (reactor == nullptr) {
       handle.resume();
       return;
     }
@@ -48,7 +48,7 @@ struct AsyncRead {
     });
   }
 
-  ssize_t await_resume() const noexcept { return result; }
+  [[nodiscard]] ssize_t await_resume() const noexcept { return result; }
 };
 
 /**
@@ -60,11 +60,11 @@ struct AsyncWrite {
   size_t count;
   ssize_t result = -1;
 
-  bool await_ready() const noexcept { return false; }
+  [[nodiscard]] bool await_ready() const noexcept { return false; }
 
   void await_suspend(std::coroutine_handle<> handle) {
     auto *reactor = Reactor::current();
-    if (!reactor) {
+    if (reactor == nullptr) {
       handle.resume();
       return;
     }
@@ -76,7 +76,7 @@ struct AsyncWrite {
     });
   }
 
-  ssize_t await_resume() const noexcept { return result; }
+  [[nodiscard]] ssize_t await_resume() const noexcept { return result; }
 };
 
 /**
@@ -85,11 +85,11 @@ struct AsyncWrite {
 struct AsyncSleep {
   int timeout_ms;
 
-  bool await_ready() const noexcept { return timeout_ms <= 0; }
+  [[nodiscard]] bool await_ready() const noexcept { return timeout_ms <= 0; }
 
-  void await_suspend(std::coroutine_handle<> handle) {
+  void await_suspend(std::coroutine_handle<> handle) const {
     auto *reactor = Reactor::current();
-    if (!reactor) {
+    if (reactor == nullptr) {
       handle.resume();
       return;
     }
@@ -121,11 +121,11 @@ struct AsyncAccept {
   int listen_fd;
   int client_fd = -1;
 
-  bool await_ready() const noexcept { return false; }
+  [[nodiscard]] bool await_ready() const noexcept { return false; }
 
   void await_suspend(std::coroutine_handle<> handle) {
     auto *reactor = Reactor::current();
-    if (!reactor) {
+    if (reactor == nullptr) {
       handle.resume();
       return;
     }
@@ -142,7 +142,7 @@ struct AsyncAccept {
         });
   }
 
-  int await_resume() const noexcept { return client_fd; }
+  [[nodiscard]] int await_resume() const noexcept { return client_fd; }
 };
 
 inline AsyncSleep sleep(int ms) { return AsyncSleep{ms}; }

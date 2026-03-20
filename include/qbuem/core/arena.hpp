@@ -170,7 +170,7 @@ private:
    * @param size Size of the new block (bytes).
    */
   void allocate_block(size_t size) {
-    auto block = std::make_unique<uint8_t[]>(size);
+    auto block = std::make_unique<uint8_t[]>(size); // NOLINT(modernize-avoid-c-arrays)
     uint8_t *ptr = block.get();
     blocks_.push_back(std::move(block));
     block_ends_.push_back(ptr + size);
@@ -194,7 +194,7 @@ private:
   size_t current_block_size_;
 
   /** @brief List of owned memory blocks, managed by unique_ptr for lifetime control. */
-  std::vector<std::unique_ptr<uint8_t[]>> blocks_;
+  std::vector<std::unique_ptr<uint8_t[]>> blocks_; // NOLINT(modernize-avoid-c-arrays)
 
   /** @brief End pointer for each block. Corresponds 1:1 with `blocks_`. */
   std::vector<uint8_t *> block_ends_;
@@ -328,7 +328,7 @@ public:
    * @note `[[nodiscard]]` — ignoring the return value triggers a compile-time warning.
    */
   [[nodiscard]] void *allocate() noexcept {
-    if (!free_list_) [[unlikely]]
+    if (free_list_ == nullptr) [[unlikely]]
       return nullptr;
     void *slot = free_list_;
     free_list_ = *reinterpret_cast<void **>(free_list_);
@@ -356,19 +356,19 @@ public:
    * @brief Return the total number of slots in the pool.
    * @returns The capacity value specified at construction.
    */
-  size_t capacity()  const noexcept { return capacity_; }
+  [[nodiscard]] size_t capacity()  const noexcept { return capacity_; }
 
   /**
    * @brief Return the number of currently allocated slots.
    * @returns Number of slots currently in use.
    */
-  size_t used()      const noexcept { return used_; }
+  [[nodiscard]] size_t used()      const noexcept { return used_; }
 
   /**
    * @brief Return the number of currently available slots.
    * @returns `capacity() - used()`.
    */
-  size_t available() const noexcept { return capacity_ - used_; }
+  [[nodiscard]] size_t available() const noexcept { return capacity_ - used_; }
 
 private:
   /** @brief Total number of slots in the pool. */
@@ -386,7 +386,7 @@ private:
   void    *free_list_ = nullptr;
 
   /** @brief Aligned contiguous memory block. Owns `capacity * kSlotSize` bytes. */
-  std::unique_ptr<uint8_t[], AlignedDeleter> storage_;
+  std::unique_ptr<uint8_t[], AlignedDeleter> storage_; // NOLINT(modernize-avoid-c-arrays)
 };
 
 } // namespace qbuem

@@ -44,19 +44,19 @@ struct LogEntry {
   static constexpr size_t kMaxMethod = 8;
   static constexpr size_t kMaxPath   = 256;
 
-  char   method[kMaxMethod];
-  char   path[kMaxPath];
+  std::array<char, kMaxMethod> method;
+  std::array<char, kMaxPath>   path;
   int    status;
   long   duration_us;
   long   timestamp_sec;   // seconds since epoch
 
   void fill(std::string_view m, std::string_view p, int s, long dur) noexcept {
     size_t ml = std::min(m.size(), kMaxMethod - 1);
-    std::memcpy(method, m.data(), ml);
+    std::memcpy(method.data(), m.data(), ml);
     method[ml] = '\0';
 
     size_t pl = std::min(p.size(), kMaxPath - 1);
-    std::memcpy(path, p.data(), pl);
+    std::memcpy(path.data(), p.data(), pl);
     path[pl] = '\0';
 
     status       = s;
@@ -101,7 +101,7 @@ public:
 
   /** @brief Spawn the background flush thread. */
   void start() {
-    thread_ = std::jthread([this](std::stop_token st) { flush_loop(st); });
+    thread_ = std::jthread([this](std::stop_token st) { flush_loop(std::move(st)); });
   }
 
   /** @brief Flush remaining entries and join the background thread. */
@@ -151,7 +151,7 @@ public:
   }
 
 private:
-  void flush_loop(std::stop_token st) {
+  void flush_loop(const std::stop_token& st) {
     while (!st.stop_requested()) {
       drain();
       // Sleep briefly to yield CPU — 1 ms is a good balance between
@@ -179,7 +179,7 @@ private:
     std::time_t ts = static_cast<std::time_t>(e.timestamp_sec);
     gmtime_r(&ts, &tm);
 
-    char ts_buf[24];
+    char ts_buf[24]; // NOLINT(modernize-avoid-c-arrays)
     std::strftime(ts_buf, sizeof(ts_buf), "%Y-%m-%dT%H:%M:%SZ", &tm);
 
     std::string line;
@@ -188,11 +188,11 @@ private:
       line = std::format(
           "{{\"ts\":\"{}\",\"method\":\"{}\","
           "\"path\":\"{}\",\"status\":{},\"duration_us\":{}}}\n",
-          ts_buf, e.method, e.path, e.status, e.duration_us);
+          ts_buf, e.method.data(), e.path.data(), e.status, e.duration_us);
     } else {
       // [YYYY-MM-DDTHH:MM:SSZ] METHOD /path STATUS Xµs
       line = std::format("[{}] {} {} {} {}µs\n",
-                         ts_buf, e.method, e.path, e.status, e.duration_us);
+                         ts_buf, e.method.data(), e.path.data(), e.status, e.duration_us);
     }
     std::fwrite(line.data(), 1, line.size(), out_);
   }
