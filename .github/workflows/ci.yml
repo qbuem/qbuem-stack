@@ -13,6 +13,15 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+# ── Compiler matrix ───────────────────────────────────────────────────────────
+# Ubuntu 22.04 ships GCC 11 and Clang 14 by default — neither supports C++23
+# <expected>.  We install GCC 13 (available in the default apt repo on the
+# GitHub-hosted runner) and Clang 17 (available from the LLVM apt repo) and
+# pin the compiler explicitly via CMAKE_CXX_COMPILER.
+#
+# Ubuntu 24.04-arm ships GCC 13 by default — no extra install needed.
+# ─────────────────────────────────────────────────────────────────────────────
+
 jobs:
   # ── 1. Static analysis (clang-tidy) ─────────────────────────────────────────
   analyze:
@@ -22,17 +31,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install dependencies
+      - name: Install Clang 17 + clang-tidy-17 + liburing
         run: |
           sudo apt-get update -q
-          sudo apt-get install -y clang clang-tidy liburing-dev
+          sudo apt-get install -y clang-17 clang-tidy-17 liburing-dev
 
       - name: Configure (generate compile_commands.json)
         run: |
           cmake -B build \
             -DCMAKE_BUILD_TYPE=Debug \
-            -DCMAKE_CXX_COMPILER=clang++ \
+            -DCMAKE_CXX_COMPILER=clang++-17 \
             -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+            -DBUILD_SHARED_LIBS=OFF \
             -DQBUEM_BUILD_TESTS=OFF \
             -DQBUEM_BUILD_EXAMPLES=OFF
 
@@ -41,11 +51,12 @@ jobs:
       - name: Materialise FetchContent headers
         run: cmake --build build --target qbuem_core --target qbuem_http --target qbuem -j$(nproc) || true
 
+      # -config-file is not supported by the run-clang-tidy Python wrapper;
+      # clang-tidy automatically discovers .clang-tidy walking up the tree.
       - name: Run clang-tidy
         run: |
-          run-clang-tidy \
+          run-clang-tidy-17 \
             -p build \
-            -config-file .clang-tidy \
             -j$(nproc) \
             $(find src -name '*.cpp' | sort)
 
@@ -60,19 +71,27 @@ jobs:
         include:
           - os: ubuntu-22.04
             platform: linux-x86_64
+            cxx: g++-13
+            extra_pkgs: gcc-13 g++-13
           - os: ubuntu-24.04-arm
             platform: linux-aarch64
+            cxx: g++
+            extra_pkgs: ""
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install liburing
-        run: sudo apt-get update -q && sudo apt-get install -y liburing-dev
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y liburing-dev ${{ matrix.extra_pkgs }}
 
       - name: Configure
         run: |
           cmake -B build \
             -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_CXX_COMPILER=${{ matrix.cxx }} \
+            -DBUILD_SHARED_LIBS=OFF \
             -DQBUEM_BUILD_TESTS=ON \
             -DQBUEM_BUILD_EXAMPLES=OFF
 
@@ -83,9 +102,12 @@ jobs:
         working-directory: build
         run: ctest --output-on-failure -C Release
 
-  # ── 3. Verify install layout ─────────────────────────────────────────────────
-  # Ensures cmake --install produces a valid include-lib distribution tree
-  # (headers + static libs + CMake package config) for each architecture.
+  # ── 3. Verify install layout (static + shared) ───────────────────────────────
+  # Ensures cmake --install produces a valid include-lib distribution tree:
+  #   include/qbuem/   ← all public headers
+  #   lib/*.a          ← static archives
+  #   lib/*.so         ← shared libraries
+  #   lib/cmake/       ← CMake package config for find_package()
   install-check:
     name: Install Layout / ${{ matrix.platform }}
     runs-on: ${{ matrix.os }}
@@ -97,20 +119,27 @@ jobs:
         include:
           - os: ubuntu-22.04
             platform: linux-x86_64
+            cxx: g++-13
+            extra_pkgs: gcc-13 g++-13
           - os: ubuntu-24.04-arm
             platform: linux-aarch64
+            cxx: g++
+            extra_pkgs: ""
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install liburing
-        run: sudo apt-get update -q && sudo apt-get install -y liburing-dev
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y liburing-dev ${{ matrix.extra_pkgs }}
 
-      # ── Static pass ────────────────────────────────────────────────────────
+      # ── Static pass (.a) ───────────────────────────────────────────────────
       - name: Configure (static pass)
         run: |
           cmake -B build_static \
             -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_CXX_COMPILER=${{ matrix.cxx }} \
             -DBUILD_SHARED_LIBS=OFF \
             -DQBUEM_BUILD_TESTS=OFF \
             -DQBUEM_BUILD_EXAMPLES=OFF
@@ -118,14 +147,15 @@ jobs:
       - name: Build (static pass)
         run: cmake --build build_static -j$(nproc)
 
-      - name: Install static pass into dist/
+      - name: Install static pass → dist/
         run: cmake --install build_static --prefix dist
 
-      # ── Shared pass ────────────────────────────────────────────────────────
+      # ── Shared pass (.so) ──────────────────────────────────────────────────
       - name: Configure (shared pass)
         run: |
           cmake -B build_shared \
             -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_CXX_COMPILER=${{ matrix.cxx }} \
             -DBUILD_SHARED_LIBS=ON \
             -DQBUEM_BUILD_TESTS=OFF \
             -DQBUEM_BUILD_EXAMPLES=OFF
@@ -138,7 +168,7 @@ jobs:
           cmake --install build_shared --prefix dist_shared
           find dist_shared/lib -name "*.so*" -exec cp -P {} dist/lib/ \;
 
-      # ── Verify combined layout ──────────────────────────────────────────────
+      # ── Verify combined layout ─────────────────────────────────────────────
       - name: Verify include-lib layout (static + shared)
         run: |
           echo "=== Install tree ==="
@@ -176,5 +206,8 @@ jobs:
           add_executable(smoke_test ../tests/reactor_test.cpp)
           target_link_libraries(smoke_test PRIVATE qbuem-stack::qbuem)
           EOF
-          cmake -B build_smoke -DCMAKE_BUILD_TYPE=Release 2>&1 | tail -20
+          cmake -B build_smoke \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_CXX_COMPILER=${{ matrix.cxx }} \
+            2>&1 | tail -20
           echo "find_package smoke test OK (configure step)"

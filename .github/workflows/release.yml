@@ -18,8 +18,13 @@ permissions:
 #             └─► build/linux-aarch64  ──┘
 #
 # Supported distribution architectures:
-#   - linux-x86_64  (Ubuntu 22.04, glibc 2.35+)
-#   - linux-aarch64 (Ubuntu 24.04 ARM runner, glibc 2.39+)
+#   - linux-x86_64  (Ubuntu 22.04, glibc 2.35+, GCC 13)
+#   - linux-aarch64 (Ubuntu 24.04 ARM runner, glibc 2.39+, GCC 13)
+#
+# C++23 compiler requirement:
+#   Ubuntu 22.04 ships GCC 11 / Clang 14 — neither supports <expected>.
+#   GCC 13 and Clang 17 are available in the apt repo of the GitHub-hosted
+#   runner.  We install them explicitly and pin CMAKE_CXX_COMPILER.
 #
 # Each build job produces a self-contained include-lib tarball containing
 # BOTH static (.a) and shared (.so) variants:
@@ -31,11 +36,8 @@ permissions:
 #
 # Build strategy: cmake is invoked twice per architecture.
 #   Pass 1 (static):  cmake -DBUILD_SHARED_LIBS=OFF → installs .a + headers + cmake config
-#   Pass 2 (shared):  cmake -DBUILD_SHARED_LIBS=ON  → installs .so files (headers already in dist)
+#   Pass 2 (shared):  cmake -DBUILD_SHARED_LIBS=ON  → installs .so (headers already in dist)
 # The two install trees are merged into a single dist/ directory.
-#
-# The publish job downloads both tarballs and creates the GitHub Release in
-# one shot to avoid race conditions on the release body.
 # ============================================================================
 
 jobs:
@@ -47,16 +49,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install dependencies
+      - name: Install Clang 17 + clang-tidy-17 + liburing
         run: |
           sudo apt-get update -q
-          sudo apt-get install -y clang clang-tidy liburing-dev
+          sudo apt-get install -y clang-17 clang-tidy-17 liburing-dev
 
       - name: Configure (generate compile_commands.json)
         run: |
           cmake -B build \
             -DCMAKE_BUILD_TYPE=Debug \
-            -DCMAKE_CXX_COMPILER=clang++ \
+            -DCMAKE_CXX_COMPILER=clang++-17 \
             -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
             -DBUILD_SHARED_LIBS=OFF \
             -DQBUEM_BUILD_TESTS=OFF \
@@ -67,11 +69,12 @@ jobs:
       - name: Materialise FetchContent headers
         run: cmake --build build --target qbuem_core --target qbuem_http --target qbuem -j$(nproc) || true
 
+      # -config-file is not supported by the run-clang-tidy Python wrapper;
+      # clang-tidy automatically discovers .clang-tidy walking up the tree.
       - name: Run clang-tidy
         run: |
-          run-clang-tidy \
+          run-clang-tidy-17 \
             -p build \
-            -config-file .clang-tidy \
             -j$(nproc) \
             $(find src -name '*.cpp' | sort)
 
@@ -86,19 +89,26 @@ jobs:
         include:
           - os: ubuntu-22.04
             platform: linux-x86_64
+            cxx: g++-13
+            extra_pkgs: gcc-13 g++-13
           - os: ubuntu-24.04-arm
             platform: linux-aarch64
+            cxx: g++
+            extra_pkgs: ""
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install liburing
-        run: sudo apt-get update -q && sudo apt-get install -y liburing-dev
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y liburing-dev ${{ matrix.extra_pkgs }}
 
       - name: Configure
         run: |
           cmake -B build \
             -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_CXX_COMPILER=${{ matrix.cxx }} \
             -DBUILD_SHARED_LIBS=OFF \
             -DQBUEM_BUILD_TESTS=ON \
             -DQBUEM_BUILD_EXAMPLES=ON
@@ -122,20 +132,27 @@ jobs:
         include:
           - os: ubuntu-22.04
             platform: linux-x86_64
+            cxx: g++-13
+            extra_pkgs: gcc-13 g++-13
           - os: ubuntu-24.04-arm
             platform: linux-aarch64
+            cxx: g++
+            extra_pkgs: ""
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install liburing
-        run: sudo apt-get update -q && sudo apt-get install -y liburing-dev
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y liburing-dev ${{ matrix.extra_pkgs }}
 
       # ── Pass 1: static libraries (.a) ──────────────────────────────────────
       - name: Configure (static pass)
         run: |
           cmake -B build_static \
             -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_CXX_COMPILER=${{ matrix.cxx }} \
             -DBUILD_SHARED_LIBS=OFF \
             -DQBUEM_BUILD_TESTS=OFF \
             -DQBUEM_BUILD_EXAMPLES=OFF \
@@ -152,6 +169,7 @@ jobs:
         run: |
           cmake -B build_shared \
             -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_CXX_COMPILER=${{ matrix.cxx }} \
             -DBUILD_SHARED_LIBS=ON \
             -DQBUEM_BUILD_TESTS=OFF \
             -DQBUEM_BUILD_EXAMPLES=OFF \
