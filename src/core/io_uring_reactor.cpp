@@ -270,13 +270,14 @@ Result<int> IOUringReactor::poll(int timeout_ms) {
   // Collect and consume CQEs one at a time so every advance is accounted for.
   struct RawEvent {
     uint64_t token;
-    int res;
+    int      res;
+    unsigned flags; // CQE flags (e.g. IORING_CQE_F_BUFFER for buf-ring recv)
   };
   std::vector<RawEvent> events;
 
   // `cqe` already points to the first completion; consume it then peek more.
   do {
-    events.push_back({io_uring_cqe_get_data64(cqe), cqe->res});
+    events.push_back({io_uring_cqe_get_data64(cqe), cqe->res, cqe->flags});
     io_uring_cqe_seen(&impl_->ring, cqe); // advances khead by 1
   } while (io_uring_peek_cqe(&impl_->ring, &cqe) == 0);
 
@@ -295,7 +296,7 @@ Result<int> IOUringReactor::poll(int timeout_ms) {
     if (op.kind == Impl::OpKind::Wake) {
       // Drain the eventfd counter.
       uint64_t val;
-      read(impl_->wake_fd, &val, sizeof(val));
+      (void)read(impl_->wake_fd, &val, sizeof(val));
       // Drain work queue.
       std::vector<std::function<void()>> local;
       {
@@ -397,12 +398,23 @@ void IOUringReactor::post(std::function<void()> fn) {
   }
   // Wake the ring by writing to the eventfd; the registered POLL_ADD fires.
   const uint64_t one = 1;
-  write(impl_->wake_fd, &one, sizeof(one)); // best-effort
+  (void)write(impl_->wake_fd, &one, sizeof(one)); // best-effort wakeup
 }
 
 void IOUringReactor::stop() { impl_->running = false; }
 bool IOUringReactor::is_running() const { return impl_->running; }
 bool IOUringReactor::is_sqpoll() const noexcept { return impl_->sqpoll_enabled; }
+
+// Signal handling via signalfd is not implemented in IOUringReactor.
+// Use the kqueue reactor on macOS or wire up signalfd(2) explicitly.
+Result<void> IOUringReactor::register_signal(int /*sig*/,
+                                             std::function<void(int)> /*cb*/) {
+  return std::unexpected(std::make_error_code(std::errc::not_supported));
+}
+
+Result<void> IOUringReactor::unregister_signal(int /*sig*/) {
+  return std::unexpected(std::make_error_code(std::errc::not_supported));
+}
 
 // ---------------------------------------------------------------------------
 // Fixed Buffer API
