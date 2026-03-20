@@ -85,9 +85,11 @@
  * @endcode
  */
 
+#include <algorithm>
 #include <atomic>
 #include <bit>
 #include <cassert>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -183,6 +185,108 @@ inline void morton2d_decode(uint32_t m, uint32_t& x, uint32_t& y) noexcept {
     assert(from <= to && to < 64u);
     if (to >= 63u) return ~uint64_t{0} << from;
     return ((uint64_t{1} << (to - from + 1u)) - 1u) << from;
+}
+
+// ── SIMD row-scan helpers ──────────────────────────────────────────────────
+
+/**
+ * @brief Scan `len` contiguous `atomic<uint64_t>` cells; return true on first
+ *        cell where `(value & mask) != 0`.
+ *
+ * This is the hot inner loop shared by `any_in_box`, `any_in_radius`, and
+ * `ChunkedWorld` cross-chunk scans.  SIMD paths: AVX-512 (8 cells/load),
+ * AVX2 (4 cells/load), NEON (2 cells/load), or scalar fallback.
+ */
+[[nodiscard]] inline bool scan_row_any(
+        const std::atomic<uint64_t>* row,
+        uint32_t len, uint64_t mask) noexcept {
+#if defined(QBUEM_GRID_SIMD_AVX512)
+    const __m512i vmask = _mm512_set1_epi64(static_cast<long long>(mask));
+    uint32_t i = 0u;
+    for (; i + 8u <= len; i += 8u) {
+        __m512i v = _mm512_loadu_si512(reinterpret_cast<const __m512i*>(row + i));
+        if (_mm512_test_epi64_mask(v, vmask)) return true;
+    }
+    for (; i < len; ++i)
+        if (row[i].load(std::memory_order_relaxed) & mask) return true;
+#elif defined(QBUEM_GRID_SIMD_AVX2)
+    const __m256i vmask = _mm256_set1_epi64x(static_cast<long long>(mask));
+    uint32_t i = 0u;
+    for (; i + 4u <= len; i += 4u) {
+        __m256i v = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(row + i));
+        __m256i r = _mm256_and_si256(v, vmask);
+        if (!_mm256_testz_si256(r, r)) return true;
+    }
+    for (; i < len; ++i)
+        if (row[i].load(std::memory_order_relaxed) & mask) return true;
+#elif defined(QBUEM_GRID_SIMD_NEON)
+    const uint64x2_t vmask = vdupq_n_u64(mask);
+    uint32_t i = 0u;
+    for (; i + 2u <= len; i += 2u) {
+        uint64x2_t v = vld1q_u64(reinterpret_cast<const uint64_t*>(row + i));
+        uint64x2_t r = vandq_u64(v, vmask);
+        if (vmaxvq_u64(r)) return true;
+    }
+    for (; i < len; ++i)
+        if (row[i].load(std::memory_order_relaxed) & mask) return true;
+#else
+    for (uint32_t i = 0u; i < len; ++i)
+        if (row[i].load(std::memory_order_relaxed) & mask) return true;
+#endif
+    return false;
+}
+
+/**
+ * @brief Scan `len` contiguous `atomic<uint64_t>` cells; return count of cells
+ *        where `(value & mask) != 0`.
+ *
+ * SIMD paths: AVX-512 (VPTEST + POPCNT on `__mmask8`), AVX2 (cmpeq + movemask),
+ * NEON (lane-extract), or scalar fallback.
+ */
+[[nodiscard]] inline uint32_t scan_row_count(
+        const std::atomic<uint64_t>* row,
+        uint32_t len, uint64_t mask) noexcept {
+    uint32_t count = 0u;
+#if defined(QBUEM_GRID_SIMD_AVX512)
+    const __m512i vmask = _mm512_set1_epi64(static_cast<long long>(mask));
+    uint32_t i = 0u;
+    for (; i + 8u <= len; i += 8u) {
+        __m512i v = _mm512_loadu_si512(reinterpret_cast<const __m512i*>(row + i));
+        count += static_cast<uint32_t>(
+            __builtin_popcount(_mm512_test_epi64_mask(v, vmask)));
+    }
+    for (; i < len; ++i)
+        if (row[i].load(std::memory_order_relaxed) & mask) ++count;
+#elif defined(QBUEM_GRID_SIMD_AVX2)
+    const __m256i vmask = _mm256_set1_epi64x(static_cast<long long>(mask));
+    const __m256i vzero = _mm256_setzero_si256();
+    uint32_t i = 0u;
+    for (; i + 4u <= len; i += 4u) {
+        __m256i v  = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(row + i));
+        __m256i r  = _mm256_and_si256(v, vmask);
+        __m256i eq = _mm256_cmpeq_epi64(r, vzero);
+        int zmask  = _mm256_movemask_epi8(eq);
+        count += static_cast<uint32_t>(
+            __builtin_popcount(static_cast<uint32_t>(~zmask))) >> 3u;
+    }
+    for (; i < len; ++i)
+        if (row[i].load(std::memory_order_relaxed) & mask) ++count;
+#elif defined(QBUEM_GRID_SIMD_NEON)
+    const uint64x2_t vmask = vdupq_n_u64(mask);
+    uint32_t i = 0u;
+    for (; i + 2u <= len; i += 2u) {
+        uint64x2_t v = vld1q_u64(reinterpret_cast<const uint64_t*>(row + i));
+        uint64x2_t r = vandq_u64(v, vmask);
+        count += static_cast<uint32_t>(vgetq_lane_u64(r, 0) != 0u)
+               + static_cast<uint32_t>(vgetq_lane_u64(r, 1) != 0u);
+    }
+    for (; i < len; ++i)
+        if (row[i].load(std::memory_order_relaxed) & mask) ++count;
+#else
+    for (uint32_t i = 0u; i < len; ++i)
+        if (row[i].load(std::memory_order_relaxed) & mask) ++count;
+#endif
+    return count;
 }
 
 } // namespace detail
@@ -335,174 +439,181 @@ public:
     }
 
     /**
-     * @brief Check whether any cell in an axis-aligned bounding box is occupied
-     *        in the given layer range.
+     * @brief Raw pointer to the first cell of row `y` (for ChunkedWorld & SIMD).
      *
-     * Iterates the (x1..x2) × (y1..y2) rectangle and returns true on first hit.
-     * With AVX-512 support, the per-cell check reduces to `VPAND + VPTST`.
-     *
-     * @param x1, y1  Top-left corner (inclusive).
-     * @param x2, y2  Bottom-right corner (inclusive).
-     * @param from    First layer (inclusive).
-     * @param to      Last  layer (inclusive).
-     * @returns true if any occupied cell exists in the box.
+     * Returns a pointer into the internal flat array.  Valid for the lifetime
+     * of this GridBitset.  Gives access to W consecutive `atomic<uint64_t>` cells.
      */
+    [[nodiscard]] const std::atomic<uint64_t>* row_ptr(uint32_t y) const noexcept {
+        assert(y < H);
+        return cells_ + static_cast<size_t>(y) * W;
+    }
+
     /**
      * @brief Check whether any cell in an axis-aligned bounding box is occupied
      *        in the given layer range.
      *
-     * Uses AVX-512 (8 cells/load), AVX2 (4 cells/load), or NEON (2 cells/load)
-     * SIMD paths when available.  Falls back to scalar on other platforms.
+     * Delegates to `detail::scan_row_any` — AVX-512 / AVX2 / NEON / scalar.
+     *
+     * @param x1,y1  Top-left  corner (inclusive).
+     * @param x2,y2  Bottom-right corner (inclusive).
+     * @param from   First layer (inclusive).
+     * @param to     Last  layer (inclusive).
+     * @returns true if any occupied cell exists in the box.
      */
     [[nodiscard]] bool any_in_box(uint32_t x1, uint32_t y1,
                                   uint32_t x2, uint32_t y2,
                                   uint32_t from, uint32_t to) const noexcept {
         assert(x1 <= x2 && x2 < W && y1 <= y2 && y2 < H);
         assert(from <= to && to < D);
-        const uint64_t mask  = detail::layer_range_mask(from, to);
-        const uint32_t box_w = x2 - x1 + 1u;
-
-#if defined(QBUEM_GRID_SIMD_AVX512)
-        // AVX-512: load 8 × uint64 per instruction.
-        const __m512i vmask = _mm512_set1_epi64(static_cast<long long>(mask));
+        const uint64_t mask = detail::layer_range_mask(from, to);
         for (uint32_t ry = y1; ry <= y2; ++ry) {
-            const auto* row = cells_ + static_cast<size_t>(ry) * W + x1;
-            uint32_t rx = 0u;
-            for (; rx + 8u <= box_w; rx += 8u) {
-                __m512i v = _mm512_loadu_si512(
-                    reinterpret_cast<const __m512i*>(row + rx));
-                if (_mm512_test_epi64_mask(v, vmask)) return true;
-            }
-            for (; rx < box_w; ++rx)
-                if (row[rx].load(std::memory_order_relaxed) & mask) return true;
+            if (detail::scan_row_any(
+                    cells_ + static_cast<size_t>(ry) * W + x1,
+                    x2 - x1 + 1u, mask)) return true;
         }
-#elif defined(QBUEM_GRID_SIMD_AVX2)
-        // AVX2: load 4 × uint64 per instruction.
-        const __m256i vmask = _mm256_set1_epi64x(static_cast<long long>(mask));
-        for (uint32_t ry = y1; ry <= y2; ++ry) {
-            const auto* row = cells_ + static_cast<size_t>(ry) * W + x1;
-            uint32_t rx = 0u;
-            for (; rx + 4u <= box_w; rx += 4u) {
-                __m256i v = _mm256_loadu_si256(
-                    reinterpret_cast<const __m256i*>(row + rx));
-                __m256i r = _mm256_and_si256(v, vmask);
-                if (!_mm256_testz_si256(r, r)) return true;
-            }
-            for (; rx < box_w; ++rx)
-                if (row[rx].load(std::memory_order_relaxed) & mask) return true;
-        }
-#elif defined(QBUEM_GRID_SIMD_NEON)
-        // NEON (AArch64): load 2 × uint64 per instruction.
-        const uint64x2_t vmask = vdupq_n_u64(mask);
-        for (uint32_t ry = y1; ry <= y2; ++ry) {
-            const auto* row = cells_ + static_cast<size_t>(ry) * W + x1;
-            uint32_t rx = 0u;
-            for (; rx + 2u <= box_w; rx += 2u) {
-                uint64x2_t v = vld1q_u64(
-                    reinterpret_cast<const uint64_t*>(row + rx));
-                uint64x2_t r = vandq_u64(v, vmask);
-                if (vmaxvq_u64(r)) return true;
-            }
-            for (; rx < box_w; ++rx)
-                if (row[rx].load(std::memory_order_relaxed) & mask) return true;
-        }
-#else
-        // Scalar fallback.
-        for (uint32_t ry = y1; ry <= y2; ++ry) {
-            for (uint32_t rx = x1; rx <= x2; ++rx) {
-                if (cells_[flat(rx, ry)].load(std::memory_order_relaxed) & mask)
-                    return true;
-            }
-        }
-#endif
         return false;
     }
 
     /**
      * @brief Count occupied cells in a box for a given layer range.
      *
-     * Uses AVX-512 (8 cells/load via VPTEST mask + POPCNT), AVX2 (4 cells/load),
-     * NEON (2 cells/load), or scalar fallback.
+     * Delegates to `detail::scan_row_count` — AVX-512 (VPTEST + POPCNT) /
+     * AVX2 / NEON / scalar.
      *
-     * @returns Number of cells in the box where at least one layer in
-     *          [from, to] is set.
+     * @returns Number of cells in [x1..x2]×[y1..y2] where any bit in
+     *          layer range [from, to] is set.
      */
     [[nodiscard]] uint32_t count_in_box(uint32_t x1, uint32_t y1,
                                         uint32_t x2, uint32_t y2,
                                         uint32_t from, uint32_t to) const noexcept {
         assert(x1 <= x2 && x2 < W && y1 <= y2 && y2 < H);
         assert(from <= to && to < D);
-        const uint64_t mask  = detail::layer_range_mask(from, to);
-        const uint32_t box_w = x2 - x1 + 1u;
+        const uint64_t mask = detail::layer_range_mask(from, to);
         uint32_t count = 0u;
-
-#if defined(QBUEM_GRID_SIMD_AVX512)
-        // AVX-512: 8 cells per load; _mm512_test_epi64_mask returns __mmask8
-        // where bit i is set iff lane i has any bit in common with vmask.
-        // POPCNT on the 8-bit mask counts non-zero lanes directly.
-        const __m512i vmask = _mm512_set1_epi64(static_cast<long long>(mask));
-        for (uint32_t ry = y1; ry <= y2; ++ry) {
-            const auto* row = cells_ + static_cast<size_t>(ry) * W + x1;
-            uint32_t rx = 0u;
-            for (; rx + 8u <= box_w; rx += 8u) {
-                __m512i v = _mm512_loadu_si512(
-                    reinterpret_cast<const __m512i*>(row + rx));
-                count += static_cast<uint32_t>(
-                    __builtin_popcount(_mm512_test_epi64_mask(v, vmask)));
-            }
-            for (; rx < box_w; ++rx)
-                if (row[rx].load(std::memory_order_relaxed) & mask) ++count;
-        }
-#elif defined(QBUEM_GRID_SIMD_AVX2)
-        // AVX2: 4 cells per load.
-        // AND with mask → compare to zero → movemask_epi8 produces 32-bit value
-        // where each zero 64-bit lane contributes 8 set bits; invert and /8 = non-zero count.
-        const __m256i vmask  = _mm256_set1_epi64x(static_cast<long long>(mask));
-        const __m256i vzero  = _mm256_setzero_si256();
-        for (uint32_t ry = y1; ry <= y2; ++ry) {
-            const auto* row = cells_ + static_cast<size_t>(ry) * W + x1;
-            uint32_t rx = 0u;
-            for (; rx + 4u <= box_w; rx += 4u) {
-                __m256i v  = _mm256_loadu_si256(
-                    reinterpret_cast<const __m256i*>(row + rx));
-                __m256i r  = _mm256_and_si256(v, vmask);
-                __m256i eq = _mm256_cmpeq_epi64(r, vzero); // 0xFF..FF where lane==0
-                // movemask_epi8: bit per byte; 8 set bits per zero 64-bit lane.
-                int zmask  = _mm256_movemask_epi8(eq);
-                // Invert: non-zero lanes → 8 bits each; popcount/8 = lane count.
-                count += static_cast<uint32_t>(
-                    __builtin_popcount(static_cast<uint32_t>(~zmask))) >> 3u;
-            }
-            for (; rx < box_w; ++rx)
-                if (row[rx].load(std::memory_order_relaxed) & mask) ++count;
-        }
-#elif defined(QBUEM_GRID_SIMD_NEON)
-        // NEON (AArch64): 2 cells per load.
-        const uint64x2_t vmask = vdupq_n_u64(mask);
-        for (uint32_t ry = y1; ry <= y2; ++ry) {
-            const auto* row = cells_ + static_cast<size_t>(ry) * W + x1;
-            uint32_t rx = 0u;
-            for (; rx + 2u <= box_w; rx += 2u) {
-                uint64x2_t v = vld1q_u64(
-                    reinterpret_cast<const uint64_t*>(row + rx));
-                uint64x2_t r = vandq_u64(v, vmask);
-                // Lane-extract: branchless non-zero test per lane.
-                count += static_cast<uint32_t>(vgetq_lane_u64(r, 0) != 0u)
-                       + static_cast<uint32_t>(vgetq_lane_u64(r, 1) != 0u);
-            }
-            for (; rx < box_w; ++rx)
-                if (row[rx].load(std::memory_order_relaxed) & mask) ++count;
-        }
-#else
-        // Scalar fallback.
-        for (uint32_t ry = y1; ry <= y2; ++ry) {
-            for (uint32_t rx = x1; rx <= x2; ++rx) {
-                if (cells_[flat(rx, ry)].load(std::memory_order_relaxed) & mask)
-                    ++count;
-            }
-        }
-#endif
+        for (uint32_t ry = y1; ry <= y2; ++ry)
+            count += detail::scan_row_count(
+                cells_ + static_cast<size_t>(ry) * W + x1,
+                x2 - x1 + 1u, mask);
         return count;
+    }
+
+    // ── Radius / circle queries ───────────────────────────────────────────────
+
+    /**
+     * @brief Check whether any cell within Chebyshev circle of radius `r`
+     *        centered at (cx, cy) is occupied in layer range [from, to].
+     *
+     * For each row in the bounding box, the exact horizontal extent is computed
+     * via a single `sqrt` call (not per cell), then `detail::scan_row_any` is
+     * used for the SIMD row scan.  O(r²) cells checked, no per-cell sqrt.
+     *
+     * @param cx, cy  Circle center [0, W) × [0, H).
+     * @param r       Radius in cells (Euclidean; circle is clipped to grid bounds).
+     * @param from    First layer (inclusive).
+     * @param to      Last  layer (inclusive).
+     * @returns true if any occupied cell exists within the circle.
+     */
+    [[nodiscard]] bool any_in_radius(uint32_t cx, uint32_t cy, uint32_t r,
+                                     uint32_t from, uint32_t to) const noexcept {
+        assert(cx < W && cy < H && from <= to && to < D);
+        const uint64_t mask = detail::layer_range_mask(from, to);
+        const int32_t  icx  = static_cast<int32_t>(cx);
+        const int32_t  icy  = static_cast<int32_t>(cy);
+        const int64_t  r2   = static_cast<int64_t>(r) * r;
+        const int32_t  y_lo = std::max(0, icy - static_cast<int32_t>(r));
+        const int32_t  y_hi = std::min(static_cast<int32_t>(H) - 1,
+                                       icy + static_cast<int32_t>(r));
+
+        for (int32_t ry = y_lo; ry <= y_hi; ++ry) {
+            const int64_t  dy   = static_cast<int64_t>(ry - icy);
+            const uint32_t half = static_cast<uint32_t>(
+                std::sqrt(static_cast<double>(r2 - dy * dy)));
+            const uint32_t x_lo = static_cast<uint32_t>(
+                std::max(0, icx - static_cast<int32_t>(half)));
+            const uint32_t x_hi = static_cast<uint32_t>(
+                std::min(static_cast<int32_t>(W) - 1,
+                         icx + static_cast<int32_t>(half)));
+            if (detail::scan_row_any(
+                    cells_ + static_cast<size_t>(ry) * W + x_lo,
+                    x_hi - x_lo + 1u, mask)) return true;
+        }
+        return false;
+    }
+
+    /**
+     * @brief Count occupied cells within Euclidean radius `r` of (cx, cy)
+     *        in layer range [from, to].
+     *
+     * Same row-extent approach as `any_in_radius`; uses SIMD `scan_row_count`.
+     *
+     * @returns Number of occupied cells within the circle.
+     */
+    [[nodiscard]] uint32_t count_in_radius(uint32_t cx, uint32_t cy, uint32_t r,
+                                           uint32_t from, uint32_t to) const noexcept {
+        assert(cx < W && cy < H && from <= to && to < D);
+        const uint64_t mask = detail::layer_range_mask(from, to);
+        const int32_t  icx  = static_cast<int32_t>(cx);
+        const int32_t  icy  = static_cast<int32_t>(cy);
+        const int64_t  r2   = static_cast<int64_t>(r) * r;
+        const int32_t  y_lo = std::max(0, icy - static_cast<int32_t>(r));
+        const int32_t  y_hi = std::min(static_cast<int32_t>(H) - 1,
+                                       icy + static_cast<int32_t>(r));
+
+        uint32_t count = 0u;
+        for (int32_t ry = y_lo; ry <= y_hi; ++ry) {
+            const int64_t  dy   = static_cast<int64_t>(ry - icy);
+            const uint32_t half = static_cast<uint32_t>(
+                std::sqrt(static_cast<double>(r2 - dy * dy)));
+            const uint32_t x_lo = static_cast<uint32_t>(
+                std::max(0, icx - static_cast<int32_t>(half)));
+            const uint32_t x_hi = static_cast<uint32_t>(
+                std::min(static_cast<int32_t>(W) - 1,
+                         icx + static_cast<int32_t>(half)));
+            count += detail::scan_row_count(
+                cells_ + static_cast<size_t>(ry) * W + x_lo,
+                x_hi - x_lo + 1u, mask);
+        }
+        return count;
+    }
+
+    /**
+     * @brief Invoke `fn(x, y, layer_mask)` for every non-empty cell within
+     *        Euclidean radius `r` of (cx, cy) in layer range [from, to].
+     *
+     * `layer_mask` is the cell's full bitmap ANDed with the layer-range mask.
+     *
+     * @tparam Fn Callable matching `void(uint32_t x, uint32_t y, uint64_t mask)`.
+     */
+    template <typename Fn>
+    void for_each_set_in_radius(uint32_t cx, uint32_t cy, uint32_t r,
+                                uint32_t from, uint32_t to,
+                                Fn&& fn) const noexcept(noexcept(fn(0u, 0u, 0ull))) {
+        assert(cx < W && cy < H && from <= to && to < D);
+        const uint64_t range_mask = detail::layer_range_mask(from, to);
+        const int32_t  icx        = static_cast<int32_t>(cx);
+        const int32_t  icy        = static_cast<int32_t>(cy);
+        const int64_t  r2         = static_cast<int64_t>(r) * r;
+        const int32_t  y_lo       = std::max(0, icy - static_cast<int32_t>(r));
+        const int32_t  y_hi       = std::min(static_cast<int32_t>(H) - 1,
+                                             icy + static_cast<int32_t>(r));
+
+        for (int32_t ry = y_lo; ry <= y_hi; ++ry) {
+            const int64_t  dy   = static_cast<int64_t>(ry - icy);
+            const uint32_t half = static_cast<uint32_t>(
+                std::sqrt(static_cast<double>(r2 - dy * dy)));
+            const uint32_t x_lo = static_cast<uint32_t>(
+                std::max(0, icx - static_cast<int32_t>(half)));
+            const uint32_t x_hi = static_cast<uint32_t>(
+                std::min(static_cast<int32_t>(W) - 1,
+                         icx + static_cast<int32_t>(half)));
+            for (uint32_t rx = x_lo; rx <= x_hi; ++rx) {
+                const uint64_t snap =
+                    cells_[flat(rx, static_cast<uint32_t>(ry))].load(
+                        std::memory_order_relaxed) & range_mask;
+                if (snap) fn(rx, static_cast<uint32_t>(ry), snap);
+            }
+        }
     }
 
     // ── Atomic bit flip ───────────────────────────────────────────────────────

@@ -226,6 +226,18 @@ add_test(NAME qbuem_infra_tests            COMMAND qbuem_infra_tests)
 add_test(NAME qbuem_middleware_tests       COMMAND qbuem_middleware_tests)
 add_test(NAME qbuem_pipeline_advanced_tests COMMAND qbuem_pipeline_advanced_tests)
 add_test(NAME qbuem_pipeline_ipc_tests     COMMAND qbuem_pipeline_ipc_tests)
+
+# ── GridBitset radius queries + TiledBitset tests ─────────────────────────────
+add_executable(qbuem_grid_spatial_tests
+    grid_spatial_test.cpp
+    ${QBUEM_TLS_FIX}
+)
+target_link_libraries(qbuem_grid_spatial_tests
+    PRIVATE
+    qbuem-stack::qbuem
+    GTest::gtest_main
+)
+add_test(NAME qbuem_grid_spatial_tests COMMAND qbuem_grid_spatial_tests)
 if(APPLE)
 add_test(NAME qbuem_kqueue_tests           COMMAND qbuem_kqueue_tests)
 endif()

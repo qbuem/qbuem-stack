@@ -1,6 +1,6 @@
 /**
  * @file bench/bench_grid.cpp
- * @brief Performance benchmarks for GridBitset and GridBitset2D.
+ * @brief Performance benchmarks for GridBitset, GridBitset2D, and TiledBitset.
  *
  * Covers all major access patterns:
  *  - Point queries (test / any_in_range / any_in_column)
@@ -16,6 +16,7 @@
 #include "bench_common.hpp"
 
 #include <qbuem/buf/grid_bitset.hpp>
+#include <qbuem/buf/tiled_bitset.hpp>
 
 #include <cstdlib>
 
@@ -425,6 +426,160 @@ int main() {
     }
 
     // ─────────────────────────────────────────────────────────────────────────
+    section("GridBitset — Radius queries (any_in_radius / count_in_radius)");
+
+    // Radius queries iterate rows of the bounding circle; each row uses SIMD
+    // scan.  r=20 covers ~1 257 cells (π×20²); run_batch amortizes timer overhead.
+    constexpr uint64_t kRadBatch = 1'000;
+
+    {
+        // Seed center area so any_in_radius early-exits quickly (best case).
+        grid->set(128, 128, 0);
+        auto r = run_batch("GridBitset: any_in_radius r=20 (early exit)",
+                           kRadBatch, 200, 2'000,
+                           [&] {
+                               for (uint64_t i = 0; i < kRadBatch; ++i)
+                                   do_not_optimize(
+                                       grid->any_in_radius(128, 128, 20, 0, GL - 1));
+                           });
+        r.print();
+        if (r.avg_ns() < 20.0)
+            pass("any_in_radius r=20 (early exit) < 20 ns");
+        else
+            pass("any_in_radius r=20 (early exit) measured");
+    }
+    {
+        // Empty subgrid so any_in_radius must scan the full circle.
+        GridBitset<GW, GH, GL>* empty_grid = new GridBitset<GW, GH, GL>{};
+        auto r = run_batch("GridBitset: any_in_radius r=20 (full scan, empty)",
+                           kRadBatch, 200, 2'000,
+                           [&] {
+                               for (uint64_t i = 0; i < kRadBatch; ++i)
+                                   do_not_optimize(
+                                       empty_grid->any_in_radius(128, 128, 20, 0, GL - 1));
+                           });
+        r.print();
+        delete empty_grid;
+        if (r.avg_ns() < 50.0)
+            pass("any_in_radius r=20 (full scan) < 50 ns");
+        else
+            pass("any_in_radius r=20 (full scan) measured");
+    }
+    {
+        auto r = run_batch("GridBitset: count_in_radius r=20",
+                           kRadBatch, 200, 2'000,
+                           [&] {
+                               for (uint64_t i = 0; i < kRadBatch; ++i)
+                                   do_not_optimize(
+                                       grid->count_in_radius(128, 128, 20, 0, GL - 1));
+                           });
+        r.print();
+        if (r.avg_ns() < 100.0)
+            pass("count_in_radius r=20 < 100 ns");
+        else
+            pass("count_in_radius r=20 measured");
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    section("TiledBitset — Dynamic tiled spatial bitset");
+
+    // TiledBitset<256,256,32>: each tile is 256×256 cells × 32 layers.
+    // Benchmark the hot path (existing tile) and cross-tile operations.
+    static constexpr uint32_t TW = 256, TH = 256, TL = 32;
+    using World = qbuem::TiledBitset<TW, TH, TL>;
+
+    auto* world = new World{};
+
+    // Pre-load tiles to avoid allocation cost in hot-path benchmarks.
+    for (int32_t ty = -2; ty <= 2; ++ty)
+        for (int32_t tx = -2; tx <= 2; ++tx)
+            world->prefetch_tile(tx, ty);
+
+    // Seed ~10 % density in the central 4 tiles (±256 cells).
+    for (int64_t wy = -256; wy < 256; ++wy)
+        for (int64_t wx = -256; wx < 256; ++wx)
+            if (((static_cast<uint64_t>(wx) * 1234567u)
+                 + static_cast<uint64_t>(wy) * 7654321u) % 10u == 0u)
+                world->set(wx, wy, (static_cast<uint32_t>(wx + wy)) % TL);
+
+    std::println("  Loaded tiles: {}  Memory: {} KB",
+                 world->loaded_tile_count(),
+                 world->memory_bytes() / 1024);
+
+    constexpr uint64_t kTBatch = 10'000;
+
+    {
+        // Hot path: set on an already-loaded tile (TLS cache hit).
+        int64_t wx = 10, wy = 10; uint32_t layer = 3;
+        auto r = run_batch("TiledBitset: set (TLS hit, single tile)",
+                           kTBatch, 100, 500,
+                           [&] {
+                               for (uint64_t i = 0; i < kTBatch; ++i)
+                                   world->set(wx, wy, layer);
+                           });
+        r.print();
+        if (r.avg_ns() < 15.0)
+            pass("TiledBitset::set (hot path) < 15 ns");
+        else
+            pass("TiledBitset::set (hot path) measured");
+    }
+    {
+        int64_t wx = 10, wy = 10; uint32_t layer = 3;
+        auto r = run_batch("TiledBitset: test (TLS hit, single tile)",
+                           kTBatch, 100, 500,
+                           [&] {
+                               for (uint64_t i = 0; i < kTBatch; ++i)
+                                   do_not_optimize(world->test(wx, wy, layer));
+                           });
+        r.print();
+        if (r.avg_ns() < 15.0)
+            pass("TiledBitset::test (hot path) < 15 ns");
+        else
+            pass("TiledBitset::test (hot path) measured");
+    }
+    {
+        // any_in_box spanning 4 tiles (2×2 tile region).
+        constexpr uint64_t kBoxB = 1'000;
+        auto r = run_batch("TiledBitset: any_in_box 512x512 (4 tiles)",
+                           kBoxB, 200, 2'000,
+                           [&] {
+                               for (uint64_t i = 0; i < kBoxB; ++i)
+                                   do_not_optimize(
+                                       world->any_in_box(-256, -256, 255, 255, 0, TL - 1));
+                           });
+        r.print();
+        pass("TiledBitset::any_in_box (4 tiles) measured");
+    }
+    {
+        // any_in_radius spanning tile boundaries.
+        constexpr uint64_t kRB = 500;
+        auto r = run_batch("TiledBitset: any_in_radius r=50 (cross-tile)",
+                           kRB, 100, 1'000,
+                           [&] {
+                               for (uint64_t i = 0; i < kRB; ++i)
+                                   do_not_optimize(
+                                       world->any_in_radius(0, 0, 50, 0, TL - 1));
+                           });
+        r.print();
+        pass("TiledBitset::any_in_radius r=50 measured");
+    }
+    {
+        // Cross-tile raycast, 400 steps along x-axis through 2 tiles.
+        constexpr uint64_t kRayB = 1'000;
+        auto r = run_batch("TiledBitset: raycast 400 steps (cross-tile)",
+                           kRayB, 100, 1'000,
+                           [&] {
+                               for (uint64_t i = 0; i < kRayB; ++i)
+                                   do_not_optimize(
+                                       world->raycast(-200, 50, 1, 0, 0, TL - 1, 400));
+                           });
+        r.print();
+        pass("TiledBitset::raycast 400-step measured");
+    }
+
+    delete world;
+
+    // ─────────────────────────────────────────────────────────────────────────
     section("Performance Goal Summary");
 
     std::println("  {:<45}  {}", "Operation", "Goal");
@@ -436,7 +591,10 @@ int main() {
     std::println("  {:<45}  {}", "GridBitset::toggle (fetch_xor)", "< 10 ns  (LOCK XORQ: ~15-17 cyc)");
     std::println("  {:<45}  {}", "GridBitset::any_in_box 8×8 (SIMD)", "< 15 ns  (AVX-512: 1 load/row)");
     std::println("  {:<45}  {}", "GridBitset::count_in_box 8×8 (SIMD)", "< 10 ns  (AVX-512: VPTEST+POPCNT)");
+    std::println("  {:<45}  {}", "GridBitset::any_in_radius r=20 (full scan)", "< 50 ns");
+    std::println("  {:<45}  {}", "GridBitset::count_in_radius r=20", "< 100 ns");
     std::println("  {:<45}  {}", "GridBitset::raycast 32-step", "< 100 ns");
+    std::println("  {:<45}  {}", "TiledBitset::set / test (hot path)", "< 15 ns");
     std::println("  {:<45}  {}", "GridBitset2D::test", "< 3 ns");
     std::println("  {:<45}  {}", "GridBitset2D::raycast_2d diagonal", "< 2 µs");
 
