@@ -94,9 +94,24 @@
 #include <optional>
 #include <type_traits>
 
-// ── BMI2 detection ────────────────────────────────────────────────────────────
-#if defined(__BMI2__)
+// ── SIMD / BMI2 detection ─────────────────────────────────────────────────────
+#if defined(__AVX512F__) && defined(__AVX512VL__)
 #  include <immintrin.h>
+#  define QBUEM_GRID_SIMD_AVX512 1
+#elif defined(__AVX2__)
+#  include <immintrin.h>
+#  define QBUEM_GRID_SIMD_AVX2   1
+#elif defined(__ARM_NEON)
+#  include <arm_neon.h>
+#  define QBUEM_GRID_SIMD_NEON   1
+#endif
+
+#if defined(__BMI2__)
+#  ifndef QBUEM_GRID_SIMD_AVX512
+#  ifndef QBUEM_GRID_SIMD_AVX2
+#    include <immintrin.h>   // BMI2 only — immintrin not yet included above
+#  endif
+#  endif
 #  define QBUEM_HAS_BMI2 1
 #else
 #  define QBUEM_HAS_BMI2 0
@@ -332,18 +347,74 @@ public:
      * @param to      Last  layer (inclusive).
      * @returns true if any occupied cell exists in the box.
      */
+    /**
+     * @brief Check whether any cell in an axis-aligned bounding box is occupied
+     *        in the given layer range.
+     *
+     * Uses AVX-512 (8 cells/load), AVX2 (4 cells/load), or NEON (2 cells/load)
+     * SIMD paths when available.  Falls back to scalar on other platforms.
+     */
     [[nodiscard]] bool any_in_box(uint32_t x1, uint32_t y1,
                                   uint32_t x2, uint32_t y2,
                                   uint32_t from, uint32_t to) const noexcept {
         assert(x1 <= x2 && x2 < W && y1 <= y2 && y2 < H);
         assert(from <= to && to < D);
-        const uint64_t mask = detail::layer_range_mask(from, to);
+        const uint64_t mask  = detail::layer_range_mask(from, to);
+        const uint32_t box_w = x2 - x1 + 1u;
+
+#if defined(QBUEM_GRID_SIMD_AVX512)
+        // AVX-512: load 8 × uint64 per instruction.
+        const __m512i vmask = _mm512_set1_epi64(static_cast<long long>(mask));
+        for (uint32_t ry = y1; ry <= y2; ++ry) {
+            const auto* row = cells_ + static_cast<size_t>(ry) * W + x1;
+            uint32_t rx = 0u;
+            for (; rx + 8u <= box_w; rx += 8u) {
+                __m512i v = _mm512_loadu_si512(
+                    reinterpret_cast<const __m512i*>(row + rx));
+                if (_mm512_test_epi64_mask(v, vmask)) return true;
+            }
+            for (; rx < box_w; ++rx)
+                if (row[rx].load(std::memory_order_relaxed) & mask) return true;
+        }
+#elif defined(QBUEM_GRID_SIMD_AVX2)
+        // AVX2: load 4 × uint64 per instruction.
+        const __m256i vmask = _mm256_set1_epi64x(static_cast<long long>(mask));
+        for (uint32_t ry = y1; ry <= y2; ++ry) {
+            const auto* row = cells_ + static_cast<size_t>(ry) * W + x1;
+            uint32_t rx = 0u;
+            for (; rx + 4u <= box_w; rx += 4u) {
+                __m256i v = _mm256_loadu_si256(
+                    reinterpret_cast<const __m256i*>(row + rx));
+                __m256i r = _mm256_and_si256(v, vmask);
+                if (!_mm256_testz_si256(r, r)) return true;
+            }
+            for (; rx < box_w; ++rx)
+                if (row[rx].load(std::memory_order_relaxed) & mask) return true;
+        }
+#elif defined(QBUEM_GRID_SIMD_NEON)
+        // NEON (AArch64): load 2 × uint64 per instruction.
+        const uint64x2_t vmask = vdupq_n_u64(mask);
+        for (uint32_t ry = y1; ry <= y2; ++ry) {
+            const auto* row = cells_ + static_cast<size_t>(ry) * W + x1;
+            uint32_t rx = 0u;
+            for (; rx + 2u <= box_w; rx += 2u) {
+                uint64x2_t v = vld1q_u64(
+                    reinterpret_cast<const uint64_t*>(row + rx));
+                uint64x2_t r = vandq_u64(v, vmask);
+                if (vmaxvq_u64(r)) return true;
+            }
+            for (; rx < box_w; ++rx)
+                if (row[rx].load(std::memory_order_relaxed) & mask) return true;
+        }
+#else
+        // Scalar fallback.
         for (uint32_t ry = y1; ry <= y2; ++ry) {
             for (uint32_t rx = x1; rx <= x2; ++rx) {
                 if (cells_[flat(rx, ry)].load(std::memory_order_relaxed) & mask)
                     return true;
             }
         }
+#endif
         return false;
     }
 

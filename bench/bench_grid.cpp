@@ -158,21 +158,43 @@ int main() {
     // ─────────────────────────────────────────────────────────────────────────
     section("GridBitset — Box Query (any_in_box / count_in_box)");
 
+    // Box queries are 10-50 ns — use run_batch() with a 1 000-op inner loop
+    // to amortize the ~25 ns steady_clock overhead to < 0.03 ns per op.
+    constexpr uint64_t kBoxBatch = 1'000;
+
     {
-        // 8×8 box — tight collision box
-        auto r = run("GridBitset: any_in_box 8x8, layers 0-7", 10'000, 500'000,
-                     [&] { do_not_optimize(grid->any_in_box(60, 60, 67, 67, 0, 7)); });
+        // 8×8 box — tight collision box (8 cells × 8 rows = 64 cells, 1 AVX-512 load/row)
+        auto r = run_batch("GridBitset: any_in_box 8x8, layers 0-7",
+                           kBoxBatch, 200, 2'000,
+                           [&] {
+                               for (uint64_t i = 0; i < kBoxBatch; ++i)
+                                   do_not_optimize(grid->any_in_box(60, 60, 67, 67, 0, 7));
+                           });
+        r.print();
+        if (r.avg_ns() < 15.0)
+            pass("any_in_box 8x8 < 15 ns (SIMD)");
+        else if (r.avg_ns() < 50.0)
+            pass("any_in_box 8x8 < 50 ns (scalar fallback)");
+        else
+            fail("any_in_box 8x8 >= 50 ns");
+    }
+    {
+        // 16×16 box — medium AoE (16 cells × 16 rows = 256 cells, 2 AVX-512 loads/row)
+        auto r = run_batch("GridBitset: any_in_box 16x16, layers 0-15",
+                           kBoxBatch, 200, 2'000,
+                           [&] {
+                               for (uint64_t i = 0; i < kBoxBatch; ++i)
+                                   do_not_optimize(grid->any_in_box(100, 100, 115, 115, 0, 15));
+                           });
         r.print();
     }
     {
-        // 16×16 box — medium AoE
-        auto r = run("GridBitset: any_in_box 16x16, layers 0-15", 10'000, 200'000,
-                     [&] { do_not_optimize(grid->any_in_box(100, 100, 115, 115, 0, 15)); });
-        r.print();
-    }
-    {
-        auto r = run("GridBitset: count_in_box 8x8, layers 0-31", 10'000, 200'000,
-                     [&] { do_not_optimize(grid->count_in_box(64, 64, 71, 71, 0, 30)); });
+        auto r = run_batch("GridBitset: count_in_box 8x8, layers 0-31",
+                           kBoxBatch, 200, 2'000,
+                           [&] {
+                               for (uint64_t i = 0; i < kBoxBatch; ++i)
+                                   do_not_optimize(grid->count_in_box(64, 64, 71, 71, 0, 30));
+                           });
         r.print();
     }
 
@@ -270,16 +292,28 @@ int main() {
     // ─────────────────────────────────────────────────────────────────────────
     section("GridBitset — Write Ops (set / clear / clear_box / reset)");
 
+    // set/clear are ~8-9 ns (LOCK ORQ/ANDQ — same hardware cost as toggle).
+    // Use run_batch() with 10 000-op inner loops to amortize timer overhead.
+    constexpr uint64_t kWriteBatch = 10'000;
+
     {
         uint32_t x = 7, y = 13, layer = 2;
-        auto r = run("GridBitset: set(x, y, layer) fetch_or", 100'000, 5'000'000,
-                     [&] { grid->set(x, y, layer); });
+        auto r = run_batch("GridBitset: set(x, y, layer) fetch_or",
+                           kWriteBatch, 100, 500,
+                           [&] {
+                               for (uint64_t i = 0; i < kWriteBatch; ++i)
+                                   grid->set(x, y, layer);
+                           });
         r.print();
     }
     {
         uint32_t x = 7, y = 13, layer = 2;
-        auto r = run("GridBitset: clear(x, y, layer) fetch_and", 100'000, 5'000'000,
-                     [&] { grid->clear(x, y, layer); });
+        auto r = run_batch("GridBitset: clear(x, y, layer) fetch_and",
+                           kWriteBatch, 100, 500,
+                           [&] {
+                               for (uint64_t i = 0; i < kWriteBatch; ++i)
+                                   grid->clear(x, y, layer);
+                           });
         r.print();
     }
     {
@@ -394,7 +428,7 @@ int main() {
     std::println("  {:<45}  {}", "GridBitset::lowest/highest_layer (BSF/CLZ)", "< 2 ns");
     std::println("  {:<45}  {}", "GridBitset::count_layers (POPCNT)", "< 2 ns");
     std::println("  {:<45}  {}", "GridBitset::toggle (fetch_xor)", "< 10 ns  (LOCK XORQ: ~15-17 cyc)");
-    std::println("  {:<45}  {}", "GridBitset::any_in_box 8×8", "< 50 ns");
+    std::println("  {:<45}  {}", "GridBitset::any_in_box 8×8 (SIMD)", "< 15 ns  (AVX-512: 1 load/row)");
     std::println("  {:<45}  {}", "GridBitset::raycast 32-step", "< 100 ns");
     std::println("  {:<45}  {}", "GridBitset2D::test", "< 3 ns");
     std::println("  {:<45}  {}", "GridBitset2D::raycast_2d diagonal", "< 2 µs");
