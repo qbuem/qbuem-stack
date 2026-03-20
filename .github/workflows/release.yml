@@ -1,6 +1,6 @@
 name: Release
 
-# Triggered by a version tag push: git tag v1.2.3 && git push origin v1.2.3
+# Triggered by a version tag push: git tag v0.1.0 && git push origin v0.1.0
 on:
   push:
     tags:
@@ -21,10 +21,18 @@ permissions:
 #   - linux-x86_64  (Ubuntu 22.04, glibc 2.35+)
 #   - linux-aarch64 (Ubuntu 24.04 ARM runner, glibc 2.39+)
 #
-# Each build job produces a self-contained include-lib tarball:
-#   include/   ← all public headers
-#   lib/       ← static archives (.a)
-#   lib/cmake/ ← CMake package config for find_package()
+# Each build job produces a self-contained include-lib tarball containing
+# BOTH static (.a) and shared (.so) variants:
+#
+#   include/qbuem/          ← all public headers (umbrella: qbuem_stack.hpp)
+#   lib/*.a                 ← static libraries  (BUILD_SHARED_LIBS=OFF pass)
+#   lib/*.so                ← shared libraries  (BUILD_SHARED_LIBS=ON  pass)
+#   lib/cmake/qbuem-stack/  ← CMake package config for find_package()
+#
+# Build strategy: cmake is invoked twice per architecture.
+#   Pass 1 (static):  cmake -DBUILD_SHARED_LIBS=OFF → installs .a + headers + cmake config
+#   Pass 2 (shared):  cmake -DBUILD_SHARED_LIBS=ON  → installs .so files (headers already in dist)
+# The two install trees are merged into a single dist/ directory.
 #
 # The publish job downloads both tarballs and creates the GitHub Release in
 # one shot to avoid race conditions on the release body.
@@ -50,6 +58,7 @@ jobs:
             -DCMAKE_BUILD_TYPE=Debug \
             -DCMAKE_CXX_COMPILER=clang++ \
             -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+            -DBUILD_SHARED_LIBS=OFF \
             -DQBUEM_BUILD_TESTS=OFF \
             -DQBUEM_BUILD_EXAMPLES=OFF
 
@@ -90,6 +99,7 @@ jobs:
         run: |
           cmake -B build \
             -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_SHARED_LIBS=OFF \
             -DQBUEM_BUILD_TESTS=ON \
             -DQBUEM_BUILD_EXAMPLES=ON
 
@@ -100,7 +110,7 @@ jobs:
         working-directory: build
         run: ctest --output-on-failure -C Release
 
-  # ── 3. Build release artifacts (include-lib distribution) ────────────────────
+  # ── 3. Build release artifacts (static + shared, both architectures) ─────────
   build:
     name: Build / ${{ matrix.platform }}
     runs-on: ${{ matrix.os }}
@@ -121,33 +131,76 @@ jobs:
       - name: Install liburing
         run: sudo apt-get update -q && sudo apt-get install -y liburing-dev
 
-      - name: Configure (library only — no tests, no examples)
+      # ── Pass 1: static libraries (.a) ──────────────────────────────────────
+      - name: Configure (static pass)
         run: |
-          cmake -B build \
+          cmake -B build_static \
             -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_SHARED_LIBS=OFF \
             -DQBUEM_BUILD_TESTS=OFF \
             -DQBUEM_BUILD_EXAMPLES=OFF \
             -DQBUEM_BUILD_BENCH=OFF
 
-      - name: Build
-        run: cmake --build build -j$(nproc)
+      - name: Build (static pass)
+        run: cmake --build build_static -j$(nproc)
 
-      - name: Install into dist/ (include-lib layout)
-        run: cmake --install build --prefix dist
+      - name: Install (static pass → dist/)
+        run: cmake --install build_static --prefix dist
 
+      # ── Pass 2: shared libraries (.so) ─────────────────────────────────────
+      - name: Configure (shared pass)
+        run: |
+          cmake -B build_shared \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_SHARED_LIBS=ON \
+            -DQBUEM_BUILD_TESTS=OFF \
+            -DQBUEM_BUILD_EXAMPLES=OFF \
+            -DQBUEM_BUILD_BENCH=OFF
+
+      - name: Build (shared pass)
+        run: cmake --build build_shared -j$(nproc)
+
+      - name: Install shared libs into dist/lib/
+        # Install the shared pass into a staging area, then copy only the
+        # shared libraries (.so) into the already-populated dist/.  Headers
+        # and CMake configs come exclusively from the static pass.
+        run: |
+          cmake --install build_shared --prefix dist_shared
+          find dist_shared/lib -name "*.so*" -exec cp -P {} dist/lib/ \;
+
+      # ── Verify combined layout ──────────────────────────────────────────────
       - name: Verify include-lib layout
         run: |
-          test -d dist/include/qbuem \
-            || (echo "ERROR: include/qbuem directory missing" && exit 1)
-          test -f dist/include/qbuem/qbuem_stack.hpp \
-            || (echo "ERROR: umbrella header qbuem_stack.hpp missing" && exit 1)
-          ls dist/lib/*.a > /dev/null 2>&1 \
-            || (echo "ERROR: no static libraries (.a) found in dist/lib/" && exit 1)
-          test -f dist/lib/cmake/qbuem-stack/qbuem-stack-config.cmake \
-            || (echo "ERROR: CMake package config missing" && exit 1)
-          echo "Install layout verified:"
+          echo "=== Full install tree ==="
           find dist -type f | sort
 
+          echo "=== Checking headers ==="
+          test -d dist/include/qbuem \
+            || (echo "ERROR: include/qbuem directory missing"        && exit 1)
+          test -f dist/include/qbuem/qbuem_stack.hpp \
+            || (echo "ERROR: umbrella header qbuem_stack.hpp missing" && exit 1)
+
+          echo "=== Checking static libraries (.a) ==="
+          ls dist/lib/*.a > /dev/null 2>&1 \
+            || (echo "ERROR: no static libraries (.a) in dist/lib/"  && exit 1)
+
+          echo "=== Checking shared libraries (.so) ==="
+          ls dist/lib/*.so* > /dev/null 2>&1 \
+            || (echo "ERROR: no shared libraries (.so) in dist/lib/" && exit 1)
+
+          echo "=== Checking CMake package config ==="
+          test -f dist/lib/cmake/qbuem-stack/qbuem-stack-config.cmake \
+            || (echo "ERROR: CMake package config missing"            && exit 1)
+
+          echo "=== Static libraries ==="
+          ls -lh dist/lib/*.a
+
+          echo "=== Shared libraries ==="
+          ls -lh dist/lib/*.so*
+
+          echo "Install layout verified."
+
+      # ── Package ─────────────────────────────────────────────────────────────
       - name: Package as tarball
         run: |
           VERSION="${GITHUB_REF_NAME}"
@@ -155,7 +208,7 @@ jobs:
           tar -czf "${ARCHIVE}" -C dist .
           echo "ARCHIVE=${ARCHIVE}" >> "$GITHUB_ENV"
           sha256sum "${ARCHIVE}" > "${ARCHIVE}.sha256"
-          echo "SHA256:"
+          echo "SHA-256:"
           cat "${ARCHIVE}.sha256"
 
       - name: Upload artifact
@@ -205,13 +258,14 @@ jobs:
 
             | Artifact | OS | Architecture |
             |----------|----|--------------|
-            | `qbuem-stack-${{ github.ref_name }}-linux-x86_64.tar.gz`  | Ubuntu 22.04 (glibc 2.35+) | x86-64 |
+            | `qbuem-stack-${{ github.ref_name }}-linux-x86_64.tar.gz`  | Ubuntu 22.04 (glibc 2.35+) | x86-64  |
             | `qbuem-stack-${{ github.ref_name }}-linux-aarch64.tar.gz` | Ubuntu 24.04 (glibc 2.39+) | AArch64 |
 
-            Each tarball contains:
+            Each tarball contains **both static and shared** library variants:
             ```
-            include/qbuem/          ← all public headers (qbuem_stack.hpp umbrella)
-            lib/                    ← static archives (.a)
+            include/qbuem/          ← all public headers (umbrella: qbuem_stack.hpp)
+            lib/*.a                 ← static libraries
+            lib/*.so                ← shared libraries
             lib/cmake/qbuem-stack/  ← CMake package config for find_package()
             ```
 
@@ -237,6 +291,12 @@ jobs:
             target_link_libraries(myapp PRIVATE qbuem-stack::http)      # HTTP/1.1 only
             target_link_libraries(myapp PRIVATE qbuem-stack::pipeline)  # pipeline only
             target_link_libraries(myapp PRIVATE qbuem-stack::core)      # reactor only
+            ```
+
+            Choose static or shared at configure time:
+            ```bash
+            cmake -DBUILD_SHARED_LIBS=OFF ..   # link statically  (default)
+            cmake -DBUILD_SHARED_LIBS=ON  ..   # link dynamically
             ```
 
             > **Note:** JSON parsing is not bundled. Choose your preferred library
