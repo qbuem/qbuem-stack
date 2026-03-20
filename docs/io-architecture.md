@@ -1,24 +1,24 @@
 # qbuem-stack IO Layer Architecture
 
-> **목표**: Zero-latency · Zero-allocation · Zero-dependency
-> C++ 서버 플랫폼의 전체 IO 스택을 한 번에 정의한다.
+> **Goal**: Zero-latency · Zero-allocation · Zero-dependency
+> Defines the complete IO stack of the C++ server platform in one place.
 
 ---
 
-## 1. 설계 원칙
+## 1. Design Principles
 
-| 원칙 | 구체적 규칙 |
+| Principle | Specific Rule |
 |------|-------------|
-| **Zero Allocation (hot path)** | accept→처리→응답 경로에서 `new`/`malloc` 금지. Arena + FixedPool + stack 전용 |
-| **Zero Dependency** | 헤더 공개 API에서 외부 라이브러리 노출 금지. 구현부(`.cpp`) 내부 한정 허용 |
-| **Zero Copy** | recv → parse → send 경로에서 memcpy 금지. IOVec scatter-gather, sendfile, MSG_ZEROCOPY |
-| **Shared-Nothing** | Reactor 1개 = Thread 1개. 스레드 간 공유 자료구조 없음 |
+| **Zero Allocation (hot path)** | No `new`/`malloc` on the accept→process→respond path. Arena + FixedPool + stack only |
+| **Zero Dependency** | No external library exposure in public header APIs. Allowed only inside implementation (`.cpp`) files |
+| **Zero Copy** | No memcpy on the recv → parse → send path. IOVec scatter-gather, sendfile, MSG_ZEROCOPY |
+| **Shared-Nothing** | 1 Reactor = 1 Thread. No shared data structures between threads |
 | **C++23 only** | Coroutines, Concepts, span, ranges, `std::expected`, `std::print`. Direct POSIX syscall usage. |
-| **Platform headers only** | `<sys/socket.h>`, `<sys/uio.h>`, `<linux/io_uring.h>` — 커널/libc 헤더만 |
+| **Platform headers only** | `<sys/socket.h>`, `<sys/uio.h>`, `<linux/io_uring.h>` — kernel/libc headers only |
 
 ---
 
-## 2. 레이어 구조
+## 2. Layer Structure
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
@@ -52,34 +52,34 @@
 
 ---
 
-## 3. 파일 구조
+## 3. File Structure
 
 ```
 include/qbuem/
-  core/               ← 기존 (Reactor, Arena, Task, Transport...)
-    net/              ← NEW: 네트워크 소켓 프리미티브
+  core/               ← existing (Reactor, Arena, Task, Transport...)
+    net/              ← NEW: network socket primitives
       socket_addr.hpp
       tcp_listener.hpp
       tcp_stream.hpp
       udp_socket.hpp
       unix_socket.hpp
-    io/               ← NEW: 버퍼 / 슬라이스 / Zero-copy
+    io/               ← NEW: buffer / slice / zero-copy
       io_slice.hpp
       read_buf.hpp
       write_buf.hpp
       async_file.hpp
       zero_copy.hpp   (Sendfile, Splice, MsgZerocopy)
-    timer_wheel.hpp   ← NEW: O(1) 계층적 타이머
-  codec/              ← NEW: 프로토콜 프레임 코덱
+    timer_wheel.hpp   ← NEW: O(1) hierarchical timer
+  codec/              ← NEW: protocol frame codec
     frame_codec.hpp
     length_prefix_codec.hpp
     line_codec.hpp
     http1_codec.hpp
-  net/                ← NEW: 연결 수명 관리
+  net/                ← NEW: connection lifetime management
     accept_loop.hpp
     connection_handler.hpp
     connection_pool.hpp
-  protocol/           ← v1.0: 프로토콜 핸들러
+  protocol/           ← v1.0: protocol handlers
     http1_handler.hpp
     http2_handler.hpp
     websocket_handler.hpp
@@ -88,50 +88,50 @@ include/qbuem/
 
 ---
 
-## 4. Layer 1 — Memory 확장
+## 4. Layer 1 — Memory Extension
 
-### 4.1 `BufferPool<N>` (신규)
+### 4.1 `BufferPool<N>` (new)
 
 ```cpp
-// FixedPoolResource 위의 얇은 래퍼 — io_uring Buffer Ring과 연동
+// Thin wrapper over FixedPoolResource — integrates with io_uring Buffer Ring
 template<size_t BufSize, size_t Count>
 class BufferPool {
     FixedPoolResource<BufSize> pool_{Count};
-    // io_uring buf_ring 연동용 iovec 테이블
+    // iovec table for io_uring buf_ring integration
     iovec iovecs_[Count];
 public:
-    // O(1) 할당. nullptr = 고갈 (backpressure 신호)
+    // O(1) acquisition. nullptr = exhausted (backpressure signal)
     std::byte* acquire() noexcept;
-    // O(1) 반환.
+    // O(1) release.
     void release(std::byte* buf) noexcept;
-    // io_uring fixed buffer 등록용
+    // For io_uring fixed buffer registration
     std::span<const iovec> iovecs() const noexcept;
     static constexpr size_t buf_size() noexcept { return BufSize; }
     static constexpr size_t count()    noexcept { return Count; }
 };
 
-// 전형적 사용:
-// per-reactor 정적 풀 (컴파일타임 크기)
+// Typical usage:
+// per-reactor static pool (compile-time size)
 using RxPool = BufferPool<4096, 1024>;   // 4MB per reactor
 using TxPool = BufferPool<65536, 64>;    // 4MB per reactor
 ```
 
 ---
 
-## 5. Layer 2 — TimerWheel (신규)
+## 5. Layer 2 — TimerWheel (new)
 
-현재 `register_timer()` 구현은 `std::unordered_map` + 최소힙(epoll/timerfd)을 사용.
-연결 수 증가 시 O(log N) 오버헤드 + 힙 할당 발생.
+The current `register_timer()` implementation uses `std::unordered_map` + a min-heap (epoll/timerfd).
+As connection count grows, O(log N) overhead and heap allocation occur.
 
-### 5.1 계층적 타이밍 휠 (Hierarchical Timing Wheel)
+### 5.1 Hierarchical Timing Wheel
 
 ```
-4 레벨 × 256 슬롯 = 전체 범위: ~4.6시간 (ms 해상도)
+4 levels × 256 slots = total range: ~4.6 hours (ms resolution)
 
-Level 0: 슬롯 0-255  →  1ms 단위     (0 ~ 255ms)
-Level 1: 슬롯 0-255  →  256ms 단위   (0 ~ 65s)
-Level 2: 슬롯 0-255  →  65.5s 단위   (0 ~ 4.6h)
-Level 3: 슬롯 0-255  →  4.7h 단위    (overflow)
+Level 0: slots 0-255  →  1ms resolution     (0 ~ 255ms)
+Level 1: slots 0-255  →  256ms resolution   (0 ~ 65s)
+Level 2: slots 0-255  →  65.5s resolution   (0 ~ 4.6h)
+Level 3: slots 0-255  →  4.7h resolution    (overflow)
 ```
 
 ```cpp
@@ -139,16 +139,16 @@ class TimerWheel {
 public:
     explicit TimerWheel() noexcept;
 
-    // O(1): 타이머 등록. 콜백은 Reactor 스레드에서 호출됨.
+    // O(1): Register timer. Callback is invoked on the Reactor thread.
     uint64_t schedule(uint64_t delay_ms, std::move_only_function<void()> cb) noexcept;
 
-    // O(1): 타이머 취소.
+    // O(1): Cancel timer.
     bool cancel(uint64_t timer_id) noexcept;
 
-    // O(expired): 시계 전진. poll() 루프에서 호출.
+    // O(expired): Advance clock. Called in the poll() loop.
     size_t tick(uint64_t now_ms) noexcept;
 
-    // 다음 만료까지 남은 시간 (ms). poll timeout 계산에 사용.
+    // Time until next expiry (ms). Used for poll timeout calculation.
     uint64_t next_expiry_ms(uint64_t now_ms) const noexcept;
 
 private:
@@ -157,7 +157,7 @@ private:
             uint64_t                       expire_ms;
             uint64_t                       id;
             std::move_only_function<void()> cb;
-            Entry* next = nullptr;  // intrusive linked list (FixedPool 사용)
+            Entry* next = nullptr;  // intrusive linked list (uses FixedPool)
         };
         Entry* head = nullptr;
     };
@@ -168,7 +168,7 @@ private:
 };
 ```
 
-**핵심**: `Entry` 할당을 `FixedPoolResource`로 처리 → timer schedule/cancel 모두 zero-heap.
+**Key**: `Entry` allocation handled by `FixedPoolResource` → timer schedule/cancel are both zero-heap.
 
 ---
 
@@ -187,12 +187,12 @@ class SocketAddr {
     enum class Family : uint8_t { IPv4, IPv6, Unix } family_;
 
 public:
-    // 파싱: 실패 시 빈 SocketAddr 반환 (port==0)
+    // Parsing: returns empty SocketAddr on failure (port==0)
     static SocketAddr ipv4(std::string_view host, uint16_t port) noexcept;
     static SocketAddr ipv6(std::string_view host, uint16_t port) noexcept;
     static SocketAddr unix_path(std::string_view path) noexcept;
 
-    // 시스템콜 직접 전달용
+    // For direct syscall passing
     const sockaddr* sa()    const noexcept;
     socklen_t       sa_len()const noexcept;
 
@@ -201,7 +201,7 @@ public:
     bool     is_ipv6()      const noexcept;
     bool     is_unix()      const noexcept;
 
-    // 할당 없는 문자열 변환: "1.2.3.4:8080" 형태로 buf에 기록
+    // Allocation-free string conversion: writes "1.2.3.4:8080" form into buf
     size_t   to_chars(std::span<char> buf) const noexcept;
     bool     operator==(const SocketAddr&) const noexcept;
 };
@@ -212,13 +212,13 @@ public:
 ```cpp
 class TcpListener {
 public:
-    // SO_REUSEPORT: 각 reactor가 독립적인 소켓으로 bind
-    // → kernel이 accept를 worker 간에 load-balance
+    // SO_REUSEPORT: each reactor binds with an independent socket
+    // → kernel load-balances accept across workers
     static Result<TcpListener> bind(SocketAddr addr,
                                     int backlog    = 512,
                                     bool reuse_port = true) noexcept;
 
-    // co_await 가능: (fd, peer_addr) 또는 에러
+    // co_await capable: (fd, peer_addr) or error
     Task<Result<std::pair<int, SocketAddr>>> accept(Reactor& r);
 
     int  fd()   const noexcept;
@@ -230,14 +230,14 @@ public:
 };
 ```
 
-**SO_REUSEPORT 전략**:
+**SO_REUSEPORT Strategy**:
 ```
 Dispatcher
   ├── Worker 0: Reactor0 ← TcpListener(8080, reuse_port=true) ← kernel
   ├── Worker 1: Reactor1 ← TcpListener(8080, reuse_port=true) ← kernel
   └── Worker 2: Reactor2 ← TcpListener(8080, reuse_port=true) ← kernel
 
-accept() 경합 없음 — kernel이 CPU affinity 기반으로 분배
+No accept() contention — kernel distributes based on CPU affinity
 ```
 
 ### 6.3 `TcpStream`
@@ -248,15 +248,15 @@ public:
     static Result<TcpStream>  connect(SocketAddr addr) noexcept;
     static TcpStream          from_fd(int fd, SocketAddr peer) noexcept;
 
-    // Vectored I/O — 단일 시스템콜로 scatter-gather
+    // Vectored I/O — scatter-gather in a single syscall
     Task<Result<size_t>> readv (std::span<iovec>       iov, Reactor& r);
     Task<Result<size_t>> writev(std::span<const iovec> iov, Reactor& r);
 
-    // 편의 단일 버퍼 오버로드 (내부적으로 iovec[1] 사용, 스택 할당)
+    // Convenience single-buffer overload (uses iovec[1] internally, stack-allocated)
     Task<Result<size_t>> read (std::span<std::byte>       buf, Reactor& r);
     Task<Result<size_t>> write(std::span<const std::byte> buf, Reactor& r);
 
-    // TCP 옵션
+    // TCP options
     Result<void> set_nodelay   (bool enable)                    noexcept;
     Result<void> set_keepalive (bool enable, int idle_sec = 60) noexcept;
     Result<void> set_recv_buf  (int bytes)                      noexcept;
@@ -279,7 +279,7 @@ public:
     static Result<UdpSocket> bind  (SocketAddr addr) noexcept;
     static Result<UdpSocket> create(bool ipv6 = false) noexcept;
 
-    // 단일 데이터그램
+    // Single datagram
     Task<Result<std::pair<size_t, SocketAddr>>>
         recvfrom(std::span<std::byte> buf, Reactor& r);
 
@@ -287,7 +287,7 @@ public:
         sendto(std::span<const std::byte> buf, SocketAddr dest, Reactor& r);
 
     // Batch recv (io_uring IORING_OP_RECVMSG_MULTI — Linux 6.0+)
-    // batch_size개 메시지를 단일 SQE로 처리
+    // Process batch_size messages with a single SQE
     Task<Result<size_t>>
         recvmsg_batch(std::span<mmsghdr> msgs, Reactor& r);
 
@@ -303,7 +303,7 @@ public:
 ### 7.1 `IOSlice` / `IOVec<N>` — zero-copy scatter-gather
 
 ```cpp
-// 단순 읽기 전용 슬라이스 (fat pointer)
+// Simple read-only slice (fat pointer)
 struct IOSlice {
     const std::byte* data;
     size_t           size;
@@ -312,8 +312,8 @@ struct IOSlice {
     bool empty() const noexcept { return size == 0; }
 };
 
-// 스택 할당 scatter-gather 배열
-// writev / sendmsg / io_uring IORING_OP_WRITEV 직접 전달
+// Stack-allocated scatter-gather array
+// Pass directly to writev / sendmsg / io_uring IORING_OP_WRITEV
 template<size_t MaxVec = 8>
 struct IOVec {
     iovec  iov[MaxVec];
@@ -326,32 +326,32 @@ struct IOVec {
     size_t total_bytes()    const noexcept;
     bool   full()           const noexcept { return count == MaxVec; }
 
-    // 시스템콜 직접 전달
+    // Direct syscall passing
     const iovec* data() const noexcept { return iov; }
     int          size() const noexcept { return static_cast<int>(count); }
 };
 ```
 
-### 7.2 `ReadBuf<N>` — 컴파일타임 고정 링버퍼, zero-alloc
+### 7.2 `ReadBuf<N>` — Compile-time fixed ring buffer, zero-alloc
 
 ```cpp
-// 연결당 수신 버퍼 — 스택 또는 Arena에 저장
-// N: 전형적으로 16KB (HTTP/1.1) ~ 256KB (HTTP/2)
+// Per-connection receive buffer — stored on stack or in Arena
+// N: typically 16KB (HTTP/1.1) ~ 256KB (HTTP/2)
 template<size_t N>
 class ReadBuf {
     std::byte buf_[N];
-    size_t    read_pos_  = 0;   // 파서가 소비한 위치
-    size_t    write_pos_ = 0;   // recv()가 채운 위치
+    size_t    read_pos_  = 0;   // position consumed by parser
+    size_t    write_pos_ = 0;   // position filled by recv()
 public:
-    // recv() syscall에 넘길 쓰기 가능 영역
+    // Writable region to pass to recv() syscall
     std::span<std::byte>       write_head()                noexcept;
     void                       commit(size_t n)            noexcept;
 
-    // 파서에게 넘길 읽기 가능 영역
+    // Readable region to pass to parser
     std::span<const std::byte> read_head()           const noexcept;
     void                       consume(size_t n)           noexcept;
 
-    // 링버퍼 공간 재활용 (read_pos == write_pos이면 리셋)
+    // Reclaim ring buffer space (reset if read_pos == write_pos)
     void                       compact()                   noexcept;
 
     size_t readable()          const noexcept;
@@ -363,23 +363,23 @@ public:
 };
 ```
 
-### 7.3 `WriteBuf` — 코르크 버퍼 (cork/flush)
+### 7.3 `WriteBuf` — Cork buffer (cork/flush)
 
 ```cpp
-// 작은 쓰기를 묶어 writev() 한 번에 전송
-// 내부 버퍼: Arena 또는 BufferPool에서 슬라이스 참조
+// Coalesce small writes into a single writev() call
+// Internal buffer: slice reference from Arena or BufferPool
 class WriteBuf {
 public:
     explicit WriteBuf(Arena& arena) noexcept;
 
-    // Arena에서 슬라이스 할당 후 반환된 span에 직접 기록
+    // Allocate slice from Arena, then write directly into returned span
     std::span<std::byte> prepare(size_t n);
     void                 confirm(size_t n) noexcept;
 
-    // 이미 할당된 버퍼 참조 추가 (zero-copy path)
+    // Add reference to already-allocated buffer (zero-copy path)
     void append_ref(IOSlice slice) noexcept;
 
-    // writev() 전달용 IOVec 구성 (스택, 최대 64 iovec)
+    // Build IOVec for writev() (stack-allocated, max 64 iovecs)
     IOVec<64> as_iovec() const noexcept;
 
     void clear() noexcept;
@@ -388,23 +388,23 @@ public:
 };
 ```
 
-### 7.4 `AsyncFile` — 비동기 파일 IO
+### 7.4 `AsyncFile` — Asynchronous File IO
 
 ```cpp
-// io_uring IORING_OP_READ/WRITE_FIXED 우선, 없으면 pread/pwrite 폴백
+// Prefers io_uring IORING_OP_READ/WRITE_FIXED, falls back to pread/pwrite
 class AsyncFile {
 public:
     static Task<Result<AsyncFile>> open(std::string_view path,
                                         int flags,  // O_RDONLY | O_DIRECT ...
                                         mode_t mode = 0644);
 
-    // 지정 오프셋에서 읽기 (고정 버퍼 사용 시 zero-copy)
+    // Read at specified offset (zero-copy when using fixed buffers)
     Task<Result<size_t>> read_at (std::span<std::byte>       buf,
                                   int64_t offset, Reactor& r);
     Task<Result<size_t>> write_at(std::span<const std::byte> buf,
                                   int64_t offset, Reactor& r);
 
-    // 순차 읽기 (오프셋 자동 증가)
+    // Sequential read (offset auto-increments)
     Task<Result<size_t>> read (std::span<std::byte>       buf, Reactor& r);
     Task<Result<size_t>> write(std::span<const std::byte> buf, Reactor& r);
 
@@ -419,31 +419,31 @@ public:
 ```cpp
 namespace zero_copy {
 
-// sendfile(2): 파일 → 소켓 직접 전송 (kernel space only, no user copy)
-// 정적 파일 서빙 최적화
+// sendfile(2): file → socket direct transfer (kernel space only, no user copy)
+// static file serving optimization
 Task<Result<size_t>>
 sendfile(int out_sock_fd, int in_file_fd,
          int64_t offset, size_t count,
          Reactor& r);
 
-// splice(2): pipe를 통한 fd → fd 전송 (generic zero-copy)
+// splice(2): fd → fd transfer via pipe (generic zero-copy)
 Task<Result<size_t>>
 splice(int in_fd, int64_t* in_off,
        int out_fd, int64_t* out_off,
        size_t count, unsigned flags,
        Reactor& r);
 
-// MSG_ZEROCOPY: send() 완료를 비동기 통지 (Linux 4.14+)
-// 대용량 동적 응답에서 사용
+// MSG_ZEROCOPY: async notification of send() completion (Linux 4.14+)
+// used for large dynamic responses
 struct ZeroCopyCtx {
-    uint32_t seq_lo, seq_hi;  // 완료 추적용 시퀀스 범위
+    uint32_t seq_lo, seq_hi;  // sequence range for completion tracking
 };
 Task<Result<ZeroCopyCtx>>
 send_zerocopy(int fd,
               std::span<const std::byte> buf,
               Reactor& r);
 
-// MSG_ZEROCOPY 완료 대기 (errqueue polling)
+// Wait for MSG_ZEROCOPY completion (errqueue polling)
 Task<Result<void>> wait_zerocopy(int fd, ZeroCopyCtx ctx, Reactor& r);
 
 } // namespace zero_copy
@@ -451,13 +451,13 @@ Task<Result<void>> wait_zerocopy(int fd, ZeroCopyCtx ctx, Reactor& r);
 
 ---
 
-## 8. Layer 5 — Transport 확장
+## 8. Layer 5 — Transport Extension
 
-### 8.1 `PlainTransport` — 구체 TCP 구현체 (신규)
+### 8.1 `PlainTransport` — Concrete TCP Implementation (new)
 
 ```cpp
-// ITransport의 plain TCP 구현
-// TLS 없음 — 서비스에서 OpenSSL/mbedTLS 구현체 주입
+// Plain TCP implementation of ITransport
+// No TLS — service injects OpenSSL/mbedTLS implementation
 class PlainTransport final : public ITransport {
 public:
     explicit PlainTransport(TcpStream stream) noexcept;
@@ -467,7 +467,7 @@ public:
     Task<Result<void>>   handshake()                           override; // no-op
     Task<Result<void>>   close()                               override;
 
-    // TcpStream 직접 접근 (zero-copy path에서 사용)
+    // Direct TcpStream access (used in zero-copy path)
     TcpStream& stream() noexcept;
 
 private:
@@ -479,35 +479,35 @@ private:
 
 ## 9. Layer 6 — Codec / Framing
 
-### 9.1 `IFrameCodec<Frame>` — zero-alloc 코덱 인터페이스
+### 9.1 `IFrameCodec<Frame>` — Zero-alloc Codec Interface
 
 ```cpp
-// Frame: 코덱이 생산/소비하는 타입.
-//        보통 스택 할당 구조체 (예: Http1Request, WsFrame).
+// Frame: the type the codec produces/consumes.
+//        Typically a stack-allocated struct (e.g., Http1Request, WsFrame).
 template<typename Frame>
 class IFrameCodec {
 public:
     virtual ~IFrameCodec() = default;
 
-    // 디코드: buf에서 프레임 하나를 out에 씀.
-    // 반환값: 소비한 바이트 수. 0 = 데이터 부족 (more_data 필요).
-    // 에러: Result의 에러 코드.
+    // Decode: reads one frame from buf into out.
+    // Returns: bytes consumed. 0 = insufficient data (more data needed).
+    // Error: error code in Result.
     virtual Result<size_t> decode(std::span<const std::byte> buf,
                                   Frame& out) noexcept = 0;
 
-    // 인코드: frame을 iov에 슬라이스 목록으로 채움.
-    // iov의 slice들이 가리키는 메모리는 caller가 관리 (Arena 등).
+    // Encode: fills iov with a list of slices representing the frame.
+    // Memory pointed to by iov slices is managed by the caller (Arena, etc.).
     virtual Result<void>   encode(const Frame& frame,
                                   IOVec<16>& iov,
                                   Arena& arena) noexcept = 0;
 };
 ```
 
-### 9.2 `LengthPrefixedCodec<Header>` — 길이 헤더 프레임
+### 9.2 `LengthPrefixedCodec<Header>` — Length-prefixed Frame
 
 ```cpp
-// Header: 고정 크기 헤더 타입. length() 메서드 필요.
-// 예: struct MyHeader { uint32_t magic; uint32_t length() const; };
+// Header: fixed-size header type. Must have a length() method.
+// Example: struct MyHeader { uint32_t magic; uint32_t length() const; };
 template<typename Header>
 class LengthPrefixedCodec final : public IFrameCodec<std::span<const std::byte>> {
 public:
@@ -520,10 +520,10 @@ public:
 };
 ```
 
-### 9.3 `LineCodec` — 줄바꿈 구분 프레임
+### 9.3 `LineCodec` — Newline-delimited Frame
 
 ```cpp
-// RESP, Redis, SMTP, NNTP 등
+// RESP, Redis, SMTP, NNTP, etc.
 class LineCodec final : public IFrameCodec<std::span<const std::byte>> {
 public:
     explicit LineCodec(std::byte delim = std::byte{'\n'},
@@ -536,11 +536,11 @@ public:
 };
 ```
 
-### 9.4 `Http1Codec` — HTTP/1.1 (기존 parser.hpp 래핑)
+### 9.4 `Http1Codec` — HTTP/1.1 (wrapping existing parser.hpp)
 
 ```cpp
-// 기존 qbuem::http::Parser를 IFrameCodec으로 래핑
-// Request/Response 모두 Arena 할당 (헤더 값 슬라이스 → Arena에 복사 없음)
+// Wraps the existing qbuem::http::Parser as IFrameCodec
+// Both Request/Response use Arena allocation (header value slices → no copy into Arena)
 class Http1Codec final : public IFrameCodec<http::Request> {
 public:
     Result<size_t> decode(std::span<const std::byte> buf,
@@ -554,7 +554,7 @@ public:
 
 ## 10. Layer 7 — Connection Lifecycle
 
-### 10.1 `IConnectionHandler<Frame>` — 연결 핸들러 인터페이스
+### 10.1 `IConnectionHandler<Frame>` — Connection Handler Interface
 
 ```cpp
 template<typename Frame>
@@ -562,25 +562,25 @@ class IConnectionHandler {
 public:
     virtual ~IConnectionHandler() = default;
 
-    // 새 연결 수락 후 호출 (handshake 포함)
+    // Called after accepting a new connection (including handshake)
     virtual Task<Result<void>> on_connect(Connection& conn,
                                           SocketAddr peer) = 0;
 
-    // 프레임 수신 시마다 호출
+    // Called on each received frame
     virtual Task<Result<void>> on_frame(Connection& conn,
                                         Frame&& frame) = 0;
 
-    // 연결 종료 시 호출 (정상/에러 모두)
+    // Called on connection close (both normal and error)
     virtual void on_disconnect(Connection& conn,
                                 std::error_code ec) noexcept = 0;
 };
 ```
 
-### 10.2 `AcceptLoop` — SO_REUSEPORT 코루틴 루프
+### 10.2 `AcceptLoop` — SO_REUSEPORT Coroutine Loop
 
 ```cpp
-// 각 Worker가 독립적인 TcpListener를 가짐 → accept 경합 없음
-// Handler: IConnectionHandler<Frame>을 구현한 타입 (또는 lambda)
+// Each Worker has an independent TcpListener → no accept() contention
+// Handler: type implementing IConnectionHandler<Frame> (or lambda)
 template<typename Frame, typename HandlerFactory>
     requires std::invocable<HandlerFactory>
           && std::derived_from<std::invoke_result_t<HandlerFactory>,
@@ -594,17 +594,17 @@ Task<void> accept_loop(
     std::stop_token    stop
 );
 
-// 내부 동작:
+// Internal behavior:
 // 1. TcpListener::bind(addr, reuse_port=true)
 // 2. loop: auto [fd, peer] = co_await listener.accept(reactor)
 // 3. auto conn = Connection{fd, reactor}
 // 4. dispatcher.spawn(handle_connection(conn, peer, codec, make_handler(), arena))
 ```
 
-### 10.3 `ConnectionPool<T>` — 아웃바운드 커넥션 풀
+### 10.3 `ConnectionPool<T>` — Outbound Connection Pool
 
 ```cpp
-template<typename T>  // T: TcpStream 또는 ITransport 구현체
+template<typename T>  // T: TcpStream or ITransport implementation
 class ConnectionPool {
 public:
     struct Config {
@@ -618,11 +618,11 @@ public:
 
     explicit ConnectionPool(Config cfg, Reactor& reactor);
 
-    // O(1) hot path: idle 연결 꺼냄
-    // 없으면 새 연결 생성 (최대 max_size까지)
+    // O(1) hot path: dequeue idle connection
+    // If none available, create new connection (up to max_size)
     Task<Result<std::unique_ptr<T, ReturnToPool>>> acquire();
 
-    // 연결 반환 (RAII deleter가 자동 호출)
+    // Return connection (RAII deleter calls automatically)
     void release(T* conn, bool healthy) noexcept;
 
     size_t idle_count()  const noexcept;
@@ -637,38 +637,38 @@ public:
 ### 11.1 HTTP/1.1
 
 ```cpp
-// Http1Handler: IConnectionHandler<http::Request> 구현
-// - keep-alive 자동 처리
-// - 100-continue 지원
+// Http1Handler: implements IConnectionHandler<http::Request>
+// - automatic keep-alive handling
+// - 100-continue support
 // - chunked transfer encoding
-// - Upgrade 헤더 처리 (→ WebSocket upgrade)
-// Router를 주입받아 요청 라우팅
+// - Upgrade header handling (→ WebSocket upgrade)
+// Injects Router for request routing
 
 class Http1Handler final : public IConnectionHandler<http::Request> {
 public:
     explicit Http1Handler(http::Router& router, Arena& arena);
-    // ... IConnectionHandler<http::Request> 구현
+    // ... IConnectionHandler<http::Request> implementation
 };
 ```
 
 ### 11.2 HTTP/2 (v1.0)
 
 ```cpp
-// 외부 HPACK 구현 없음 — header table은 Arena 기반 구현
-// SETTINGS, WINDOW_UPDATE, PING, GOAWAY 지원
+// No external HPACK implementation — header table is Arena-based implementation
+// Supports SETTINGS, WINDOW_UPDATE, PING, GOAWAY
 // Stream multiplexing: AsyncChannel<Http2Frame> per stream
 
 struct Http2Frame {
     uint8_t  type;
     uint8_t  flags;
     uint32_t stream_id;
-    std::span<const std::byte> payload;  // Arena에서 살아있는 동안 유효
+    std::span<const std::byte> payload;  // valid while Arena is alive
 };
 
 class Http2Handler final : public IConnectionHandler<Http2Frame> {
 public:
     explicit Http2Handler(http::Router& router, Arena& arena);
-    // ALPN "h2" 협상 후 Http1Codec → Http2Codec 전환
+    // Switch Http1Codec → Http2Codec after ALPN "h2" negotiation
 };
 ```
 
@@ -679,22 +679,22 @@ struct WsFrame {
     bool   fin;
     uint8_t opcode;   // TEXT/BINARY/PING/PONG/CLOSE
     bool   masked;
-    std::span<const std::byte> payload;  // unmasked, Arena 소유
+    std::span<const std::byte> payload;  // unmasked, Arena-owned
 };
 
 class WebSocketHandler final : public IConnectionHandler<WsFrame> {
 public:
-    // HTTP/1.1 Upgrade 요청 검증 후 101 Switching Protocols 응답
-    // 이후 WsFrame 루프
+    // Validate HTTP/1.1 Upgrade request then respond with 101 Switching Protocols
+    // Followed by WsFrame loop
 };
 ```
 
 ### 11.4 gRPC (v1.0)
 
 ```cpp
-// HTTP/2 위에서 동작. protobuf 직접 의존 없음.
-// 서비스에서 serialize/deserialize 구현 제공
-// MessageBus Bidi채널 → gRPC 백엔드 연결
+// Operates over HTTP/2. No direct protobuf dependency.
+// Service provides serialize/deserialize implementation
+// MessageBus Bidi channel → gRPC backend connection
 
 template<typename Req, typename Res>
 class GrpcHandler {
@@ -711,19 +711,19 @@ public:
 
 ---
 
-## 12. Zero-Dependency 전략
+## 12. Zero-Dependency Strategy
 
 ```
-의존성 레벨        헤더 노출  구현 노출  비고
+Dependency Level   Header Exposed  Impl Exposed  Notes
 ─────────────────────────────────────────────────────────────────────
-POSIX sockets      YES        YES        zero-dep, 항상 사용 가능
-Linux io_uring     NO (pimpl) YES(.cpp)  선택적. 없으면 epoll 폴백
-liburing           NO (pimpl) YES(.cpp)  선택적. CMake 옵션
-OpenSSL/TLS        NO         NO         서비스에서 ITransport 구현
-nghttp2            NO         NO         서비스에서 ICodec 구현
-protobuf           NO         NO         서비스에서 직렬화 구현
-JSON               NO         NO         qbuem-json 별도 레포
-zlib/brotli/zstd   NO         NO         서비스에서 IBodyEncoder 구현
+POSIX sockets      YES             YES           zero-dep, always available
+Linux io_uring     NO (pimpl)      YES(.cpp)     optional. falls back to epoll if unavailable
+liburing           NO (pimpl)      YES(.cpp)     optional. CMake option
+OpenSSL/TLS        NO              NO            service implements ITransport
+nghttp2            NO              NO            service implements ICodec
+protobuf           NO              NO            service implements serialization
+JSON               NO              NO            qbuem-json separate repository
+zlib/brotli/zstd   NO              NO            service implements IBodyEncoder
 ```
 
 **CMake feature flags:**
@@ -737,10 +737,10 @@ option(QBUEM_ZEROCOPY "Enable MSG_ZEROCOPY support" ON)   # Linux 4.14+
 
 ---
 
-## 13. 구현 의존성 & 로드맵
+## 13. Implementation Dependencies & Roadmap
 
 ```
-v0.7.0 — IO Primitives (이 문서의 Layer 3-5)
+v0.7.0 — IO Primitives (Layer 3-5 from this document)
   ├── SocketAddr / TcpListener / TcpStream / UdpSocket
   ├── IOSlice / IOVec<N> / ReadBuf<N> / WriteBuf
   ├── AsyncFile
@@ -754,14 +754,14 @@ v0.8.0 — Codec + Connection Lifecycle (Layer 6-7)
   ├── IConnectionHandler<Frame>
   └── ConnectionPool<T>
 
-v0.9.0 — Pipeline 고도화 (기존 TODO 유지)
+v0.9.0 — Pipeline Enhancement (existing TODOs retained)
   ├── DynamicPipeline::hot_swap
   ├── PriorityChannel<T>
   ├── SpscChannel<T> (Lamport)
   └── Rx operators
 
 v1.0.0 — Protocol Handlers
-  ├── Http1Handler (기존 router 연결)
+  ├── Http1Handler (existing router connection)
   ├── Http2Handler (HPACK, stream multiplexing)
   ├── WebSocketHandler (RFC 6455)
   └── GrpcHandler<Req,Res> (protobuf injection)
@@ -769,52 +769,52 @@ v1.0.0 — Protocol Handlers
 
 ---
 
-## 14. Hot Path 메모리 흐름 (전체 zero-alloc 증명)
+## 14. Hot Path Memory Flow (proving full zero-alloc)
 
 ```
 [accept]
-  TcpListener::accept()           → int fd (스택)
-  SocketAddr peer                 → 스택 value type
+  TcpListener::accept()           → int fd (stack)
+  SocketAddr peer                 → stack value type
 
-[연결 초기화]
+[connection init]
   Connection conn{fd, reactor}    → FixedPoolResource<sizeof(Connection)>
-  Arena arena{conn.arena()}       → 연결당 Arena (Connection 내부)
-  ReadBuf<16384> rbuf             → 스택 (코루틴 프레임 내부)
-  WriteBuf wbuf{arena}            → Arena 참조만
+  Arena arena{conn.arena()}       → per-connection Arena (inside Connection)
+  ReadBuf<16384> rbuf             → stack (inside coroutine frame)
+  WriteBuf wbuf{arena}            → Arena reference only
 
-[수신]
-  rbuf.write_head()               → rbuf의 스택 버퍼 참조
+[receive]
+  rbuf.write_head()               → stack buffer reference inside rbuf
   TcpStream::read(rbuf.write_head(), reactor)
     → register_event (epoll) or POLL_ADD (io_uring)
-    → 이벤트 후 recv() 시스템콜
-  rbuf.commit(n)                  → 포인터 증가
+    → recv() syscall after event
+  rbuf.commit(n)                  → pointer increment
 
-[파싱]
+[parse]
   Http1Codec::decode(rbuf.read_head(), request)
-    → request 헤더 값: rbuf 내부 포인터 (zero-copy slice)
-    → request 자체: 스택 (코루틴 프레임)
-  rbuf.consume(n)                 → 포인터 증가
+    → request header values: pointers inside rbuf (zero-copy slice)
+    → request itself: stack (coroutine frame)
+  rbuf.consume(n)                 → pointer increment
 
-[처리]
-  router.dispatch(request, env)   → Pipeline Action 체인
-  Arena로 응답 헤더/바디 구성     → bump-pointer, O(1)
+[process]
+  router.dispatch(request, env)   → Pipeline Action chain
+  Build response headers/body in Arena → bump-pointer, O(1)
 
-[송신]
-  wbuf.as_iovec()                 → 스택 IOVec<64>
-  TcpStream::writev(iov, reactor) → 단일 writev() 시스템콜
+[send]
+  wbuf.as_iovec()                 → stack IOVec<64>
+  TcpStream::writev(iov, reactor) → single writev() syscall
 
-[연결 종료]
-  Connection 소멸                 → FixedPoolResource::release()
-  Arena::reset()                  → 포인터 리셋 (OS 반환 없음)
+[connection close]
+  Connection destructor           → FixedPoolResource::release()
+  Arena::reset()                  → pointer reset (no OS return)
 ```
 
-**new/malloc 호출 횟수: 0**
+**new/malloc call count: 0**
 
 ---
 
-## 15. 성능 목표
+## 15. Performance Goals
 
-| 지표 | 목표 | 측정 방법 |
+| Metric | Target | Measurement Method |
 |------|------|-----------|
 | Latency P50 | < 50µs | wrk2 constant rate |
 | Latency P99 | < 500µs | wrk2 constant rate |

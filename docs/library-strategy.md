@@ -1,28 +1,28 @@
-# qbuem-stack 라이브러리 분리 전략
+# qbuem-stack Library Separation Strategy
 
-> **원칙**: 기능 단위 독립 라이브러리 · 단방향 의존성 · Zero external dependency
+> **Principle**: Function-unit independent libraries · Unidirectional dependencies · Zero external dependency
 >
-> 관련 문서:
-> - IO 아키텍처: [docs/io-architecture.md](./io-architecture.md)
-> - IO 기술 심층 분석: [docs/io-deep-dive.md](./io-deep-dive.md)
-> - 파이프라인 설계: [docs/pipeline-design.md](./pipeline-design.md)
+> Related documents:
+> - IO Architecture: [docs/io-architecture.md](./io-architecture.md)
+> - IO Technology Deep Dive: [docs/io-deep-dive.md](./io-deep-dive.md)
+> - Pipeline Design: [docs/pipeline-design.md](./pipeline-design.md)
 
 ---
 
-## 1. 설계 원칙
+## 1. Design Principles
 
-| 원칙 | 내용 |
+| Principle | Description |
 |------|------|
-| **단일 책임** | 라이브러리 하나 = 명확한 기능 하나 |
-| **단방향 의존** | 상위 레이어가 하위를 의존. 역방향 없음 |
-| **Zero external dep** | 각 라이브러리 헤더에 외부 라이브러리 노출 금지 |
-| **독립 소비** | 임베디드 서버는 `qbuem::reactor`만, HTTP 서버는 `qbuem::http-server`만 |
-| **헤더 온리 우선** | template/concept 위주 라이브러리는 헤더 온리로 노출 |
-| **모노레포** | 하나의 git 레포, 다수의 CMake 타겟으로 관리 |
+| **Single responsibility** | One library = one clear function |
+| **Unidirectional dependency** | Upper layers depend on lower. No reverse. |
+| **Zero external dep** | No external library exposure in any library header |
+| **Independent consumption** | Embedded server uses only `qbuem::reactor`; HTTP server only `qbuem::http-server` |
+| **Header-only first** | template/concept-heavy libraries are exposed as header-only |
+| **Monorepo** | One git repository, multiple CMake targets |
 
 ---
 
-## 2. 라이브러리 전체 목록 (9레벨)
+## 2. Complete Library List (9 levels)
 
 ```
 Level 0  ─ Foundation   : result · arena · crypto
@@ -39,7 +39,7 @@ Level 9  ─ Umbrella     : qbuem (all)
 
 ---
 
-## 3. 의존성 그래프
+## 3. Dependency Graph
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
@@ -98,33 +98,33 @@ Level 9  ─ Umbrella     : qbuem (all)
 
 ---
 
-## 4. 라이브러리별 상세
+## 4. Per-Library Details
 
 ### Level 0 — Foundation
 
 #### `qbuem::result` (header-only)
 ```
-헤더: include/qbuem/result.hpp  (현재 common.hpp 분리)
-의존: 없음
-내용: Result<T>, unexpected<E>, errc enum, ok(), err()
-용도: 모든 라이브러리의 공통 에러 타입
+Headers: include/qbuem/result.hpp  (currently split from common.hpp)
+Depends on: none
+Contents: Result<T>, unexpected<E>, errc enum, ok(), err()
+Purpose: Common error type for all libraries
 ```
 
 #### `qbuem::arena` (header-only)
 ```
-헤더: include/qbuem/arena.hpp  (현재 core/arena.hpp → 이동)
-의존: 없음
-내용: Arena, FixedPoolResource<N,A>, BufferPool<Size,Count>
-용도: 모든 레이어의 zero-alloc 메모리 기반
+Headers: include/qbuem/arena.hpp  (currently core/arena.hpp → to be moved)
+Depends on: none
+Contents: Arena, FixedPoolResource<N,A>, BufferPool<Size,Count>
+Purpose: zero-alloc memory foundation for all layers
 ```
 
 #### `qbuem::crypto` (static lib)
 ```
-헤더: include/qbuem/crypto.hpp
-소스: src/crypto/crypto.cpp
-의존: result (+ POSIX getrandom/arc4random)
-내용: constant_time_equal(), csrf_token(), random_bytes()
-용도: 타이밍 안전 비교, CSPRNG. 외부 OpenSSL 없음.
+Headers: include/qbuem/crypto.hpp
+Sources: src/crypto/crypto.cpp
+Depends on: result (+ POSIX getrandom/arc4random)
+Contents: constant_time_equal(), csrf_token(), random_bytes()
+Purpose: Timing-safe comparison, CSPRNG. No external OpenSSL.
 ```
 
 ---
@@ -133,31 +133,31 @@ Level 9  ─ Umbrella     : qbuem (all)
 
 #### `qbuem::task` (header-only)
 ```
-헤더: include/qbuem/task.hpp, include/qbuem/awaiters.hpp
-의존: result
-내용: Task<T>, promise_type, symmetric transfer, AsyncRead/Write awaiters
-용도: 모든 코루틴 기반 비동기 작업의 토대
+Headers: include/qbuem/task.hpp, include/qbuem/awaiters.hpp
+Depends on: result
+Contents: Task<T>, promise_type, symmetric transfer, AsyncRead/Write awaiters
+Purpose: Foundation for all coroutine-based async operations
 ```
 
 #### `qbuem::reactor` (static lib — interface + TimerWheel)
 ```
-헤더: include/qbuem/reactor/reactor.hpp
-       include/qbuem/reactor/timer_wheel.hpp
-소스: src/reactor/reactor.cpp (current() thread_local)
-       src/reactor/timer_wheel.cpp
-의존: result, task
-내용: Reactor abstract interface, EventType, TimerWheel O(1)
-용도: 플랫폼 독립 이벤트 루프 추상화
-주의: 구체 구현 없음 — epoll/kqueue/iouring 중 하나와 링크 필요
+Headers: include/qbuem/reactor/reactor.hpp
+         include/qbuem/reactor/timer_wheel.hpp
+Sources: src/reactor/reactor.cpp (current() thread_local)
+         src/reactor/timer_wheel.cpp
+Depends on: result, task
+Contents: Reactor abstract interface, EventType, TimerWheel O(1)
+Purpose: Platform-independent event loop abstraction
+Note: No concrete implementation — must link with one of epoll/kqueue/iouring
 ```
 
 #### `qbuem::dispatcher` (static lib)
 ```
-헤더: include/qbuem/reactor/dispatcher.hpp
-소스: src/reactor/dispatcher.cpp
-의존: reactor
-내용: Dispatcher, thread-per-core, post(), spawn(), CPU affinity
-용도: 다중 Reactor 조율, Worker 스레드 관리
+Headers: include/qbuem/reactor/dispatcher.hpp
+Sources: src/reactor/dispatcher.cpp
+Depends on: reactor
+Contents: Dispatcher, thread-per-core, post(), spawn(), CPU affinity
+Purpose: Coordinates multiple Reactors, manages Worker threads
 ```
 
 ---
@@ -166,34 +166,34 @@ Level 9  ─ Umbrella     : qbuem (all)
 
 #### `qbuem::epoll` (static lib, Linux only)
 ```
-헤더: include/qbuem/reactor/epoll_reactor.hpp
-소스: src/reactor/epoll_reactor.cpp
-의존: reactor
-내용: EpollReactor (eventfd wakeup, level-trigger)
-플랫폼: Linux
+Headers: include/qbuem/reactor/epoll_reactor.hpp
+Sources: src/reactor/epoll_reactor.cpp
+Depends on: reactor
+Contents: EpollReactor (eventfd wakeup, level-trigger)
+Platform: Linux
 ```
 
 #### `qbuem::kqueue` (static lib, macOS/BSD only)
 ```
-헤더: include/qbuem/reactor/kqueue_reactor.hpp
-소스: src/reactor/kqueue_reactor.cpp
-의존: reactor
-내용: KqueueReactor (EVFILT_USER wakeup)
-플랫폼: macOS, FreeBSD
+Headers: include/qbuem/reactor/kqueue_reactor.hpp
+Sources: src/reactor/kqueue_reactor.cpp
+Depends on: reactor
+Contents: KqueueReactor (EVFILT_USER wakeup)
+Platform: macOS, FreeBSD
 ```
 
 #### `qbuem::iouring` (static lib, Linux 5.1+)
 ```
-헤더: include/qbuem/reactor/io_uring_reactor.hpp
-소스: src/reactor/io_uring_reactor.cpp
-의존: reactor (liburing — pimpl 내부, 헤더 미노출)
-내용: IOUringReactor (SQPOLL, Fixed Buffers, Buffer Ring)
-       고급: multishot accept/recv, linked SQEs, fixed files
-플랫폼: Linux 5.1+
-옵션:  QBUEM_IOURING=ON/OFF (없으면 epoll 자동 선택)
+Headers: include/qbuem/reactor/io_uring_reactor.hpp
+Sources: src/reactor/io_uring_reactor.cpp
+Depends on: reactor (liburing — pimpl internal, not exposed in headers)
+Contents: IOUringReactor (SQPOLL, Fixed Buffers, Buffer Ring)
+          Advanced: multishot accept/recv, linked SQEs, fixed files
+Platform: Linux 5.1+
+Option:   QBUEM_IOURING=ON/OFF (epoll selected automatically if unavailable)
 ```
 
-**CMake 자동 선택 로직:**
+**CMake auto-selection logic:**
 ```cmake
 if(APPLE)
     set(QBUEM_DEFAULT_REACTOR kqueue)
@@ -212,46 +212,46 @@ endif()
 
 #### `qbuem::net` (static lib)
 ```
-헤더: include/qbuem/net/socket_addr.hpp
-       include/qbuem/net/tcp_listener.hpp
-       include/qbuem/net/tcp_stream.hpp
-       include/qbuem/net/udp_socket.hpp
-       include/qbuem/net/unix_socket.hpp
-소스: src/net/*.cpp
-의존: reactor, result, task
-내용: SocketAddr(IPv4/IPv6/Unix), TcpListener(SO_REUSEPORT),
-       TcpStream(readv/writev), UdpSocket(sendmsg/recvmsg),
-       UnixSocket(stream/dgram)
-용도: 모든 네트워크 I/O의 기반. TLS 없음 (transport에서 주입).
+Headers: include/qbuem/net/socket_addr.hpp
+         include/qbuem/net/tcp_listener.hpp
+         include/qbuem/net/tcp_stream.hpp
+         include/qbuem/net/udp_socket.hpp
+         include/qbuem/net/unix_socket.hpp
+Sources: src/net/*.cpp
+Depends on: reactor, result, task
+Contents: SocketAddr(IPv4/IPv6/Unix), TcpListener(SO_REUSEPORT),
+          TcpStream(readv/writev), UdpSocket(sendmsg/recvmsg),
+          UnixSocket(stream/dgram)
+Purpose: Foundation for all network I/O. No TLS (injected via transport).
 ```
 
 #### `qbuem::buf` (header-only)
 ```
-헤더: include/qbuem/buf/io_slice.hpp
-       include/qbuem/buf/read_buf.hpp
-       include/qbuem/buf/write_buf.hpp
-의존: arena
-내용: IOSlice, IOVec<N>, ReadBuf<N>(링버퍼), WriteBuf(코르크)
-용도: 할당 없는 scatter-gather IO 버퍼 추상화
+Headers: include/qbuem/buf/io_slice.hpp
+         include/qbuem/buf/read_buf.hpp
+         include/qbuem/buf/write_buf.hpp
+Depends on: arena
+Contents: IOSlice, IOVec<N>, ReadBuf<N>(ring buffer), WriteBuf(cork)
+Purpose: Allocation-free scatter-gather IO buffer abstraction
 ```
 
 #### `qbuem::file` (static lib)
 ```
-헤더: include/qbuem/io/async_file.hpp
-소스: src/io/async_file.cpp
-의존: reactor, buf
-내용: AsyncFile (io_uring READ/WRITE_FIXED 우선, pread 폴백)
-       O_DIRECT 지원, 정렬 버퍼 검증
+Headers: include/qbuem/io/async_file.hpp
+Sources: src/io/async_file.cpp
+Depends on: reactor, buf
+Contents: AsyncFile (prefers io_uring READ/WRITE_FIXED, falls back to pread)
+          O_DIRECT support, aligned buffer validation
 ```
 
 #### `qbuem::zerocopy` (static lib, Linux)
 ```
-헤더: include/qbuem/io/zero_copy.hpp
-소스: src/io/zero_copy.cpp
-의존: net, reactor
-내용: sendfile(2), splice(2), MSG_ZEROCOPY + wait
-       kTLS TX 오프로드 감지 및 연동 (Linux 4.13+)
-플랫폼: Linux (macOS: sendfile 헤더는 있으나 기능 제한)
+Headers: include/qbuem/io/zero_copy.hpp
+Sources: src/io/zero_copy.cpp
+Depends on: net, reactor
+Contents: sendfile(2), splice(2), MSG_ZEROCOPY + wait
+          kTLS TX offload detection and integration (Linux 4.13+)
+Platform: Linux (macOS: sendfile header present but functionality limited)
 ```
 
 ---
@@ -260,36 +260,36 @@ endif()
 
 #### `qbuem::transport` (header-only + small impl)
 ```
-헤더: include/qbuem/transport/itransport.hpp
-       include/qbuem/transport/plain_transport.hpp
-소스: src/transport/plain_transport.cpp
-의존: net, task, result
-내용: ITransport (추상), PlainTransport (TCP 구체 구현)
-주입점: 서비스에서 OpenSSL/mbedTLS 구현체를 ITransport로 주입
-        kTLS: 핸드셰이크 후 setsockopt(SOL_TLS) 설정하는 구현체도 가능
+Headers: include/qbuem/transport/itransport.hpp
+         include/qbuem/transport/plain_transport.hpp
+Sources: src/transport/plain_transport.cpp
+Depends on: net, task, result
+Contents: ITransport (abstract), PlainTransport (concrete TCP implementation)
+Injection point: service injects OpenSSL/mbedTLS implementation as ITransport
+                 kTLS: implementation that calls setsockopt(SOL_TLS) after handshake is also possible
 ```
 
 #### `qbuem::codec` (header-only)
 ```
-헤더: include/qbuem/codec/frame_codec.hpp
-       include/qbuem/codec/length_prefix_codec.hpp
-       include/qbuem/codec/line_codec.hpp
-의존: buf, result
-내용: IFrameCodec<Frame>, LengthPrefixedCodec<H>, LineCodec
-용도: 프레임 경계 파싱. 할당 없음 — 모든 작업이 IOSlice/ReadBuf 위에서.
+Headers: include/qbuem/codec/frame_codec.hpp
+         include/qbuem/codec/length_prefix_codec.hpp
+         include/qbuem/codec/line_codec.hpp
+Depends on: buf, result
+Contents: IFrameCodec<Frame>, LengthPrefixedCodec<H>, LineCodec
+Purpose: Frame boundary parsing. No allocation — all operations on IOSlice/ReadBuf.
 ```
 
 #### `qbuem::server` (static lib)
 ```
-헤더: include/qbuem/server/accept_loop.hpp
-       include/qbuem/server/iconnection_handler.hpp
-       include/qbuem/server/connection_pool.hpp
-소스: src/server/*.cpp
-의존: net, transport, codec, dispatcher, arena
-내용: AcceptLoop<Frame,HandlerFactory> (SO_REUSEPORT, coroutine)
-       IConnectionHandler<Frame>
-       ConnectionPool<T> (min_idle, max_size, health_check)
-용도: 서버 연결 수락/관리 인프라. 프로토콜 독립.
+Headers: include/qbuem/server/accept_loop.hpp
+         include/qbuem/server/iconnection_handler.hpp
+         include/qbuem/server/connection_pool.hpp
+Sources: src/server/*.cpp
+Depends on: net, transport, codec, dispatcher, arena
+Contents: AcceptLoop<Frame,HandlerFactory> (SO_REUSEPORT, coroutine)
+          IConnectionHandler<Frame>
+          ConnectionPool<T> (min_idle, max_size, health_check)
+Purpose: Server connection accept/management infrastructure. Protocol-agnostic.
 ```
 
 ---
@@ -298,27 +298,27 @@ endif()
 
 #### `qbuem::http` (static lib)
 ```
-헤더: include/qbuem/http/parser.hpp
-       include/qbuem/http/request.hpp
-       include/qbuem/http/response.hpp
-       include/qbuem/http/router.hpp
-소스: src/http/*.cpp
-의존: buf, codec, result
-내용: SIMD HTTP/1.1 FSM 파서 (AVX2/SSE2/NEON/scalar),
-       Request/Response 값 타입, Radix Tree 라우터
-용도: HTTP 레이어. App/미들웨어 없음 — http-server에서 제공.
+Headers: include/qbuem/http/parser.hpp
+         include/qbuem/http/request.hpp
+         include/qbuem/http/response.hpp
+         include/qbuem/http/router.hpp
+Sources: src/http/*.cpp
+Depends on: buf, codec, result
+Contents: SIMD HTTP/1.1 FSM parser (AVX2/SSE2/NEON/scalar),
+          Request/Response value types, Radix Tree router
+Purpose: HTTP layer. No App/middleware — provided by http-server.
 ```
 
 #### `qbuem::http-server` (static lib)
 ```
-헤더: include/qbuem/http/http1_handler.hpp
-       include/qbuem/http/http_server.hpp
-소스: src/http/http1_handler.cpp
-의존: http, server, transport, arena
-내용: Http1Handler (IConnectionHandler<http::Request> 구현)
-       keep-alive, chunked, 100-continue, Upgrade 처리
-       App (listen/middleware/lifecycle) — 현재 qbuem_stack.cpp
-용도: 실제 HTTP 서버 구동. 미들웨어 체인 포함.
+Headers: include/qbuem/http/http1_handler.hpp
+         include/qbuem/http/http_server.hpp
+Sources: src/http/http1_handler.cpp
+Depends on: http, server, transport, arena
+Contents: Http1Handler (IConnectionHandler<http::Request> implementation)
+          keep-alive, chunked, 100-continue, Upgrade handling
+          App (listen/middleware/lifecycle) — currently in qbuem_stack.cpp
+Purpose: Actual HTTP server runtime. Includes middleware chain.
 ```
 
 ---
@@ -327,33 +327,33 @@ endif()
 
 #### `qbuem::context` (header-only)
 ```
-헤더: include/qbuem/pipeline/context.hpp
-       include/qbuem/pipeline/service_registry.hpp
-       include/qbuem/pipeline/action_env.hpp
-       include/qbuem/pipeline/concepts.hpp
-의존: task, result
-내용: Context (불변 persistent list), ServiceRegistry (DI),
-       ActionEnv, WorkerLocal<T>, ContextualItem<T>
-       C++23 Concepts: ActionFn, BatchActionFn, PipelineInputFor
+Headers: include/qbuem/pipeline/context.hpp
+         include/qbuem/pipeline/service_registry.hpp
+         include/qbuem/pipeline/action_env.hpp
+         include/qbuem/pipeline/concepts.hpp
+Depends on: task, result
+Contents: Context (immutable persistent list), ServiceRegistry (DI),
+          ActionEnv, WorkerLocal<T>, ContextualItem<T>
+          C++23 Concepts: ActionFn, BatchActionFn, PipelineInputFor
 ```
 
 #### `qbuem::channel` (header-only)
 ```
-헤더: include/qbuem/pipeline/async_channel.hpp
-       include/qbuem/pipeline/stream.hpp
-       include/qbuem/pipeline/task_group.hpp
-의존: task, reactor, context
-내용: AsyncChannel<T> (Vyukov MPMC), Stream<T>, TaskGroup
-       cross-reactor wakeup via Reactor::post()
+Headers: include/qbuem/pipeline/async_channel.hpp
+         include/qbuem/pipeline/stream.hpp
+         include/qbuem/pipeline/task_group.hpp
+Depends on: task, reactor, context
+Contents: AsyncChannel<T> (Vyukov MPMC), Stream<T>, TaskGroup
+          cross-reactor wakeup via Reactor::post()
 ```
 
 #### `qbuem::pipeline` (header-only)
 ```
-헤더: include/qbuem/pipeline/action.hpp
-       include/qbuem/pipeline/static_pipeline.hpp
-       include/qbuem/pipeline/pipeline.hpp  ← umbrella include
-의존: channel, context, dispatcher
-내용: Action<In,Out>, StaticPipeline<In,Out>, PipelineBuilder
+Headers: include/qbuem/pipeline/action.hpp
+         include/qbuem/pipeline/static_pipeline.hpp
+         include/qbuem/pipeline/pipeline.hpp  ← umbrella include
+Depends on: channel, context, dispatcher
+Contents: Action<In,Out>, StaticPipeline<In,Out>, PipelineBuilder
 ```
 
 ---
@@ -362,44 +362,44 @@ endif()
 
 #### `qbuem::pipeline-graph` (header-only)
 ```
-헤더: include/qbuem/pipeline/dynamic_pipeline.hpp
-       include/qbuem/pipeline/pipeline_graph.hpp
-       include/qbuem/pipeline/message_bus.hpp
-의존: pipeline
-내용: IDynamicAction, DynamicPipeline (hot-swap, insert/remove)
-       PipelineGraph (DAG, Kahn's algo, fan-out, A/B route)
-       MessageBus (Unary/ServerStream/ClientStream/Bidi)
+Headers: include/qbuem/pipeline/dynamic_pipeline.hpp
+         include/qbuem/pipeline/pipeline_graph.hpp
+         include/qbuem/pipeline/message_bus.hpp
+Depends on: pipeline
+Contents: IDynamicAction, DynamicPipeline (hot-swap, insert/remove)
+          PipelineGraph (DAG, Kahn's algo, fan-out, A/B route)
+          MessageBus (Unary/ServerStream/ClientStream/Bidi)
 ```
 
 #### `qbuem::resilience` (header-only)
 ```
-헤더: include/qbuem/pipeline/retry_policy.hpp
-       include/qbuem/pipeline/circuit_breaker.hpp
-       include/qbuem/pipeline/dead_letter.hpp
-의존: pipeline, context
-내용: RetryPolicy (Fixed/Exp/Jitter), CircuitBreaker (3-state),
-       DeadLetter<T>, DeadLetterQueue
+Headers: include/qbuem/pipeline/retry_policy.hpp
+         include/qbuem/pipeline/circuit_breaker.hpp
+         include/qbuem/pipeline/dead_letter.hpp
+Depends on: pipeline, context
+Contents: RetryPolicy (Fixed/Exp/Jitter), CircuitBreaker (3-state),
+          DeadLetter<T>, DeadLetterQueue
 ```
 
 #### `qbuem::tracing` (header-only)
 ```
-헤더: include/qbuem/tracing/trace_context.hpp
-       include/qbuem/tracing/span_exporter.hpp
-       include/qbuem/tracing/pipeline_tracer.hpp
-의존: context
-내용: TraceContext (W3C), Sampler 인터페이스, SpanExporter 인터페이스
-       PipelineTracer, LoggingExporter, NoopExporter
-주입점: OtlpGrpcExporter/ZipkinExporter 등은 서비스에서 구현
+Headers: include/qbuem/tracing/trace_context.hpp
+         include/qbuem/tracing/span_exporter.hpp
+         include/qbuem/tracing/pipeline_tracer.hpp
+Depends on: context
+Contents: TraceContext (W3C), Sampler interface, SpanExporter interface
+          PipelineTracer, LoggingExporter, NoopExporter
+Injection point: OtlpGrpcExporter/ZipkinExporter etc. implemented by service
 ```
 
 #### `qbuem::metrics` (header-only)
 ```
-헤더: include/qbuem/metrics/action_metrics.hpp
-       include/qbuem/metrics/pipeline_observer.hpp
-의존: pipeline, context
-내용: ActionMetrics, PipelineMetrics, PipelineObserver 훅
-       LoggingObserver (기본 구현)
-주입점: Prometheus push는 서비스에서 IMetricsExporter 구현
+Headers: include/qbuem/metrics/action_metrics.hpp
+         include/qbuem/metrics/pipeline_observer.hpp
+Depends on: pipeline, context
+Contents: ActionMetrics, PipelineMetrics, PipelineObserver hooks
+          LoggingObserver (default implementation)
+Injection point: Prometheus push implemented by service via IMetricsExporter
 ```
 
 ---
@@ -408,31 +408,31 @@ endif()
 
 #### `qbuem::ws` (static lib)
 ```
-헤더: include/qbuem/protocol/websocket_handler.hpp
-소스: src/protocol/websocket_handler.cpp
-의존: http-server, server, buf
-내용: WebSocketHandler (RFC 6455)
-       HTTP Upgrade, masking/unmasking, PING/PONG, CLOSE handshake
+Headers: include/qbuem/protocol/websocket_handler.hpp
+Sources: src/protocol/websocket_handler.cpp
+Depends on: http-server, server, buf
+Contents: WebSocketHandler (RFC 6455)
+          HTTP Upgrade, masking/unmasking, PING/PONG, CLOSE handshake
 ```
 
 #### `qbuem::http2` (static lib)
 ```
-헤더: include/qbuem/protocol/http2_handler.hpp
-소스: src/protocol/http2_handler.cpp, src/protocol/hpack.cpp
-의존: http-server, server, buf, arena
-내용: Http2Handler, HPACK encoder/decoder (arena 기반, zero-alloc),
-       stream multiplexing, SETTINGS/WINDOW_UPDATE/PING/GOAWAY
-외부dep: 없음 (nghttp2 사용 안 함 — 직접 구현)
+Headers: include/qbuem/protocol/http2_handler.hpp
+Sources: src/protocol/http2_handler.cpp, src/protocol/hpack.cpp
+Depends on: http-server, server, buf, arena
+Contents: Http2Handler, HPACK encoder/decoder (arena-based, zero-alloc),
+          stream multiplexing, SETTINGS/WINDOW_UPDATE/PING/GOAWAY
+External deps: none (nghttp2 not used — self-implemented)
 ```
 
 #### `qbuem::grpc` (static lib)
 ```
-헤더: include/qbuem/protocol/grpc_handler.hpp
-소스: src/protocol/grpc_handler.cpp
-의존: http2, pipeline, channel
-내용: GrpcHandler<Req,Res> (Unary/Server/Client/Bidi)
-       Stream<Res> / AsyncChannel<Req> 직접 연결
-주입점: protobuf 직렬화는 서비스에서 주입 (템플릿 파라미터)
+Headers: include/qbuem/protocol/grpc_handler.hpp
+Sources: src/protocol/grpc_handler.cpp
+Depends on: http2, pipeline, channel
+Contents: GrpcHandler<Req,Res> (Unary/Server/Client/Bidi)
+          Stream<Res> / AsyncChannel<Req> direct connection
+Injection point: protobuf serialization injected by service (template parameter)
 ```
 
 ---
@@ -441,21 +441,21 @@ endif()
 
 #### `qbuem` (interface lib, links all)
 ```
-헤더: include/qbuem/qbuem-stack.hpp  ← 현재 파일 유지
-의존: 모든 레이어
-용도: 대부분의 서비스 — 하나만 링크하면 전체 사용 가능
+Headers: include/qbuem/qbuem-stack.hpp  ← current file retained
+Depends on: all layers
+Purpose: most services — link just this one to use everything
 ```
 
 ---
 
-## 5. CMake 타겟 이름 규칙
+## 5. CMake Target Naming Convention
 
 ```cmake
-# 네임스페이스: qbuem-stack::
-# 타겟 이름: qbuem_<name>   (내부용)
-# 별칭:      qbuem-stack::<name>  (소비용)
+# Namespace: qbuem-stack::
+# Target name: qbuem_<name>   (internal use)
+# Alias:       qbuem-stack::<name>  (consumer use)
 
-# 예시
+# Example
 add_library(qbuem_result INTERFACE)
 add_library(qbuem-stack::result ALIAS qbuem_result)
 
@@ -463,34 +463,34 @@ add_library(qbuem_net STATIC ...)
 add_library(qbuem-stack::net ALIAS qbuem_net)
 ```
 
-### 소비 예시 (서비스 CMakeLists.txt)
+### Consumption Examples (service CMakeLists.txt)
 
 ```cmake
-# 케이스 1: 전체 스택 (웹 서비스)
+# Case 1: full stack (web service)
 find_package(qbuem-stack REQUIRED)
 target_link_libraries(my-web-service PRIVATE qbuem-stack::qbuem)
 
-# 케이스 2: HTTP 서버만 (API 서버)
+# Case 2: HTTP server only (API server)
 find_package(qbuem-stack REQUIRED COMPONENTS http-server pipeline)
 target_link_libraries(my-api PRIVATE
     qbuem-stack::http-server
     qbuem-stack::pipeline)
 
-# 케이스 3: IO 레이어만 (게임 서버, 임베디드)
+# Case 3: IO layer only (game server, embedded)
 find_package(qbuem-stack REQUIRED COMPONENTS net buf server)
 target_link_libraries(my-game-server PRIVATE
     qbuem-stack::net
     qbuem-stack::buf
     qbuem-stack::server)
 
-# 케이스 4: Pipeline만 (데이터 처리)
+# Case 4: Pipeline only (data processing)
 find_package(qbuem-stack REQUIRED COMPONENTS pipeline resilience tracing)
 target_link_libraries(my-worker PRIVATE
     qbuem-stack::pipeline
     qbuem-stack::resilience
     qbuem-stack::tracing)
 
-# 케이스 5: Reactor만 (임베디드 IO 서버)
+# Case 5: Reactor only (embedded IO server)
 find_package(qbuem-stack REQUIRED COMPONENTS reactor iouring net)
 target_link_libraries(my-embedded PRIVATE
     qbuem-stack::iouring
@@ -499,13 +499,13 @@ target_link_libraries(my-embedded PRIVATE
 
 ---
 
-## 6. 디렉토리 구조 (목표 상태)
+## 6. Directory Structure (target state)
 
 ```
 qbuem-stack/
 ├── include/qbuem/
-│   ├── result.hpp          ← qbuem::result (헤더 온리)
-│   ├── arena.hpp           ← qbuem::arena  (헤더 온리)
+│   ├── result.hpp          ← qbuem::result (header-only)
+│   ├── arena.hpp           ← qbuem::arena  (header-only)
 │   ├── crypto.hpp
 │   ├── reactor/
 │   │   ├── reactor.hpp     ← qbuem::reactor
@@ -521,7 +521,7 @@ qbuem-stack/
 │   │   ├── udp_socket.hpp
 │   │   └── unix_socket.hpp
 │   ├── buf/
-│   │   ├── io_slice.hpp    ← qbuem::buf (헤더 온리)
+│   │   ├── io_slice.hpp    ← qbuem::buf (header-only)
 │   │   ├── read_buf.hpp
 │   │   └── write_buf.hpp
 │   ├── io/
@@ -531,7 +531,7 @@ qbuem-stack/
 │   │   ├── itransport.hpp  ← qbuem::transport
 │   │   └── plain_transport.hpp
 │   ├── codec/
-│   │   ├── frame_codec.hpp ← qbuem::codec (헤더 온리)
+│   │   ├── frame_codec.hpp ← qbuem::codec (header-only)
 │   │   ├── length_prefix_codec.hpp
 │   │   └── line_codec.hpp
 │   ├── server/
@@ -545,7 +545,7 @@ qbuem-stack/
 │   │   ├── router.hpp
 │   │   └── http_server.hpp ← qbuem::http-server
 │   ├── pipeline/
-│   │   ├── context.hpp     ← qbuem::context (헤더 온리)
+│   │   ├── context.hpp     ← qbuem::context (header-only)
 │   │   ├── service_registry.hpp
 │   │   ├── action_env.hpp
 │   │   ├── concepts.hpp
@@ -597,8 +597,8 @@ qbuem-stack/
 │   ├── pipeline_test.cpp
 │   ├── dispatcher_post_test.cpp
 │   └── integration/
-│       ├── http1_server_test.cpp   ← 실제 포트 bind + 요청 전송
-│       ├── pipeline_e2e_test.cpp   ← 3단계 파이프라인 end-to-end
+│       ├── http1_server_test.cpp   ← actual port bind + request sending
+│       ├── pipeline_e2e_test.cpp   ← 3-stage pipeline end-to-end
 │       └── websocket_test.cpp
 │
 ├── cmake/
@@ -611,37 +611,37 @@ qbuem-stack/
 
 ---
 
-## 7. 버전 관리 전략
+## 7. Version Management Strategy
 
-### SemVer 정책
+### SemVer Policy
 
-| 변경 유형 | 버전 증가 |
+| Change Type | Version Bump |
 |-----------|-----------|
-| API 추가 (backward-compat) | MINOR |
-| API 변경/삭제 | MAJOR |
-| 버그 수정 | PATCH |
-| 내부 구현 개선 | PATCH |
+| API addition (backward-compat) | MINOR |
+| API change/removal | MAJOR |
+| Bug fix | PATCH |
+| Internal implementation improvement | PATCH |
 
-### 라이브러리별 버전
+### Per-library Versioning
 
-모든 라이브러리는 **단일 버전** (`qbuem-stack VERSION`)을 공유한다.
-개별 라이브러리 버전 없음 — 모노레포 단일 릴리스.
+All libraries share a **single version** (`qbuem-stack VERSION`).
+No per-library versions — monorepo single release.
 
 ```cmake
 project(qbuem-stack VERSION 1.0.0)
-# 모든 타겟이 동일한 VERSION_MAJOR.MINOR.PATCH 사용
+# All targets use the same VERSION_MAJOR.MINOR.PATCH
 ```
 
 ---
 
-## 8. 외부 주입 지점 (서비스가 구현할 것들)
+## 8. External Injection Points (what services implement)
 
 ```
-인터페이스               주입 라이브러리          서비스 구현 예시
+Interface                Injection Library        Service Implementation Examples
 ───────────────────────────────────────────────────────────────────────
 ITransport               qbuem::transport        OpenSSLTransport
                                                  mbedTLSTransport
-                                                 kTLSTransport (kTLS 오프로드)
+                                                 kTLSTransport (kTLS offload)
 IBodyEncoder             qbuem::http-server      GzipEncoder (zlib)
                                                  BrotliEncoder (brotli)
                                                  ZstdEncoder (zstd)
@@ -658,65 +658,65 @@ IIdempotencyStore        qbuem::resilience       RedisIdempotency
                                                  InMemoryIdempotency
 ICheckpointStore         qbuem::pipeline-graph   RedisCheckpoint
                                                  FileCheckpoint
-GrpcHandler<Req,Res>     qbuem::grpc             서비스별 핸들러 구현
-                                                 (protobuf serialization 포함)
+GrpcHandler<Req,Res>     qbuem::grpc             per-service handler implementation
+                                                 (protobuf serialization included)
 ```
 
 ---
 
-## 9. 마이그레이션 계획 (현재 → 목표 구조)
+## 9. Migration Plan (current → target structure)
 
-| 단계 | 내용 | 버전 | 상태 |
+| Step | Description | Version | Status |
 |------|------|------|------|
-| 1 | 헤더 이동: `core/arena.hpp` → `arena.hpp`, `core/reactor.hpp` → `reactor/reactor.hpp` | v0.7.0 | ✅ |
-| 2 | CMake 타겟 분리: `qbuem_core` → `qbuem_result` + `qbuem_arena` + `qbuem_task` + `qbuem_reactor` | v0.7.0 | ✅ |
-| 3 | `net/` 디렉토리 신설, IO 프리미티브 추가 | v0.7.0 | ✅ |
-| 4 | `buf/`, `io/`, `transport/`, `codec/`, `server/` 추가 | v0.7.0 | ✅ |
-| 5 | Pipeline 헤더 재구성: `context`, `channel`, `pipeline` 분리 | v0.7.0 | ✅ |
-| 6 | `tracing/`, `metrics/` 분리 | v0.8.0 | ✅ |
-| 7 | `protocol/` 추가 (ws, http2, grpc 핸들러 스텁) | v1.0.0 | ✅ |
-| 8 | `find_package(qbuem-stack COMPONENTS ...)` 전체 25개 컴포넌트 지원 | v1.1 | ✅ |
-| 9 | DynamicPipeline, PipelineGraph, MessageBus 구현 | v1.0.0 | ✅ |
-| 10 | HTTP/2 full (HPACK), WebSocket (RFC 6455), gRPC (4패턴) 구현 | v1.0.0 | ✅ |
-| 11 | `reactor/*` 포워딩 헤더 추가 (하위 호환 경로 제공) | v1.1 | ✅ |
-| 12 | `qbuem::xdp` — AF_XDP + UMEM 라이브러리 (선택적, QBUEM_XDP=ON) | v1.1 | ✅ |
-| 13 | QUIC/HTTP3 `ITransport` 레퍼런스 가이드 | v1.1 | ✅ |
-| 14 | HTTP/3 native (quiche 동봉) / AF_XDP 프로덕션 예제 | v2.0 | 계획 |
+| 1 | Header move: `core/arena.hpp` → `arena.hpp`, `core/reactor.hpp` → `reactor/reactor.hpp` | v0.7.0 | ✅ |
+| 2 | CMake target split: `qbuem_core` → `qbuem_result` + `qbuem_arena` + `qbuem_task` + `qbuem_reactor` | v0.7.0 | ✅ |
+| 3 | Create net/ directory, add IO primitives | v0.7.0 | ✅ |
+| 4 | Add buf/, io/, transport/, codec/, server/ | v0.7.0 | ✅ |
+| 5 | Reorganize pipeline headers: separate context, channel, pipeline | v0.7.0 | ✅ |
+| 6 | Split tracing/, metrics/ | v0.8.0 | ✅ |
+| 7 | Add protocol/ (ws, http2, grpc handler stubs) | v1.0.0 | ✅ |
+| 8 | Full 25-component support for `find_package(qbuem-stack COMPONENTS ...)` | v1.1 | ✅ |
+| 9 | Implement DynamicPipeline, PipelineGraph, MessageBus | v1.0.0 | ✅ |
+| 10 | Implement full HTTP/2 (HPACK), WebSocket (RFC 6455), gRPC (4 patterns) | v1.0.0 | ✅ |
+| 11 | Add reactor/* forwarding headers (provide backward-compat paths) | v1.1 | ✅ |
+| 12 | `qbuem::xdp` — AF_XDP + UMEM library (optional, QBUEM_XDP=ON) | v1.1 | ✅ |
+| 13 | QUIC/HTTP3 `ITransport` reference guide | v1.1 | ✅ |
+| 14 | HTTP/3 native (quiche bundled) / AF_XDP production example | v2.0 | planned |
 
-### 하위 호환성 유지
+### Maintaining Backward Compatibility
 
 ```cmake
-# 이전 사용법도 계속 동작하도록 alias 유지
-add_library(qbuem-stack::core  ALIAS qbuem_reactor)  # 기존 core → reactor
+# Maintain aliases so previous usage continues to work
+add_library(qbuem-stack::core  ALIAS qbuem_reactor)  # old core → reactor
 add_library(qbuem-stack::http  ALIAS qbuem_http)
 add_library(qbuem-stack::qbuem ALIAS qbuem_all)
 ```
 
-헤더 경로도 하위 호환 포워딩 헤더로 유지됩니다:
+Header paths are also maintained via backward-compat forwarding headers:
 
 ```cpp
-// 모두 동일하게 동작 — 실제 헤더는 core/ 에 있음
-#include <qbuem/reactor/task.hpp>     // 새 경로 (포워딩)
-#include <qbuem/core/task.hpp>        // 기존 경로 (실제 헤더)
+// All work equivalently — actual header is in core/
+#include <qbuem/reactor/task.hpp>     // new path (forwarding)
+#include <qbuem/core/task.hpp>        // legacy path (actual header)
 ```
 
 ---
 
-## 10. AF_XDP 선택적 라이브러리 (`qbuem::xdp`)
+## 10. AF_XDP Optional Library (`qbuem::xdp`)
 
-커널 네트워크 스택을 완전히 우회하는 극한 성능 패킷 I/O.
+Extreme-performance packet I/O that completely bypasses the kernel network stack.
 
-### 빌드
+### Build
 
 ```bash
-# AF_XDP 인터페이스만 (stub — 컴파일은 되나 실제 동작 없음)
+# AF_XDP interface only (stub — compiles but no actual behavior)
 cmake -DQBUEM_XDP=ON ..
 
-# AF_XDP + libbpf 실제 연동 (Linux 4.18+, libbpf-dev 필요)
+# AF_XDP + libbpf actual integration (Linux 4.18+, requires libbpf-dev)
 cmake -DQBUEM_XDP=ON -DQBUEM_XDP_LIBBPF=ON ..
 ```
 
-### 사용
+### Usage
 
 ```cmake
 find_package(qbuem-stack REQUIRED COMPONENTS xdp)
@@ -726,34 +726,34 @@ target_link_libraries(myapp PRIVATE qbuem-stack::xdp)
 ```cpp
 #include <qbuem/xdp/xdp.hpp>
 
-// UMEM 생성 (NIC ↔ 유저스페이스 공유 메모리)
+// Create UMEM (shared memory between NIC ↔ user space)
 auto umem = qbuem::xdp::Umem::create({
     .frame_count   = 4096,
     .frame_size    = 4096,
     .use_hugepages = true,
 });
 
-// XSK 소켓 (eth0, 큐 0, native mode)
+// XSK socket (eth0, queue 0, native mode)
 auto xsk = qbuem::xdp::XskSocket::create("eth0", 0, *umem, {
     .mode           = qbuem::xdp::XskConfig::Mode::Native,
     .force_zerocopy = true,
 });
 
-// 수신 루프
+// Receive loop
 umem->fill_frames(2048);
 while (true) {
     qbuem::xdp::UmemFrame frames[64];
     uint32_t n = xsk->recv(frames, 64);
-    // 처리 ...
+    // process ...
     umem->fill_frames(n);
 }
 ```
 
-### 적용 사례
+### Use Cases
 
-| 사례 | 목표 PPS | 비고 |
+| Use Case | Target PPS | Notes |
 |------|---------|------|
-| 게임 서버 UDP | 10M+ PPS | RTT < 50µs |
-| 고속 QUIC (HTTP/3) | 1M+ conn/s | 연결 마이그레이션 |
-| 패킷 캡처/분석 | 100M+ PPS | tcpdump 대체 |
-| L4 로드밸런서 | 100M+ PPS | XDP redirect |
+| Game server UDP | 10M+ PPS | RTT < 50µs |
+| High-speed QUIC (HTTP/3) | 1M+ conn/s | connection migration |
+| Packet capture/analysis | 100M+ PPS | tcpdump replacement |
+| L4 load balancer | 100M+ PPS | XDP redirect |
