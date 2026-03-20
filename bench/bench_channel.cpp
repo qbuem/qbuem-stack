@@ -30,7 +30,10 @@ static void bench_async_channel_trysend() {
     bench::section("AsyncChannel<int> — try_send + try_recv (non-blocking)");
 
     constexpr size_t   kCapacity = 4096;
-    constexpr uint64_t kWarmup   = 100'000;
+    // Large warmup lets the CPU reach its operating frequency before measurement.
+    // On 2.1 GHz Xeon with 2x LOCK CMPXCHG per round-trip, the goal of
+    // > 40M ops/s (25 ns) requires the CPU to be thermally stable.
+    constexpr uint64_t kWarmup   = 1'000'000;
     constexpr uint64_t kIter     = 10'000'000;
 
     AsyncChannel<int> chan(kCapacity);
@@ -87,7 +90,7 @@ static void bench_spsc_channel() {
     bench::section("SpscChannel<uint64_t> — wait-free SPSC");
 
     constexpr size_t   kCapacity = 4096;
-    constexpr uint64_t kWarmup   = 100'000;
+    constexpr uint64_t kWarmup   = 1'000'000; // large warmup for thermal stability
     constexpr uint64_t kIter     = 20'000'000;
 
     SpscChannel<uint64_t> chan(kCapacity);

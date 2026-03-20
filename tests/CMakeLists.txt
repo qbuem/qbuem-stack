@@ -231,7 +231,8 @@ add_test(NAME qbuem_kqueue_tests           COMMAND qbuem_kqueue_tests)
 endif()
 
 # SIMD correctness validation (standalone, no umbrella library)
-if(QBUEM_BUILD_TESTS)
+# Only build on ARM64 where NEON is available
+if(QBUEM_BUILD_TESTS AND CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64")
   add_executable(qbuem_neon_validation
       ${CMAKE_CURRENT_SOURCE_DIR}/neon_validation.cpp
       ${QBUEM_TLS_FIX}

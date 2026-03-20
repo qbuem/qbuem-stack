@@ -15,6 +15,8 @@
 
 #include <qbuem/common.hpp>
 
+#include <array>
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -25,6 +27,7 @@ namespace qbuem {
 // ---------------------------------------------------------------------------
 // Heterogeneous hash/equality for string maps — allows string_view lookup
 // without constructing a std::string key.
+// Used by the lazy query-parameter cache only (cold path).
 // ---------------------------------------------------------------------------
 struct StringViewHash {
   using is_transparent = void;
@@ -87,14 +90,19 @@ public:
    */
   std::string_view remote_addr()   const { return remote_addr_; }
 
-  std::string_view header(std::string_view key) const {
-    auto it = headers_.find(key); // heterogeneous lookup — no string allocation
-    return (it != headers_.end()) ? it->second : std::string_view{};
+  std::string_view header(std::string_view key) const noexcept {
+    // Linear scan over flat inline array — O(n), cache-friendly, zero allocation.
+    for (uint8_t i = 0; i < header_count_; ++i)
+      if (headers_flat_[i].first == key)
+        return headers_flat_[i].second;
+    return {};
   }
 
-  std::string_view param(std::string_view key) const {
-    auto it = params_.find(key); // heterogeneous lookup — no string allocation
-    return (it != params_.end()) ? it->second : std::string_view{};
+  std::string_view param(std::string_view key) const noexcept {
+    for (uint8_t i = 0; i < param_count_; ++i)
+      if (params_flat_[i].first == key)
+        return params_flat_[i].second;
+    return {};
   }
 
   /**
@@ -131,33 +139,42 @@ public:
 
   // ── Setters used by the parser / router ────────────────────────────────────
 
-  void set_method(Method m) { method_ = m; }
+  void set_method(Method m) noexcept { method_ = m; }
 
   /** Split the raw request-target at '?'; routing uses only path_. */
-  void set_path(std::string_view raw) {
+  void set_path(std::string_view raw) noexcept {
     size_t q = raw.find('?');
     if (q == std::string_view::npos) {
-      path_         = std::string(raw);
-      query_string_.clear();
+      path_         = raw;
+      query_string_ = {};
     } else {
-      path_         = std::string(raw.substr(0, q));
-      query_string_ = std::string(raw.substr(q + 1));
+      path_         = raw.substr(0, q);
+      query_string_ = raw.substr(q + 1);
     }
     query_cache_.reset(); // invalidate lazy cache on path change
   }
 
-  void set_body(std::string_view b) { body_ = std::string(b); }
+  void set_body(std::string_view b) noexcept { body_ = b; }
 
-  void add_header(std::string_view key, std::string_view value) {
-    headers_[std::string(key)] = std::string(value);
+  /**
+   * Store a header key/value pair. Both views MUST remain valid for the
+   * lifetime of this Request (they reference the connection receive buffer).
+   * Up to kMaxInlineHeaders entries are stored inline (zero allocation).
+   */
+  void add_header(std::string_view key, std::string_view value) noexcept {
+    if (header_count_ < kMaxInlineHeaders) [[likely]]
+      headers_flat_[header_count_++] = {key, value};
   }
-  void set_param(std::string_view key, std::string_view value) {
-    params_[std::string(key)] = std::string(value);
+
+  void set_param(std::string_view key, std::string_view value) noexcept {
+    if (param_count_ < kMaxInlineParams) [[likely]]
+      params_flat_[param_count_++] = {key, value};
   }
 
   /**
    * Store the remote (client) IP address as seen by the server.
    * Called by the server after accept(); NOT based on request headers.
+   * Stored as an owned string because the socket address is ephemeral.
    */
   void set_remote_addr(std::string_view addr) {
     remote_addr_ = std::string(addr);
@@ -221,13 +238,33 @@ private:
     }
   }
 
-  Method      method_       = Method::Unknown;
-  std::string path_;
-  std::string query_string_;
-  std::string body_;
-  std::string remote_addr_;  // client IP from socket (set by server, not headers)
-  StringMap   headers_;
-  StringMap   params_;
+  // Maximum number of headers stored inline (zero allocation).
+  // Typical HTTP requests have 5-15 headers; 32 covers all real-world cases.
+  static constexpr uint8_t kMaxInlineHeaders = 32;
+  // Maximum number of URL path parameters (:name segments).
+  static constexpr uint8_t kMaxInlineParams  = 16;
+
+  Method           method_       = Method::Unknown;
+  // Zero-copy string_view fields — reference the connection receive buffer.
+  // The buffer MUST outlive this Request object (standard HTTP server lifecycle).
+  std::string_view path_;
+  std::string_view query_string_;
+  std::string_view body_;
+  // Owned string — set by the server from socket data (ephemeral address struct).
+  std::string      remote_addr_;
+
+  // Inline flat-array header storage — zero heap allocation for all typical requests.
+  // Key and value are string_views into the original receive buffer (zero-copy).
+  // INVARIANT: the receive buffer MUST outlive this Request object.
+  std::array<std::pair<std::string_view, std::string_view>, kMaxInlineHeaders>
+      headers_flat_{};
+  uint8_t header_count_ = 0;
+
+  // Inline flat-array path-parameter storage.
+  std::array<std::pair<std::string_view, std::string_view>, kMaxInlineParams>
+      params_flat_{};
+  uint8_t param_count_ = 0;
+
   mutable std::optional<StringMap> query_cache_; // lazy-parsed query string
 };
 

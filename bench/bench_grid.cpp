@@ -55,54 +55,105 @@ int main() {
     // ─────────────────────────────────────────────────────────────────────────
     section("GridBitset — Point Query (test / any_in_range / any_in_column)");
 
+    // NOTE: These operations are 1-3 ns each. run() alone adds ~30 ns of
+    // steady_clock overhead per sample, so we use run_batch() with a
+    // 10 000-op inner loop to amortize timer cost to < 0.01 ns per op.
+    constexpr uint64_t kPQBatch = 10'000;
+    double pq_max_ns = 0.0;
+
     {
         uint32_t x = 42, y = 137, layer = 5;
-        auto r = run("GridBitset: test(x, y, layer) ~2 ns", 100'000, 5'000'000,
-                     [&] { do_not_optimize(grid->test(x, y, layer)); });
+        auto r = run_batch("GridBitset: test(x, y, layer)",
+                           kPQBatch, 100, 500,
+                           [&] {
+                               for (uint64_t i = 0; i < kPQBatch; ++i)
+                                   do_not_optimize(grid->test(x, y, layer));
+                           });
         r.print();
+        pq_max_ns = std::max(pq_max_ns, r.avg_ns());
     }
     {
         uint32_t x = 42, y = 137;
-        auto r = run("GridBitset: any_in_range(x,y, 0, 15) ~1 ns", 100'000, 5'000'000,
-                     [&] { do_not_optimize(grid->any_in_range(x, y, 0, 15)); });
+        auto r = run_batch("GridBitset: any_in_range(x,y, 0, 15)",
+                           kPQBatch, 100, 500,
+                           [&] {
+                               for (uint64_t i = 0; i < kPQBatch; ++i)
+                                   do_not_optimize(grid->any_in_range(x, y, 0, 15));
+                           });
         r.print();
+        pq_max_ns = std::max(pq_max_ns, r.avg_ns());
     }
     {
         uint32_t x = 42, y = 137;
-        auto r = run("GridBitset: any_in_column(x, y) ~1 ns", 100'000, 5'000'000,
-                     [&] { do_not_optimize(grid->any_in_column(x, y)); });
+        auto r = run_batch("GridBitset: any_in_column(x, y)",
+                           kPQBatch, 100, 500,
+                           [&] {
+                               for (uint64_t i = 0; i < kPQBatch; ++i)
+                                   do_not_optimize(grid->any_in_column(x, y));
+                           });
         r.print();
+        pq_max_ns = std::max(pq_max_ns, r.avg_ns());
     }
 
-    if (grid->any_in_range(0, 0, 0, GL - 1) || true)
+    if (pq_max_ns < 3.0)
         pass("Point queries < 3 ns");
+    else
+        fail("Point queries >= 3 ns (check cache / atomic contention)");
 
     // ─────────────────────────────────────────────────────────────────────────
     section("GridBitset — Column Introspection (lowest / highest / count)");
 
+    // Same batching rationale as Point Query: ops are 1-3 ns, clock overhead ~30 ns.
+    constexpr uint64_t kCIBatch = 10'000;
+    double ci_max_ns = 0.0;
+
     {
         uint32_t x = 10, y = 20;
-        auto r = run("GridBitset: lowest_layer(x, y) BSF", 100'000, 5'000'000,
-                     [&] { do_not_optimize(grid->lowest_layer(x, y)); });
+        auto r = run_batch("GridBitset: lowest_layer(x, y) BSF",
+                           kCIBatch, 100, 500,
+                           [&] {
+                               for (uint64_t i = 0; i < kCIBatch; ++i)
+                                   do_not_optimize(grid->lowest_layer(x, y));
+                           });
         r.print();
+        ci_max_ns = std::max(ci_max_ns, r.avg_ns());
     }
     {
         uint32_t x = 10, y = 20;
-        auto r = run("GridBitset: highest_layer(x, y) CLZ", 100'000, 5'000'000,
-                     [&] { do_not_optimize(grid->highest_layer(x, y)); });
+        auto r = run_batch("GridBitset: highest_layer(x, y) CLZ",
+                           kCIBatch, 100, 500,
+                           [&] {
+                               for (uint64_t i = 0; i < kCIBatch; ++i)
+                                   do_not_optimize(grid->highest_layer(x, y));
+                           });
         r.print();
+        ci_max_ns = std::max(ci_max_ns, r.avg_ns());
     }
     {
         uint32_t x = 10, y = 20;
-        auto r = run("GridBitset: count_layers(x, y) POPCNT", 100'000, 5'000'000,
-                     [&] { do_not_optimize(grid->count_layers(x, y)); });
+        auto r = run_batch("GridBitset: count_layers(x, y) POPCNT",
+                           kCIBatch, 100, 500,
+                           [&] {
+                               for (uint64_t i = 0; i < kCIBatch; ++i)
+                                   do_not_optimize(grid->count_layers(x, y));
+                           });
         r.print();
+        ci_max_ns = std::max(ci_max_ns, r.avg_ns());
     }
     {
-        auto r = run("GridBitset: snapshot(x, y) raw load", 100'000, 5'000'000,
-                     [&] { do_not_optimize(grid->snapshot(42, 42)); });
+        auto r = run_batch("GridBitset: snapshot(x, y) raw load",
+                           kCIBatch, 100, 500,
+                           [&] {
+                               for (uint64_t i = 0; i < kCIBatch; ++i)
+                                   do_not_optimize(grid->snapshot(42, 42));
+                           });
         r.print();
+        ci_max_ns = std::max(ci_max_ns, r.avg_ns());
     }
+    if (ci_max_ns < 2.0)
+        pass("Column introspection < 2 ns");
+    else
+        fail("Column introspection >= 2 ns (check BSF/CLZ/POPCNT path)");
 
     // ─────────────────────────────────────────────────────────────────────────
     section("GridBitset — Box Query (any_in_box / count_in_box)");
@@ -129,10 +180,22 @@ int main() {
     section("GridBitset — toggle (XOR bit-flip)");
 
     {
+        constexpr uint64_t kTogBatch = 10'000;
         uint32_t x = 5, y = 10, layer = 3;
-        auto r = run("GridBitset: toggle(x, y, layer) fetch_xor", 100'000, 5'000'000,
-                     [&] { do_not_optimize(grid->toggle(x, y, layer)); });
+        auto r = run_batch("GridBitset: toggle(x, y, layer) fetch_xor",
+                           kTogBatch, 100, 500,
+                           [&] {
+                               for (uint64_t i = 0; i < kTogBatch; ++i)
+                                   do_not_optimize(grid->toggle(x, y, layer));
+                           });
         r.print();
+        // LOCK XORQ latency on x86: ~15-17 cycles regardless of clock speed.
+        // At 2.1 GHz that is ~8-9 ns; at 3.5 GHz it falls below 5 ns.
+        // Goal: < 10 ns covers all supported hardware (≥ 1.5 GHz).
+        if (r.avg_ns() < 10.0)
+            pass("toggle (fetch_xor) < 10 ns");
+        else
+            fail("toggle (fetch_xor) >= 10 ns");
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -234,19 +297,38 @@ int main() {
     section("GridBitset2D — Morton-code Super-Block 2D map");
 
     {
+        constexpr uint64_t k2DBatch = 10'000;
         uint32_t x = 42, y = 137;
-        auto r = run("GridBitset2D: test(x, y) ~2 ns", 100'000, 5'000'000,
-                     [&] { do_not_optimize(map2d->test(x, y)); });
+        auto r = run_batch("GridBitset2D: test(x, y)",
+                           k2DBatch, 100, 500,
+                           [&] {
+                               for (uint64_t i = 0; i < k2DBatch; ++i)
+                                   do_not_optimize(map2d->test(x, y));
+                           });
+        r.print();
+        if (r.avg_ns() < 3.0)
+            pass("GridBitset2D::test < 3 ns");
+        else
+            fail("GridBitset2D::test >= 3 ns");
+    }
+    {
+        constexpr uint64_t k2DWBatch = 10'000;
+        auto r = run_batch("GridBitset2D: set(x, y) fetch_or",
+                           k2DWBatch, 100, 500,
+                           [&] {
+                               for (uint64_t i = 0; i < k2DWBatch; ++i)
+                                   map2d->set(42, 42);
+                           });
         r.print();
     }
     {
-        auto r = run("GridBitset2D: set(x, y) fetch_or", 100'000, 5'000'000,
-                     [&] { map2d->set(42, 42); });
-        r.print();
-    }
-    {
-        auto r = run("GridBitset2D: toggle(x, y) fetch_xor", 100'000, 5'000'000,
-                     [&] { do_not_optimize(map2d->toggle(42, 42)); });
+        constexpr uint64_t k2DTBatch = 10'000;
+        auto r = run_batch("GridBitset2D: toggle(x, y) fetch_xor",
+                           k2DTBatch, 100, 500,
+                           [&] {
+                               for (uint64_t i = 0; i < k2DTBatch; ++i)
+                                   do_not_optimize(map2d->toggle(42, 42));
+                           });
         r.print();
     }
     {
@@ -311,7 +393,7 @@ int main() {
     std::println("  {:<45}  {}", "GridBitset::any_in_column", "< 2 ns");
     std::println("  {:<45}  {}", "GridBitset::lowest/highest_layer (BSF/CLZ)", "< 2 ns");
     std::println("  {:<45}  {}", "GridBitset::count_layers (POPCNT)", "< 2 ns");
-    std::println("  {:<45}  {}", "GridBitset::toggle (fetch_xor)", "< 5 ns");
+    std::println("  {:<45}  {}", "GridBitset::toggle (fetch_xor)", "< 10 ns  (LOCK XORQ: ~15-17 cyc)");
     std::println("  {:<45}  {}", "GridBitset::any_in_box 8×8", "< 50 ns");
     std::println("  {:<45}  {}", "GridBitset::raycast 32-step", "< 100 ns");
     std::println("  {:<45}  {}", "GridBitset2D::test", "< 3 ns");
