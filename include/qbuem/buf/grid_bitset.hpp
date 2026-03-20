@@ -421,6 +421,9 @@ public:
     /**
      * @brief Count occupied cells in a box for a given layer range.
      *
+     * Uses AVX-512 (8 cells/load via VPTEST mask + POPCNT), AVX2 (4 cells/load),
+     * NEON (2 cells/load), or scalar fallback.
+     *
      * @returns Number of cells in the box where at least one layer in
      *          [from, to] is set.
      */
@@ -429,14 +432,76 @@ public:
                                         uint32_t from, uint32_t to) const noexcept {
         assert(x1 <= x2 && x2 < W && y1 <= y2 && y2 < H);
         assert(from <= to && to < D);
-        const uint64_t mask = detail::layer_range_mask(from, to);
+        const uint64_t mask  = detail::layer_range_mask(from, to);
+        const uint32_t box_w = x2 - x1 + 1u;
         uint32_t count = 0u;
+
+#if defined(QBUEM_GRID_SIMD_AVX512)
+        // AVX-512: 8 cells per load; _mm512_test_epi64_mask returns __mmask8
+        // where bit i is set iff lane i has any bit in common with vmask.
+        // POPCNT on the 8-bit mask counts non-zero lanes directly.
+        const __m512i vmask = _mm512_set1_epi64(static_cast<long long>(mask));
+        for (uint32_t ry = y1; ry <= y2; ++ry) {
+            const auto* row = cells_ + static_cast<size_t>(ry) * W + x1;
+            uint32_t rx = 0u;
+            for (; rx + 8u <= box_w; rx += 8u) {
+                __m512i v = _mm512_loadu_si512(
+                    reinterpret_cast<const __m512i*>(row + rx));
+                count += static_cast<uint32_t>(
+                    __builtin_popcount(_mm512_test_epi64_mask(v, vmask)));
+            }
+            for (; rx < box_w; ++rx)
+                if (row[rx].load(std::memory_order_relaxed) & mask) ++count;
+        }
+#elif defined(QBUEM_GRID_SIMD_AVX2)
+        // AVX2: 4 cells per load.
+        // AND with mask → compare to zero → movemask_epi8 produces 32-bit value
+        // where each zero 64-bit lane contributes 8 set bits; invert and /8 = non-zero count.
+        const __m256i vmask  = _mm256_set1_epi64x(static_cast<long long>(mask));
+        const __m256i vzero  = _mm256_setzero_si256();
+        for (uint32_t ry = y1; ry <= y2; ++ry) {
+            const auto* row = cells_ + static_cast<size_t>(ry) * W + x1;
+            uint32_t rx = 0u;
+            for (; rx + 4u <= box_w; rx += 4u) {
+                __m256i v  = _mm256_loadu_si256(
+                    reinterpret_cast<const __m256i*>(row + rx));
+                __m256i r  = _mm256_and_si256(v, vmask);
+                __m256i eq = _mm256_cmpeq_epi64(r, vzero); // 0xFF..FF where lane==0
+                // movemask_epi8: bit per byte; 8 set bits per zero 64-bit lane.
+                int zmask  = _mm256_movemask_epi8(eq);
+                // Invert: non-zero lanes → 8 bits each; popcount/8 = lane count.
+                count += static_cast<uint32_t>(
+                    __builtin_popcount(static_cast<uint32_t>(~zmask))) >> 3u;
+            }
+            for (; rx < box_w; ++rx)
+                if (row[rx].load(std::memory_order_relaxed) & mask) ++count;
+        }
+#elif defined(QBUEM_GRID_SIMD_NEON)
+        // NEON (AArch64): 2 cells per load.
+        const uint64x2_t vmask = vdupq_n_u64(mask);
+        for (uint32_t ry = y1; ry <= y2; ++ry) {
+            const auto* row = cells_ + static_cast<size_t>(ry) * W + x1;
+            uint32_t rx = 0u;
+            for (; rx + 2u <= box_w; rx += 2u) {
+                uint64x2_t v = vld1q_u64(
+                    reinterpret_cast<const uint64_t*>(row + rx));
+                uint64x2_t r = vandq_u64(v, vmask);
+                // Lane-extract: branchless non-zero test per lane.
+                count += static_cast<uint32_t>(vgetq_lane_u64(r, 0) != 0u)
+                       + static_cast<uint32_t>(vgetq_lane_u64(r, 1) != 0u);
+            }
+            for (; rx < box_w; ++rx)
+                if (row[rx].load(std::memory_order_relaxed) & mask) ++count;
+        }
+#else
+        // Scalar fallback.
         for (uint32_t ry = y1; ry <= y2; ++ry) {
             for (uint32_t rx = x1; rx <= x2; ++rx) {
                 if (cells_[flat(rx, ry)].load(std::memory_order_relaxed) & mask)
                     ++count;
             }
         }
+#endif
         return count;
     }
 

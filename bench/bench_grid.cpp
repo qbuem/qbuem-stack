@@ -196,6 +196,12 @@ int main() {
                                    do_not_optimize(grid->count_in_box(64, 64, 71, 71, 0, 30));
                            });
         r.print();
+        if (r.avg_ns() < 10.0)
+            pass("count_in_box 8x8 < 10 ns (SIMD)");
+        else if (r.avg_ns() < 50.0)
+            pass("count_in_box 8x8 < 50 ns (scalar fallback)");
+        else
+            fail("count_in_box 8x8 >= 50 ns");
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -429,6 +435,7 @@ int main() {
     std::println("  {:<45}  {}", "GridBitset::count_layers (POPCNT)", "< 2 ns");
     std::println("  {:<45}  {}", "GridBitset::toggle (fetch_xor)", "< 10 ns  (LOCK XORQ: ~15-17 cyc)");
     std::println("  {:<45}  {}", "GridBitset::any_in_box 8×8 (SIMD)", "< 15 ns  (AVX-512: 1 load/row)");
+    std::println("  {:<45}  {}", "GridBitset::count_in_box 8×8 (SIMD)", "< 10 ns  (AVX-512: VPTEST+POPCNT)");
     std::println("  {:<45}  {}", "GridBitset::raycast 32-step", "< 100 ns");
     std::println("  {:<45}  {}", "GridBitset2D::test", "< 3 ns");
     std::println("  {:<45}  {}", "GridBitset2D::raycast_2d diagonal", "< 2 µs");
