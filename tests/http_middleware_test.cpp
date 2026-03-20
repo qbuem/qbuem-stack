@@ -12,6 +12,7 @@
 #include <qbuem/middleware/request_id.hpp>
 #include <qbuem/middleware/token_auth.hpp>
 
+#include <memory>
 #include <string>
 #include <string_view>
 
@@ -19,31 +20,39 @@ using namespace qbuem;
 using namespace qbuem::middleware;
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
+//
+// Request stores string_views into a receive buffer (zero-copy design).
+// The buffer MUST outlive the Request. TestReq owns the buffer via unique_ptr
+// so the heap address is stable even if TestReq is moved — string_views in
+// req remain valid for the lifetime of the TestReq object.
 
-static Request make_get(const char* path, const char* origin = nullptr) {
-    std::string raw = std::string("GET ") + path + " HTTP/1.1\r\nHost: localhost\r\n";
-    if (origin) {
-        raw += std::string("Origin: ") + origin + "\r\n";
-    }
-    raw += "\r\n";
+struct TestReq {
+    std::unique_ptr<std::string> raw_buf; // heap-stable; string_views in req point here
+    Request req;
+};
+
+static TestReq make_get(const char* path, const char* origin = nullptr) {
+    TestReq tr;
+    tr.raw_buf = std::make_unique<std::string>(
+        std::string("GET ") + path + " HTTP/1.1\r\nHost: localhost\r\n");
+    if (origin) *tr.raw_buf += std::string("Origin: ") + origin + "\r\n";
+    *tr.raw_buf += "\r\n";
 
     HttpParser parser;
-    Request req;
-    parser.parse(raw, req);
-    return req;
+    parser.parse(*tr.raw_buf, tr.req);
+    return tr;
 }
 
-static Request make_options(const char* path, const char* origin = nullptr) {
-    std::string raw = std::string("OPTIONS ") + path + " HTTP/1.1\r\nHost: localhost\r\n";
-    if (origin) {
-        raw += std::string("Origin: ") + origin + "\r\n";
-    }
-    raw += "\r\n";
+static TestReq make_options(const char* path, const char* origin = nullptr) {
+    TestReq tr;
+    tr.raw_buf = std::make_unique<std::string>(
+        std::string("OPTIONS ") + path + " HTTP/1.1\r\nHost: localhost\r\n");
+    if (origin) *tr.raw_buf += std::string("Origin: ") + origin + "\r\n";
+    *tr.raw_buf += "\r\n";
 
     HttpParser parser;
-    Request req;
-    parser.parse(raw, req);
-    return req;
+    parser.parse(*tr.raw_buf, tr.req);
+    return tr;
 }
 
 // ─── CorsConfig ───────────────────────────────────────────────────────────────
@@ -70,17 +79,17 @@ TEST(CorsConfigTest, CustomConfig) {
 
 TEST(CorsMiddlewareTest, WildcardOriginAllowsRequest) {
     auto mw = cors();  // default: allow_origin = "*"
-    auto req = make_get("/api/data");
+    auto tr = make_get("/api/data");
     Response res;
-    bool cont = mw(req, res);
+    bool cont = mw(tr.req, res);
     EXPECT_TRUE(cont);  // chain continues
 }
 
 TEST(CorsMiddlewareTest, PreflightReturns204AndHaltsChain) {
     auto mw = cors();
-    auto req = make_options("/api/data");
+    auto tr = make_options("/api/data");
     Response res;
-    bool cont = mw(req, res);
+    bool cont = mw(tr.req, res);
     EXPECT_FALSE(cont);  // chain halted
 }
 
@@ -89,9 +98,9 @@ TEST(CorsMiddlewareTest, AllowedOriginWhitelistMatches) {
     cfg.allow_origins = {"https://app.example.com", "https://admin.example.com"};
     auto mw = cors(std::move(cfg));
 
-    auto req = make_get("/api/data", "https://app.example.com");
+    auto tr = make_get("/api/data", "https://app.example.com");
     Response res;
-    bool cont = mw(req, res);
+    bool cont = mw(tr.req, res);
     EXPECT_TRUE(cont);
 }
 
@@ -100,9 +109,9 @@ TEST(CorsMiddlewareTest, UnknownOriginNotInWhitelist) {
     cfg.allow_origins = {"https://allowed.com"};
     auto mw = cors(std::move(cfg));
 
-    auto req = make_get("/api/data", "https://evil.com");
+    auto tr = make_get("/api/data", "https://evil.com");
     Response res;
-    bool cont = mw(req, res);
+    bool cont = mw(tr.req, res);
     // Origin not in whitelist — chain continues but no CORS headers added
     EXPECT_TRUE(cont);
 }
@@ -133,9 +142,9 @@ TEST(RateLimitMiddlewareTest, FirstRequestAllowed) {
     cfg.burst = 100.0;
 
     auto mw = rate_limit(cfg);
-    auto req = make_get("/api/test");
+    auto tr = make_get("/api/test");
     Response res;
-    bool cont = mw(req, res);
+    bool cont = mw(tr.req, res);
     EXPECT_TRUE(cont);
 }
 
@@ -149,9 +158,9 @@ TEST(RateLimitMiddlewareTest, ExhaustedBucketReturns429) {
 
     // We need to exhaust the bucket; with burst=0, first request has 0 tokens
     // Actually, with burst=0 the bucket starts full (0 tokens) so 0 < 1.0 → 429
-    auto req = make_get("/");
+    auto tr = make_get("/");
     Response res;
-    bool cont = mw(req, res);
+    bool cont = mw(tr.req, res);
     // With burst=0, bucket starts with 0 tokens → 429 → chain halted
     EXPECT_FALSE(cont);
 }
@@ -160,17 +169,17 @@ TEST(RateLimitMiddlewareTest, ExhaustedBucketReturns429) {
 
 TEST(RequestIdMiddlewareTest, AddsRequestIdHeader) {
     auto mw = request_id();
-    auto req = make_get("/");
+    auto tr = make_get("/");
     Response res;
-    bool cont = mw(req, res);
+    bool cont = mw(tr.req, res);
     EXPECT_TRUE(cont);  // chain continues
 }
 
 TEST(RequestIdMiddlewareTest, CustomHeaderName) {
     auto mw = request_id("X-Trace-ID");
-    auto req = make_get("/");
+    auto tr = make_get("/");
     Response res;
-    bool cont = mw(req, res);
+    bool cont = mw(tr.req, res);
     EXPECT_TRUE(cont);
 }
 
@@ -225,9 +234,9 @@ TEST(TokenAuthTest, MissingAuthorizationHeaderBlocks) {
     auto verifier = std::make_shared<AcceptAllVerifier>();
     auto mw = bearer_auth(verifier);
 
-    auto req = make_get("/api/secure");  // no Authorization header
+    auto tr = make_get("/api/secure");  // no Authorization header
     Response res;
-    bool cont = mw(req, res);
+    bool cont = mw(tr.req, res);
     EXPECT_FALSE(cont);  // chain halted — 401
 }
 

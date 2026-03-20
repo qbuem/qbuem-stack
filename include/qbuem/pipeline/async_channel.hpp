@@ -86,7 +86,7 @@ public:
    * @returns `true` on success, `false` if the ring is full or the channel is closed.
    */
   bool try_send(T value) {
-    if (closed_.load(std::memory_order_relaxed))
+    if (closed_.load(std::memory_order_relaxed)) [[unlikely]]
       return false;
 
     size_t pos = tail_.load(std::memory_order_relaxed);
@@ -95,16 +95,18 @@ public:
       size_t seq = slot.sequence.load(std::memory_order_acquire);
       intptr_t diff = static_cast<intptr_t>(seq) - static_cast<intptr_t>(pos);
 
-      if (diff == 0) {
+      if (diff == 0) [[likely]] {
         // Slot is free: try to claim it
         if (tail_.compare_exchange_weak(pos, pos + 1, std::memory_order_relaxed,
-                                        std::memory_order_relaxed)) {
+                                        std::memory_order_relaxed)) [[likely]] {
           slot.storage = std::move(value);
           slot.sequence.store(pos + 1, std::memory_order_release);
-          wake_one_receiver();
+          // Inline fast-path: skip function call when no waiters (common case).
+          if (recv_waiter_count_.load(std::memory_order_relaxed) != 0) [[unlikely]]
+            wake_one_receiver_slow();
           return true;
         }
-      } else if (diff < 0) {
+      } else if (diff < 0) [[unlikely]] {
         return false; // ring full
       } else {
         pos = tail_.load(std::memory_order_relaxed);
@@ -126,16 +128,18 @@ public:
       intptr_t diff =
           static_cast<intptr_t>(seq) - static_cast<intptr_t>(pos + 1);
 
-      if (diff == 0) {
+      if (diff == 0) [[likely]] {
         // Slot has data: try to claim it
         if (head_.compare_exchange_weak(pos, pos + 1, std::memory_order_relaxed,
-                                         std::memory_order_relaxed)) {
+                                         std::memory_order_relaxed)) [[likely]] {
           T value = std::move(slot.storage);
           slot.sequence.store(pos + capacity_, std::memory_order_release);
-          wake_one_sender();
+          // Inline fast-path: skip function call when no waiters (common case).
+          if (send_waiter_count_.load(std::memory_order_relaxed) != 0) [[unlikely]]
+            wake_one_sender_slow();
           return value;
         }
-      } else if (diff < 0) {
+      } else if (diff < 0) [[unlikely]] {
         return std::nullopt; // ring empty
       } else {
         pos = head_.load(std::memory_order_relaxed);
@@ -422,24 +426,22 @@ private:
     return false;
   }
 
-  void wake_one_receiver() {
-    // Fast path: skip mutex if no waiters (common case in fully-async usage)
-    if (recv_waiter_count_.load(std::memory_order_relaxed) == 0) return;
+  // Slow paths (mutex lock) — called only when there are waiters.
+  // Marked noinline so the fast path (try_send/try_recv) stays compact.
+  [[gnu::noinline]] void wake_one_receiver_slow() noexcept {
     Waiter *w = nullptr;
     {
       std::lock_guard lock(recv_waiters_mutex_);
       if (recv_waiters_) {
-        w              = recv_waiters_;
-        recv_waiters_  = w->next;
+        w             = recv_waiters_;
+        recv_waiters_ = w->next;
         recv_waiter_count_.fetch_sub(1, std::memory_order_relaxed);
       }
     }
-    if (!w) return;
-    resume_waiter(w);
+    if (w) resume_waiter(w);
   }
 
-  void wake_one_sender() {
-    if (send_waiter_count_.load(std::memory_order_relaxed) == 0) return;
+  [[gnu::noinline]] void wake_one_sender_slow() noexcept {
     Waiter *w = nullptr;
     {
       std::lock_guard lock(send_waiters_mutex_);
@@ -449,8 +451,18 @@ private:
         send_waiter_count_.fetch_sub(1, std::memory_order_relaxed);
       }
     }
-    if (!w) return;
-    resume_waiter(w);
+    if (w) resume_waiter(w);
+  }
+
+  // Called from async send()/recv() coroutine paths (not hot path).
+  void wake_one_receiver() {
+    if (recv_waiter_count_.load(std::memory_order_relaxed) == 0) return;
+    wake_one_receiver_slow();
+  }
+
+  void wake_one_sender() {
+    if (send_waiter_count_.load(std::memory_order_relaxed) == 0) return;
+    wake_one_sender_slow();
   }
 
   void wake_all_receivers() {
@@ -506,18 +518,25 @@ private:
   const size_t capacity_;
   Slot        *slots_;
 
-  alignas(64) std::atomic<size_t> tail_{0};  // producers
-  alignas(64) std::atomic<size_t> head_{0};  // consumers
-  alignas(64) std::atomic<bool>   closed_{false};
+  // Producer cache line: tail_ + closed_ + recv_waiter_count_
+  // try_send reads all three — single cache-line touch on the hot path.
+  alignas(64) std::atomic<size_t>   tail_{0};         // producers write
+  std::atomic<bool>                 closed_{false};   // co-located with tail_ (no alignas)
+  char                              _pad_p_[3];       // align recv_waiter_count_ to 4B
+  std::atomic<uint32_t>             recv_waiter_count_{0}; // producers read in wake_one_receiver
 
-  // Waiter lists (protected by their respective mutexes)
+  // Consumer cache line: head_ + send_waiter_count_
+  // try_recv reads both — single cache-line touch on the hot path.
+  alignas(64) std::atomic<size_t>   head_{0};         // consumers write
+  std::atomic<uint32_t>             send_waiter_count_{0}; // consumers read in wake_one_sender
+  char                              _pad_c_[64 - sizeof(size_t) - sizeof(uint32_t)];
+
+  // Waiter lists (cold path only — protected by their respective mutexes)
   std::mutex              send_waiters_mutex_;
   Waiter                 *send_waiters_ = nullptr;
-  std::atomic<uint32_t>   send_waiter_count_{0}; // fast-path: skip lock when 0
 
   std::mutex              recv_waiters_mutex_;
   Waiter                 *recv_waiters_ = nullptr;
-  std::atomic<uint32_t>   recv_waiter_count_{0}; // fast-path: skip lock when 0
 };
 
 } // namespace qbuem

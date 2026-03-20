@@ -22,8 +22,6 @@ All modules must adhere to these quantitative benchmarks to be considered part o
 
 ## ✅ Completed: v2.3.0 — HTTP Client Full Feature Set
 
-## ✅ Completed: v2.3.0 — HTTP Client Full Feature Set
-
 > **Goal**: Complete curl-free HTTP client — async DNS, timeout, redirects, connection pool, kTLS HTTPS.
 
 ### 1. Language Policy
@@ -69,6 +67,41 @@ All modules must adhere to these quantitative benchmarks to be considered part o
 - [x] **All English**: Comments and output strings translated to English.
 
 ---
+
+---
+
+## ✅ Completed: v3.4.0 — Spatial Index & Build Fixes
+
+### 1. GridBitset Radius Query APIs (`include/qbuem/buf/grid_bitset.hpp`)
+- [x] **`any_in_radius(cx, cy, r, from, to)`**: Returns `true` if any set bit exists within Euclidean radius `r` on layers `[from, to]`. Per-row sqrt extent + AVX-512/AVX2/NEON SIMD scan — O(r) sqrt calls, O(r²) cell checks, early-exit on first hit.
+- [x] **`count_in_radius(cx, cy, r, from, to)`**: Counts set bits within radius. Full circular area scan via shared `detail::scan_row_count()` helper.
+- [x] **`for_each_set_in_radius(cx, cy, r, from, to, fn)`**: Invokes `fn(x, y, layer_mask)` for every non-empty cell within radius. Same per-row sqrt pattern.
+- [x] **`detail::scan_row_any()` / `detail::scan_row_count()`**: Extracted SIMD helpers (AVX-512 / AVX2 / NEON / scalar) shared by all spatial query methods, eliminating ~130 lines of duplicated SIMD code.
+- [x] **`row_ptr(y)`**: Public accessor returning a pointer to the first cell of row `y` — enables external cross-tile row scanning.
+
+### 2. TiledBitset — Infinite Dynamic Spatial Bitset (`include/qbuem/buf/tiled_bitset.hpp`)
+- [x] **`TiledBitset<TileW, TileH, D>`**: Infinite-coordinate dynamic spatial bitset using `GridBitset<TileW,TileH,D>` tiles stored in an `unordered_map`. World coordinates are `int64_t`; tile coordinates are `int32_t`. Negative coordinates fully supported.
+- [x] **TLS 4-slot cache**: Per-thread circular eviction cache (keyed by `instance_id_ + map generation + tile key`) gives mutex-free tile access on the hot path. `shared_mutex` only on TLS cache miss.
+- [x] **`instance_id_`**: Monotone atomic counter per `TiledBitset` instance prevents TLS cache collisions when allocator reuses heap addresses across object lifetimes.
+- [x] **Cross-tile row scan**: `scan_world_row_any()` / `scan_world_row_count()` split world-row queries at `TileW` boundaries and call the shared SIMD helpers per segment.
+- [x] **`raycast(wx, wy, dx, dy, from, to, max_steps)`**: Bresenham DDA raycast transparently crossing tile boundaries via `snapshot(wx, wy)` per step.
+- [x] **`evict_empty_tiles()`**: Scans all loaded tiles; frees tiles where `for_each_set` finds no occupied cells. Returns eviction count. Reclaims `sizeof(Tile)` per evicted tile.
+- [x] **Murmur3 finalizer hash** for `(int32_t cx, int32_t cy)` tile key pairs (good avalanche for packed int32 inputs).
+
+### 3. Open-World Example (`examples/11-advanced-apps/open_world/open_world_example.cpp`)
+- [x] **5-tick open-world simulation** using `TiledBitset<256,256,16>` with 5 semantic layers (wall, player, NPC, monster, item).
+- [x] **Three named zones** across tile(-2,-2) through tile(1,0): Ashfield Keep, Bridge of Fate (straddling a tile boundary at x=256), Shadowfen Vale (fully isolated tile).
+- [x] **Tick 1–5**: Demonstrates world spawn, aggro radius, AoE count, cross-tile line-of-sight raycast, minimap scan, player movement, zone despawn → tile eviction.
+
+### 4. Low-Level Primitive Fixes
+- [x] **`IntrusiveList` move semantics**: Added move constructor and move assignment operator that re-link the sentinel head pointers. Required by `std::sort` on arrays containing `PriceLevel` (which embeds an `IntrusiveList`).
+- [x] **`hft_matching.cpp`**: Replaced `uint32_t rng_` with `Xorshift32` callable struct (zero-allocation, no stdlib PRNG dependency). Fixed narrowing conversions in `GenerationHandle` construction.
+- [x] **`lockfree_bench.cpp`**: Added missing `using namespace std::chrono_literals` for `ms` duration literals.
+- [x] **`micro_ticker_example.cpp`**: Replaced non-existent `qbuem::create_reactor()` with `std::make_unique<EpollReactor>()`; replaced `reactor->schedule()` with `register_timer()`.
+
+### 5. Spatial Test Suite (`tests/grid_spatial_test.cpp`)
+- [x] **41 tests**: 10 `GridRadiusTest` (radius query correctness, layer filter, approximate circle area) + 31 `TiledBitsetTest` (all ops, negative coords, cross-tile box/radius/raycast, coordinate roundtrip, tile lifecycle, memory stats).
+- [x] **All 16 test suites pass** (full `ctest --output-on-failure` clean run).
 
 ---
 

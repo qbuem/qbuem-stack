@@ -2,7 +2,7 @@
 
 **Zero Latency · Zero Allocation · Zero Dependency**
 
-> **Current Version: v3.3.0** — C++23 enforcement · ARM NEON SIMD parity · ConfigManager/Secret<T> · GridBitset game APIs.
+> **Current Version: v3.4.0** — Spatial radius queries · `TiledBitset` infinite dynamic world · `IntrusiveList` move semantics · example build fixes.
 >
 > High-performance C++ infrastructure for Web Application Servers (WAS), Inter-Process Communication (IPC), and Data Processing.
 
@@ -28,8 +28,6 @@
 | **Event Loop Jitter** | < 5μs | `MicroTicker` built-in metrics |
 | **Heap Allocation** | **Strictly 0 Bytes** in hot-paths | `valgrind --tool=massif` |
 | **Context Switches** | Near Zero (via Batching) | `perf stat -e context-switches` |
-
----
 
 ---
 
@@ -207,12 +205,11 @@ See [examples/06-ipc-messaging/ipc_pipeline](./examples/06-ipc-messaging/ipc_pip
 
 ---
 
----
-
-## GridBitset — Game & Simulation Spatial Map
+## GridBitset & TiledBitset — Spatial Index
 
 `GridBitset<W, H, D>` and `GridBitset2D<W, H>` are zero-allocation, wait-free
-spatial bitsets with a full game-ready API.
+spatial bitsets for fixed-size worlds. `TiledBitset<TileW, TileH, D>` extends
+this to an **infinite dynamic world** using `int64_t` world coordinates.
 
 ### Dimension Modes
 
@@ -221,6 +218,7 @@ spatial bitsets with a full game-ready API.
 | `GridBitset<W,H,D>` (D=1) | 2D flag | 1 bit packed | Walkability map |
 | `GridBitset<W,H,D>` (D≤64) | 2.5D layers | 1 `uint64_t` | Multi-floor, voxel chunk |
 | `GridBitset2D<W,H>` | 2D Morton | 8×8 Super-Blocks | Tile map, collision, FOV |
+| `TiledBitset<TW,TH,D>` | Infinite tiles | `GridBitset<TW,TH,D>` per tile | Open-world, GIS, robotics |
 
 ### API Quick Reference
 
@@ -255,6 +253,12 @@ world.for_each_set([](uint32_t x, uint32_t y, uint64_t layers) {
 });
 world.for_each_set_in_box(x1,y1, x2,y2, 0, 15, fn);
 
+// ── Radius queries (v3.4.0) — per-row sqrt + AVX2/NEON scan ─
+world.any_in_radius(cx, cy, r, 0, 15);    // true if any set bit within radius
+world.count_in_radius(cx, cy, r, 0, 15);  // count set bits in circle
+world.for_each_set_in_radius(cx, cy, r, 0, 15,
+    [](uint32_t x, uint32_t y, uint64_t layers) { /* ... */ });
+
 // ── Grid algebra ────────────────────────────────────────────
 world.merge_from(other);       // OR  — spawn entities into world
 world.intersect_with(other);  // AND — shared visibility
@@ -263,45 +267,66 @@ world.diff_from(other);        // AND-NOT — remove destroyed obstacles
 // ── 2D tile map (Morton-code cache-optimal layout) ──────────
 GridBitset2D<128, 128> tiles;
 tiles.set(x, y);              tiles.clear(x, y);
-tiles.toggle(x, y);           // flip tile state
 tiles.test(x, y);
 tiles.any_in_box(x1,y1, x2,y2);
 tiles.count_all();                  // POPCNT entire map
 auto los = tiles.raycast_2d(px, py, tx, ty);  // line-of-sight
 tiles.for_each_set([](uint32_t x, uint32_t y) { /* ... */ });
-tiles.merge_from(other);
-tiles.diff_from(other);
+
+// ── TiledBitset — infinite dynamic world (v3.4.0) ───────────
+// int64_t world coordinates; tiles allocated on demand
+TiledBitset<256, 256, 16> open_world;
+
+open_world.set(wx, wy, layer);            // creates tile if needed
+open_world.clear(wx, wy, layer);
+bool hit = open_world.test(wx, wy, layer);
+
+// Cross-tile spatial queries
+open_world.any_in_box(wx1, wy1, wx2, wy2, 0, 15);
+open_world.any_in_radius(cx, cy, r, 0, 15);
+open_world.count_in_radius(cx, cy, r, 0, 15);
+open_world.raycast(wx, wy, dx, dy, 0, 15, max_steps);
+
+// Memory management
+size_t freed = open_world.evict_empty_tiles();  // release fully-empty tiles
+open_world.for_each_tile([](int32_t tx, int32_t ty, const auto& tile) {
+    // iterate all loaded tiles
+});
+auto stats = open_world.memory_stats(); // {tile_count, allocated_bytes}
 ```
 
 ### Thread Safety
 
-All **read operations** (`test`, `any_*`, `snapshot`, `lowest/highest_layer`,
-`count_*`, `for_each_*`, `raycast*`) are **wait-free** — safe to call from any
-number of threads concurrently with no locks.
-
-All **write operations** (`set`, `clear`, `toggle`, `merge_from`, `diff_from`,
+**`GridBitset` (fixed-size):**
+All read operations (`test`, `any_*`, `count_*`, `for_each_*`, `raycast*`) are
+**wait-free** — safe to call from any number of threads concurrently with no locks.
+All write operations (`set`, `clear`, `toggle`, `merge_from`, `diff_from`,
 `clear_box`) are **lock-free** via `fetch_or`/`fetch_and`/`fetch_xor`.
-Multiple writers to different cells are fully safe.
+
+**`TiledBitset` (infinite):**
+Uses a per-thread 4-slot TLS cache for hot-path tile lookups (mutex-free).
+A `shared_mutex` is only acquired on a TLS cache miss (cold path). Tile creation
+uses a `unique_lock`. Safe for concurrent reads and writes from multiple threads.
 
 ---
 
 ## Examples
 
-The [`examples/`](./examples/) directory contains **44 programs** organized into 11 categories, each with a detailed README.
+The [`examples/`](./examples/) directory contains **58 programs** organized into 11 categories, each with a detailed README.
 
-| Category | Highlights |
-| :--- | :--- |
-| [01 Foundation](./examples/01-foundation/) | `hello_world`, `async_timer` — start here |
-| [02 Network](./examples/02-network/) | TCP echo, UDP, Unix socket, WebSocket |
-| [03 Memory](./examples/03-memory/) | Arena, zero-copy, NUMA + huge pages |
-| [04 Codec & Security](./examples/04-codec-security/) | Length-prefix/line codecs, crypto, security middleware |
-| [05 Pipeline](./examples/05-pipeline/) | Fan-out, hot-swap, batching, sensor fusion, windowed processing |
-| [06 IPC & Messaging](./examples/06-ipc-messaging/) | SHMChannel, **flagship IPC pipeline**, MessageBus, SPSC |
-| [07 Resilience](./examples/07-resilience/) | Retry + CircuitBreaker + DLQ, Saga, Canary, Checkpoint, SLO |
-| [08 Observability](./examples/08-observability/) | W3C tracing, TimerWheel, TaskGroup structured concurrency |
-| [09 Database](./examples/09-database/) | Connection pool, session store, coroutine JSON |
-| [10 Hardware](./examples/10-hardware/) | PCIe VFIO, RDMA, eBPF, NVMe, kTLS, kqueue |
-| [11 Advanced Apps](./examples/11-advanced-apps/) | Autonomous driving fusion, HFT platform, game server, I/O dashboard |
+| # | Category | Programs | Highlights |
+| :--- | :--- | :---: | :--- |
+| [01](./examples/01-foundation/) | Foundation | 3 | `hello_world`, `async_timer`, `micro_ticker` |
+| [02](./examples/02-network/) | Network | 7 | TCP echo, UDP advanced, Unix socket, WebSocket, HTTP fetch, HTTP/2, FetchStream |
+| [03](./examples/03-memory/) | Memory | 4 | Arena, zero-copy, NUMA + huge pages, lock-free bench |
+| [04](./examples/04-codec-security/) | Codec & Security | 3 | Length-prefix/line codecs, crypto, security middleware |
+| [05](./examples/05-pipeline/) | Pipeline | 12 | Fan-out, hot-swap, batching, dynamic router, backpressure, stateful window, windowed action |
+| [06](./examples/06-ipc-messaging/) | IPC & Messaging | 4 | SHMChannel, **flagship IPC pipeline**, MessageBus, SPSC |
+| [07](./examples/07-resilience/) | Resilience | 6 | Retry + CircuitBreaker + DLQ, Saga, Canary, Checkpoint, SLO |
+| [08](./examples/08-observability/) | Observability | 5 | W3C tracing, lifecycle tracer, inspector dashboard, TimerWheel, TaskGroup |
+| [09](./examples/09-database/) | Database | 2 | Connection pool, session store, coroutine JSON |
+| [10](./examples/10-hardware/) | Hardware | 2 | PCIe VFIO + RDMA + eBPF + NVMe (Linux), kqueue (macOS) |
+| [11](./examples/11-advanced-apps/) | Advanced Apps | 10 | Autonomous driving, HFT matching, open-world spatial, trading platform, game server, hardware chaos |
 
 **Recommended learning path:**
 ```
@@ -313,8 +338,9 @@ hello_world → async_timer → tcp_echo_server → arena → pipeline/fanout
 
 ## Roadmap Highlights
 
-- **v3.3.0 (Current)**: Full C++23 enforcement (`std::print`, `std::jthread`, `std::format_to_n`). ARM NEON SIMD parity (WebSocket masking, GF(2⁸) erasure, base64url, CRC32, HTTP header scan). `ConfigManager` + `Secret<T>`. GridBitset game-ready APIs (toggle, raycast, for_each, merge/diff/intersect).
-- **v3.4.0 (Next)**: AF_XDP production examples, QUIC/HTTP3 via quiche integration, sanitizer clean-up pass.
+- **v3.3.0**: Full C++23 enforcement (`std::print`, `std::jthread`, `std::format_to_n`). ARM NEON SIMD parity (WebSocket masking, GF(2⁸) erasure, base64url, CRC32, HTTP header scan). `ConfigManager` + `Secret<T>`. GridBitset game-ready APIs (toggle, raycast, for_each, merge/diff/intersect).
+- **v3.4.0 (Current)**: `GridBitset` radius queries (`any_in_radius`, `count_in_radius`, `for_each_set_in_radius`) with per-row sqrt + AVX2/NEON. `TiledBitset<W,H,D>` infinite dynamic world with TLS-cached tile lookup. `IntrusiveList` move semantics. Build fixes across `lockfree_bench`, `hft_matching`, `micro_ticker_example`. 58 examples total.
+- **v3.5.0 (Next)**: AF_XDP production examples, QUIC/HTTP3 via quiche integration, sanitizer clean-up pass.
 
 ---
 

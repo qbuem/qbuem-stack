@@ -1,83 +1,122 @@
 # qbuem-stack Benchmarks
 
-마이크로 벤치마크 모음입니다. 각 벤치마크는 `-O3 -march=native`로 빌드되어
-실제 배포 환경의 성능을 측정합니다.
+A collection of micro-benchmarks built with `-O3 -march=native`, measuring
+performance as it would appear in a production release build.
 
-## 빌드
+## Build
 
 ```sh
-# 프로젝트 루트에서
+# From the repository root
 cmake -B build -DCMAKE_BUILD_TYPE=Release
-cmake --build build --target bench_http bench_router bench_arena bench_channel bench_pipeline -j$(nproc)
+cmake --build build --target bench_http bench_router bench_arena bench_channel bench_pipeline bench_grid -j$(nproc)
 ```
 
-또는 모든 벤치마크를 한 번에:
+Or build everything at once:
 
 ```sh
-cmake --build build --target run_bench
+cmake --build build -j$(nproc)
 ```
 
-## 개별 실행
+## Run Individual Benchmarks
 
 ```sh
-# HTTP 파서 처리량 (MB/s)
+# HTTP parser throughput (MB/s)
 ./build/bench/bench_http
 
-# 라우터 룩업 레이턴시 (ns/req)
+# Router lookup latency (ns/req)
 ./build/bench/bench_router
 
-# Arena 할당 속도 (ns/alloc)
+# Arena allocation speed (ns/alloc)
 ./build/bench/bench_arena
 
-# AsyncChannel 처리량 (ops/s)
+# AsyncChannel / SpscChannel throughput (ops/s)
 ./build/bench/bench_channel
 
-# 3-스테이지 파이프라인 처리량 (items/s)
+# 3-stage pipeline throughput (items/s)
 ./build/bench/bench_pipeline
+
+# GridBitset spatial queries + TiledBitset dynamic world (ns/op)
+./build/bench/bench_grid
 ```
 
-## 성능 목표 (v1.0)
+## Performance Targets (v3.4.0)
 
-| 벤치마크      | 지표          | 목표           | 설명                          |
-|--------------|---------------|----------------|-------------------------------|
-| HTTP 파서    | 처리량         | > 500 MB/s     | AVX2 활성화 시 ~1 GiB/s       |
-| 라우터 룩업  | 레이턴시       | < 200 ns/req   | 1,000-라우트 Radix Tree       |
-| Arena 할당   | 레이턴시       | < 5 ns/alloc   | bump-pointer, 힙 할당 없음    |
-| AsyncChannel | 처리량         | > 10M ops/s    | MPMC ring-buffer              |
-| Pipeline     | 처리량         | > 1M items/s   | 3-스테이지 체인               |
+### Core Components
 
-## 결과 해석 (p50 / p99)
+| Benchmark | Metric | Target | Notes |
+|-----------|--------|--------|-------|
+| HTTP parser | Throughput | > 300 MB/s | AVX2 path; ~1 GiB/s with AVX-512 |
+| Router lookup | Latency | < 200 ns/req | 1,000-route Radix Tree |
+| Arena alloc | Latency | < 5 ns/alloc | Bump-pointer, zero heap allocation |
+| AsyncChannel | Throughput | > 40M ops/s | MPMC ring-buffer |
+| SpscChannel | Throughput | > 100M ops/s | Wait-free single-producer/consumer |
+| Pipeline | Throughput | > 1M items/s | 3-stage coroutine chain |
 
-벤치마크 출력에는 보통 다음 지표가 포함됩니다:
+### GridBitset Spatial Queries
+
+> 256×256 grid, 32 layers, ~10 % density. Single-threaded.
+
+| Benchmark | Target | Notes |
+|-----------|--------|-------|
+| `test(x,y,layer)` | < 30 ns | Atomic load, L3-bound at 256×256 |
+| `any_in_box 8×8` | < 50 ns | 64-cell SIMD scan |
+| `any_in_radius r=20` | < 100 ns | Per-row sqrt extent + AVX2/NEON scan |
+| `count_in_radius r=20` | < 200 ns | Full circular area scan |
+| `raycast` 32-step | < 50 ns | Bresenham DDA, early-exit on hit |
+| `for_each_set` sparse | < 1 ns/cell | Sequential, L1-hot |
+
+### TiledBitset Dynamic World
+
+> 256×256 tiles, 16 layers, 25 pre-loaded tiles, ~10 % density.
+
+| Benchmark | Target | Notes |
+|-----------|--------|-------|
+| `set(wx,wy,layer)` | < 50 ns | TLS cache hit → direct tile write |
+| `test(wx,wy,layer)` | < 50 ns | 4-slot TLS cache; shared_mutex on miss |
+| `any_in_box` cross-tile | < 200 ns | Splits scan at tile boundaries |
+| `any_in_radius r=50` | < 500 ns | Cross-tile per-row SIMD scan |
+| `raycast` 400-step | < 5 µs | Bresenham DDA across multiple tiles |
+
+## Reading Results (p50 / p99)
+
+Benchmark output typically includes:
 
 ```
-ops/sec   : 초당 처리 수 (높을수록 좋음)
-p50 (ns)  : 중앙값 레이턴시. 일반적인 처리 속도를 나타냄.
-p99 (ns)  : 99번째 백분위 레이턴시. 꼬리 레이턴시(tail latency).
-            SLO 설계 시 p99를 기준으로 목표를 설정하세요.
-p999 (ns) : 99.9번째 백분위. 극단적 지연 발생 빈도 확인용.
+ops/sec   : Throughput — higher is better.
+p50 (ns)  : Median latency — typical case performance.
+p99 (ns)  : 99th-percentile latency — tail latency.
+            Use p99 as the primary SLO design target.
+p999 (ns) : 99.9th-percentile — measures extreme outliers.
 ```
 
-### 해석 가이드
+### Interpretation Guide
 
-- **p50 낮음 + p99 높음**: 꼬리 레이턴시 문제. GC pause, lock contention,
-  or 시스템 인터럽트를 의심하세요.
-- **p50 자체가 높음**: 핵심 처리 경로 병목. 프로파일러(perf, VTune)로
-  핫스팟을 찾으세요.
-- **ops/s 목표 미달**: CPU 코어 수, NUMA topology, 채널 용량(channel_cap)을
-  조정해보세요.
+- **Low p50 + high p99**: Tail-latency problem. Suspect lock contention, OS
+  scheduler jitter, or NUMA cross-traffic. Profile with `perf stat -e cs`.
+- **High p50**: Hot-path bottleneck. Use `perf record -g` or VTune to find the
+  hot instruction.
+- **Throughput below target**: Check CPU core count, NUMA topology, and channel
+  capacity (`channel_cap`). Ensure `SO_BUSY_POLL` / `io_uring` is in use.
 
-## 측정 환경 기록 권장 사항
+## Recommended Measurement Environment
 
 ```
-CPU:     Intel Xeon Gold 6254 @ 3.10GHz (18C/36T)
-OS:      Ubuntu 22.04 LTS, kernel 5.15.0
-Compiler: GCC 12.3, -O3 -march=native
-Build:   Release (CMake)
-Isolate: taskset -c 0 ./bench_xxx  (NUMA 고정)
+CPU:      Intel Xeon Gold 6254 @ 3.10GHz (18C/36T)  — or equivalent
+OS:       Ubuntu 22.04 LTS, kernel 5.15+
+Compiler: GCC 13+, Clang 17+  |  Flags: -O3 -march=native
+Build:    Release (cmake -DCMAKE_BUILD_TYPE=Release)
+Isolate:  taskset -c 0 ./bench_xxx    # pin to a single core
 ```
 
-재현성을 높이기 위해:
-- `cpupower frequency-set -g performance`로 CPU 주파수를 고정하세요.
-- `taskset -c <core>` 로 단일 코어에 고정하세요.
-- 백그라운드 프로세스를 최소화하세요.
+For reproducible results:
+
+```sh
+# Fix CPU frequency to performance governor
+sudo cpupower frequency-set -g performance
+
+# Pin to a single isolated core
+taskset -c 0 ./build/bench/bench_http
+
+# Minimize background load
+sudo systemctl stop snapd.service bluetooth.service
+```

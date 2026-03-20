@@ -121,10 +121,51 @@ Pipeline components must test all of the following:
 
 ---
 
+---
+
+## Review Pillars
+
+Every PR is evaluated against the six pillars defined in `CLAUDE.md`. A single
+violation on a hot path is a **review failure**:
+
+| Pillar | Summary |
+|--------|---------|
+| **E — Extreme Performance** | Implementations must follow reference designs in `docs/`. |
+| **L — Zero Latency** | No blocking syscalls, no `std::mutex`, no `sleep_for` on reactor threads. |
+| **C — Zero Copy** | Pass `std::span<const std::byte>` / `std::string_view`; never copy on the hot path. |
+| **A — Zero Allocation** | No `new`, `std::vector`, `std::string` construction on the hot path. Use `Arena` / `FixedPoolResource`. |
+| **D — Zero Dependency** | No third-party `#include` in public headers (`include/qbuem/`). |
+| **H — Hardware Alignment** | SIMD-first (AVX2/NEON parity required), `alignas(64)` on shared mutable structs. |
+
+Full rule tables: `CLAUDE.md` §Review Pass/Fail Criteria.
+
+---
+
+## Spatial Index Contribution Guide
+
+### GridBitset (fixed-size, `include/qbuem/buf/grid_bitset.hpp`)
+- Use `detail::scan_row_any()` / `detail::scan_row_count()` for all row-level
+  SIMD operations — do not duplicate SIMD logic inline.
+- Radius queries must use the per-row sqrt extent pattern (one `sqrt` per row).
+- AVX-512 / AVX2 / NEON paths must be kept in parity (Pillar H2).
+
+### TiledBitset (infinite dynamic world, `include/qbuem/buf/tiled_bitset.hpp`)
+- Tile lookups must go through the TLS 4-slot cache before acquiring any lock.
+- Cross-tile queries must split at `TileW` / `TileH` boundaries and call the
+  shared SIMD row helpers.
+- `evict_empty_tiles()` requires a `unique_lock` — keep it off the hot path.
+- Use `instance_id_` (not `this` pointer) as the TLS cache key to prevent
+  use-after-free when the allocator reuses addresses.
+
+---
+
 ## Code Style
 
-- C++23: use concepts, coroutines, `std::span`, `std::format`, `std::print`/`std::println`, `std::expected`, `std::unreachable()`
-- Do not add external dependencies (OS syscalls only)
-- `alignas(64)` — apply to shared mutable data at cache-line boundaries
-- `[[nodiscard]]` — apply to all functions where ignoring the return value is a bug
-- `[[likely]]` / `[[unlikely]]` — hot path branches only (do not overuse)
+- **Language**: English only — all comments, strings, and documentation.
+- **C++23**: concepts, coroutines, `std::span`, `std::format`,
+  `std::print`/`std::println`, `std::expected`, `std::unreachable()`,
+  `std::jthread`, `std::to_underlying`.
+- No external dependencies in `include/` (OS syscalls only).
+- `alignas(64)` on all shared mutable data structures (Pillar H4).
+- `[[nodiscard]]` on all functions returning `std::expected`, `Task`, or error codes.
+- `[[likely]]` / `[[unlikely]]` on hot-path branches only — do not overuse.

@@ -211,13 +211,15 @@ struct OrderBook {
             // Remove fully filled orders.
             if (bid->qty == 0) {
                 bid_level->orders.remove(bid);
-                pool.release(qbuem::GenerationHandle{bid->id & 0xFFFF'FFFFu,
-                                                     static_cast<uint32_t>(bid->id >> 32)});
+                pool.release(qbuem::GenerationHandle{
+                    static_cast<uint32_t>(bid->id & 0xFFFF'FFFFu),
+                    static_cast<uint32_t>(bid->id >> 32)});
             }
             if (ask->qty == 0) {
                 ask_level->orders.remove(ask);
-                pool.release(qbuem::GenerationHandle{ask->id & 0xFFFF'FFFFu,
-                                                     static_cast<uint32_t>(ask->id >> 32)});
+                pool.release(qbuem::GenerationHandle{
+                    static_cast<uint32_t>(ask->id & 0xFFFF'FFFFu),
+                    static_cast<uint32_t>(ask->id >> 32)});
             }
         }
         bids.compact();
@@ -247,6 +249,18 @@ static constexpr std::array<int64_t, kNumSymbols> kMidPrices{
 
 // ── Simulated market feed ─────────────────────────────────────────────────────
 
+/** @brief Xorshift32 PRNG — zero-allocation, callable, seeded by uint32_t. */
+struct Xorshift32 {
+    uint32_t state;
+    explicit Xorshift32(uint32_t seed) noexcept : state(seed ? seed : 1u) {}
+    uint32_t operator()() noexcept {
+        state ^= state << 13u;
+        state ^= state >> 17u;
+        state ^= state << 5u;
+        return state;
+    }
+};
+
 /**
  * @brief Generates random limit orders centered around a drifting mid-price.
  *
@@ -258,7 +272,7 @@ public:
     explicit SimFeed(size_t symbol_idx, int64_t mid_cents)
         : symbol_idx_(symbol_idx)
         , mid_(mid_cents)
-        , rng_(static_cast<uint32_t>(symbol_idx * 123456789))
+        , rng_(static_cast<uint32_t>(symbol_idx * 123456789u))
     {}
 
     /**
@@ -300,7 +314,7 @@ private:
     size_t   symbol_idx_;
     int64_t  mid_;
     int64_t  spread_cents_{5}; // half-spread
-    uint32_t rng_;
+    Xorshift32 rng_;
 };
 
 // ── Statistics ────────────────────────────────────────────────────────────────

@@ -226,12 +226,25 @@ add_test(NAME qbuem_infra_tests            COMMAND qbuem_infra_tests)
 add_test(NAME qbuem_middleware_tests       COMMAND qbuem_middleware_tests)
 add_test(NAME qbuem_pipeline_advanced_tests COMMAND qbuem_pipeline_advanced_tests)
 add_test(NAME qbuem_pipeline_ipc_tests     COMMAND qbuem_pipeline_ipc_tests)
+
+# ── GridBitset radius queries + TiledBitset tests ─────────────────────────────
+add_executable(qbuem_grid_spatial_tests
+    grid_spatial_test.cpp
+    ${QBUEM_TLS_FIX}
+)
+target_link_libraries(qbuem_grid_spatial_tests
+    PRIVATE
+    qbuem-stack::qbuem
+    GTest::gtest_main
+)
+add_test(NAME qbuem_grid_spatial_tests COMMAND qbuem_grid_spatial_tests)
 if(APPLE)
 add_test(NAME qbuem_kqueue_tests           COMMAND qbuem_kqueue_tests)
 endif()
 
 # SIMD correctness validation (standalone, no umbrella library)
-if(QBUEM_BUILD_TESTS)
+# Only build on ARM64 where NEON is available
+if(QBUEM_BUILD_TESTS AND CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64")
   add_executable(qbuem_neon_validation
       ${CMAKE_CURRENT_SOURCE_DIR}/neon_validation.cpp
       ${QBUEM_TLS_FIX}
