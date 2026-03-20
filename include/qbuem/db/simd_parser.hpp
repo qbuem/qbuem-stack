@@ -38,6 +38,7 @@
 #include <qbuem/common.hpp>
 #include <qbuem/db/value.hpp>
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <span>
@@ -106,8 +107,8 @@ struct ParsedField {
 struct ParsedRow {
     static constexpr uint16_t kMaxCols = 256;
 
-    ParsedField fields[kMaxCols];
-    uint16_t    count{0};
+    std::array<ParsedField, kMaxCols> fields{};
+    uint16_t                          count{0};
 };
 
 // ─── PostgreSQL parser ────────────────────────────────────────────────────────

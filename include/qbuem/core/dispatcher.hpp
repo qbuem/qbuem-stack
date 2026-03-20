@@ -127,7 +127,7 @@ public:
    * Used in SO_REUSEPORT multi-socket accept patterns to determine how many
    * per-reactor listening sockets to create.
    */
-  size_t thread_count() const noexcept { return reactors_.size(); }
+  [[nodiscard]] size_t thread_count() const noexcept { return reactors_.size(); }
 
   /**
    * @brief Register an incoming fd with a specific worker Reactor by index.

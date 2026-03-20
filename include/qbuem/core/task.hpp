@@ -164,7 +164,7 @@ template <typename T = void> struct Task {
   }
 
   // Awaiter interface
-  bool await_ready() const noexcept { return !handle || handle.done(); }
+  [[nodiscard]] bool await_ready() const noexcept { return !handle || handle.done(); }
   std::coroutine_handle<>
   await_suspend(std::coroutine_handle<> awaiting) noexcept {
     handle.promise().continuation = awaiting;
@@ -238,7 +238,7 @@ template <> struct Task<void> {
     return *this;
   }
 
-  bool resume() {
+  [[nodiscard]] bool resume() const {
     if (!handle || handle.done())
       return false;
     handle.resume();
@@ -259,9 +259,9 @@ template <> struct Task<void> {
   }
 
   // Awaiter interface
-  bool await_ready() const noexcept { return !handle || handle.done(); }
-  std::coroutine_handle<>
-  await_suspend(std::coroutine_handle<> awaiting) noexcept {
+  [[nodiscard]] bool await_ready() const noexcept { return !handle || handle.done(); }
+  [[nodiscard]] std::coroutine_handle<>
+  await_suspend(std::coroutine_handle<> awaiting) const noexcept {
     handle.promise().continuation = awaiting;
     return handle;
   }

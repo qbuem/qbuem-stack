@@ -209,13 +209,13 @@ inline void gf_mul_add(uint8_t coeff, std::span<const std::byte> in,
 #ifdef QBUEM_ERASURE_AVX2
     // AVX2 path: VPSHUFB split-table GF multiply
     // Build lo/hi 4-bit nibble tables
-    alignas(32) uint8_t tbl_lo[16], tbl_hi[16];
+    alignas(32) std::array<uint8_t, 16> tbl_lo{}, tbl_hi{};
     for (int i = 0; i < 16; ++i) {
-        tbl_lo[i] = gf256::fast_mul(coeff, static_cast<uint8_t>(i));
-        tbl_hi[i] = gf256::fast_mul(coeff, static_cast<uint8_t>(i << 4));
+        tbl_lo[static_cast<size_t>(i)] = gf256::fast_mul(coeff, static_cast<uint8_t>(i));
+        tbl_hi[static_cast<size_t>(i)] = gf256::fast_mul(coeff, static_cast<uint8_t>(i << 4));
     }
-    __m256i lo = _mm256_broadcastsi128_si256(_mm_loadu_si128((__m128i*)tbl_lo));
-    __m256i hi = _mm256_broadcastsi128_si256(_mm_loadu_si128((__m128i*)tbl_hi));
+    __m256i lo = _mm256_broadcastsi128_si256(_mm_loadu_si128(reinterpret_cast<const __m128i*>(tbl_lo.data())));
+    __m256i hi = _mm256_broadcastsi128_si256(_mm_loadu_si128(reinterpret_cast<const __m128i*>(tbl_hi.data())));
     __m256i mask_lo = _mm256_set1_epi8(0x0F);
 
     size_t i = 0;

@@ -53,6 +53,7 @@
 #include <qbuem/common.hpp>
 #include <qbuem/core/arena.hpp>
 
+#include <array>
 #include <cstdint>
 #include <functional>
 #include <limits>
@@ -122,7 +123,7 @@ public:
    */
   [[nodiscard]] TimerId schedule(uint64_t delay_ms, Callback fn) {
     void *raw = pool_.allocate();
-    if (!raw) [[unlikely]] return kInvalid;
+    if (raw == nullptr) [[unlikely]] return kInvalid;
 
     auto *e = new (raw) Entry{};
     e->fn        = std::move(fn);
@@ -248,7 +249,7 @@ private:
   };
 
   /** @brief Slot resolution per level (ms): 1 ms, 256 ms, 65536 ms, 16777216 ms. */
-  static constexpr uint64_t kSlotMs[LEVELS] = {1, 256, 65536, 16777216};
+  static constexpr std::array<uint64_t, LEVELS> kSlotMs = {1, 256, 65536, 16777216};
 
   /**
    * @brief Insert an entry into the appropriate level/slot.
@@ -282,7 +283,7 @@ private:
     // Insert at head
     e->next = slots_[lv][sl];
     e->prev = nullptr;
-    if (slots_[lv][sl])
+    if (slots_[lv][sl] != nullptr)
       slots_[lv][sl]->prev = e;
     slots_[lv][sl] = e;
   }
@@ -295,11 +296,11 @@ private:
    * @param e   Entry pointer to remove.
    */
   void unlink(size_t lv, size_t sl, Entry *e) noexcept {
-    if (e->prev)
+    if (e->prev != nullptr)
       e->prev->next = e->next;
     else
       slots_[lv][sl] = e->next; // update head
-    if (e->next)
+    if (e->next != nullptr)
       e->next->prev = e->prev;
     e->next = nullptr;
     e->prev = nullptr;
@@ -319,7 +320,7 @@ private:
     Entry *e = slots_[level][slot];
     slots_[level][slot] = nullptr;
 
-    while (e) {
+    while (e != nullptr) {
       Entry *nxt = e->next;
       e->next = nullptr;
       e->prev = nullptr;
@@ -354,7 +355,7 @@ private:
     Entry *e = slots_[level][slot];
     slots_[level][slot] = nullptr;
 
-    while (e) {
+    while (e != nullptr) {
       Entry *nxt = e->next;
       e->next = nullptr;
       e->prev = nullptr;
@@ -370,7 +371,7 @@ private:
     for (size_t lv = 0; lv < LEVELS; ++lv) {
       for (size_t sl = 0; sl < SLOTS_PER_LEVEL; ++sl) {
         Entry *e = slots_[lv][sl];
-        while (e) {
+        while (e != nullptr) {
           Entry *nxt = e->next;
           e->~Entry();
           pool_.deallocate(e);
@@ -392,7 +393,7 @@ private:
   FixedPoolResource<sizeof(Entry), alignof(Entry)> pool_;
 
   /** @brief Slot array [level][slot] → doubly linked list head. */
-  Entry   *slots_[LEVELS][SLOTS_PER_LEVEL] = {};
+  std::array<std::array<Entry*, SLOTS_PER_LEVEL>, LEVELS> slots_ = {};
 
   /** @brief TimerId → Entry* index — supports O(1) cancel() and next_expiry_ms(). */
   std::unordered_map<TimerId, Entry *> index_;

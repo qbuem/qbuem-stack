@@ -41,6 +41,7 @@
 #include <qbuem/core/task.hpp>
 #include <qbuem/db/value.hpp>
 
+#include <array>
 #include <atomic>
 #include <cstdint>
 #include <memory>
@@ -341,7 +342,7 @@ public:
         size_t n = reg.count_.load(std::memory_order_acquire);
         for (size_t i = 0; i < n; ++i) {
             auto* d = reg.drivers_[i].load(std::memory_order_acquire);
-            if (d && d->accepts(dsn))
+            if (d != nullptr && d->accepts(dsn))
                 return d;
         }
         return nullptr;
@@ -354,7 +355,7 @@ private:
         return reg;
     }
 
-    std::atomic<IDBDriver*> drivers_[kMaxDrivers]{};
+    std::array<std::atomic<IDBDriver*>, kMaxDrivers> drivers_{};
     std::atomic<size_t>     count_{0};
 };
 

@@ -101,7 +101,7 @@ public:
 
   /** @brief Spawn the background flush thread. */
   void start() {
-    thread_ = std::jthread([this](std::stop_token st) { flush_loop(std::move(st)); });
+    thread_ = std::jthread([this](const std::stop_token& st) { flush_loop(st); });
   }
 
   /** @brief Flush remaining entries and join the background thread. */

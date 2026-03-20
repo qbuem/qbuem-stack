@@ -14,6 +14,7 @@
 
 #include <qbuem/common.hpp>
 
+#include <array>
 #include <ctime>
 #include <string>
 #include <string_view>
@@ -104,7 +105,7 @@ public:
    * Multiple cookies are supported; each call appends one Set-Cookie line.
    */
   Response &set_cookie(std::string_view name, std::string_view value,
-                       CookieOptions opts = CookieOptions{});
+                       const CookieOptions& opts = CookieOptions{});
 
   /**
    * @brief Set the ETag response header.
@@ -133,9 +134,9 @@ public:
   Response &last_modified(std::time_t t) {
     std::tm tm{};
     gmtime_r(&t, &tm);
-    char buf[48];
-    std::strftime(buf, sizeof(buf), "%a, %d %b %Y %H:%M:%S GMT", &tm);
-    return header("Last-Modified", buf);
+    std::array<char, 48> buf{};
+    std::strftime(buf.data(), buf.size(), "%a, %d %b %Y %H:%M:%S GMT", &tm);
+    return header("Last-Modified", buf.data());
   }
 
   /** @brief Return the value of a response header (empty string_view if not set). */

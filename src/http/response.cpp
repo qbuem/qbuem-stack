@@ -1,4 +1,5 @@
 #include <qbuem/http/response.hpp>
+#include <array>
 #include <cstdio>
 
 namespace qbuem {
@@ -23,9 +24,9 @@ Response &Response::body(std::string_view b) {
 Response &Response::chunk(std::string_view data) {
   if (data.empty()) return *this;
   // Chunked framing: "<hex-size>\r\n<data>\r\n"
-  char sz[16];
-  int  n = std::snprintf(sz, sizeof(sz), "%zx\r\n", data.size());
-  chunk_buf_.append(sz, static_cast<size_t>(n));
+  std::array<char, 16> sz{};
+  int  n = std::snprintf(sz.data(), sz.size(), "%zx\r\n", data.size());
+  chunk_buf_.append(sz.data(), static_cast<size_t>(n));
   chunk_buf_.append(data);
   chunk_buf_ += "\r\n";
   return *this;
@@ -75,7 +76,7 @@ std::string Response::encode_trailers() const {
 }
 
 Response &Response::set_cookie(std::string_view name, std::string_view value,
-                                CookieOptions opts) {
+                                const CookieOptions& opts) {
   std::string cookie = std::string(name) + "=" + std::string(value);
 
   if (!opts.path.empty())

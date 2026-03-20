@@ -143,7 +143,7 @@ public:
    * @brief Check whether the Reactor's event loop is currently running.
    * @returns true if running, false otherwise.
    */
-  virtual bool is_running() const = 0;
+  [[nodiscard]] virtual bool is_running() const = 0;
 
   /**
    * @brief Run a single iteration of the event loop.

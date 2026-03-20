@@ -38,6 +38,7 @@
 #include <qbuem/core/timer_wheel.hpp>
 #include <qbuem/db/driver.hpp>
 
+#include <array>
 #include <atomic>
 #include <cstdint>
 #include <memory>
@@ -138,7 +139,7 @@ private:
         static constexpr size_t kMaxSlots = 256;
 
         alignas(64) std::atomic<size_t> top_{0};
-        alignas(64) std::atomic<uint32_t> slots_[kMaxSlots]{};
+        alignas(64) std::array<std::atomic<uint32_t>, kMaxSlots> slots_{};
 
         explicit FreeStack() = default;
 

@@ -51,21 +51,21 @@ public:
    */
   std::optional<size_t> parse(std::string_view data, Request &req);
 
-  bool is_complete()      const { return state_ == State::Complete; }
-  State state()           const { return state_; }
+  [[nodiscard]] bool is_complete()      const { return state_ == State::Complete; }
+  [[nodiscard]] State state()           const { return state_; }
 
   /**
    * True once all headers have been read (body may still be pending).
    * Useful for sending 100 Continue before the body arrives.
    */
-  bool headers_complete() const { return headers_complete_; }
+  [[nodiscard]] bool headers_complete() const { return headers_complete_; }
 
   /**
    * HTTP status code to send when the parser returns nullopt:
    *   400 — bad syntax / header injection
    *   413 — Payload Too Large
    */
-  int error_status() const { return error_status_; }
+  [[nodiscard]] int error_status() const { return error_status_; }
 
 private:
   State       state_              = State::Method;

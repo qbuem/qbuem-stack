@@ -101,10 +101,10 @@ template<typename V, size_t KeyLen = 64>
     requires std::is_trivially_copyable_v<V>
 struct alignas(64) CacheSlot {
     alignas(64) std::atomic<uint64_t> generation{0}; ///< Seqlock generation counter
-    alignas(64) char                  key[KeyLen]{};  ///< NUL-terminated key string
+    alignas(64) std::array<char, KeyLen> key{};       ///< NUL-terminated key string
     alignas(64) V                     value{};         ///< Cached value
     uint64_t                          expire_ns{0};    ///< Expiry (nanoseconds since epoch; 0=no expiry)
-    uint8_t                           _pad[64 - sizeof(uint64_t)]{};
+    std::array<uint8_t, 64 - sizeof(uint64_t)>  _pad{};
 
     /** @brief True if this slot is occupied. */
     [[nodiscard]] bool occupied() const noexcept {
@@ -118,7 +118,7 @@ struct alignas(64) CacheSlot {
 
     /** @brief True if this slot's key matches the given key. */
     [[nodiscard]] bool key_matches(std::string_view k) const noexcept {
-        return std::strncmp(key, k.data(), KeyLen) == 0;
+        return std::strncmp(key.data(), k.data(), KeyLen) == 0;
     }
 };
 
@@ -201,10 +201,10 @@ public:
         std::atomic_thread_fence(std::memory_order_seq_cst);
 
         // Write key + value
-        std::strncpy(slot.key, key.data(), KeyLen - 1);
+        std::strncpy(slot.key.data(), key.data(), KeyLen - 1);
         slot.key[KeyLen - 1] = '\0';
         slot.value = value;
-        slot.expire_ns = ttl_ns ? (now_ns() + ttl_ns) : 0;
+        slot.expire_ns = (ttl_ns != 0u) ? (now_ns() + ttl_ns) : 0;
 
         // Commit: increment to next even generation
         std::atomic_thread_fence(std::memory_order_seq_cst);
@@ -242,7 +242,7 @@ public:
             // Seqlock read loop
             for (int retry = 0; retry < 8; ++retry) {
                 uint64_t gen1 = slot.generation.load(std::memory_order_acquire);
-                if (gen1 & 1) {
+                if ((gen1 & 1u) != 0u) {
                     // Write in progress — spin briefly
                     stats_.seqlock_retries.fetch_add(1, std::memory_order_relaxed);
                     for (int i = 0; i < 16; ++i) {
