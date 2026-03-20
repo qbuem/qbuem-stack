@@ -34,11 +34,16 @@ jobs:
           sudo apt-get update -q
           sudo apt-get install -y clang-18 clang-tidy-18 clang-tools-18 liburing-dev
 
+      # Generate compile_commands.json with g++ so the standard library
+      # include paths are resolved by GCC 13 (which has full C++23 support).
+      # clang-tidy-18 reads these commands and applies its analysis using
+      # the same flags; ExtraArgs in .clang-tidy supplies -D__cpp_concepts
+      # to work around the clang-18 vs libstdc++-13 __cpp_concepts mismatch.
       - name: Configure (generate compile_commands.json)
         run: |
           cmake -B build \
             -DCMAKE_BUILD_TYPE=Debug \
-            -DCMAKE_CXX_COMPILER=clang++-18 \
+            -DCMAKE_CXX_COMPILER=g++ \
             -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
             -DBUILD_SHARED_LIBS=OFF \
             -DQBUEM_BUILD_TESTS=OFF \

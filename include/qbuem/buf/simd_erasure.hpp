@@ -319,7 +319,7 @@ public:
      *                data; shards[k..k+m-1] will be overwritten with parity.
      *                All spans must have equal size.
      */
-    void encode(std::span<std::span<std::byte>> shards) noexcept {
+    void encode(std::span<std::span<std::byte>> shards) const noexcept {
         assert(static_cast<int>(shards.size()) == k_ + m_);
         size_t sz = shards[0].size();
 
@@ -431,7 +431,7 @@ private:
             for (int row = 0; row < n; ++row) {
                 if (row == col) continue;
                 uint8_t factor = mat[static_cast<size_t>(row * n + col)];
-                if (!factor) continue;
+                if (factor == 0U) continue;
                 for (int c = 0; c < n; ++c) {
                     mat[static_cast<size_t>(row * n + c)] ^=
                         gf256::fast_mul(factor, mat[static_cast<size_t>(col * n + c)]);

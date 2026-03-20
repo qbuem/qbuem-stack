@@ -195,7 +195,7 @@ private:
         int64_t i;
         double  d;
         bool    b;
-        char    s[256]; // null-terminated inline string (≤255 bytes + NUL)
+        char    s[256]; // NOLINT(modernize-avoid-c-arrays) null-terminated inline string (<=255 bytes + NUL)
     } u_{};
 };
 
@@ -377,10 +377,10 @@ public:
     [[nodiscard]] std::expected<void, std::error_code>
     load_env(std::string_view prefix) noexcept {
         extern char** environ; // POSIX standard
-        if (!environ) return {};
+        if (environ == nullptr) return {};
 
         const size_t plen = prefix.size();
-        for (char** ep = environ; *ep; ++ep) {
+        for (char** ep = environ; *ep != nullptr; ++ep) {
             std::string_view entry{*ep};
             if (entry.size() <= plen) continue;
             if (entry.substr(0, plen) != prefix) continue;
@@ -391,8 +391,8 @@ public:
             std::string_view raw_key = entry.substr(plen, eq - plen);
             std::string_view val_str = entry.substr(eq + 1);
 
-            // Normalize: lowercase + _ → .
-            char key_buf[256]{};
+            // Normalize: lowercase + _ -> .
+            char key_buf[256]{}; // NOLINT(modernize-avoid-c-arrays)
             const size_t klen = std::min(raw_key.size(), sizeof(key_buf) - 1);
             for (size_t i = 0; i < klen; ++i) {
                 const char c = raw_key[i];
@@ -418,17 +418,17 @@ public:
      */
     [[nodiscard]] std::expected<void, std::error_code>
     load_file(std::string_view path) noexcept {
-        char path_buf[4096]{};
+        char path_buf[4096]{}; // NOLINT(modernize-avoid-c-arrays)
         const size_t plen = std::min(path.size(), sizeof(path_buf) - 1);
         std::memcpy(path_buf, path.data(), plen);
 
         FILE* f = ::fopen(path_buf, "r"); // NOLINT(cppcoreguidelines-owning-memory)
-        if (!f)
+        if (f == nullptr)
             return std::unexpected(
                 std::error_code{errno, std::system_category()});
 
-        char line[1024]{};
-        while (::fgets(line, sizeof(line), f)) {
+        char line[1024]{}; // NOLINT(modernize-avoid-c-arrays)
+        while (::fgets(line, sizeof(line), f) != nullptr) {
             std::string_view sv{line};
             while (!sv.empty() && (sv.back() == '\n' || sv.back() == '\r'))
                 sv.remove_suffix(1);
@@ -444,7 +444,7 @@ public:
             while (!raw_key.empty() && raw_key.back() == ' ')  raw_key.remove_suffix(1);
             while (!val_str.empty() && val_str.front() == ' ') val_str.remove_prefix(1);
 
-            char key_buf[256]{};
+            char key_buf[256]{}; // NOLINT(modernize-avoid-c-arrays)
             const size_t klen = std::min(raw_key.size(), sizeof(key_buf) - 1);
             for (size_t i = 0; i < klen; ++i) {
                 const char c = raw_key[i];
@@ -478,7 +478,7 @@ public:
     template <typename T>
     [[nodiscard]] T get_or(std::string_view key, T default_val) const noexcept {
         const ConfigValue* v = table_.find(detail::fnv1a(key));
-        if (!v) return default_val;
+        if (v == nullptr) return default_val;
 
         if constexpr (std::is_same_v<T, int64_t>) {
             if (v->type() == ConfigValue::Type::Int)    return v->as_int();
@@ -493,7 +493,7 @@ public:
             if (v->type() == ConfigValue::Type::String) {
                 // strtod via a fixed stack buffer (no heap)
                 const auto sv = v->as_string();
-                char buf[64]{};
+                char buf[64]{}; // NOLINT(modernize-avoid-c-arrays)
                 const size_t n = std::min(sv.size(), sizeof(buf) - 1);
                 std::memcpy(buf, sv.data(), n);
                 char* end{};
@@ -525,7 +525,7 @@ public:
     [[nodiscard]] std::expected<Secret<std::string>, std::error_code>
     get_secret(std::string_view key) const noexcept {
         const ConfigValue* v = table_.find(detail::fnv1a(key));
-        if (!v)
+        if (v == nullptr)
             return std::unexpected(
                 std::make_error_code(std::errc::no_such_file_or_directory));
         if (v->type() != ConfigValue::Type::String)
