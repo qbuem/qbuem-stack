@@ -55,6 +55,7 @@
 #include <qbuem/net/dns.hpp>
 #include <qbuem/net/tcp_stream.hpp>
 
+#include <array>
 #include <charconv>
 #include <chrono>
 #include <deque>
@@ -105,7 +106,7 @@ public:
    *
    * @param st  Cancellation token.
    */
-  Task<Result<FetchResponse>> send(std::stop_token st = {});
+  Task<Result<FetchResponse>> send(const std::stop_token& st = {});
 
 private:
   FetchClient  *client_;
@@ -202,13 +203,13 @@ public:
    * temporary allocation on every request.
    */
   static std::string make_pool_key(std::string_view host, uint16_t port) {
-    char port_buf[6]; // max "65535"
-    auto [ptr, ec] = std::to_chars(port_buf, port_buf + sizeof(port_buf), port);
+    std::array<char, 6> port_buf{}; // max "65535"
+    auto [ptr, ec] = std::to_chars(port_buf.data(), port_buf.data() + port_buf.size(), port);
     std::string key;
-    key.reserve(host.size() + 1 + static_cast<size_t>(ptr - port_buf));
+    key.reserve(host.size() + 1 + static_cast<size_t>(ptr - port_buf.data()));
     key.append(host);
     key += ':';
-    key.append(port_buf, ptr);
+    key.append(port_buf.data(), ptr);
     return key;
   }
 
@@ -229,10 +230,10 @@ public:
   }
 
   /** @brief Return the default timeout in milliseconds (0 = none). */
-  long long default_timeout_ms() const noexcept { return default_timeout_ms_; }
+  [[nodiscard]] long long default_timeout_ms() const noexcept { return default_timeout_ms_; }
 
   /** @brief Return the default maximum redirect count. */
-  int default_max_redirects() const noexcept { return default_max_redirects_; }
+  [[nodiscard]] int default_max_redirects() const noexcept { return default_max_redirects_; }
 
   /**
    * @brief Close and discard all pooled connections.
@@ -242,7 +243,7 @@ public:
   void clear_pool() { pool_.clear(); }
 
   /** @brief Return the total number of idle connections across all hosts. */
-  size_t idle_count() const noexcept {
+  [[nodiscard]] size_t idle_count() const noexcept {
     size_t n = 0;
     for (auto &[k, v] : pool_) n += v.size();
     return n;
@@ -260,7 +261,7 @@ private:
 
 // ─── ClientRequest::send implementation ──────────────────────────────────────
 
-inline Task<Result<FetchResponse>> ClientRequest::send(std::stop_token st) {
+inline Task<Result<FetchResponse>> ClientRequest::send(const std::stop_token& st) {
   // Parse URL
   auto parsed = ParsedUrl::parse(url_);
   if (!parsed) co_return unexpected(parsed.error());
@@ -278,7 +279,7 @@ inline Task<Result<FetchResponse>> ClientRequest::send(std::stop_token st) {
   Reactor*         reactor  = Reactor::current();
 
   long long tms = client_->default_timeout_ms();
-  if (tms > 0 && reactor) {
+  if (tms > 0 && reactor != nullptr) {
     auto r = reactor->register_timer(
         static_cast<int>(tms),
         [&timeout_ss](int) { timeout_ss.request_stop(); });
@@ -289,7 +290,7 @@ inline Task<Result<FetchResponse>> ClientRequest::send(std::stop_token st) {
   auto effective_st = combined.token();
 
   auto cancel_timer = [&] {
-    if (timer_id >= 0 && reactor) reactor->unregister_timer(timer_id);
+    if (timer_id >= 0 && reactor != nullptr) reactor->unregister_timer(timer_id);
   };
 
   int redirects = 0;

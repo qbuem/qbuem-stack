@@ -61,6 +61,7 @@
 #include <qbuem/net/tcp_stream.hpp>
 
 #include <algorithm>
+#include <array>
 #include <charconv>
 #include <chrono>
 #include <cstddef>
@@ -180,25 +181,25 @@ public:
   FetchResponse() = default;
 
   /** @brief HTTP status code (e.g. 200, 404, 500). */
-  int status() const noexcept { return status_; }
+  [[nodiscard]] int status() const noexcept { return status_; }
 
   /** @brief Returns true for 2xx success responses. */
-  bool ok() const noexcept { return status_ >= 200 && status_ < 300; }
+  [[nodiscard]] bool ok() const noexcept { return status_ >= 200 && status_ < 300; }
 
   /**
    * @brief Return a response header value (case-insensitive key lookup).
    * @returns Header value, or empty string_view if the header is absent.
    */
-  std::string_view header(std::string_view key) const {
+  [[nodiscard]] std::string_view header(std::string_view key) const {
     // Keys are stored pre-lowercased by add_header(); just lowercase
     // the (typically short) lookup key without a heap allocation.
-    char  buf[64];
-    const bool fits = key.size() < sizeof(buf);
+    std::array<char, 64> buf{};
+    const bool fits = key.size() < buf.size();
     if (fits) {
       for (size_t i = 0; i < key.size(); ++i)
         buf[i] = static_cast<char>(
             std::tolower(static_cast<unsigned char>(key[i])));
-      std::string_view lower_key(buf, key.size());
+      std::string_view lower_key(buf.data(), key.size());
       auto it = headers_.find(std::string(lower_key));
       return (it != headers_.end()) ? std::string_view(it->second)
                                      : std::string_view{};
@@ -212,7 +213,7 @@ public:
   }
 
   /** @brief Response body as a string_view (raw bytes). */
-  std::string_view body() const noexcept { return body_; }
+  [[nodiscard]] std::string_view body() const noexcept { return body_; }
 
   /** @brief Move the response body out (avoids a copy). */
   std::string take_body() && { return std::move(body_); }
@@ -404,7 +405,7 @@ inline Result<FetchResponse> parse_response(std::string_view raw) {
  * termination. Enforces an 8 MiB guard to prevent unbounded allocation.
  */
 inline Task<Result<std::string>> read_http_response(TcpStream &stream,
-                                                     std::stop_token st) {
+                                                     const std::stop_token& st) {
   static constexpr size_t kChunkSize       = 4096;
   static constexpr size_t kMaxResponseSize = 8 * 1024 * 1024; // 8 MiB
 
@@ -439,18 +440,18 @@ inline Task<Result<std::string>> read_http_response(TcpStream &stream,
       if (pos != std::string::npos) {
         header_end = pos + 4;
 
-        if (icase_find(buf.data(), header_end, "transfer-encoding: chunked"))
+        if (icase_find(buf.data(), header_end, "transfer-encoding: chunked") != nullptr)
           chunked = true;
 
         if (!chunked) {
           const char *cl_ptr =
               icase_find(buf.data(), header_end, "content-length: ");
-          if (cl_ptr) {
+          if (cl_ptr != nullptr) {
             cl_ptr += 16; // skip "content-length: "
             const char *eol =
                 static_cast<const char *>(
                     ::memchr(cl_ptr, '\r', buf.data() + header_end - cl_ptr));
-            size_t cl_len = eol ? static_cast<size_t>(eol - cl_ptr)
+            size_t cl_len = (eol != nullptr) ? static_cast<size_t>(eol - cl_ptr)
                                 : static_cast<size_t>(buf.data() + header_end - cl_ptr);
             std::from_chars(cl_ptr, cl_ptr + cl_len, content_length);
             // Pre-allocate based on Content-Length to avoid incremental growth.
@@ -488,11 +489,11 @@ struct CombinedStop {
   std::stop_callback<std::function<void()>> cb_a;
   std::stop_callback<std::function<void()>> cb_b;
 
-  CombinedStop(std::stop_token a, std::stop_token b)
+  CombinedStop(const std::stop_token& a, const std::stop_token& b)
       : cb_a(a, [this] { source.request_stop(); })
       , cb_b(b, [this] { source.request_stop(); }) {}
 
-  std::stop_token token() { return source.get_token(); }
+  [[nodiscard]] std::stop_token token() const { return source.get_token(); }
 };
 
 } // namespace detail
@@ -589,13 +590,13 @@ public:
    * @param st  Cancellation token. Checked before every I/O operation.
    * @returns   FetchResponse on success, or an error_code on failure.
    */
-  Task<Result<FetchResponse>> send(std::stop_token st = {}) {
+  Task<Result<FetchResponse>> send(const std::stop_token& st = {}) {
     // ── Build combined stop_token (user + optional timeout timer) ───────
     std::stop_source  timeout_ss;
     int               timer_id = -1;
     Reactor*          reactor  = Reactor::current();
 
-    if (timeout_ms_ > 0 && reactor) {
+    if (timeout_ms_ > 0 && reactor != nullptr) {
       auto r = reactor->register_timer(
           static_cast<int>(timeout_ms_),
           [&timeout_ss](int) { timeout_ss.request_stop(); });
@@ -614,7 +615,7 @@ public:
 
       if (!result) {
         // Cancel timer before returning
-        if (timer_id >= 0 && reactor) reactor->unregister_timer(timer_id);
+        if (timer_id >= 0 && reactor != nullptr) reactor->unregister_timer(timer_id);
         co_return result;
       }
 
@@ -634,7 +635,7 @@ public:
       }
 
       // Done — cancel timer and return
-      if (timer_id >= 0 && reactor) reactor->unregister_timer(timer_id);
+      if (timer_id >= 0 && reactor != nullptr) reactor->unregister_timer(timer_id);
       co_return result;
     }
   }
@@ -647,7 +648,7 @@ private:
    * @param st   Effective stop_token (combined user + timeout).
    */
   Task<Result<FetchResponse>> send_one(const std::string &url,
-                                       std::stop_token st) {
+                                       const std::stop_token& st) {
     // Parse URL
     auto parsed = ParsedUrl::parse(url);
     if (!parsed) co_return unexpected(parsed.error());

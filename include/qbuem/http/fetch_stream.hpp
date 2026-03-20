@@ -218,7 +218,7 @@ public:
      *
      * @note The caller **must** call `release(chunk)` after processing each chunk.
      */
-    [[nodiscard]] Task<std::optional<FetchChunk*>> next(std::stop_token st) {
+    [[nodiscard]] Task<std::optional<FetchChunk*>> next(const std::stop_token& st) {
         if (st.stop_requested()) co_return std::nullopt;
         auto item = co_await chan_.recv();
         if (!item) co_return std::nullopt;  // EOS
@@ -249,7 +249,7 @@ public:
      *
      * @param st  Cancellation token that stops the pump.
      */
-    Task<void> start_pump(std::stop_token st) {
+    Task<void> start_pump(const std::stop_token& st) { // NOLINT(readability-make-member-function-const)
         int64_t remaining = content_len_;  // -1 = unknown
 
         if (chunked_) {
@@ -292,7 +292,7 @@ private:
 
     // ── Content-Length / connection-close pump ────────────────────────────────
 
-    Task<void> pump_fixed(std::stop_token st, int64_t content_len) {
+    Task<void> pump_fixed(const std::stop_token& st, int64_t content_len) {
         int64_t received = 0;
 
         while (!st.stop_requested()) {
@@ -319,7 +319,7 @@ private:
 
     // ── Chunked transfer-encoding pump ───────────────────────────────────────
 
-    Task<void> pump_chunked(std::stop_token st) {
+    Task<void> pump_chunked(const std::stop_token& st) {
         // Read and decode HTTP/1.1 chunked transfer encoding
         // chunk-line: "<hex-size>\r\n<data>\r\n" repeated, terminated by "0\r\n\r\n"
         std::array<std::byte, 32> linebuf{};
@@ -342,7 +342,7 @@ private:
             if (done) break;
 
             // Parse hex chunk size
-            char hexbuf[16]{};
+            std::array<char, 16> hexbuf{};
             size_t hexlen = 0;
             for (size_t i = 0; i < linelen && hexlen < 15; ++i) {
                 char c = static_cast<char>(linebuf[i]);
@@ -350,7 +350,7 @@ private:
                 if (c != '\r') hexbuf[hexlen++] = c;
             }
             size_t chunk_size = 0;
-            auto [ptr, ec] = std::from_chars(hexbuf, hexbuf + hexlen, chunk_size, 16);
+            auto [ptr, ec] = std::from_chars(hexbuf.data(), hexbuf.data() + hexlen, chunk_size, 16);
             if (ec != std::errc{} || chunk_size == 0) break;  // zero chunk = end
 
             // Read chunk data
@@ -385,8 +385,8 @@ private:
     AsyncChannel<FetchChunk*> chan_;            ///< Chunk delivery channel
 
     // Fixed pool — no heap allocation on hot path
-    alignas(64) FetchChunk         pool_[kPoolSlots];
-    FetchChunk*                    free_stack_[kPoolSlots];
+    alignas(64) std::array<FetchChunk, kPoolSlots>    pool_{};
+    std::array<FetchChunk*, kPoolSlots>               free_stack_{};
     alignas(64) std::atomic<size_t> free_count_{0};
 };
 
@@ -435,7 +435,7 @@ public:
      * @returns Shared pointer to a ready-to-pump `FetchStream`, or error.
      */
     [[nodiscard]] Task<Result<std::shared_ptr<FetchStream>>>
-    stream(std::string url, std::stop_token st) {
+    stream(std::string url, const std::stop_token& st) {
         (void)st;
         // Parse URL
         auto parsed = ParsedUrl::parse(url);

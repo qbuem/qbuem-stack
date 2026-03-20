@@ -257,7 +257,7 @@ private:
    * Determines the level based on the difference between expiry_ms and current_ms_.
    * @param e Entry pointer to insert.
    */
-  void insert(Entry *e) {
+  void insert(Entry *e) { // NOLINT(readability-make-member-function-const)
     uint64_t delta = (e->expiry_ms > current_ms_) ? (e->expiry_ms - current_ms_) : 0;
 
     size_t lv = 0;

@@ -171,16 +171,16 @@ public:
   }
 
   /** @brief Returns true if kTLS offload was successfully activated. */
-  bool ktls_active() const noexcept { return ktls_active_; }
+  [[nodiscard]] bool ktls_active() const noexcept { return ktls_active_; }
 
   /** @brief Server hostname (informational). */
-  std::string_view hostname() const noexcept { return hostname_; }
+  [[nodiscard]] std::string_view hostname() const noexcept { return hostname_; }
 
   /** @brief Server port. */
-  uint16_t port() const noexcept { return port_; }
+  [[nodiscard]] uint16_t port() const noexcept { return port_; }
 
   /** @brief Underlying socket fd. */
-  int fd() const noexcept { return stream_.fd(); }
+  [[nodiscard]] int fd() const noexcept { return stream_.fd(); }
 
   /** @brief Enable TCP_NODELAY. */
   void set_nodelay(bool v) noexcept { stream_.set_nodelay(v); }
@@ -239,7 +239,7 @@ public:
    * @param st  Cancellation token.
    * @returns   FetchResponse on success, error_code on failure.
    */
-  Task<Result<FetchResponse>> send(std::stop_token st = {}) {
+  Task<Result<FetchResponse>> send(const std::stop_token& st = {}) {
     auto parsed = ParsedUrl::parse(url_);
     if (!parsed) co_return unexpected(parsed.error());
 

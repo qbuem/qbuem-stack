@@ -66,8 +66,8 @@ struct AllocRecord {
     uint64_t tid{0};              ///< Thread ID of the allocating thread
     uint8_t  freed{0};            ///< 1 if a matching free() was observed
     uint8_t  source{0};           ///< 0=malloc, 1=mmap, 2=arena, 3=pool
-    uint8_t  _pad[6]{};
-    uint64_t stack[kMaxFrames]{}; ///< Instruction pointer call-stack (0-terminated)
+    std::array<uint8_t, 6>          _pad{};
+    std::array<uint64_t, kMaxFrames> stack{}; ///< Instruction pointer call-stack (0-terminated)
     uint32_t depth{0};            ///< Number of valid frames in `stack`
 };
 static_assert(std::is_trivially_copyable_v<AllocRecord>);
@@ -188,7 +188,7 @@ public:
      * @returns true if all probes attached successfully.
      */
     bool attach(std::string_view binary_path = "/proc/self/exe") noexcept {
-        if (!runtime_) return false;
+        if (runtime_ == nullptr) return false;
         bool ok = true;
         ok &= (runtime_->attach_uprobe(binary_path, "malloc",  false) == 0);
         ok &= (runtime_->attach_uprobe(binary_path, "malloc",  true)  == 0); // uretprobe
@@ -208,7 +208,7 @@ public:
      * @returns Number of events processed.
      */
     size_t poll() noexcept {
-        if (!runtime_ || !attached_) return 0;
+        if (runtime_ == nullptr || !attached_) return 0;
         stats_.poll_cycles.fetch_add(1, std::memory_order_relaxed);
 
         std::array<AllocRecord, kPollBatch> batch{};
@@ -241,7 +241,7 @@ public:
         report.total_outstanding_count = stats_.outstanding.load(std::memory_order_acquire);
         report.total_outstanding_bytes = stats_.outstanding_bytes.load(std::memory_order_acquire);
 
-        if (!runtime_ || !attached_) return report;
+        if (runtime_ == nullptr || !attached_) return report;
 
         // Read all outstanding allocations from the BPF map
         std::array<AllocRecord, 4096> buf{};
@@ -258,7 +258,7 @@ public:
 
     /** @brief Detach all eBPF probes. */
     void detach() noexcept {
-        if (runtime_) runtime_->detach();
+        if (runtime_ != nullptr) runtime_->detach();
         attached_ = false;
     }
 

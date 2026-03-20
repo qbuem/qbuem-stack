@@ -176,7 +176,7 @@ h2_decode_frame_header(std::span<const std::byte, 9> in) noexcept {
  */
 inline int hpack_static_index(std::string_view name, std::string_view value = "") noexcept {
     // Partial static table covering method + common pseudo-headers
-    static constexpr std::pair<std::string_view, std::string_view> kTable[] = {
+    static constexpr std::array<std::pair<std::string_view, std::string_view>, 23> kTable = {{
         {"",                   ""},          // 0 unused
         {":authority",         ""},          // 1
         {":method",            "GET"},       // 2
@@ -200,8 +200,8 @@ inline int hpack_static_index(std::string_view name, std::string_view value = ""
         {"content-length",     ""},          // 28
         {"content-type",       ""},          // 31
         {"host",               ""},          // 38
-    };
-    for (int i = 1; i < static_cast<int>(std::size(kTable)); ++i) {
+    }};
+    for (int i = 1; i < static_cast<int>(kTable.size()); ++i) {
         if (kTable[i].first == name && (value.empty() || kTable[i].second == value))
             return i;
     }
@@ -285,7 +285,7 @@ struct Http2Response {
     int         status{0};     ///< HTTP status code (from :status pseudo-header)
     std::string headers;       ///< Raw decoded header block (name: value\r\n …)
     std::string body;          ///< Response body (full, accumulated DATA frames)
-    bool        ok() const noexcept { return status >= 200 && status < 300; }
+    [[nodiscard]] bool ok() const noexcept { return status >= 200 && status < 300; }
 };
 
 // ─── Http2Connection ─────────────────────────────────────────────────────────
@@ -327,7 +327,7 @@ public:
      * @param st Cancellation token.
      * @returns `Result<void>` — ok on success, error on write failure.
      */
-    [[nodiscard]] Task<Result<void>> handshake(std::stop_token st) {
+    [[nodiscard]] Task<Result<void>> handshake(const std::stop_token& st) {
         // Client connection preface (RFC 7540 §3.5)
         static constexpr std::string_view kPreface =
             "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n";
@@ -367,7 +367,7 @@ public:
      */
     [[nodiscard]] Task<Result<Http2Response>> get(
             std::string_view path,
-            std::stop_token st,
+            const std::stop_token& st,
             std::span<const std::pair<std::string,std::string>> hdrs = {}) {
         co_return co_await send_request("GET", path, st, {}, hdrs);
     }
@@ -384,7 +384,7 @@ public:
     [[nodiscard]] Task<Result<Http2Response>> post(
             std::string_view path,
             std::string_view body,
-            std::stop_token st,
+            const std::stop_token& st,
             std::span<const std::pair<std::string,std::string>> hdrs = {}) {
         co_return co_await send_request("POST", path, st, body, hdrs);
     }
@@ -400,7 +400,7 @@ private:
         std::vector<std::byte> payload;
     };
 
-    [[nodiscard]] Task<Result<H2Frame>> read_frame(std::stop_token st) {
+    [[nodiscard]] Task<Result<H2Frame>> read_frame(const std::stop_token& st) {
         // Read 9-byte frame header
         std::array<std::byte, 9> hdr_buf{};
         size_t got = 0;
@@ -438,7 +438,7 @@ private:
     }
 
     [[nodiscard]] Task<Result<size_t>> write_raw(
-            std::span<const std::byte> data, std::stop_token st) {
+            std::span<const std::byte> data, const std::stop_token& st) {
         size_t sent = 0;
         while (sent < data.size()) {
             if (st.stop_requested())
@@ -450,7 +450,7 @@ private:
         co_return sent;
     }
 
-    Task<void> send_settings(std::stop_token st) {
+    Task<void> send_settings(const std::stop_token& st) {
         // Empty SETTINGS frame (stream_id = 0)
         std::array<std::byte, 9> hdr{};
         h2_encode_frame_header(std::span<std::byte,9>(hdr), 0,
@@ -458,7 +458,7 @@ private:
         co_await write_raw(hdr, st);
     }
 
-    Task<void> send_settings_ack(std::stop_token st) {
+    Task<void> send_settings_ack(const std::stop_token& st) {
         std::array<std::byte, 9> hdr{};
         h2_encode_frame_header(std::span<std::byte,9>(hdr), 0,
                                H2FrameType::Settings, H2Flags::Ack, 0);
@@ -466,7 +466,7 @@ private:
     }
 
     Task<void> send_window_update(uint32_t stream_id, uint32_t increment,
-                                  std::stop_token st) {
+                                  const std::stop_token& st) {
         std::array<std::byte, 9 + 4> buf{};
         h2_encode_frame_header(std::span<std::byte>(buf).first<9>(), 4,
                                H2FrameType::WindowUpdate, 0, stream_id);
@@ -482,7 +482,7 @@ private:
     [[nodiscard]] Task<Result<Http2Response>> send_request(
             std::string_view method,
             std::string_view path,
-            std::stop_token st,
+            const std::stop_token& st,
             std::string_view req_body,
             std::span<const std::pair<std::string,std::string>> extra_hdrs) {
         uint32_t stream_id = next_stream_id_;

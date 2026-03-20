@@ -37,6 +37,7 @@
 
 #include <qbuem/common.hpp>
 
+#include <array>
 #include <cstdint>
 #include <cstring>
 #include <string_view>
@@ -199,15 +200,15 @@ static_assert(sizeof(Value) <= 32, "db::Value must fit in 32 bytes");
  */
 template <size_t N = 8>
 struct BoundParams {
-    Value   values[N]{};
+    std::array<Value, N> values{};
     uint8_t count{0};
 
     void bind(Value v) {
         if (count < N) values[count++] = v;
     }
 
-    std::span<const Value> span() const noexcept {
-        return {values, count};
+    [[nodiscard]] std::span<const Value> span() const noexcept {
+        return {values.data(), count};
     }
 };
 

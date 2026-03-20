@@ -334,7 +334,7 @@ public:
     [[nodiscard]] double hit_rate() const noexcept {
         uint64_t h = stats_.hits.load();
         uint64_t m = stats_.misses.load();
-        return (h + m) ? static_cast<double>(h) / static_cast<double>(h + m) : 0.0;
+        return ((h + m) != 0u) ? static_cast<double>(h) / static_cast<double>(h + m) : 0.0;
     }
 
     /** @brief Current number of occupied slots. */
