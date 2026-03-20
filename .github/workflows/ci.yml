@@ -1,0 +1,149 @@
+name: CI
+
+# Runs on every push and pull request (non-tag commits).
+# Validates that the library builds and all tests pass on both
+# supported Linux architectures.
+on:
+  push:
+    branches: ['**']
+    tags-ignore: ['v*']
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ── 1. Static analysis (clang-tidy) ─────────────────────────────────────────
+  analyze:
+    name: Static Analysis (clang-tidy)
+    runs-on: ubuntu-22.04
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y clang clang-tidy liburing-dev
+
+      - name: Configure (generate compile_commands.json)
+        run: |
+          cmake -B build \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_CXX_COMPILER=clang++ \
+            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+            -DQBUEM_BUILD_TESTS=OFF \
+            -DQBUEM_BUILD_EXAMPLES=OFF
+
+      # Build library targets so FetchContent headers are materialised and
+      # clang-tidy can resolve all includes.
+      - name: Materialise FetchContent headers
+        run: cmake --build build --target qbuem_core --target qbuem_http --target qbuem -j$(nproc) || true
+
+      - name: Run clang-tidy
+        run: |
+          run-clang-tidy \
+            -p build \
+            -config-file .clang-tidy \
+            -j$(nproc) \
+            $(find src -name '*.cpp' | sort)
+
+  # ── 2. Build & test (both Linux architectures) ───────────────────────────────
+  test:
+    name: Test / ${{ matrix.platform }}
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            platform: linux-x86_64
+          - os: ubuntu-24.04-arm
+            platform: linux-aarch64
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install liburing
+        run: sudo apt-get update -q && sudo apt-get install -y liburing-dev
+
+      - name: Configure
+        run: |
+          cmake -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DQBUEM_BUILD_TESTS=ON \
+            -DQBUEM_BUILD_EXAMPLES=OFF
+
+      - name: Build
+        run: cmake --build build -j$(nproc)
+
+      - name: Test
+        working-directory: build
+        run: ctest --output-on-failure -C Release
+
+  # ── 3. Verify install layout ─────────────────────────────────────────────────
+  # Ensures cmake --install produces a valid include-lib distribution tree
+  # (headers + static libs + CMake package config) for each architecture.
+  install-check:
+    name: Install Layout / ${{ matrix.platform }}
+    runs-on: ${{ matrix.os }}
+    needs: [test]
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            platform: linux-x86_64
+          - os: ubuntu-24.04-arm
+            platform: linux-aarch64
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install liburing
+        run: sudo apt-get update -q && sudo apt-get install -y liburing-dev
+
+      - name: Configure (tests + examples off — library only)
+        run: |
+          cmake -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DQBUEM_BUILD_TESTS=OFF \
+            -DQBUEM_BUILD_EXAMPLES=OFF
+
+      - name: Build
+        run: cmake --build build -j$(nproc)
+
+      - name: Install into dist/
+        run: cmake --install build --prefix dist
+
+      - name: Verify include-lib layout
+        run: |
+          echo "=== Install tree ==="
+          find dist -type f | sort
+
+          echo "=== Checking required paths ==="
+          test -d dist/include/qbuem          || (echo "FAIL: include/qbuem missing"  && exit 1)
+          test -f dist/include/qbuem/qbuem_stack.hpp \
+                                               || (echo "FAIL: umbrella header missing" && exit 1)
+          ls dist/lib/*.a > /dev/null 2>&1    || (echo "FAIL: no static libs in lib/"  && exit 1)
+          test -f dist/lib/cmake/qbuem-stack/qbuem-stack-config.cmake \
+                                               || (echo "FAIL: CMake config missing"   && exit 1)
+          echo "Install layout OK"
+
+      - name: Smoke-test find_package
+        run: |
+          mkdir smoke && cd smoke
+          cat > CMakeLists.txt <<'EOF'
+          cmake_minimum_required(VERSION 3.20)
+          project(smoke CXX)
+          set(CMAKE_CXX_STANDARD 23)
+          list(APPEND CMAKE_PREFIX_PATH "${CMAKE_CURRENT_SOURCE_DIR}/../dist")
+          find_package(qbuem-stack REQUIRED)
+          add_executable(smoke_test ../tests/reactor_test.cpp)
+          target_link_libraries(smoke_test PRIVATE qbuem-stack::qbuem)
+          EOF
+          cmake -B build_smoke -DCMAKE_BUILD_TYPE=Release 2>&1 | tail -20
+          echo "find_package smoke test OK (configure step)"

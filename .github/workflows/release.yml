@@ -1,6 +1,6 @@
 name: Release
 
-# Triggered by a version tag push: git tag v0.3.0 && git push origin v0.3.0
+# Triggered by a version tag push: git tag v1.2.3 && git push origin v1.2.3
 on:
   push:
     tags:
@@ -13,13 +13,21 @@ permissions:
 # Job graph:
 #
 #   analyze ──┐
-#             ├─► build/macos-arm64    ──┐
-#   test    ──┤   build/linux-x86_64   ──┼─► publish (single release upload)
+#             ├─► build/linux-x86_64   ──┐
+#   test    ──┤                           ├─► publish (single release upload)
 #             └─► build/linux-aarch64  ──┘
 #
-# Each build job saves its tarball as a GitHub Actions artifact.
-# The publish job downloads all three and creates the GitHub Release in one
-# shot — no race condition on the release body.
+# Supported distribution architectures:
+#   - linux-x86_64  (Ubuntu 22.04, glibc 2.35+)
+#   - linux-aarch64 (Ubuntu 24.04 ARM runner, glibc 2.39+)
+#
+# Each build job produces a self-contained include-lib tarball:
+#   include/   ← all public headers
+#   lib/       ← static archives (.a)
+#   lib/cmake/ ← CMake package config for find_package()
+#
+# The publish job downloads both tarballs and creates the GitHub Release in
+# one shot to avoid race conditions on the release body.
 # ============================================================================
 
 jobs:
@@ -58,7 +66,7 @@ jobs:
             -j$(nproc) \
             $(find src -name '*.cpp' | sort)
 
-  # ── 2. Test (all release platforms) ─────────────────────────────────────────
+  # ── 2. Test (both release architectures) ─────────────────────────────────────
   test:
     name: Test / ${{ matrix.platform }}
     runs-on: ${{ matrix.os }}
@@ -67,8 +75,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: macos-14
-            platform: macos-arm64
           - os: ubuntu-22.04
             platform: linux-x86_64
           - os: ubuntu-24.04-arm
@@ -77,8 +83,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install liburing (Linux)
-        if: runner.os == 'Linux'
+      - name: Install liburing
         run: sudo apt-get update -q && sudo apt-get install -y liburing-dev
 
       - name: Configure
@@ -89,13 +94,13 @@ jobs:
             -DQBUEM_BUILD_EXAMPLES=ON
 
       - name: Build
-        run: cmake --build build -j$(nproc 2>/dev/null || sysctl -n hw.logicalcpu)
+        run: cmake --build build -j$(nproc)
 
       - name: Test
         working-directory: build
         run: ctest --output-on-failure -C Release
 
-  # ── 3. Build release artifacts ───────────────────────────────────────────────
+  # ── 3. Build release artifacts (include-lib distribution) ────────────────────
   build:
     name: Build / ${{ matrix.platform }}
     runs-on: ${{ matrix.os }}
@@ -105,8 +110,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: macos-14
-            platform: macos-arm64
           - os: ubuntu-22.04
             platform: linux-x86_64
           - os: ubuntu-24.04-arm
@@ -115,36 +118,53 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install liburing (Linux)
-        if: runner.os == 'Linux'
+      - name: Install liburing
         run: sudo apt-get update -q && sudo apt-get install -y liburing-dev
 
-      - name: Configure
+      - name: Configure (library only — no tests, no examples)
         run: |
           cmake -B build \
             -DCMAKE_BUILD_TYPE=Release \
             -DQBUEM_BUILD_TESTS=OFF \
-            -DQBUEM_BUILD_EXAMPLES=OFF
+            -DQBUEM_BUILD_EXAMPLES=OFF \
+            -DQBUEM_BUILD_BENCH=OFF
 
       - name: Build
-        run: cmake --build build -j$(nproc 2>/dev/null || sysctl -n hw.logicalcpu)
+        run: cmake --build build -j$(nproc)
 
-      - name: Install
+      - name: Install into dist/ (include-lib layout)
         run: cmake --install build --prefix dist
 
-      - name: Package
+      - name: Verify include-lib layout
         run: |
-          ARCHIVE="qbuem-stack-${GITHUB_REF_NAME}-${{ matrix.platform }}.tar.gz"
+          test -d dist/include/qbuem \
+            || (echo "ERROR: include/qbuem directory missing" && exit 1)
+          test -f dist/include/qbuem/qbuem_stack.hpp \
+            || (echo "ERROR: umbrella header qbuem_stack.hpp missing" && exit 1)
+          ls dist/lib/*.a > /dev/null 2>&1 \
+            || (echo "ERROR: no static libraries (.a) found in dist/lib/" && exit 1)
+          test -f dist/lib/cmake/qbuem-stack/qbuem-stack-config.cmake \
+            || (echo "ERROR: CMake package config missing" && exit 1)
+          echo "Install layout verified:"
+          find dist -type f | sort
+
+      - name: Package as tarball
+        run: |
+          VERSION="${GITHUB_REF_NAME}"
+          ARCHIVE="qbuem-stack-${VERSION}-${{ matrix.platform }}.tar.gz"
           tar -czf "${ARCHIVE}" -C dist .
           echo "ARCHIVE=${ARCHIVE}" >> "$GITHUB_ENV"
+          sha256sum "${ARCHIVE}" > "${ARCHIVE}.sha256"
+          echo "SHA256:"
+          cat "${ARCHIVE}.sha256"
 
-      # Store tarball as a GitHub Actions artifact so the publish job can
-      # collect all three and upload them in a single release API call.
-      - name: Save artifact
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ env.ARCHIVE }}
-          path: ${{ env.ARCHIVE }}
+          path: |
+            ${{ env.ARCHIVE }}
+            ${{ env.ARCHIVE }}.sha256
           retention-days: 1
 
   # ── 4. Publish GitHub Release (single job — no race condition) ───────────────
@@ -158,36 +178,70 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           pattern: qbuem-stack-*
-          merge-multiple: true   # flatten into cwd
+          merge-multiple: true   # flatten all artifacts into cwd
 
       - name: List artifacts
-        run: ls -lh qbuem-stack-*.tar.gz
+        run: |
+          echo "=== Release artifacts ==="
+          ls -lh qbuem-stack-*.tar.gz
+          echo "=== Checksums ==="
+          cat qbuem-stack-*.sha256
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: qbuem-stack-*.tar.gz
+          files: |
+            qbuem-stack-*.tar.gz
+            qbuem-stack-*.sha256
           body: |
             ## qbuem-stack ${{ github.ref_name }}
 
-            ### Platforms
-            | Artifact | OS | Arch |
-            |----------|----|------|
-            | `qbuem-stack-*-macos-arm64.tar.gz`   | macOS 14     | Apple Silicon (arm64) |
-            | `qbuem-stack-*-linux-x86_64.tar.gz`  | Ubuntu 22.04 | x86-64 |
-            | `qbuem-stack-*-linux-aarch64.tar.gz` | Ubuntu 24.04 | AArch64 |
+            Zero Latency · Zero Allocation · Zero Dependency
+            C++23 high-performance infrastructure library.
 
-            ### Usage
-            Download the tarball for your platform, extract it, then:
+            ---
+
+            ### Distribution Packages
+
+            | Artifact | OS | Architecture |
+            |----------|----|--------------|
+            | `qbuem-stack-${{ github.ref_name }}-linux-x86_64.tar.gz`  | Ubuntu 22.04 (glibc 2.35+) | x86-64 |
+            | `qbuem-stack-${{ github.ref_name }}-linux-aarch64.tar.gz` | Ubuntu 24.04 (glibc 2.39+) | AArch64 |
+
+            Each tarball contains:
+            ```
+            include/qbuem/          ← all public headers (qbuem_stack.hpp umbrella)
+            lib/                    ← static archives (.a)
+            lib/cmake/qbuem-stack/  ← CMake package config for find_package()
+            ```
+
+            Verify integrity with the accompanying `.sha256` files:
+            ```bash
+            sha256sum -c qbuem-stack-${{ github.ref_name }}-linux-x86_64.tar.gz.sha256
+            ```
+
+            ---
+
+            ### Integration
+
+            Extract the tarball, then add to your CMake project:
 
             ```cmake
             list(APPEND CMAKE_PREFIX_PATH "/path/to/qbuem-stack-dist")
             find_package(qbuem-stack REQUIRED)
 
-            target_link_libraries(myapp PRIVATE qbuem-stack::qbuem)  # full (App + HTTP + core)
-            target_link_libraries(myapp PRIVATE qbuem-stack::http)   # HTTP + core
-            target_link_libraries(myapp PRIVATE qbuem-stack::core)   # reactor only
+            # Full stack (pipeline + HTTP + reactor + all extensions)
+            target_link_libraries(myapp PRIVATE qbuem-stack::qbuem)
+
+            # Selective components
+            target_link_libraries(myapp PRIVATE qbuem-stack::http)      # HTTP/1.1 only
+            target_link_libraries(myapp PRIVATE qbuem-stack::pipeline)  # pipeline only
+            target_link_libraries(myapp PRIVATE qbuem-stack::core)      # reactor only
             ```
 
-            > JSON 라이브러리는 포함되지 않습니다. 원하는 라이브러리(simdjson, nlohmann/json, glaze 등)를 직접 선택하여 `req.body()`를 파싱하세요.
+            > **Note:** JSON parsing is not bundled. Choose your preferred library
+            > (simdjson, nlohmann/json, glaze, etc.) and parse `req.body()` directly.
+
+            > **Requirements:** C++23 compiler (GCC 13+ or Clang 17+), CMake ≥ 3.20,
+            > `liburing-dev` on Linux for `io_uring` support.
           generate_release_notes: true
