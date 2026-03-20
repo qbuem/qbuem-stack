@@ -30,6 +30,7 @@
  */
 
 #include <qbuem/reactor/micro_ticker.hpp>
+#include <qbuem/core/epoll_reactor.hpp>
 #include <qbuem/qbuem_stack.hpp>
 
 #include <algorithm>
@@ -82,7 +83,7 @@ static void run_passive_baseline(TickStats& stats) {
     constexpr int    kIterations = 100;
     constexpr int    kTargetMs   = 1;
 
-    auto reactor = qbuem::create_reactor();
+    auto reactor = std::make_unique<qbuem::EpollReactor>();
     auto prev    = Clock::now();
 
     for (int i = 0; i < kIterations; ++i) {
@@ -122,12 +123,12 @@ static void run_reactor_driven(TickStats& stats) {
     constexpr uint64_t kIterations = 200;
     constexpr auto     kInterval   = 100us;
 
-    auto reactor = qbuem::create_reactor();
+    auto reactor = std::make_unique<qbuem::EpollReactor>();
     qbuem::MicroTicker ticker(kInterval);
 
     // Register a simple timer callback inside the reactor.
     std::atomic<uint64_t> reactor_fires{0};
-    reactor->schedule(10ms, [&reactor_fires] {
+    reactor->register_timer(10, [&reactor_fires](int) {
         ++reactor_fires;
     });
 

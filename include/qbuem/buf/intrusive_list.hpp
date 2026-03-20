@@ -73,6 +73,28 @@ public:
     IntrusiveList(const IntrusiveList&)            = delete;
     IntrusiveList& operator=(const IntrusiveList&) = delete;
 
+    // Move: transfer all nodes, re-link sentinel pointers to the new head.
+    IntrusiveList(IntrusiveList&& other) noexcept {
+        head_.next = &head_;
+        head_.prev = &head_;
+        *this = std::move(other);
+    }
+    IntrusiveList& operator=(IntrusiveList&& other) noexcept {
+        if (this == &other) return *this;
+        if (!other.empty()) {
+            head_.next          = other.head_.next;
+            head_.prev          = other.head_.prev;
+            head_.next->prev    = &head_;
+            head_.prev->next    = &head_;
+            other.head_.next    = &other.head_;
+            other.head_.prev    = &other.head_;
+        } else {
+            head_.next = &head_;
+            head_.prev = &head_;
+        }
+        return *this;
+    }
+
     // ── Capacity ─────────────────────────────────────────────────────────────
 
     [[nodiscard]] bool   empty() const noexcept { return head_.next == &head_; }
