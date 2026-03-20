@@ -90,7 +90,7 @@ The `MicroTicker` does not replace the `Reactor`; it **drives** it by calling `p
 #### Implementation Example
 ```cpp
 // 1. Initialize Reactor and MicroTicker (100us interval)
-auto reactor = qbuem::create_reactor();
+auto reactor = std::make_unique<qbuem::EpollReactor>();
 qbuem::MicroTicker ticker(100us);
 
 // 2. Drive the loop
@@ -174,6 +174,118 @@ graph LR
 
 > [!IMPORTANT]
 > **SIMD Verticality**: In 2.5D, we store 64 vertical layers in a single `uint64_t`. This allows "is there anything between floor 2 and 5?" to be answered by `(bitmap[idx] & mask_2_to_5) != 0` in **~1ns**.
+
+### Radius Queries (v3.4.0)
+
+`GridBitset` provides three Euclidean radius query methods using a **per-row
+sqrt extent** pattern — O(r) square-root calls, O(r²) SIMD cell checks:
+
+```cpp
+// Scan one row: compute half-width via sqrt, then call shared SIMD helper
+const int64_t r2 = static_cast<int64_t>(r) * r;
+for (int32_t ry = y_lo; ry <= y_hi; ++ry) {
+    const int64_t dy   = ry - icy;
+    const uint32_t half = static_cast<uint32_t>(std::sqrt(static_cast<double>(r2 - dy*dy)));
+    const uint32_t x_lo = clamp(icx - half, 0, W-1);
+    const uint32_t x_hi = clamp(icx + half, 0, W-1);
+    // AVX-512 / AVX2 / NEON / scalar via detail::scan_row_any()
+    if (detail::scan_row_any(cells_ + ry*W + x_lo, x_hi-x_lo+1, mask)) return true;
+}
+```
+
+The same `detail::scan_row_any()` and `detail::scan_row_count()` helpers are
+shared by `any_in_box`, `count_in_box`, and all radius variants, ensuring a
+single SIMD implementation path with no duplication.
+
+---
+
+## 6. TiledBitset<TileW, TileH, D> — Infinite Dynamic World
+
+`TiledBitset` extends `GridBitset` to an **unbounded coordinate space** by
+managing a map of `GridBitset` tiles. It is the natural choice for open-world
+games, GIS systems, warehouse AMR grids, and sensor occupancy maps where the
+world extent is unknown at compile time.
+
+### Architecture
+
+```
+World coordinate (int64_t wx, wy)
+        │
+        ▼  floor division
+Tile coordinate (int32_t tx, ty)  ──── uint64_t key = pack(tx, ty)
+        │                                    │
+        │              ┌─────────────────────▼──────────────────────┐
+        │              │    unordered_map<uint64_t, Tile, KeyHash>   │
+        │              │    (Murmur3 finalizer hash for tile keys)   │
+        │              └─────────────────────────────────────────────┘
+        │                         ▲
+        └── TLS 4-slot cache ─────┘
+             (instance_id + map_gen + tile_key)
+             miss → shared_mutex::lock_shared → map lookup
+```
+
+### TLS Cache Design
+
+Each thread keeps a circular 4-slot cache keyed on `(instance_id_, map_gen_,
+tile_key)`. The cache is checked before any lock is acquired:
+
+```cpp
+struct TLSEntry {
+    uint64_t instance_id{~0ULL};  // prevents collisions across TiledBitset instances
+    uint32_t gen{~0u};            // invalidated when a tile is added or evicted
+    uint64_t key{~0ULL};
+    Tile*    ptr{nullptr};
+};
+thread_local TLSEntry cache[4];
+thread_local uint32_t next{0u};
+```
+
+The `instance_id_` is a monotone atomic counter incremented at each
+`TiledBitset` construction. This prevents the cache from returning a stale
+tile pointer when the allocator reuses a heap address for a new instance.
+
+### Cross-Tile Queries
+
+Row-level queries split at `TileW` boundaries:
+
+```
+world row wy spanning tiles (tx=0, tx=1, tx=2):
+
+  |← TileW ←|← TileW ←|← remainder →|
+  [  tile 0 ][  tile 1 ][   tile 2   ]
+  ↑          ↑          ↑
+  scan seg 0  scan seg 1  scan seg 2
+```
+
+Each segment is passed to `detail::scan_row_any()` / `detail::scan_row_count()`
+so the same AVX-512/AVX2/NEON SIMD code is reused.
+
+### Memory Management
+
+```cpp
+TiledBitset<256, 256, 16> world;
+
+// Each tile = sizeof(GridBitset<256,256,16>) = 256*256*8 = 512 KiB
+auto stats = world.memory_stats();
+// stats.tile_count, stats.allocated_bytes
+
+// Evict tiles where for_each_set finds no occupied cells
+size_t freed = world.evict_empty_tiles();
+```
+
+`evict_empty_tiles()` acquires a `unique_lock` and increments `map_gen_`,
+invalidating all TLS cache entries. It should be called infrequently (e.g.,
+after a zone despawn), not on the hot path.
+
+### Thread Safety
+
+| Operation | Mechanism |
+|-----------|-----------|
+| `test` / `snapshot` (TLS hit) | Wait-free |
+| `test` / `snapshot` (TLS miss) | `shared_lock` |
+| `set` / `clear` (tile exists, TLS hit) | Atomic `fetch_or` / `fetch_and` — wait-free |
+| `set` (tile missing — create) | `unique_lock` |
+| `evict_empty_tiles()` | `unique_lock` |
 
 ---
 
