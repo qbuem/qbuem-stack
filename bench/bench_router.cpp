@@ -19,7 +19,7 @@
 #include <qbuem/http/request.hpp>
 #include <qbuem/http/router.hpp>
 
-#include <print>
+#include <qbuem/compat/print.hpp>
 #include <string>
 #include <unordered_map>
 #include <vector>

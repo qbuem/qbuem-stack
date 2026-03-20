@@ -55,7 +55,7 @@
 #include <cstdint>
 #include <cstring>
 #include <format>
-#include <print>
+#include <qbuem/compat/print.hpp>
 #include <span>
 #include <string_view>
 

@@ -1,38 +1,38 @@
 # SHM Messaging: Zero-copy Inter-Process Communication
 
-`qbuem-stack`의 공유 메모리(SHM) 메시징 인프라에 대한 상세 엔지니어링 가이드입니다.
-실제 구현 기반의 API 레퍼런스와 Pipeline 연계 패턴을 다룹니다.
+A detailed engineering guide to the shared memory (SHM) messaging infrastructure of `qbuem-stack`.
+Covers the API reference based on the actual implementation and Pipeline integration patterns.
 
 ---
 
-## 1. 메시징 계층 아키텍처
+## 1. Messaging Layer Architecture
 
-qbuem-stack은 세 가지 독립적인 메시징 레이어를 제공하며, 이들은 Pipeline 브릿지 어댑터를 통해 완전히 연계됩니다.
+qbuem-stack provides three independent messaging layers, all fully interconnected via Pipeline bridge adapters.
 
-| 레이어 | 구현체 | 스코프 | 레이턴시 (p99) | 주요 특성 |
+| Layer | Implementation | Scope | Latency (p99) | Key Characteristics |
 | :--- | :--- | :--- | :--- | :--- |
-| **MessageBus** | `AsyncChannel<T>` (내부) | 프로세스 내 (intra-process) | < 50ns | `std::any` 타입 소거, 토픽 기반 pub/sub, fan-out |
-| **SHMBus (LOCAL_ONLY)** | `AsyncChannel<T>` | 프로세스 내 | < 50ns | `SHMBus::declare<T>()` 통합 API |
-| **SHMBus (SYSTEM_WIDE)** | `SHMChannel<T>` | 프로세스 간 (inter-process) | < 150ns | POSIX SHM (`shm_open`+`mmap`), lock-free MPMC |
-| **SHMChannel (직접)** | `SHMChannel<T>` | 프로세스 간 | < 150ns | 최저 레이턴시, `trivially_copyable` 요건 |
+| **MessageBus** | `AsyncChannel<T>` (internal) | Intra-process | < 50ns | `std::any` type erasure, topic-based pub/sub, fan-out |
+| **SHMBus (LOCAL_ONLY)** | `AsyncChannel<T>` | Intra-process | < 50ns | `SHMBus::declare<T>()` unified API |
+| **SHMBus (SYSTEM_WIDE)** | `SHMChannel<T>` | Inter-process | < 150ns | POSIX SHM (`shm_open`+`mmap`), lock-free MPMC |
+| **SHMChannel (direct)** | `SHMChannel<T>` | Inter-process | < 150ns | Lowest latency, `trivially_copyable` requirement |
 
 ---
 
 ## 2. SHMChannel\<T\>
 
-### 2.1 개요
+### 2.1 Overview
 
-`SHMChannel<T>`는 POSIX 공유 메모리 위에서 동작하는 lock-free Vyukov MPMC ring buffer입니다.
+`SHMChannel<T>` is a lock-free Vyukov MPMC ring buffer operating on top of POSIX shared memory.
 
 ```
 namespace qbuem::shm
 ```
 
-**핵심 제약사항**: `T`는 `std::is_trivially_copyable_v<T>`를 만족해야 합니다.
-`std::string`, `std::vector` 등 heap을 포함하는 타입은 사용 불가합니다.
+**Core constraint**: `T` must satisfy `std::is_trivially_copyable_v<T>`.
+Types that involve heap allocation, such as `std::string` or `std::vector`, cannot be used.
 
 ```cpp
-// ✅ 올바른 예: 고정 크기 POD
+// ✅ Correct: fixed-size POD
 struct SensorReading {
     uint64_t timestamp_ns;
     float    value;
@@ -40,23 +40,23 @@ struct SensorReading {
 };
 static_assert(std::is_trivially_copyable_v<SensorReading>);
 
-// ✅ 문자열이 필요한 경우: 고정 크기 배열 사용
+// ✅ When strings are needed: use fixed-size arrays
 struct RawOrder {
     uint64_t order_id;
-    char     symbol[16];  // std::string 불가 — SHM 요건
+    char     symbol[16];  // std::string not allowed — SHM requirement
     double   price;
     int      qty;
 };
 static_assert(std::is_trivially_copyable_v<RawOrder>);
 
-// ❌ 잘못된 예: SHM에서 사용 불가
+// ❌ Incorrect: cannot be used in SHM
 struct BadMsg {
-    std::string name;   // static_assert 실패
+    std::string name;   // static_assert fails
     std::vector<int> data;
 };
 ```
 
-### 2.2 API 레퍼런스
+### 2.2 API Reference
 
 ```cpp
 template <typename T>
@@ -64,88 +64,88 @@ class SHMChannel {
 public:
     using Ptr = std::shared_ptr<SHMChannel<T>>;
 
-    // ── 생성 / 열기 ──────────────────────────────────────────────────────
+    // ── Create / Open ─────────────────────────────────────────────────────
 
-    /// Producer 측: SHM 세그먼트를 새로 생성합니다.
-    /// @param name     채널 이름 (예: "trading.raw_orders")
-    /// @param capacity 링버퍼 슬롯 수 (2의 거듭제곱 권장)
+    /// Producer side: creates a new SHM segment.
+    /// @param name     Channel name (e.g., "trading.raw_orders")
+    /// @param capacity Number of ring buffer slots (power of two recommended)
     static Result<Ptr> create(std::string_view name, size_t capacity) noexcept;
 
-    /// Consumer 측: 기존 SHM 세그먼트를 엽니다.
+    /// Consumer side: opens an existing SHM segment.
     static Result<Ptr> open(std::string_view name) noexcept;
 
-    /// SHM 이름을 파일시스템에서 제거합니다 (멱등 — ENOENT → ok).
-    /// 모든 핸들이 close()된 뒤 실제 메모리가 해제됩니다.
+    /// Removes the SHM name from the filesystem (idempotent — ENOENT → ok).
+    /// Actual memory is released by the kernel after all handles are close()d.
     static Result<void> unlink(std::string_view name) noexcept;
 
-    // ── 생산자 API ───────────────────────────────────────────────────────
+    // ── Producer API ─────────────────────────────────────────────────────
 
-    /// 메시지 전송 (슬롯 포화 시 co_await 백프레셔).
+    /// Send a message (co_await backpressure when slots are saturated).
     Task<Result<void>> send(const T& msg) noexcept;
 
-    /// 논블로킹 송신 시도. 실패 시 false 반환.
+    /// Non-blocking send attempt. Returns false on failure.
     bool try_send(const T& msg) noexcept;
 
-    // ── 소비자 API ───────────────────────────────────────────────────────
+    // ── Consumer API ─────────────────────────────────────────────────────
 
-    /// 메시지 수신 (zero-copy — DataArena 직접 포인터 반환).
-    /// 다음 recv() 호출 전까지 포인터 유효.
+    /// Receive a message (zero-copy — returns a direct DataArena pointer).
+    /// Pointer is valid until the next recv() call.
     Task<std::optional<const T*>> recv() noexcept;
 
-    /// 논블로킹 수신 시도.
+    /// Non-blocking receive attempt.
     std::optional<const T*> try_recv() noexcept;
 
-    // ── 라이프사이클 ─────────────────────────────────────────────────────
+    // ── Lifecycle ────────────────────────────────────────────────────────
 
-    void close() noexcept;       ///< Draining 상태로 전환
+    void close() noexcept;       ///< Transition to draining state
     bool is_open() const noexcept;
     size_t size() const noexcept;
 };
 ```
 
-### 2.3 메모리 구조 (세그먼트 레이아웃)
+### 2.3 Memory Layout (Segment Layout)
 
 ```
 [Control Header (64B, cache-line aligned)]
-  ├─ atomic<u64> tail     — 생산자 커밋 인덱스
-  ├─ atomic<u64> head     — 소비자 소비 인덱스
-  ├─ u32 capacity         — 링버퍼 슬롯 수
+  ├─ atomic<u64> tail     — producer commit index
+  ├─ atomic<u64> head     — consumer consumption index
+  ├─ u32 capacity         — number of ring buffer slots
   ├─ u32 magic            — 0x5142554D ("QBUM")
   └─ atomic<u32> state    — bit0: Active, bit1: Draining
 
 [Slot Ring (capacity × sizeof(Slot))]
-  각 Slot: Vyukov sequence (atomic<u64>) + payload (T)
+  Each Slot: Vyukov sequence (atomic<u64>) + payload (T)
 
 [Padding to page boundary]
 ```
 
-### 2.4 사용 예시
+### 2.4 Usage Example
 
 ```cpp
 #include <qbuem/shm/shm_channel.hpp>
 using namespace qbuem;
 using namespace qbuem::shm;
 
-// Producer 프로세스
+// Producer process
 auto chan = SHMChannel<SensorReading>::create("sensors.temp", 1024);
 co_await (*chan)->send(SensorReading{timestamp_ns(), 37.5f, 1});
 
-// Consumer 프로세스
+// Consumer process
 auto chan = SHMChannel<SensorReading>::open("sensors.temp");
 auto msg = co_await (*chan)->recv();
 if (msg) process(**msg);
 
-// 종료 시 정리
+// Cleanup on shutdown
 (*chan)->close();
-SHMChannel<SensorReading>::unlink("sensors.temp");  // 멱등
+SHMChannel<SensorReading>::unlink("sensors.temp");  // idempotent
 ```
 
 ---
 
 ## 3. SHMBus
 
-`SHMBus`는 여러 토픽을 하나의 인터페이스로 관리하는 통합 메시지 버스입니다.
-최대 64개 토픽, `TopicScope`로 로컬/시스템 전역 전환.
+`SHMBus` is a unified message bus that manages multiple topics through a single interface.
+Supports up to 64 topics, with `TopicScope` for switching between local and system-wide scope.
 
 ```
 namespace qbuem::shm
@@ -156,38 +156,38 @@ enum class TopicScope { LOCAL_ONLY, SYSTEM_WIDE };
 
 class SHMBus {
 public:
-    // 토픽 선언
+    // Declare a topic
     template <typename T>
     void declare(std::string_view name, TopicScope scope, size_t capacity = 256);
 
-    // 발행 (try_publish: 논블로킹)
+    // Publish (try_publish: non-blocking)
     template <typename T>
     bool try_publish(std::string_view name, const T& msg);
 
-    // 구독 (ISubscription::recv() → co_await)
+    // Subscribe (ISubscription::recv() → co_await)
     template <typename T>
     std::unique_ptr<ISubscription<T>> subscribe(std::string_view name);
 };
 ```
 
-### 3.1 TopicScope 선택 기준
+### 3.1 TopicScope Selection Criteria
 
-| 상황 | 권장 Scope |
+| Situation | Recommended Scope |
 | :--- | :--- |
-| 동일 프로세스 내 스레드 간 통신 | `LOCAL_ONLY` (AsyncChannel 백엔드) |
-| 별도 프로세스 간 통신 | `SYSTEM_WIDE` (SHMChannel 백엔드) |
-| 마이크로서비스 IPC | `SYSTEM_WIDE` |
+| Communication between threads within the same process | `LOCAL_ONLY` (AsyncChannel backend) |
+| Communication between separate processes | `SYSTEM_WIDE` (SHMChannel backend) |
+| Microservice IPC | `SYSTEM_WIDE` |
 
 ---
 
-## 4. Pipeline 브릿지 어댑터
+## 4. Pipeline Bridge Adapters
 
-Pipeline과 메시징 레이어를 연결하는 어댑터 클래스들입니다.
+Adapter classes that connect the Pipeline to the messaging layers.
 
 ### 4.1 SHMSource\<T\> / SHMSink\<T\>
 
-`SHMChannel<T>`를 Pipeline Source/Sink로 사용합니다.
-`include/qbuem/shm/shm_bus.hpp`에 정의되어 있습니다.
+Uses `SHMChannel<T>` as a Pipeline Source/Sink.
+Defined in `include/qbuem/shm/shm_bus.hpp`.
 
 ```
 namespace qbuem::shm
@@ -197,9 +197,9 @@ namespace qbuem::shm
 template <typename T>
 class SHMSource {
 public:
-    explicit SHMSource(std::string_view channel_name);  // 이름 소유 (std::string)
-    Result<void> init() noexcept;                       // SHMChannel<T>::open() 호출
-    Task<std::optional<const T*>> next();               // recv() 위임
+    explicit SHMSource(std::string_view channel_name);  // owns the name (std::string)
+    Result<void> init() noexcept;                       // calls SHMChannel<T>::open()
+    Task<std::optional<const T*>> next();               // delegates to recv()
     void close();
 };
 
@@ -207,17 +207,17 @@ template <typename T>
 class SHMSink {
 public:
     explicit SHMSink(std::string_view channel_name, size_t capacity = 1024);
-    Result<void> init() noexcept;           // SHMChannel<T>::create() 호출
-    Task<Result<void>> sink(const T& msg);  // send() 위임
+    Result<void> init() noexcept;           // calls SHMChannel<T>::create()
+    Task<Result<void>> sink(const T& msg);  // delegates to send()
 };
 ```
 
-> **주의**: `name_` 멤버는 `std::string`으로 소유합니다 (`std::string_view` 사용 시 임시 객체에서 dangling).
+> **Note**: The `name_` member is owned as `std::string` (using `std::string_view` would cause dangling from temporaries).
 
 ### 4.2 MessageBusSource\<T\> / MessageBusSink\<T\>
 
-`MessageBus` 토픽을 Pipeline Source/Sink로 사용합니다.
-`include/qbuem/pipeline/message_bus.hpp`에 정의되어 있습니다.
+Uses `MessageBus` topics as a Pipeline Source/Sink.
+Defined in `include/qbuem/pipeline/message_bus.hpp`.
 
 ```
 namespace qbuem
@@ -228,8 +228,8 @@ template <typename T>
 class MessageBusSource {
 public:
     MessageBusSource(MessageBus& bus, std::string topic, size_t cap = 256);
-    Result<void> init() noexcept;               // bus.subscribe_stream<T>() 호출
-    Task<std::optional<const T*>> next();       // stream recv, 값은 buf_에 저장
+    Result<void> init() noexcept;               // calls bus.subscribe_stream<T>()
+    Task<std::optional<const T*>> next();       // stream recv, value stored in buf_
     void close();
 };
 
@@ -237,44 +237,44 @@ template <typename T>
 class MessageBusSink {
 public:
     MessageBusSink(MessageBus& bus, std::string topic);
-    Result<void> init() noexcept;                    // no-op (항상 ok)
+    Result<void> init() noexcept;                    // no-op (always ok)
     Task<Result<void>> sink(const T& msg);           // bus.publish(topic_, msg)
 };
 ```
 
 ### 4.3 PipelineBuilder::with_source() / with_sink()
 
-`PipelineBuilder`에서 직접 어댑터를 연결합니다.
-`include/qbuem/pipeline/static_pipeline.hpp`에 구현되어 있습니다.
+Connect adapters directly in `PipelineBuilder`.
+Implemented in `include/qbuem/pipeline/static_pipeline.hpp`.
 
 ```cpp
-// Source 요건: init() → Result<void>, next() → Task<optional<const T*>>
+// Source requirement: init() → Result<void>, next() → Task<optional<const T*>>
 template <typename SourceT>
 PipelineBuilder<OrigIn, CurOut> with_source(SourceT src, size_t cap = 256);
 
-// Sink 요건: init() → Result<void>, sink(const T&) → Task<Result<void>>
+// Sink requirement: init() → Result<void>, sink(const T&) → Task<Result<void>>
 template <typename SinkT>
 PipelineBuilder<OrigIn, CurOut> with_sink(SinkT snk);
 ```
 
-**동작 원리:**
-- `with_source()`: 내부 `AsyncChannel`을 생성하고 `head_=tail_=src_ch`로 설정. 소스 펌프 코루틴이 `src.next()` → `src_ch.send()` 루프를 실행.
-- `with_sink()`: 현재 `tail_` 채널을 캡처. drain 코루틴이 `drain_ch.recv()` → `snk.sink()` 루프를 실행.
+**How it works:**
+- `with_source()`: Creates an internal `AsyncChannel` and sets `head_=tail_=src_ch`. A source pump coroutine runs the `src.next()` → `src_ch.send()` loop.
+- `with_sink()`: Captures the current `tail_` channel. A drain coroutine runs the `drain_ch.recv()` → `snk.sink()` loop.
 
 ---
 
-## 5. 완전 연계 패턴
+## 5. Full Integration Patterns
 
-### 5.1 SHMChannel → Pipeline → MessageBus (단방향 체인)
+### 5.1 SHMChannel → Pipeline → MessageBus (One-Way Chain)
 
 ```
-[외부 Producer 프로세스]
+[External Producer Process]
     ↓ SHMChannel<RawOrder> ("trading.raw")
 [SHMSource] → PipelineBuilder::with_source()
     ↓ stage_parse → stage_enrich → stage_validate
 [MessageBusSink] → PipelineBuilder::with_sink()
     ↓ MessageBus topic("validated_orders")
-[구독자 1, 2, 3 ...]
+[Subscriber 1, 2, 3 ...]
 ```
 
 ```cpp
@@ -295,17 +295,17 @@ auto pipeline = PipelineBuilder<RawOrder, RawOrder>{}
 pipeline.start(dispatcher);
 ```
 
-### 5.2 MessageBus → Pipeline → MessageBus (이중 버스 릴레이)
+### 5.2 MessageBus → Pipeline → MessageBus (Dual Bus Relay)
 
 ```cpp
-// Stage 1: 전처리 파이프라인
+// Stage 1: Pre-processing pipeline
 auto stage1 = PipelineBuilder<RawOrder, RawOrder>{}
     .add<ParsedOrder>(stage_parse)
     .add<ValidatedOrder>(stage_validate)
     .with_sink(MessageBusSink<ValidatedOrder>(bus, "stage1_out"))
     .build();
 
-// Stage 2: 후처리 파이프라인 (MessageBusSource로 Stage 1 출력 수신)
+// Stage 2: Post-processing pipeline (receives Stage 1 output via MessageBusSource)
 auto stage2 = PipelineBuilder<ValidatedOrder, ValidatedOrder>{}
     .with_source(MessageBusSource<ValidatedOrder>(bus, "stage1_out"))
     .add<ValidatedOrder>(stage_risk_check)
@@ -316,7 +316,7 @@ stage1.start(dispatcher);
 stage2.start(dispatcher);
 ```
 
-### 5.3 SHMBus (LOCAL_ONLY) → Pipeline 수동 브릿지
+### 5.3 SHMBus (LOCAL_ONLY) → Pipeline Manual Bridge
 
 ```cpp
 SHMBus shm_bus;
@@ -327,7 +327,7 @@ auto pipeline = PipelineBuilder<RawOrder, RawOrder>{}
     .build();
 pipeline.start(dispatcher);
 
-// SHMBus 구독 → pipeline.push() 브릿지
+// SHMBus subscription → pipeline.push() bridge
 auto sub = shm_bus.subscribe<RawOrder>("shm.orders");
 dispatcher.spawn([&, s = std::move(sub)]() mutable -> Task<void> {
     for (;;) {
@@ -337,42 +337,42 @@ dispatcher.spawn([&, s = std::move(sub)]() mutable -> Task<void> {
     }
 }());
 
-// 발행
+// Publish
 shm_bus.try_publish("shm.orders", RawOrder{1001, "SAMSUNG", 72500.0, 10});
 ```
 
 ---
 
-## 6. trivially_copyable 제약과 대응 패턴
+## 6. trivially_copyable Constraint and Workaround Patterns
 
-`SHMChannel<T>`는 컴파일 타임에 `static_assert(std::is_trivially_copyable_v<T>)`를 수행합니다.
+`SHMChannel<T>` performs `static_assert(std::is_trivially_copyable_v<T>)` at compile time.
 
-| 필요 데이터 | SHM 타입 | Pipeline 내부 타입 | 변환 위치 |
+| Required Data | SHM Type | Pipeline Internal Type | Conversion Point |
 | :--- | :--- | :--- | :--- |
-| 문자열 | `char symbol[16]` | `std::string` | 첫 번째 Pipeline 스테이지 |
-| 가변 길이 배열 | `float data[64]` | `std::vector<float>` | 첫 번째 Pipeline 스테이지 |
-| 복잡한 구조체 | ID만 포함 | 풀 구조체 | `ServiceRegistry` 조회 |
+| String | `char symbol[16]` | `std::string` | First Pipeline stage |
+| Variable-length array | `float data[64]` | `std::vector<float>` | First Pipeline stage |
+| Complex struct | ID only | Full struct | `ServiceRegistry` lookup |
 
 ```cpp
-// SHM 전용 타입 (trivially copyable)
+// SHM-only type (trivially copyable)
 struct RawOrder {
     uint64_t order_id;
-    char     symbol[16];   // std::string 불가
+    char     symbol[16];   // std::string not allowed
     double   price;
     int      qty;
 };
 static_assert(std::is_trivially_copyable_v<RawOrder>);
 
-// Pipeline 내부 타입 (일반 C++ 타입)
+// Pipeline internal type (standard C++ types)
 struct ParsedOrder {
     uint64_t    order_id;
-    std::string symbol;    // std::string 사용 가능
+    std::string symbol;    // std::string is usable here
     double      price;
     int         qty;
     bool        valid;
 };
 
-// 변환 스테이지 (첫 번째 add())
+// Conversion stage (first add())
 Task<Result<ParsedOrder>> stage_parse(RawOrder raw, ActionEnv) {
     ParsedOrder p;
     p.symbol = std::string(raw.symbol);  // char[16] → std::string
@@ -383,50 +383,50 @@ Task<Result<ParsedOrder>> stage_parse(RawOrder raw, ActionEnv) {
 
 ---
 
-## 7. SHMChannel 정리 (unlink)
+## 7. SHMChannel Cleanup (unlink)
 
-`SHMChannel<T>::unlink()`은 SHM 세그먼트의 파일시스템 이름을 제거합니다.
+`SHMChannel<T>::unlink()` removes the filesystem name of the SHM segment.
 
-- **멱등**: 이미 존재하지 않는 이름이면 `ok()` 반환 (ENOENT → 성공 처리)
-- **실제 메모리 해제**: 모든 프로세스가 `close()`한 뒤 커널이 메모리 해제
-- **`/dev/shm` 정리**: crash 후 남은 세그먼트를 안전하게 제거
+- **Idempotent**: Returns `ok()` if the name does not exist (ENOENT → treated as success)
+- **Actual memory release**: The kernel releases the memory after all processes have called `close()`
+- **`/dev/shm` cleanup**: Safely removes segments left behind after a crash
 
 ```cpp
-// 단일 정리 (멱등이므로 반복 호출 안전)
+// Single cleanup (safe to call repeatedly due to idempotency)
 SHMChannel<SensorReading>::unlink("sensors.temp");
 
-// 애플리케이션 시작 시 잔여 세그먼트 초기화 패턴
+// Pattern for clearing residual segments at application startup
 const char* names[] = {"trading.raw", "trading.validated"};
 for (auto n : names) {
-    SHMChannel<RawOrder>::unlink(n);   // ENOENT → ok, 오류 무시
+    SHMChannel<RawOrder>::unlink(n);   // ENOENT → ok, errors ignored
 }
 ```
 
 ---
 
-## 8. 신뢰성 & 오류 처리
+## 8. Reliability & Error Handling
 
-| 상황 | 동작 |
+| Situation | Behavior |
 | :--- | :--- |
-| Producer crash (쓰기 중) | Consumer: `recv()` 반환값 검증, Sequence 불일치 → 슬롯 스킵 |
-| Consumer 지연 (backpressure) | `send()` co_await 대기 (채널 포화 시 자동 백프레셔) |
-| `try_send()` 채널 포화 | `false` 반환 — 호출자가 처리 결정 |
-| SHM 세그먼트 없음 (`open()`) | `Result::error()` 반환 |
-| `unlink()` 이미 삭제됨 | `ok()` 반환 (멱등) |
-| `SHMSource::init()` 실패 | `with_source()` 펌프 코루틴 시작 안 함 (무음 처리) |
+| Producer crash (during write) | Consumer: validate `recv()` return value; sequence mismatch → skip slot |
+| Consumer lag (backpressure) | `send()` co_await blocks (automatic backpressure when channel is saturated) |
+| `try_send()` channel saturated | Returns `false` — caller decides how to handle |
+| SHM segment not found (`open()`) | Returns `Result::error()` |
+| `unlink()` already deleted | Returns `ok()` (idempotent) |
+| `SHMSource::init()` failure | `with_source()` pump coroutine does not start (silent handling) |
 
 ---
 
-## 9. 성능 특성
+## 9. Performance Characteristics
 
-| 지표 | 값 |
+| Metric | Value |
 | :--- | :--- |
-| **IPC 레이턴시** | < 150ns (Producer commit → Consumer wake) |
-| **처리량** | 5M+ msg/s (소형 페이로드) |
-| **hot-path 힙 할당** | 0 (DataArena 직접 접근) |
-| **최대 토픽 수 (SHMBus)** | 64 |
-| **`T` 크기 제한** | 실용적으로 슬롯 크기 이하 (`sizeof(T)` 권장 ≤ 256B) |
+| **IPC latency** | < 150ns (Producer commit → Consumer wake) |
+| **Throughput** | 5M+ msg/s (small payloads) |
+| **Hot-path heap allocation** | 0 (direct DataArena access) |
+| **Max topics (SHMBus)** | 64 |
+| **`T` size limit** | Practically at or below slot size (`sizeof(T)` recommended ≤ 256B) |
 
 ---
 
-*qbuem-stack SHM Messaging — 프로세스 경계를 넘는 zero-copy 메시징.*
+*qbuem-stack SHM Messaging — zero-copy messaging across process boundaries.*

@@ -20,7 +20,7 @@
 
 #include <cstdlib>
 #include <new>
-#include <print>
+#include <qbuem/compat/print.hpp>
 #include <vector>
 
 // ─── Arena allocation benchmark ──────────────────────────────────────────────

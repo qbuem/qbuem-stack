@@ -46,9 +46,28 @@
  * On x86 with BMI2 (`-mbmi2`), `_pdep_u32` interleaves in O(1).
  * A portable fallback is compiled otherwise.
  *
+ * ### Game-Ready API Extensions
+ * Both `GridBitset` and `GridBitset2D` expose a uniform set of APIs designed
+ * for game and simulation workloads:
+ *
+ * | API | Description |
+ * |-----|-------------|
+ * | `toggle(x,y[,layer])` | XOR-flip one bit — doors, switches, destructibles |
+ * | `lowest_layer / highest_layer` | Ground/ceiling detection (BSF/CLZ, ~1 ns) |
+ * | `count_layers / count_all` | Population counts (POPCNT) |
+ * | `any_in_column` | Broad-phase: any obstacle at (x,y)? |
+ * | `for_each_set[_in_box]` | Iterate occupied cells with sparse-skip |
+ * | `merge_from` | OR — union two grids (spawn, merge zones) |
+ * | `intersect_with` | AND — shared visibility, overlap detection |
+ * | `diff_from` | AND-NOT — remove destroyed obstacles |
+ * | `clear_box` | Bulk-clear a rectangular region |
+ * | `raycast / raycast_2d` | Bresenham DDA line-of-sight / bullet trace |
+ *
  * ### Thread Safety
- * - Reads (`test`, `any_in_range`, `snapshot`, `any_in_box`) are wait-free.
- * - Writes (`set`, `clear`, `set_column`) use `fetch_or`/`fetch_and`
+ * - Reads (`test`, `any_in_range`, `snapshot`, `any_in_box`, `for_each_set`,
+ *   `raycast`, `raycast_2d`, `lowest_layer`, `highest_layer`, `count_*`) are wait-free.
+ * - Writes (`set`, `clear`, `toggle`, `merge_from`, `diff_from`,
+ *   `intersect_with`, `clear_box`) use `fetch_or`/`fetch_and`/`fetch_xor`
  *   (`memory_order_release` / `memory_order_acquire`).
  * - Multiple writers to different cells are fully safe.
  * - Concurrent write + read of the **same cell** is safe (atomic).
@@ -72,6 +91,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <optional>
 #include <type_traits>
 
 // ── BMI2 detection ────────────────────────────────────────────────────────────
@@ -349,6 +369,285 @@ public:
         return count;
     }
 
+    // ── Atomic bit flip ───────────────────────────────────────────────────────
+
+    /**
+     * @brief Atomically toggle a single layer bit (XOR).
+     *
+     * Useful for toggling doors, switches, destructible terrain, etc.
+     * @param x     Column index [0, W).
+     * @param y     Row index    [0, H).
+     * @param layer Vertical layer [0, D).
+     * @returns true if the bit is now set (after the toggle).
+     */
+    bool toggle(uint32_t x, uint32_t y, uint32_t layer) noexcept {
+        assert(x < W && y < H && layer < D);
+        const uint64_t bit  = uint64_t{1} << layer;
+        const uint64_t prev = cells_[flat(x, y)].fetch_xor(bit,
+                                                            std::memory_order_acq_rel);
+        return (prev & bit) == 0u; // true = bit is now SET
+    }
+
+    // ── Column-level queries ──────────────────────────────────────────────────
+
+    /**
+     * @brief Test whether any layer is occupied at (x, y). ~1 ns.
+     *
+     * Equivalent to `snapshot(x, y) != 0`. Useful for broad-phase checks
+     * before a more specific `any_in_range`.
+     */
+    [[nodiscard]] bool any_in_column(uint32_t x, uint32_t y) const noexcept {
+        assert(x < W && y < H);
+        return cells_[flat(x, y)].load(std::memory_order_acquire) != 0u;
+    }
+
+    /**
+     * @brief Return the index of the lowest (ground-nearest) occupied layer.
+     *
+     * Returns D if no layer is set (no floor detected).
+     * Uses `std::countr_zero` — single BSF/TZCNT instruction on x86/AArch64.
+     *
+     * @param x Column [0, W). @param y Row [0, H).
+     * @returns Layer index in [0, D), or D if the column is empty.
+     */
+    [[nodiscard]] uint32_t lowest_layer(uint32_t x, uint32_t y) const noexcept {
+        assert(x < W && y < H);
+        const uint64_t snap = cells_[flat(x, y)].load(std::memory_order_acquire)
+                              & kLayerMask;
+        return snap ? static_cast<uint32_t>(std::countr_zero(snap)) : D;
+    }
+
+    /**
+     * @brief Return the index of the highest (ceiling-nearest) occupied layer.
+     *
+     * Returns D if no layer is set.
+     * Uses `std::countl_zero` — single BSR/CLZ instruction.
+     *
+     * @param x Column [0, W). @param y Row [0, H).
+     * @returns Layer index in [0, D), or D if the column is empty.
+     */
+    [[nodiscard]] uint32_t highest_layer(uint32_t x, uint32_t y) const noexcept {
+        assert(x < W && y < H);
+        const uint64_t snap = cells_[flat(x, y)].load(std::memory_order_acquire)
+                              & kLayerMask;
+        return snap ? static_cast<uint32_t>(63u - std::countl_zero(snap)) : D;
+    }
+
+    /**
+     * @brief Count the number of occupied layers in a single column. ~1 ns.
+     *
+     * Uses POPCNT — one instruction on modern CPUs.
+     *
+     * @param x Column [0, W). @param y Row [0, H).
+     */
+    [[nodiscard]] uint32_t count_layers(uint32_t x, uint32_t y) const noexcept {
+        assert(x < W && y < H);
+        return static_cast<uint32_t>(
+            std::popcount(cells_[flat(x, y)].load(std::memory_order_acquire)
+                          & kLayerMask));
+    }
+
+    // ── Grid-wide aggregates ──────────────────────────────────────────────────
+
+    /**
+     * @brief Total occupied layer-slots across the entire grid.
+     *
+     * Sums `popcount` over all W×H cells.  O(W×H).
+     */
+    [[nodiscard]] uint32_t count_total() const noexcept {
+        uint32_t total = 0u;
+        for (const auto& c : cells_)
+            total += static_cast<uint32_t>(
+                std::popcount(c.load(std::memory_order_relaxed) & kLayerMask));
+        return total;
+    }
+
+    // ── Bulk-clear ────────────────────────────────────────────────────────────
+
+    /**
+     * @brief Clear all layers in [from, to] for every cell in a box.
+     *
+     * Useful for clearing explosion zones, opening passages, resetting rooms.
+     *
+     * @param x1,y1 Top-left corner (inclusive).
+     * @param x2,y2 Bottom-right corner (inclusive).
+     * @param from  First layer (inclusive).
+     * @param to    Last  layer (inclusive).
+     */
+    void clear_box(uint32_t x1, uint32_t y1,
+                   uint32_t x2, uint32_t y2,
+                   uint32_t from, uint32_t to) noexcept {
+        assert(x1 <= x2 && x2 < W && y1 <= y2 && y2 < H);
+        assert(from <= to && to < D);
+        const uint64_t mask = ~detail::layer_range_mask(from, to);
+        for (uint32_t ry = y1; ry <= y2; ++ry)
+            for (uint32_t rx = x1; rx <= x2; ++rx)
+                cells_[flat(rx, ry)].fetch_and(mask, std::memory_order_release);
+    }
+
+    // ── Iteration ─────────────────────────────────────────────────────────────
+
+    /**
+     * @brief Invoke `fn(x, y, layer_mask)` for every non-empty cell.
+     *
+     * `layer_mask` is the full 64-bit layer bitmap for that cell.
+     * Iteration order: row-major (y then x).
+     *
+     * Callback signature: `void fn(uint32_t x, uint32_t y, uint64_t mask)`.
+     *
+     * @tparam Fn Callable matching `void(uint32_t, uint32_t, uint64_t)`.
+     */
+    template <typename Fn>
+    void for_each_set(Fn&& fn) const noexcept(noexcept(fn(0u, 0u, 0ull))) {
+        for (uint32_t ry = 0u; ry < H; ++ry) {
+            for (uint32_t rx = 0u; rx < W; ++rx) {
+                const uint64_t snap =
+                    cells_[flat(rx, ry)].load(std::memory_order_relaxed) & kLayerMask;
+                if (snap) fn(rx, ry, snap);
+            }
+        }
+    }
+
+    /**
+     * @brief Invoke `fn(x, y, layer_mask)` for every non-empty cell in a box
+     *        with layers intersecting [from, to].
+     *
+     * `layer_mask` is the full bitmap ANDed with the layer-range mask.
+     *
+     * @tparam Fn Callable matching `void(uint32_t, uint32_t, uint64_t)`.
+     */
+    template <typename Fn>
+    void for_each_set_in_box(uint32_t x1, uint32_t y1,
+                              uint32_t x2, uint32_t y2,
+                              uint32_t from, uint32_t to,
+                              Fn&& fn) const noexcept(noexcept(fn(0u, 0u, 0ull))) {
+        assert(x1 <= x2 && x2 < W && y1 <= y2 && y2 < H);
+        assert(from <= to && to < D);
+        const uint64_t range_mask = detail::layer_range_mask(from, to);
+        for (uint32_t ry = y1; ry <= y2; ++ry) {
+            for (uint32_t rx = x1; rx <= x2; ++rx) {
+                const uint64_t snap =
+                    cells_[flat(rx, ry)].load(std::memory_order_relaxed) & range_mask;
+                if (snap) fn(rx, ry, snap);
+            }
+        }
+    }
+
+    // ── Grid-level bitwise operations ─────────────────────────────────────────
+
+    /**
+     * @brief OR `other` into this grid (union of occupied cells).
+     *
+     * Use case: merge spawned entities into the main obstacle grid.
+     * @param other Must have identical W, H, D template parameters.
+     */
+    void merge_from(const GridBitset& other) noexcept {
+        for (size_t i = 0u; i < kCells; ++i)
+            cells_[i].fetch_or(
+                other.cells_[i].load(std::memory_order_relaxed) & kLayerMask,
+                std::memory_order_release);
+    }
+
+    /**
+     * @brief AND this grid with `other` (keep only cells set in both).
+     *
+     * Use case: compute overlap between two visibility sets.
+     * @param other Must have identical W, H, D template parameters.
+     */
+    void intersect_with(const GridBitset& other) noexcept {
+        for (size_t i = 0u; i < kCells; ++i) {
+            const uint64_t keep =
+                other.cells_[i].load(std::memory_order_relaxed) & kLayerMask;
+            cells_[i].fetch_and(keep, std::memory_order_release);
+        }
+    }
+
+    /**
+     * @brief AND-NOT `other` from this grid (remove cells set in `other`).
+     *
+     * Use case: remove obstacles that were destroyed in a physics event.
+     * @param other Must have identical W, H, D template parameters.
+     */
+    void diff_from(const GridBitset& other) noexcept {
+        for (size_t i = 0u; i < kCells; ++i) {
+            const uint64_t remove =
+                other.cells_[i].load(std::memory_order_relaxed) & kLayerMask;
+            cells_[i].fetch_and(~remove, std::memory_order_release);
+        }
+    }
+
+    // ── Raycasting (DDA) ─────────────────────────────────────────────────────
+
+    /**
+     * @brief Ray-cast result returned by `raycast()`.
+     */
+    struct RayHit {
+        uint32_t x;          ///< Hit cell column.
+        uint32_t y;          ///< Hit cell row.
+        uint64_t layer_mask; ///< Full layer bitmap of the hit cell (ANDed with range).
+        uint32_t steps;      ///< Number of grid steps taken until the hit.
+    };
+
+    /**
+     * @brief Walk a DDA ray from (x0, y0) in direction (dx, dy) and return
+     *        the first cell that has any layer set in [from, to].
+     *
+     * Uses the integer DDA (Digital Differential Analyzer) algorithm —
+     * no floating-point divisions after setup.
+     *
+     * @param x0, y0   Ray origin (must be inside the grid).
+     * @param dx, dy   Direction components (integers; at least one non-zero).
+     * @param from, to Layer range to test against.
+     * @param max_steps Maximum grid cells to traverse before giving up.
+     * @returns `RayHit` on first occupied cell, or `std::nullopt` if nothing
+     *          was hit within `max_steps` steps.
+     */
+    [[nodiscard]] std::optional<RayHit>
+    raycast(int32_t x0, int32_t y0,
+            int32_t dx, int32_t dy,
+            uint32_t from, uint32_t to,
+            uint32_t max_steps) const noexcept {
+        assert(dx != 0 || dy != 0);
+        assert(from <= to && to < D);
+        assert(x0 >= 0 && static_cast<uint32_t>(x0) < W);
+        assert(y0 >= 0 && static_cast<uint32_t>(y0) < H);
+
+        const uint64_t range_mask = detail::layer_range_mask(from, to);
+
+        // DDA: step sign and absolute deltas.
+        const int32_t sx = (dx > 0) ? 1 : (dx < 0 ? -1 : 0);
+        const int32_t sy = (dy > 0) ? 1 : (dy < 0 ? -1 : 0);
+        // Absolute component magnitudes (Chebyshev-step DDA).
+        const int32_t adx = (dx < 0 ? -dx : dx);
+        const int32_t ady = (dy < 0 ? -dy : dy);
+
+        int32_t cx = x0, cy = y0;
+        int32_t err = adx - ady; // Bresenham error accumulator
+
+        for (uint32_t step = 0u; step < max_steps; ++step) {
+            // Bounds check — stop if ray leaves the grid.
+            if (cx < 0 || cy < 0 ||
+                static_cast<uint32_t>(cx) >= W ||
+                static_cast<uint32_t>(cy) >= H)
+                return std::nullopt;
+
+            const uint64_t snap =
+                cells_[flat(static_cast<uint32_t>(cx),
+                            static_cast<uint32_t>(cy))]
+                    .load(std::memory_order_relaxed) & range_mask;
+            if (snap)
+                return RayHit{static_cast<uint32_t>(cx),
+                              static_cast<uint32_t>(cy),
+                              snap, step};
+
+            // Advance DDA.
+            const int32_t e2 = 2 * err;
+            if (e2 > -ady) { err -= ady; cx += sx; }
+            if (e2 <  adx) { err += adx; cy += sy; }
+        }
+        return std::nullopt;
+    }
+
     // ── Metadata ─────────────────────────────────────────────────────────────
 
     /** @brief Total number of cells (W × H). */
@@ -483,6 +782,196 @@ public:
         assert(x < W && y < H);
         const size_t sb_idx = super_block_index(x, y);
         return words_[sb_idx].load(std::memory_order_acquire);
+    }
+
+    // ── Bit flip ─────────────────────────────────────────────────────────────
+
+    /**
+     * @brief Atomically toggle cell (x, y) — XOR 1 bit.
+     *
+     * Useful for toggling gates, destructible tiles, switches.
+     * @returns true if the bit is now set (after the toggle).
+     */
+    bool toggle(uint32_t x, uint32_t y) noexcept {
+        assert(x < W && y < H);
+        auto [word_idx, bit_idx] = locate(x, y);
+        const uint64_t bit  = uint64_t{1} << bit_idx;
+        const uint64_t prev = words_[word_idx].fetch_xor(bit,
+                                                         std::memory_order_acq_rel);
+        return (prev & bit) == 0u;
+    }
+
+    // ── Bulk operations ───────────────────────────────────────────────────────
+
+    /**
+     * @brief Clear all cells in the axis-aligned box [x1,x2]×[y1,y2].
+     *
+     * Useful for room resets, explosion clearing, door openings.
+     */
+    void clear_box(uint32_t x1, uint32_t y1,
+                   uint32_t x2, uint32_t y2) noexcept {
+        assert(x1 <= x2 && x2 < W && y1 <= y2 && y2 < H);
+        for (uint32_t ry = y1; ry <= y2; ++ry)
+            for (uint32_t rx = x1; rx <= x2; ++rx)
+                clear(rx, ry);
+    }
+
+    // ── Aggregates ────────────────────────────────────────────────────────────
+
+    /**
+     * @brief Count all occupied cells in the grid.
+     *
+     * Sums POPCNT over all Super-Block words.  O(W×H / 64).
+     */
+    [[nodiscard]] uint32_t count_all() const noexcept {
+        uint32_t total = 0u;
+        for (const auto& w : words_)
+            total += static_cast<uint32_t>(
+                std::popcount(w.load(std::memory_order_relaxed)));
+        return total;
+    }
+
+    /**
+     * @brief Count occupied cells in a box.
+     */
+    [[nodiscard]] uint32_t count_in_box(uint32_t x1, uint32_t y1,
+                                        uint32_t x2, uint32_t y2) const noexcept {
+        assert(x1 <= x2 && x2 < W && y1 <= y2 && y2 < H);
+        uint32_t n = 0u;
+        for (uint32_t ry = y1; ry <= y2; ++ry)
+            for (uint32_t rx = x1; rx <= x2; ++rx)
+                if (test(rx, ry)) ++n;
+        return n;
+    }
+
+    // ── Iteration ─────────────────────────────────────────────────────────────
+
+    /**
+     * @brief Invoke `fn(x, y)` for every occupied cell in the grid.
+     *
+     * Super-Block words that are zero are skipped in O(1), so sparse grids
+     * are traversed efficiently.
+     *
+     * @tparam Fn Callable matching `void(uint32_t x, uint32_t y)`.
+     */
+    template <typename Fn>
+    void for_each_set(Fn&& fn) const noexcept(noexcept(fn(0u, 0u))) {
+        for (uint32_t sby = 0u; sby < kSBH; ++sby) {
+            for (uint32_t sbx = 0u; sbx < kSBW; ++sbx) {
+                uint64_t word =
+                    words_[static_cast<size_t>(sby) * kSBW + sbx]
+                        .load(std::memory_order_relaxed);
+                if (!word) continue;
+                while (word) {
+                    const uint32_t bit  = static_cast<uint32_t>(std::countr_zero(word));
+                    uint32_t lx{}, ly{};
+                    detail::morton2d_decode(bit, lx, ly);
+                    const uint32_t gx = sbx * kSBSize + lx;
+                    const uint32_t gy = sby * kSBSize + ly;
+                    if (gx < W && gy < H) fn(gx, gy);
+                    word &= word - 1u; // clear lowest set bit
+                }
+            }
+        }
+    }
+
+    /**
+     * @brief Invoke `fn(x, y)` for every occupied cell in a box.
+     *
+     * @tparam Fn Callable matching `void(uint32_t x, uint32_t y)`.
+     */
+    template <typename Fn>
+    void for_each_set_in_box(uint32_t x1, uint32_t y1,
+                              uint32_t x2, uint32_t y2,
+                              Fn&& fn) const noexcept(noexcept(fn(0u, 0u))) {
+        assert(x1 <= x2 && x2 < W && y1 <= y2 && y2 < H);
+        for (uint32_t ry = y1; ry <= y2; ++ry)
+            for (uint32_t rx = x1; rx <= x2; ++rx)
+                if (test(rx, ry)) fn(rx, ry);
+    }
+
+    // ── Grid-level bitwise operations ─────────────────────────────────────────
+
+    /**
+     * @brief OR `other` into this grid (union).
+     *
+     * Use case: merge an entity's footprint into the collision map.
+     */
+    void merge_from(const GridBitset2D& other) noexcept {
+        for (size_t i = 0u; i < kSBCount; ++i)
+            words_[i].fetch_or(other.words_[i].load(std::memory_order_relaxed),
+                               std::memory_order_release);
+    }
+
+    /**
+     * @brief AND this grid with `other` (intersection).
+     *
+     * Use case: retain only cells visible to both player and enemy.
+     */
+    void intersect_with(const GridBitset2D& other) noexcept {
+        for (size_t i = 0u; i < kSBCount; ++i)
+            words_[i].fetch_and(other.words_[i].load(std::memory_order_relaxed),
+                                std::memory_order_release);
+    }
+
+    /**
+     * @brief AND-NOT `other` from this grid (remove cells in `other`).
+     *
+     * Use case: remove destroyed obstacles from the collision map.
+     */
+    void diff_from(const GridBitset2D& other) noexcept {
+        for (size_t i = 0u; i < kSBCount; ++i) {
+            const uint64_t remove = other.words_[i].load(std::memory_order_relaxed);
+            words_[i].fetch_and(~remove, std::memory_order_release);
+        }
+    }
+
+    // ── Raycasting (Bresenham DDA) ────────────────────────────────────────────
+
+    /**
+     * @brief Result returned by `raycast_2d()`.
+     */
+    struct RayHit {
+        uint32_t x;      ///< Hit cell column.
+        uint32_t y;      ///< Hit cell row.
+        uint32_t steps;  ///< Steps taken until the hit.
+    };
+
+    /**
+     * @brief Walk a Bresenham ray from (x0,y0) toward (x1,y1) and return
+     *        the first occupied cell along the path.
+     *
+     * Terminates at the target cell or grid boundary.
+     * Useful for line-of-sight, bullet traces, and corridor detection.
+     *
+     * @returns `RayHit` on first hit, or `std::nullopt` if the path is clear.
+     */
+    [[nodiscard]] std::optional<RayHit>
+    raycast_2d(uint32_t x0, uint32_t y0,
+               uint32_t x1, uint32_t y1) const noexcept {
+        assert(x0 < W && y0 < H && x1 < W && y1 < H);
+
+        const int32_t dx  = (int32_t)x1 - (int32_t)x0;
+        const int32_t dy  = (int32_t)y1 - (int32_t)y0;
+        const int32_t sx  = (dx > 0) ? 1 : -1;
+        const int32_t sy  = (dy > 0) ? 1 : -1;
+        int32_t adx = (dx < 0 ? -dx : dx);
+        int32_t ady = (dy < 0 ? -dy : dy);
+        int32_t err = adx - ady;
+        int32_t cx  = (int32_t)x0;
+        int32_t cy  = (int32_t)y0;
+
+        const uint32_t max_steps = static_cast<uint32_t>(adx + ady + 1u);
+        for (uint32_t s = 0u; s < max_steps; ++s) {
+            if (test(static_cast<uint32_t>(cx), static_cast<uint32_t>(cy)))
+                return RayHit{static_cast<uint32_t>(cx),
+                              static_cast<uint32_t>(cy), s};
+            if (cx == (int32_t)x1 && cy == (int32_t)y1) break;
+            const int32_t e2 = 2 * err;
+            if (e2 > -ady) { err -= ady; cx += sx; }
+            if (e2 <  adx) { err += adx; cy += sy; }
+        }
+        return std::nullopt;
     }
 
     /** @brief Total cells (W × H). */

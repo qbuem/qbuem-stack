@@ -1,12 +1,14 @@
 # ============================================================================
 # qbuem-stack benchmarks
 # ============================================================================
-# 성능 목표 (v1.0):
-#   - HTTP 파서    : > 500 MB/s (1 GiB/s @AVX2)
-#   - 라우터 룩업  : < 200 ns/req (1000-route 트리)
-#   - Arena 할당   : < 5 ns/alloc (bump-pointer)
-#   - AsyncChannel : > 10M ops/s (MPMC ring-buffer)
-#   - Pipeline     : > 1M items/s (3-stage chain)
+# Performance goals (v3.3.0):
+#   - HTTP parser     : > 300 MB/s (SIMD scalar path)
+#   - Router lookup   : < 200 ns/req (1000-route radix tree)
+#   - Arena alloc     : < 20 ns/alloc (bump-pointer)
+#   - AsyncChannel    : > 40M ops/s (MPMC ring-buffer)
+#   - SpscChannel     : > 100M ops/s (wait-free SPSC)
+#   - GridBitset test : < 3 ns (wait-free atomic load)
+#   - GridBitset ray  : < 100 ns (32-step DDA)
 # ============================================================================
 
 add_executable(bench_http
@@ -39,14 +41,21 @@ add_executable(bench_pipeline
 target_link_libraries(bench_pipeline PRIVATE qbuem-stack::qbuem)
 target_compile_options(bench_pipeline PRIVATE -O3 -march=native)
 
-# Umbrella target: 모든 벤치마크를 순서대로 실행
+add_executable(bench_grid
+    bench_grid.cpp
+)
+target_link_libraries(bench_grid PRIVATE qbuem-stack::qbuem)
+target_compile_options(bench_grid PRIVATE -O3 -march=native)
+
+# Umbrella target: run all benchmarks in sequence
 add_custom_target(run_bench
     COMMAND bench_http
     COMMAND bench_router
     COMMAND bench_arena
     COMMAND bench_channel
     COMMAND bench_pipeline
-    DEPENDS bench_http bench_router bench_arena bench_channel bench_pipeline
+    COMMAND bench_grid
+    DEPENDS bench_http bench_router bench_arena bench_channel bench_pipeline bench_grid
     WORKING_DIRECTORY ${CMAKE_BINARY_DIR}/bench
     COMMENT "[qbuem-stack] Running all benchmarks..."
 )

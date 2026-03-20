@@ -15,7 +15,7 @@
 #include <cstdint>
 #include <functional>
 #include <numeric>
-#include <print>
+#include <qbuem/compat/print.hpp>
 #include <string>
 #include <vector>
 

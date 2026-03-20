@@ -18,7 +18,7 @@
 #include <qbuem/http/parser.hpp>
 #include <qbuem/http/request.hpp>
 
-#include <print>
+#include <qbuem/compat/print.hpp>
 #include <string>
 
 // ─── Test HTTP messages ───────────────────────────────────────────────────────
