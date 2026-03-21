@@ -17,12 +17,32 @@
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
-#include <print>
+#include <format>
 #include <span>
 #include <string>
 #include <string_view>
 #include <vector>
+
+// Compatibility shim: <print> requires GCC 14+ / Clang 18+; provide println()
+// via <format> + fputs for compilers that lack it (e.g. GCC 13 on CI).
+#if __has_include(<print>)
+#  include <print>
+#else
+namespace {
+template <class... Args>
+inline void println(std::format_string<Args...> fmt, Args&&... args) {
+    std::string s = std::format(fmt, std::forward<Args>(args)...);
+    s += '\n';
+    std::fputs(s.c_str(), stdout);
+}
+inline void println(std::string_view sv) {
+    std::fputs(sv.data(), stdout);
+    std::fputc('\n', stdout);
+}
+}  // anonymous namespace
+#endif
 
 // ─── Test harness ─────────────────────────────────────────────────────────────
 
@@ -33,9 +53,9 @@ static void check(bool ok, std::string_view name) {
     ++g_total;
     if (ok) {
         ++g_passed;
-        std::println("  PASS  {}", name);
+        println("  PASS  {}", name);
     } else {
-        std::println("  FAIL  {}", name);
+        println("  FAIL  {}", name);
     }
 }
 
@@ -82,7 +102,7 @@ static size_t find_header_end_neon(const char* data, size_t len) noexcept {
 }
 
 static void test_http_scanner() {
-    std::println("\n[1] HTTP header scanner (\\r\\n\\r\\n)");
+    println("\n[1] HTTP header scanner (\\r\\n\\r\\n)");
 
     // Basic hit in first 16-byte chunk
     {
@@ -184,7 +204,7 @@ static void xor_mask_neon(const uint8_t* src, uint8_t* dst, size_t len,
 }
 
 static void test_ws_masking() {
-    std::println("\n[2] WebSocket XOR masking");
+    println("\n[2] WebSocket XOR masking");
 
     const std::array<uint8_t, 4> key = {0xAB, 0xCD, 0xEF, 0x12};
 
@@ -262,7 +282,7 @@ static bool ct_equal_neon(std::string_view a, std::string_view b) noexcept {
 }
 
 static void test_ct_compare() {
-    std::println("\n[3] Constant-time comparison");
+    println("\n[3] Constant-time comparison");
 
     auto run = [](std::string_view a, std::string_view b, bool expect, std::string_view label) {
         bool sref = ct_equal_scalar(a, b);
@@ -353,7 +373,7 @@ static DotPositions find_dots_neon(const char* data, size_t len) noexcept {
 }
 
 static void test_jwt_dots() {
-    std::println("\n[4] JWT dot scanner");
+    println("\n[4] JWT dot scanner");
 
     auto run = [](const char* token, std::string_view label) {
         size_t len = strlen(token);
@@ -503,7 +523,7 @@ static std::string base64url_neon(const uint8_t* data, size_t len) {
 }
 
 static void test_base64url() {
-    std::println("\n[5] Base64url encoding (NEON vqtbl1q_u8)");
+    println("\n[5] Base64url encoding (NEON vqtbl1q_u8)");
 
     auto run = [](std::span<const uint8_t> data, std::string_view label) {
         std::string s = base64url_scalar(data.data(), data.size());
@@ -633,7 +653,7 @@ static void gf_muladd_neon(uint8_t coeff,
 }
 
 static void test_gf_muladd() {
-    std::println("\n[6] GF(2^8) erasure coding multiply-accumulate (vqtbl1q_u8)");
+    println("\n[6] GF(2^8) erasure coding multiply-accumulate (vqtbl1q_u8)");
 
     auto run = [](uint8_t coeff, size_t len, std::string_view label) {
         std::vector<uint8_t> in(len), out_scalar(len, 0), out_neon(len, 0);
@@ -687,15 +707,15 @@ static void test_gf_muladd() {
 // ─── main ─────────────────────────────────────────────────────────────────────
 
 int main() {
-    std::println("qbuem-stack NEON validation on {}", []() -> std::string_view {
+    println("qbuem-stack NEON validation on {}", []() -> std::string_view {
 #if defined(__aarch64__)
         return "AArch64";
 #else
         return "unknown arch";
 #endif
     }());
-    std::println("Compiler: " __VERSION__);
-    std::println("NEON available: {}", []() -> std::string_view {
+    println("Compiler: " __VERSION__);
+    println("NEON available: {}", []() -> std::string_view {
 #if defined(__ARM_NEON)
         return "yes (__ARM_NEON defined)";
 #else
@@ -710,13 +730,13 @@ int main() {
     test_base64url();
     test_gf_muladd();
 
-    std::println("\n─────────────────────────────────────────");
-    std::println("Results: {}/{} passed", g_passed, g_total);
+    println("\n─────────────────────────────────────────");
+    println("Results: {}/{} passed", g_passed, g_total);
     if (g_passed == g_total) {
-        std::println("ALL NEON PATHS CORRECT");
+        println("ALL NEON PATHS CORRECT");
         return 0;
     } else {
-        std::println("FAILURES: {} test(s) failed", g_total - g_passed);
+        println("FAILURES: {} test(s) failed", g_total - g_passed);
         return 1;
     }
 }
