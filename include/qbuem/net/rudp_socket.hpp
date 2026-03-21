@@ -396,7 +396,7 @@ public:
      * @brief Gracefully close the RUDP connection (sends FIN).
      * @param st Cancellation token.
      */
-    Task<void> close(const std::stop_token& st) const {
+    Task<void> close(const std::stop_token& st) {
         co_await send_ctrl(RudpFlags::Fin, st);
     }
 
@@ -456,7 +456,7 @@ private:
 
     // ── Control frames ────────────────────────────────────────────────────────
 
-    [[nodiscard]] Task<Result<void>> send_ctrl(uint8_t flags, const std::stop_token& st) const {
+    [[nodiscard]] Task<Result<void>> send_ctrl(uint8_t flags, const std::stop_token& st) {
         (void)st; // stop_token reserved for future send cancellation
         RudpHeader hdr;
         hdr.seq    = send_seq_;
@@ -465,7 +465,7 @@ private:
         hdr.window = kRudpWindow;
 
         std::array<std::byte, kRudpHeaderBase> frame{};
-        hdr.encode(frame);
+        (void)hdr.encode(frame);
         auto r = co_await udp_.send_to(frame, remote_);
         if (!r) co_return std::unexpected(r.error());
         co_return {};
@@ -475,7 +475,7 @@ private:
         co_await send_ctrl(RudpFlags::Ack, st);
     }
 
-    [[nodiscard]] Task<void> send_nack(const std::stop_token& st) const {
+    [[nodiscard]] Task<void> send_nack(const std::stop_token& st) {
         (void)st; // stop_token reserved for future send cancellation
         RudpHeader hdr;
         hdr.seq    = send_seq_;

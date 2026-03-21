@@ -134,7 +134,7 @@ public:
         bool ipv6 = (group.family() == SocketAddr::Family::IPv6);
         int domain = ipv6 ? AF_INET6 : AF_INET;
         int fd = ::socket(domain, SOCK_DGRAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
-        if (fd < 0) return unexpected(std::error_code(errno, std::system_category()));
+        if (fd < 0) return std::unexpected(std::error_code(errno, std::system_category()));
 
         MulticastSocket sock(fd);
 
@@ -144,14 +144,14 @@ public:
             sa.sin6_family = AF_INET6;
             sa.sin6_port   = 0;  // OS assigns port
             if (::bind(fd, reinterpret_cast<const sockaddr*>(&sa), sizeof(sa)) != 0) {
-                return unexpected(std::error_code(errno, std::system_category()));
+                return std::unexpected(std::error_code(errno, std::system_category()));
             }
             // Set outgoing interface by index
             if (!iface.empty()) {
                 unsigned idx = ::if_nametoindex(std::string(iface).c_str());
                 if (::setsockopt(fd, IPPROTO_IPV6, IPV6_MULTICAST_IF,
                                  &idx, sizeof(idx)) != 0) {
-                    return unexpected(std::error_code(errno, std::system_category()));
+                    return std::unexpected(std::error_code(errno, std::system_category()));
                 }
             }
         } else {
@@ -159,7 +159,7 @@ public:
             sa.sin_family = AF_INET;
             sa.sin_port   = 0;
             if (::bind(fd, reinterpret_cast<const sockaddr*>(&sa), sizeof(sa)) != 0) {
-                return unexpected(std::error_code(errno, std::system_category()));
+                return std::unexpected(std::error_code(errno, std::system_category()));
             }
             // Set outgoing interface by address
             if (!iface.empty()) {
@@ -192,7 +192,7 @@ public:
         bool ipv6 = (group.family() == SocketAddr::Family::IPv6);
         int domain = ipv6 ? AF_INET6 : AF_INET;
         int fd = ::socket(domain, SOCK_DGRAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
-        if (fd < 0) return unexpected(std::error_code(errno, std::system_category()));
+        if (fd < 0) return std::unexpected(std::error_code(errno, std::system_category()));
 
         // Allow multiple receivers on the same port
         {
@@ -208,7 +208,7 @@ public:
             sa.sin6_port   = htons(group.port());
             if (::bind(fd, reinterpret_cast<const sockaddr*>(&sa), sizeof(sa)) != 0) {
                 ::close(fd);
-                return unexpected(std::error_code(errno, std::system_category()));
+                return std::unexpected(std::error_code(errno, std::system_category()));
             }
         } else {
             sockaddr_in sa{};
@@ -217,7 +217,7 @@ public:
             sa.sin_addr.s_addr = INADDR_ANY;
             if (::bind(fd, reinterpret_cast<const sockaddr*>(&sa), sizeof(sa)) != 0) {
                 ::close(fd);
-                return unexpected(std::error_code(errno, std::system_category()));
+                return std::unexpected(std::error_code(errno, std::system_category()));
             }
         }
 
@@ -226,7 +226,7 @@ public:
 
         // Join the multicast group
         auto jr = sock.join_group_fd(fd, group, iface);
-        if (!jr) return unexpected(jr.error());
+        if (!jr) return std::unexpected(jr.error());
 
         return sock;
     }
@@ -243,7 +243,7 @@ public:
      * @returns `Result<void>` — ok on success.
      */
     [[nodiscard]] Result<void>
-    join_group(SocketAddr group, std::string_view iface = "") noexcept {
+    join_group(SocketAddr group, std::string_view iface = "") const noexcept {
         return join_group_fd(fd_, group, iface);
     }
 
@@ -263,7 +263,7 @@ public:
                 ? 0 : ::if_nametoindex(std::string(iface).c_str());
             if (::setsockopt(fd_, IPPROTO_IPV6, IPV6_LEAVE_GROUP,
                              &mreq, sizeof(mreq)) != 0)
-                return unexpected(std::error_code(errno, std::system_category()));
+                return std::unexpected(std::error_code(errno, std::system_category()));
         } else {
             ip_mreq mreq{};
             mreq.imr_multiaddr = group.addr_.ipv4_;
@@ -274,7 +274,7 @@ public:
             }
             if (::setsockopt(fd_, IPPROTO_IP, IP_DROP_MEMBERSHIP,
                              &mreq, sizeof(mreq)) != 0)
-                return unexpected(std::error_code(errno, std::system_category()));
+                return std::unexpected(std::error_code(errno, std::system_category()));
         }
         return {};
     }
@@ -291,12 +291,12 @@ public:
         if (group_.family() == SocketAddr::Family::IPv6) {
             if (::setsockopt(fd_, IPPROTO_IPV6, IPV6_MULTICAST_HOPS,
                              &ttl, sizeof(ttl)) != 0)
-                return unexpected(std::error_code(errno, std::system_category()));
+                return std::unexpected(std::error_code(errno, std::system_category()));
         } else {
             unsigned char uc = static_cast<unsigned char>(ttl);
             if (::setsockopt(fd_, IPPROTO_IP, IP_MULTICAST_TTL,
                              &uc, sizeof(uc)) != 0)
-                return unexpected(std::error_code(errno, std::system_category()));
+                return std::unexpected(std::error_code(errno, std::system_category()));
         }
         return {};
     }
@@ -316,12 +316,12 @@ public:
             unsigned int v = enabled ? 1u : 0u;
             if (::setsockopt(fd_, IPPROTO_IPV6, IPV6_MULTICAST_LOOP,
                              &v, sizeof(v)) != 0)
-                return unexpected(std::error_code(errno, std::system_category()));
+                return std::unexpected(std::error_code(errno, std::system_category()));
         } else {
             unsigned char v = enabled ? 1u : 0u;
             if (::setsockopt(fd_, IPPROTO_IP, IP_MULTICAST_LOOP,
                              &v, sizeof(v)) != 0)
-                return unexpected(std::error_code(errno, std::system_category()));
+                return std::unexpected(std::error_code(errno, std::system_category()));
         }
         return {};
     }
@@ -341,7 +341,7 @@ public:
         sockaddr_storage ss{};
         socklen_t sslen{};
         auto r = group_.to_sockaddr(ss, sslen);
-        if (!r) co_return unexpected(r.error());
+        if (!r) co_return std::unexpected(r.error());
 
         struct SendAwaiter {
             int fd_;
@@ -370,7 +370,7 @@ public:
         SendAwaiter aw{fd_, buf.data(), buf.size(), &ss, sslen};
         co_await aw;
         if (aw.result_ < 0)
-            co_return unexpected(std::error_code(aw.err_, std::system_category()));
+            co_return std::unexpected(std::error_code(aw.err_, std::system_category()));
         co_return static_cast<size_t>(aw.result_);
     }
 
@@ -384,7 +384,7 @@ public:
     [[nodiscard]] Task<Result<std::pair<size_t, SocketAddr>>>
     recv_from(std::span<std::byte> buf, const std::stop_token& st) {
         if (st.stop_requested())
-            co_return unexpected(std::make_error_code(std::errc::operation_canceled));
+            co_return std::unexpected(std::make_error_code(std::errc::operation_canceled));
 
         struct RecvAwaiter {
             int fd_;
@@ -414,7 +414,7 @@ public:
         co_await aw;
 
         if (aw.result_ < 0)
-            co_return unexpected(std::error_code(aw.err_, std::system_category()));
+            co_return std::unexpected(std::error_code(aw.err_, std::system_category()));
 
         SocketAddr from;
         if (aw.from_.ss_family == AF_INET) {
@@ -449,7 +449,7 @@ private:
                 ? 0 : ::if_nametoindex(std::string(iface).c_str());
             if (::setsockopt(fd, IPPROTO_IPV6, IPV6_JOIN_GROUP,
                              &mreq, sizeof(mreq)) != 0)
-                return unexpected(std::error_code(errno, std::system_category()));
+                return std::unexpected(std::error_code(errno, std::system_category()));
         } else {
             ip_mreq mreq{};
             mreq.imr_multiaddr = group.addr_.ipv4_;
@@ -460,7 +460,7 @@ private:
             }
             if (::setsockopt(fd, IPPROTO_IP, IP_ADD_MEMBERSHIP,
                              &mreq, sizeof(mreq)) != 0)
-                return unexpected(std::error_code(errno, std::system_category()));
+                return std::unexpected(std::error_code(errno, std::system_category()));
         }
         return {};
     }
