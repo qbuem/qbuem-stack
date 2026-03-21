@@ -71,10 +71,10 @@ struct IOUringReactor::Impl {
   // Submit a fresh POLL_ADD for wake_fd and record it.
   void resubmit_wake(uint64_t token) {
     struct io_uring_sqe *sqe = io_uring_get_sqe(&ring);
-    if (!sqe) {
+    if (sqe == nullptr) {
       io_uring_submit(&ring);
       sqe = io_uring_get_sqe(&ring);
-      if (!sqe)
+      if (sqe == nullptr)
         return;
     }
     io_uring_prep_poll_add(sqe, wake_fd, POLLIN);
@@ -84,10 +84,10 @@ struct IOUringReactor::Impl {
   // Submit a POLL_ADD SQE for a pending op that is already in `ops`.
   void submit_poll(uint64_t token, int fd, EventType type) {
     struct io_uring_sqe *sqe = io_uring_get_sqe(&ring);
-    if (!sqe) {
+    if (sqe == nullptr) {
       io_uring_submit(&ring);
       sqe = io_uring_get_sqe(&ring);
-      if (!sqe)
+      if (sqe == nullptr)
         return; // Ring overflow – event lost; will be rescheduled next poll.
     }
     unsigned mask = (type == EventType::Read) ? POLLIN : POLLOUT;
@@ -98,10 +98,10 @@ struct IOUringReactor::Impl {
   // Submit an ASYNC_CANCEL SQE to cancel a pending operation by token.
   void cancel_by_token(uint64_t token) {
     struct io_uring_sqe *sqe = io_uring_get_sqe(&ring);
-    if (!sqe) {
+    if (sqe == nullptr) {
       io_uring_submit(&ring);
       sqe = io_uring_get_sqe(&ring);
-      if (!sqe)
+      if (sqe == nullptr)
         return;
     }
     // user_data=0 for the cancel SQE → no callback dispatched on completion.
@@ -214,10 +214,10 @@ Result<int> IOUringReactor::register_timer(int timeout_ms,
   impl_->timer_tokens[timer_id] = token;
 
   struct io_uring_sqe *sqe = io_uring_get_sqe(&impl_->ring);
-  if (!sqe) {
+  if (sqe == nullptr) {
     io_uring_submit(&impl_->ring);
     sqe = io_uring_get_sqe(&impl_->ring);
-    if (!sqe) {
+    if (sqe == nullptr) {
       impl_->ops.erase(token);
       impl_->timer_tokens.erase(timer_id);
       return std::unexpected(
@@ -329,7 +329,7 @@ Result<int> IOUringReactor::poll(int timeout_ms) {
 
       // Persistent-event semantics: resubmit POLL_ADD before invoking the
       // callback so that a new event is already queued while the callback runs.
-      if (tmap.count(op.fd)) {
+      if (tmap.count(op.fd) != 0u) {
         uint64_t new_token = impl_->next_token++;
         auto &new_op = impl_->ops[new_token];
         new_op.kind = op.kind;
@@ -450,10 +450,10 @@ Result<void> IOUringReactor::read_fixed(int fd, int buf_idx,
   op.callback    = std::move(callback);
 
   struct io_uring_sqe *sqe = io_uring_get_sqe(&impl_->ring);
-  if (!sqe) {
+  if (sqe == nullptr) {
     io_uring_submit(&impl_->ring);
     sqe = io_uring_get_sqe(&impl_->ring);
-    if (!sqe) {
+    if (sqe == nullptr) {
       impl_->ops.erase(token);
       return std::unexpected(std::make_error_code(std::errc::resource_unavailable_try_again));
     }
@@ -476,10 +476,10 @@ Result<void> IOUringReactor::write_fixed(int fd, int buf_idx,
   op.callback    = std::move(callback);
 
   struct io_uring_sqe *sqe = io_uring_get_sqe(&impl_->ring);
-  if (!sqe) {
+  if (sqe == nullptr) {
     io_uring_submit(&impl_->ring);
     sqe = io_uring_get_sqe(&impl_->ring);
-    if (!sqe) {
+    if (sqe == nullptr) {
       impl_->ops.erase(token);
       return std::unexpected(std::make_error_code(std::errc::resource_unavailable_try_again));
     }
@@ -569,10 +569,10 @@ Result<void> IOUringReactor::recv_buffered(
   entry.pending_fd = fd;
 
   struct io_uring_sqe *sqe = io_uring_get_sqe(&impl_->ring);
-  if (!sqe) {
+  if (sqe == nullptr) {
     io_uring_submit(&impl_->ring);
     sqe = io_uring_get_sqe(&impl_->ring);
-    if (!sqe) {
+    if (sqe == nullptr) {
       impl_->ops.erase(token);
       return std::unexpected(std::make_error_code(std::errc::resource_unavailable_try_again));
     }
