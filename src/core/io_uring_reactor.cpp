@@ -296,7 +296,7 @@ Result<int> IOUringReactor::poll(int timeout_ms) {
     if (op.kind == Impl::OpKind::Wake) {
       // Drain the eventfd counter.
       uint64_t val;
-      (void)read(impl_->wake_fd, &val, sizeof(val));
+      [[maybe_unused]] ssize_t r = read(impl_->wake_fd, &val, sizeof(val));
       // Drain work queue.
       std::vector<std::function<void()>> local;
       {
@@ -398,7 +398,7 @@ void IOUringReactor::post(std::function<void()> fn) {
   }
   // Wake the ring by writing to the eventfd; the registered POLL_ADD fires.
   const uint64_t one = 1;
-  (void)write(impl_->wake_fd, &one, sizeof(one)); // best-effort wakeup
+  [[maybe_unused]] ssize_t w = write(impl_->wake_fd, &one, sizeof(one)); // best-effort wakeup
 }
 
 void IOUringReactor::stop() { impl_->running = false; }
