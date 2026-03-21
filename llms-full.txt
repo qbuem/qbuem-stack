@@ -9,9 +9,9 @@
 
 **Zero Latency · Zero Allocation · Zero Dependency**
 
-> **Current Version: v2.2.0** — Monadic HTTP Fetch Client (curl-free). Pipeline ↔ MessageBus ↔ SHM fully integrated.
+> **Current Version: v3.4.0** — Spatial radius queries · `TiledBitset` infinite dynamic world · `IntrusiveList` move semantics · example build fixes. 58 examples total.
 >
-> High-performance C++ infrastructure for Web Application Servers (WAS), Inter-Process Communication (IPC), and Data Processing.
+> High-performance C++23 infrastructure for Web Application Servers (WAS), Inter-Process Communication (IPC), and Data Processing.
 
 ---
 
@@ -98,7 +98,7 @@ int main() {
         res.status(200).body("Zero allocation hello");
     });
 
-    // C++20 Coroutine Async handler
+    // C++23 Coroutine Async handler
     app.get("/api/v1/user/:id", [](const qbuem::Request& req, qbuem::Response& res)
         -> qbuem::Task<void> {
         auto id = req.param("id");
@@ -164,7 +164,7 @@ See [examples/06-ipc-messaging/ipc_pipeline](./examples/06-ipc-messaging/ipc_pip
 
 ---
 
-## Performance Benchmarks (v2.1.0)
+## Performance Benchmarks (v3.3.0)
 
 | Component | Metric | Result |
 | :--- | :--- | :--- |
@@ -180,21 +180,21 @@ See [examples/06-ipc-messaging/ipc_pipeline](./examples/06-ipc-messaging/ipc_pip
 
 ## Examples
 
-The [`examples/`](./examples/) directory contains **44 programs** organized into 11 categories, each with a detailed README.
+The [`examples/`](./examples/) directory contains **58 programs** organized into 11 categories, each with a detailed README.
 
 | Category | Highlights |
 | :--- | :--- |
-| [01 Foundation](./examples/01-foundation/) | `hello_world`, `async_timer` — start here |
-| [02 Network](./examples/02-network/) | TCP echo, UDP, Unix socket, WebSocket |
-| [03 Memory](./examples/03-memory/) | Arena, zero-copy, NUMA + huge pages |
-| [04 Codec & Security](./examples/04-codec-security/) | Length-prefix/line codecs, crypto, security middleware |
-| [05 Pipeline](./examples/05-pipeline/) | Fan-out, hot-swap, batching, sensor fusion, windowed processing |
+| [01 Foundation](./examples/01-foundation/) | `hello_world`, `async_timer`, `micro_ticker` — start here |
+| [02 Network](./examples/02-network/) | TCP echo, UDP advanced, Unix socket, WebSocket, HTTP fetch, HTTP/2, FetchStream |
+| [03 Memory](./examples/03-memory/) | Arena, zero-copy, NUMA + huge pages, lock-free bench |
+| [04 Codec & Security](./examples/04-codec-security/) | Length-prefix/line codecs, crypto URL, security middleware, **crypto primitives** (SHA/HMAC/PBKDF2/HKDF/AEAD) |
+| [05 Pipeline](./examples/05-pipeline/) | Fan-out, hot-swap, batching, dynamic router, backpressure, stateful window, windowed action |
 | [06 IPC & Messaging](./examples/06-ipc-messaging/) | SHMChannel, **flagship IPC pipeline**, MessageBus, SPSC |
 | [07 Resilience](./examples/07-resilience/) | Retry + CircuitBreaker + DLQ, Saga, Canary, Checkpoint, SLO |
-| [08 Observability](./examples/08-observability/) | W3C tracing, TimerWheel, TaskGroup structured concurrency |
+| [08 Observability](./examples/08-observability/) | W3C tracing, lifecycle tracer, inspector dashboard, TimerWheel, TaskGroup |
 | [09 Database](./examples/09-database/) | Connection pool, session store, coroutine JSON |
 | [10 Hardware](./examples/10-hardware/) | PCIe VFIO, RDMA, eBPF, NVMe, kTLS, kqueue |
-| [11 Advanced Apps](./examples/11-advanced-apps/) | Autonomous driving fusion, HFT platform, game server, I/O dashboard |
+| [11 Advanced Apps](./examples/11-advanced-apps/) | Autonomous driving, HFT matching, open-world spatial, trading platform, game server, hardware chaos |
 
 **Recommended learning path:**
 ```
@@ -206,9 +206,10 @@ hello_world → async_timer → tcp_echo_server → arena → pipeline/fanout
 
 ## Roadmap Highlights
 
-- **v2.2.0 (Current)**: Monadic HTTP fetch client (curl-free), async DNS, timeout, redirect, connection pool, kTLS HTTPS.
-- **v2.3.0 (Next)**: HTTP/3 native (quiche bundled), QUIC transport support.
-- **v2.4.0**: AF_XDP production examples, eBPF CO-RE enhancements.
+- **v2.3.0**: HTTP fetch client (curl-free), async DNS, timeout, redirect, connection pool, kTLS HTTPS.
+- **v3.3.0**: Full C++23 enforcement (`std::print`, `std::jthread`, `std::format_to_n`). ARM NEON SIMD parity (WebSocket masking, GF(2⁸) erasure, base64url, CRC32, HTTP header scan). `ConfigManager` + `Secret<T>`. GridBitset game-ready APIs.
+- **v3.4.0 (Current)**: `GridBitset` radius queries with AVX2/NEON. `TiledBitset<W,H,D>` infinite dynamic world. `IntrusiveList` move semantics. Build fixes. 58 examples total.
+- **v3.5.0 (Next)**: AF_XDP production examples, QUIC/HTTP3 via quiche integration, sanitizer clean-up pass.
 
 ---
 
@@ -10943,6 +10944,7 @@ Protocol codecs and cryptographic utilities — all zero external dependencies.
 | [codec](04-codec-security/codec/README.md) | `codec_example.cpp` | `LengthPrefixedCodec` + `LineCodec` (CRLF/LF), partial read |
 | [crypto_url](04-codec-security/crypto_url/README.md) | `crypto_url_example.cpp` | CSPRNG, RDRAND/RDSEED, CSRF tokens, constant-time compare, URL encode/decode |
 | [security_middleware](04-codec-security/security_middleware/README.md) | `security_middleware_example.cpp` | SecurityMiddleware, TokenAuth, StaticFiles, BodyEncoder |
+| [crypto_primitives](04-codec-security/crypto_primitives/README.md) | `crypto_primitives_example.cpp` | SHA-256/512, HMAC, PBKDF2, HKDF, Base64/url, ChaCha20-Poly1305, AES-256-GCM, CSPRNG |
 
 ---
 
@@ -11038,6 +11040,10 @@ Full-stack applications combining multiple qbuem-stack layers.
 | [trading_platform](11-advanced-apps/trading_platform/README.md) | `trading_platform.cpp` | Full HFT platform: WAS + pipeline + auto-scale + SLO + SSE (requires qbuem-json) |
 | [game_server](11-advanced-apps/game_server/README.md) | `game_server.cpp` | Real-time multiplayer turn-based game + JWT + rate limit + SSE leaderboard (requires qbuem-json) |
 | [middleware](11-advanced-apps/middleware/README.md) | `middleware_example.cpp` | CORS + RateLimit + RequestID + HSTS + BearerAuth + SSE (requires qbuem-json) |
+| [hft_matching](11-advanced-apps/hft_matching/README.md) | `hft_matching.cpp` | Lock-free order book, SPSC channel, PCIe-aware zero-copy HFT matching engine |
+| [open_world](11-advanced-apps/open_world/README.md) | `open_world_example.cpp` | `TiledBitset` infinite dynamic world, tile CRUD, TLS-cached lookup |
+| [spatial_fusion](11-advanced-apps/spatial_fusion/README.md) | `spatial_fusion_example.cpp` | `GridBitset` radius queries, AVX2/NEON scan, sensor coverage analysis |
+| [hardware_chaos](11-advanced-apps/hardware_chaos/README.md) | `hardware_chaos_example.cpp` | Hardware fault injection, chaos engineering for HW-dependent pipelines |
 
 ---
 
@@ -11089,3 +11095,1223 @@ Full-stack applications combining multiple qbuem-stack layers.
 ```
 
 
+
+---
+
+## FILE: docs/cpp23-upgrade-strategy.md
+---
+
+# C++23 Upgrade & Refactoring Strategy
+
+This document outlines the current state of C++23 adoption in `qbuem-stack` and identifies areas for further refactoring to fully leverage C++23 features.
+
+## 1. Standard Error Handling: `std::expected`
+
+The project is transitioning from custom aliases (`Result<T>`) to direct usage of the C++23 standard library error-handling types.
+
+- **Status**: 🔄 In Transition (Moving away from `Result<T>` alias)
+- **Rationale**: Using pure `std::expected<T, std::error_code>` and `std::unexpected` increases code transparency, ensures compliance with modern IDE/tooling expectations, and avoids "magic" types that hide standard implementation details.
+- **Refactoring Goal**:
+    - Replace all occurrences of `qbuem::Result<T>` with `std::expected<T, std::error_code>`.
+    - Replace all occurrences of `qbuem::unexpected(e)` with `std::unexpected(e)`.
+    - Use `std::expected<void, std::error_code>` for operations that previously returned `Result<void>`.
+- **Implementation**: `include/qbuem/common.hpp` will eventually deprecate or remove the `Result` and `unexpected` aliases once the migration is complete.
+
+## 2. Targeted C++23 Refactoring Opportunities
+
+The following areas have been identified where C++23 features can replace older or non-standard patterns.
+
+### 2.1. `std::print` and `std::println`
+Replace legacy C-style `printf`/`fprintf` and `std::cout` with the type-safe and efficient `std::print` and `std::println`.
+
+- **Current Status**: ❌ Legacy `printf`, `fprintf`, and `std::snprintf` are used in benchmarks, examples, and some library code.
+- **Refactoring Goal**: 
+    - Replace `printf(...)` and `fprintf(stderr, ...)` in `bench/`, `examples/`, and `include/qbuem/pipeline/observability.hpp`.
+    - Remove `include/qbuem/compat/print.hpp` (the current shim) once a C++23 compliant compiler is guaranteed for all builds.
+    - Replace `std::snprintf` with `std::format` or `std::format_to` where appropriate (while respecting hot-path constraints).
+
+### 2.2. `std::jthread`
+Replace `std::thread` with `std::jthread` for safer, RAII-based thread management (automatic joining on destruction).
+
+- **Current Status**: ❌ `std::thread` is used in `Dispatcher`, `DnsResolver`, and several test files.
+- **Refactoring Goal**:
+    - Update `include/qbuem/core/dispatcher.hpp` to use `std::jthread`.
+    - Update `include/qbuem/net/dns.hpp`.
+    - Note: `std::jthread` also supports `std::stop_token` natively, which aligns with the project's cancellation strategy.
+
+### 2.3. `std::to_underlying`
+Replace `static_cast<UnderlyingType>(enum_value)` with the more semantic `std::to_underlying()`.
+
+- **Current Status**: ❌ Manual `static_cast` is used in `WebSocketHandler` and `Numa` logic.
+- **Refactoring Goal**:
+    - `include/qbuem/server/websocket_handler.hpp`: Replace `static_cast<uint8_t>(frame.opcode)`.
+    - `include/qbuem/core/numa.hpp`: Replace `static_cast<int>(thread_count)`.
+
+### 2.4. `if consteval`
+Replace `if (std::is_constant_evaluated())` with the C++23 `if consteval` syntax for clearer compile-time branching.
+
+- **Current Status**: ℹ️ Potential usage in `simd_erasure.hpp` or `simd_validator.hpp` for fallback logic.
+
+### 2.5. `std::views` and `std::ranges`
+Leverage C++23 range improvements such as `std::views::zip`, `std::views::enumerate`, and `std::views::chunk`.
+
+- **Refactoring Goal**:
+    - **Pipeline Batching**: Use `std::views::chunk` to process messages in fixed-size batches.
+    - **Multi-vector Iteration**: Use `std::views::zip` in `simd_erasure.hpp` or `dynamic_router.hpp` when iterating over multiple aligned buffers simultaneously.
+    - **SIMD Loops**: Use `std::views::enumerate` to get indices during manual vectorization fallbacks.
+
+### 2.6. `std::mdspan`
+For multi-dimensional data like image frames in `sensor_fusion` or 3D grids in `high-performance-primitives.md`.
+
+- **Refactoring Goal**:
+    - Explore `std::mdspan` for `include/qbuem/pipeline/sensor_fusion.hpp` to provide a standard view over multi-channel raw data.
+
+### 2.7. `auto(x)` and `auto{x}` (Explicit decay-copy)
+Use `auto(x)` when a copy is explicitly intended, such as passing a value to a coroutine or a capture-by-copy lambda.
+
+## 3. Implementation Roadmap
+
+1. **Phase 1 (Low Risk)**: Replace `printf` with `std::print` in examples and benchmarks.
+2. **Phase 2 (Semantic)**: Replace `static_cast` on enums with `std::to_underlying`.
+3. **Phase 3 (Core)**: Migrate `std::thread` to `std::jthread` in `Dispatcher` and `Reactor` management.
+4. **Phase 4 (Advanced)**: Integrate `std::views` (chunk, zip) into pipeline and SIMD processing loops.
+
+---
+
+## FILE: docs/neon-optimization-strategy.md
+---
+
+# ARM NEON SIMD Optimization Strategy
+
+This document identifies files and functions within the `qbuem-stack` project that are candidates for ARM NEON SIMD optimizations.
+
+## 1. High-Priority Candidates (Data Processing)
+
+These components process large buffers and will see the most significant performance gains from vectorization.
+
+| File Path | Function/Logic | Current Status | NEON Potential |
+|-----------|----------------|----------------|----------------|
+| `include/qbuem/buf/simd_erasure.hpp` | `gf_mul_add` (GF(2^8) Reed-Solomon) | AVX2/SSE4.2 only | Implement split-table lookup using `vtblq_u8` (similar to `vpshufb`). |
+| `include/qbuem/security/simd_validator.hpp` | `crc32` (IEEE 802.3) | SSE4.2 only | Use ARMv8-A CRC32 extensions (`__crc32cw`, etc.). |
+| `include/qbuem/security/simd_validator.hpp` | `scan_neon` (JSON structural scan) | Basic NEON | Use `vget_lane_u64` and `clz` for faster bitmask processing instead of falling back to scalar early. |
+| `include/qbuem/crypto.hpp` | `constant_time_equal` | Scalar loop | Vectorize XOR and OR reduction using 128-bit NEON registers. |
+| `include/qbuem/crypto.hpp` | `base64url_encode` | Scalar loop | Implement SIMD base64 encoding using `vtblq_u8` for character translation. |
+| `include/qbuem/server/websocket_handler.hpp` | `decode_frame`/`encode_frame` (XOR Masking) | Scalar loop | Vectorize 4-byte mask application across 16-byte chunks. |
+| `include/qbuem/server/websocket_handler.hpp` | `compute_accept_key` (SHA-1) | Scalar loop | Use ARMv8-A Cryptography Extensions (`vsha1cq_u32`, etc.). |
+| `src/http/parser.cpp` | `find_header_end` (`\r\n\r\n` scan) | Simplified NEON | Improve bitmask extraction to avoid excessive scalar checks on potential hits. |
+
+## 2. Medium-Priority Candidates (Hashing & Searching)
+
+These components are frequently called but usually handle smaller chunks of data per call.
+
+| File Path | Function/Logic | Current Status | NEON Potential |
+|-----------|----------------|----------------|----------------|
+| `include/qbuem/codec/line_codec.hpp` | `decode` (Line delimiter search) | `std::memchr` | Implement `memchr`-like search for `\r` and `\n` simultaneously using `vceqq_u8` and `vmaxq_u8`. |
+| `include/qbuem/security/jwt_action.hpp` | `hash` (FNV-1a) | Scalar loop | Vectorize FNV-1a by processing multiple 32-bit/64-bit words in parallel (if hash collision risks are managed). |
+| `include/qbuem/buf/lock_free_hash_map.hpp` | `hash` (Integer mix) | Scalar | Vectorize key mixing for batch insertions. |
+| `include/qbuem/db/smart_cache.hpp` | `hash_key` (FNV-1a) | Scalar | Same as `jwt_action`. |
+| `include/qbuem/db/simd_parser.hpp` | `parse_row_neon` | In-progress | Ensure full vectorization of column delimiter scanning and NULL bitmap processing. |
+
+## 3. Implementation Guidelines
+
+### Detection
+Use the existing `QBUEM_HAS_NEON` or `__ARM_NEON` macros to gate NEON-specific code:
+
+```cpp
+#if defined(__ARM_NEON)
+#  include <arm_neon.h>
+#  define QBUEM_USE_NEON 1
+#endif
+```
+
+### Common Patterns
+1. **XOR/Masking**: Use `veorq_u8` for 128-bit bitwise XOR.
+2. **Character Searching**: Use `vceqq_u8` to create a mask and `vmaxvq_u8` (on AArch64) to quickly check if any byte matched.
+3. **Table Lookup**: Use `vtbl1_u8` / `vtblq_u8` for fast small-table lookups (useful for Base64 and GF arithmetic).
+4. **CRC/SHA**: Prefer ARMv8-A hardware instructions (`__crc32b`, `vsha1mq_u32`) when available, falling back to vectorized software implementations.
+
+## 4. Summary of Targeted Files
+
+### `include/qbuem/`
+- `buf/simd_erasure.hpp`
+- `buf/lock_free_hash_map.hpp`
+- `codec/line_codec.hpp`
+- `crypto.hpp`
+- `db/simd_parser.hpp`
+- `db/smart_cache.hpp`
+- `security/simd_validator.hpp`
+- `security/jwt_action.hpp`
+- `server/websocket_handler.hpp`
+
+### `src/`
+- `http/parser.cpp`
+- `db/simd_parser.cpp` (Implementation of `simd_parser.hpp`)
+
+---
+
+## FILE: docs/crypto-primitives.md
+---
+
+# Cryptographic Primitives Module
+
+`include/qbuem/crypto/` — Zero-dependency, zero-allocation cryptography for C++23.
+
+---
+
+## 1. Overview
+
+The `qbuem::crypto` namespace provides a complete, production-grade cryptographic
+toolkit built entirely on the C++23 standard library. No external dependencies
+(no OpenSSL, libsodium, or Botan) are required.
+
+All primitives satisfy the three invariants:
+
+| Invariant | Guarantee |
+|-----------|-----------|
+| **Zero allocation** | No `new`, no `std::vector` on hot paths; all state in `std::array` or caller-provided `std::span<uint8_t>` |
+| **Constant-time** | No secret-dependent branches or table lookups in MAC/compare paths |
+| **SIMD-first** | SHA-NI / ARM SHA2 for hashing; AVX2 / NEON for Base64; AES-NI / ARM AES for AES-GCM |
+
+---
+
+## 2. Module Structure
+
+```
+include/qbuem/crypto/
+├── crypto.hpp              ← Umbrella: include this for everything
+│
+├── random.hpp              ← CSPRNG (Layer 1)
+├── sha256.hpp              ← SHA-256 / SHA-224 (Layer 1)
+├── sha512.hpp              ← SHA-512 / SHA-384 / SHA-512/256 / SHA-512/224 (Layer 1)
+├── hmac.hpp                ← HMAC-SHA-256 / HMAC-SHA-512 (Layer 1)
+├── pbkdf2.hpp              ← PBKDF2-HMAC-SHA-256/512 (Layer 1)
+├── hkdf.hpp                ← HKDF-SHA-256/512 extract + expand (Layer 1)
+├── base64.hpp              ← Base64 / Base64url encode + decode (Layer 2)
+│
+├── chacha20.hpp            ← ChaCha20 stream cipher (Layer 2)
+├── poly1305.hpp            ← Poly1305 one-time MAC (Layer 2)
+├── chacha20_poly1305.hpp   ← ChaCha20-Poly1305 AEAD (Layer 2)
+│
+└── aes_gcm.hpp             ← AES-128-GCM / AES-256-GCM (Layer 3 — AES-NI only)
+```
+
+---
+
+## 3. Algorithms
+
+### 3.1 Hash Functions
+
+| Function | Standard | Output | SIMD path |
+|----------|----------|--------|-----------|
+| `sha256(data)` | FIPS 180-4 | 32 bytes | SHA-NI (x86) / ARM SHA2 / scalar |
+| `sha224(data)` | FIPS 180-4 | 28 bytes | same compression as SHA-256 |
+| `sha512(data)` | FIPS 180-4 | 64 bytes | ARMv8.2-SHA512 / scalar |
+| `sha384(data)` | FIPS 180-4 | 48 bytes | same compression as SHA-512 |
+| `sha512_256(data)` | FIPS 180-4 | 32 bytes | same compression as SHA-512 |
+| `sha512_224(data)` | FIPS 180-4 | 28 bytes | same compression as SHA-512 |
+
+**Streaming interface** (avoids copying large inputs):
+
+```cpp
+qbuem::crypto::Sha256Context ctx;
+ctx.update(header_span);
+ctx.update(body_span);
+auto digest = ctx.finalize();  // std::array<uint8_t, 32>
+```
+
+### 3.2 Message Authentication (HMAC)
+
+| Function | Standard | Tag size | Notes |
+|----------|----------|----------|-------|
+| `hmac_sha256(key, msg)` | RFC 2104 | 32 bytes | one-shot |
+| `hmac_sha512(key, msg)` | RFC 2104 | 64 bytes | one-shot |
+| `verify_hmac_sha256(key, msg, tag)` | RFC 2104 | — | constant-time; bool result |
+| `verify_hmac_sha512(key, msg, tag)` | RFC 2104 | — | constant-time |
+| `HmacSha256{key}` | RFC 2104 | — | streaming; `reset()` + `update()` + `finalize()` |
+
+```cpp
+// Sign
+auto tag = qbuem::crypto::hmac_sha256("api-secret", payload);
+
+// Verify (timing-safe — no early exit on mismatch)
+bool ok = qbuem::crypto::verify_hmac_sha256(
+    {key.data(), key.size()}, {msg.data(), msg.size()}, expected_tag);
+```
+
+### 3.3 Key Derivation
+
+#### PBKDF2 — Password Hashing
+
+| Function | Standard | Use case |
+|----------|----------|---------|
+| `pbkdf2_hmac_sha256<N>(pw, salt, iter)` | RFC 2898 | Password storage |
+| `pbkdf2_hmac_sha512<N>(pw, salt, iter)` | RFC 2898 | Password storage (higher security) |
+
+Recommended iteration counts (OWASP 2023):
+- SHA-256: **600 000** iterations
+- SHA-512: **210 000** iterations
+
+```cpp
+// Generate a random salt once; store it alongside the hash
+auto salt = qbuem::crypto::random_bytes<16>().value();
+
+// Derive 32-byte key
+auto dk = qbuem::crypto::pbkdf2_hmac_sha256<32>(password, salt, 600'000);
+```
+
+#### HKDF — Key Derivation from Shared Secret
+
+| Function | Standard | Use case |
+|----------|----------|---------|
+| `hkdf_extract_sha256(salt, ikm)` | RFC 5869 | Condense IKM into PRK |
+| `hkdf_expand_sha256(prk, info, out)` | RFC 5869 | Derive multiple sub-keys |
+| `hkdf_extract_sha512` / `hkdf_expand_sha512` | RFC 5869 | SHA-512 variant |
+
+```cpp
+// Typical TLS-like session key derivation
+auto prk = qbuem::crypto::hkdf_extract_sha256(server_nonce, ecdh_shared_secret);
+
+std::array<uint8_t, 32> enc_key{}, auth_key{};
+qbuem::crypto::hkdf_expand_sha256(prk, "enc v1",  enc_key);
+qbuem::crypto::hkdf_expand_sha256(prk, "auth v1", auth_key);
+```
+
+### 3.4 Base64 / Base64url Encoding
+
+| Function | RFC | Padding |
+|----------|-----|---------|
+| `base64_encode(data)` | RFC 4648 §4 | `=` padded |
+| `base64_decode(str)` | RFC 4648 §4 | with/without `=` |
+| `base64url_encode(data)` | RFC 4648 §5 | no padding (default) |
+| `base64url_decode(str)` | RFC 4648 §5 | with/without `=` |
+
+`base64_decode` / `base64url_decode` return `Result<std::string>` (i.e.,
+`std::expected<std::string, std::error_code>`); invalid characters yield an error code.
+
+```cpp
+// Standard Base64
+std::string enc = qbuem::crypto::base64_encode(binary_data);
+auto dec = qbuem::crypto::base64_decode(enc);
+if (!dec) handle_error(dec.error());
+
+// URL-safe Base64 for JWT / session tokens
+std::string jwt_safe = qbuem::crypto::base64url_encode(signature_bytes);
+```
+
+### 3.5 Authenticated Encryption (AEAD)
+
+#### ChaCha20-Poly1305 (recommended — always available)
+
+| Function | Standard | Notes |
+|----------|----------|-------|
+| `chacha20_poly1305_seal(key, nonce, aad, pt, ct, tag)` | RFC 8439 | separate output buffers |
+| `chacha20_poly1305_seal(key, nonce, aad, data)` | RFC 8439 | in-place; returns `AeadTag` |
+| `chacha20_poly1305_open(key, nonce, aad, ct, tag, pt)` | RFC 8439 | authenticate-before-decrypt |
+| `chacha20_poly1305_open(key, nonce, aad, data, tag)` | RFC 8439 | in-place |
+
+```cpp
+using namespace qbuem::crypto;
+
+AeadKey   key   = random_bytes<32>().value();
+AeadNonce nonce = random_bytes<12>().value();
+
+// Encrypt
+std::vector<uint8_t> ct(plaintext.size());
+AeadTag tag{};
+chacha20_poly1305_seal(key, nonce, aad, plaintext, ct, tag);
+
+// Decrypt + verify (returns error if tag is invalid)
+auto result = chacha20_poly1305_open(key, nonce, aad, ct, tag, plaintext_out);
+if (!result) { /* forgery / corruption detected */ }
+```
+
+**Security requirements:**
+- The nonce must be **unique per (key, message) pair**. Reuse leaks the key stream.
+- Use a random 96-bit nonce or a monotonically increasing 64-bit counter.
+
+#### AES-GCM (hardware-only)
+
+`AesGcm128` / `AesGcm256` use AES-NI + PCLMULQDQ on x86-64 or ARM AES + PMULL on AArch64.
+No software fallback is provided (table-based AES is vulnerable to cache-timing attacks).
+
+```cpp
+if (!qbuem::crypto::has_aes_ni()) {
+    // Fall back to ChaCha20-Poly1305 (always safe)
+}
+
+auto ctx = qbuem::crypto::AesGcm256::create(aes_key);
+if (!ctx) { /* AES-NI unavailable */ }
+
+AesGcmTag tag{};
+ctx->seal(nonce, aad, plaintext, ciphertext, tag);
+auto r = ctx->open(nonce, aad, ciphertext, tag, plaintext_out);
+```
+
+### 3.6 CSPRNG
+
+| Function | Source | Notes |
+|----------|--------|-------|
+| `random_fill(span<uint8_t>)` | `getrandom(2)` / `arc4random_buf` | kernel CSPRNG |
+| `hw_random_fill(span<uint8_t>)` | RDRAND → kernel fallback | fast bulk entropy |
+| `hw_seed_fill(span<uint8_t>)` | RDSEED → RDRAND → kernel | thermal TRNG |
+| `random_bytes<N>()` | kernel CSPRNG | returns `Result<array<uint8_t,N>>` |
+| `has_rdrand()` / `has_rdseed()` | CPUID | compile-time or runtime detection |
+| `rdrand64(out)` / `rdseed64(out)` | x86 instruction | single 64-bit sample |
+
+---
+
+## 4. SIMD Acceleration Summary
+
+| Algorithm | x86-64 | AArch64 | Scalar fallback |
+|-----------|--------|---------|-----------------|
+| SHA-256 | SHA-NI (`__SHA__`) ~4 GB/s | ARM SHA2 (`__ARM_FEATURE_SHA2`) ~3 GB/s | ~200–400 MB/s |
+| SHA-512 | Scalar | ARMv8.2-SHA512 | Scalar |
+| Base64 encode | AVX2 (`__AVX2__`) ~4 GB/s | NEON vtbl ~3 GB/s | ~600 MB/s |
+| ChaCha20 | AVX2 8-block | NEON 4-block | 1-block |
+| AES-GCM | AES-NI + PCLMUL | ARM AES + PMULL | Not supported |
+
+---
+
+## 5. API Quick Reference
+
+```cpp
+#include <qbuem/crypto/crypto.hpp>
+
+using namespace qbuem::crypto;
+
+// ── Hashing ──────────────────────────────────────────────────────
+Sha256Digest d = sha256("message");                          // one-shot
+Sha512Digest d = sha512(span<const uint8_t>{buf, len});     // one-shot
+Sha256Context ctx; ctx.update(a); ctx.update(b);
+Sha256Digest d = ctx.finalize();                             // streaming
+
+// ── HMAC ─────────────────────────────────────────────────────────
+Sha256Digest tag = hmac_sha256("key", "message");
+bool ok = verify_hmac_sha256({key}, {msg}, expected_tag);   // constant-time
+
+// ── PBKDF2 ───────────────────────────────────────────────────────
+auto dk = pbkdf2_hmac_sha256<32>(password, salt, 600'000);
+
+// ── HKDF ─────────────────────────────────────────────────────────
+auto prk = hkdf_extract_sha256(salt, ikm);
+std::array<uint8_t, 32> okm{};
+hkdf_expand_sha256(prk, info, okm);
+
+// ── Base64 ───────────────────────────────────────────────────────
+std::string enc = base64_encode(data);
+auto dec = base64_decode(enc);          // Result<std::string>
+std::string url = base64url_encode(data);
+
+// ── ChaCha20-Poly1305 ─────────────────────────────────────────────
+AeadKey key = random_bytes<32>().value();
+AeadNonce nonce = random_bytes<12>().value();
+AeadTag tag{};
+chacha20_poly1305_seal(key, nonce, aad, plaintext, ciphertext, tag);
+auto r = chacha20_poly1305_open(key, nonce, aad, ciphertext, tag, plaintext_out);
+
+// ── AES-GCM ──────────────────────────────────────────────────────
+if (has_aes_ni()) {
+    auto ctx = AesGcm256::create(aes_key).value();
+    AesGcmTag tag{};
+    ctx.seal(nonce, aad, plaintext, ciphertext, tag);
+    ctx.open(nonce, aad, ciphertext, tag, plaintext_out);
+}
+
+// ── CSPRNG ───────────────────────────────────────────────────────
+auto bytes = random_bytes<32>().value();          // 256-bit key
+hw_random_fill(buf);                              // RDRAND + fallback
+```
+
+---
+
+## 6. Algorithm Selection Guide
+
+| Use case | API | Notes |
+|----------|-----|-------|
+| Password storage | `pbkdf2_hmac_sha256<32>(pw, salt, 600'000)` | Slow by design |
+| Session key from ECDH | `hkdf_extract_sha256` → `hkdf_expand_sha256` | RFC 5869 |
+| API request signing | `hmac_sha256` + `verify_hmac_sha256` | Constant-time |
+| Symmetric encryption (portable) | `chacha20_poly1305_seal/open` | Always safe |
+| Symmetric encryption (performance) | `AesGcm256` + ChaCha20 fallback | ~5× faster |
+| Session token generation | `random_bytes<32>` + `base64url_encode` | 256-bit entropy |
+| Content addressing / dedup | `sha256` | Fast, SIMD-accelerated |
+| JWT signature | `hmac_sha256` or `base64url_encode(sig)` | HS256 pattern |
+
+---
+
+## 7. What Is Intentionally Excluded
+
+| Algorithm | Reason |
+|-----------|--------|
+| Software AES | Table lookups create cache-timing side channels |
+| TLS handshake / X.509 | Requires certificate store, complex state machine |
+| X25519 / ECDH | Constant-time Montgomery multiplication is complex to implement safely |
+| RSA / ECDSA | Requires arbitrary-precision arithmetic |
+
+Use the optional `qbuem-stack::tls` component (wraps OpenSSL/mbedTLS) for
+TLS handshakes and certificate-based authentication.
+
+---
+
+## 8. Testing
+
+Tests live in `tests/crypto_primitives_test.cpp` and cover:
+
+- **Known-answer tests** (KAT): SHA-256/224, SHA-512/384, HMAC-SHA-256 against NIST FIPS 180-4 and RFC 4231 vectors; HKDF against RFC 5869 Appendix A.1; Base64 against RFC 4648 §10.
+- **Streaming vs one-shot equality** for SHA-256, SHA-512, HMAC.
+- **Round-trip correctness** for Base64, Base64url, ChaCha20-Poly1305, AES-GCM.
+- **Tamper detection** for ChaCha20-Poly1305 (modified ciphertext, tag, and AAD) and AES-GCM.
+- **PBKDF2 determinism** — same inputs yield the same derived key.
+- **HKDF RFC 5869 A.1** — exact extract PRK and expand OKM values verified.
+- **CSPRNG sanity** — output is non-zero and consecutive calls differ.
+
+Build and run with:
+```bash
+cmake -B build && cmake --build build --target qbuem_crypto_tests
+cd build && ctest -R qbuem_crypto_tests --output-on-failure
+```
+
+---
+
+## 9. Example
+
+See `examples/04-codec-security/crypto_primitives/` for a runnable walkthrough
+of all APIs from hashing through AEAD encryption.
+
+---
+
+## FILE: docs/secure-config-architecture.md
+---
+
+# Secure Configuration Architecture (qbuem-config)
+
+This document specifies the design for a high-performance, security-first configuration management module for `qbuem-stack`.
+
+## 1. Design Philosophy
+
+- **Zero Hardcoding**: No secrets, credentials, or environment-specific values in the source code.
+- **Immutable Post-Init**: Configuration is loaded once during the "Boot Phase" and remains immutable throughout the "Execution Phase" to ensure lock-free access.
+- **Secret Isolation**: Sensitive data is wrapped in specialized types that prevent accidental logging, serialisation, or memory persistence.
+- **Type Safety**: Config values are accessed via typed getters with compile-time checks or C++23 `std::expected` error handling.
+
+## 2. Security Pillars
+
+### 2.1. The Layered Loading Strategy (Priority)
+Configuration is merged from multiple sources in the following order (highest priority last):
+1. **Embedded Defaults**: Hardcoded safe defaults (e.g., internal buffer sizes).
+2. **Config File**: Local files (e.g., `config.json`, `config.toml`). **Must be added to `.gitignore`.**
+3. **Environment Variables**: Prefixed variables (e.g., `QBUEM_DB_PASSWORD`).
+4. **Secret Manager/KMS**: Runtime injection from external providers (AWS Secrets Manager, HashiCorp Vault).
+
+### 2.2. Secret<T> Wrapper
+To prevent sensitive data from leaking into logs or core dumps:
+- **Masked `operator<<`**: Overloaded to print `[REDACTED]` instead of the actual value.
+- **Memory Zeroing**: Uses `explicit_bzero` or `SecureZeroMemory` in the destructor to wipe the secret from RAM.
+- **Non-Copyable**: Move-only to track ownership and prevent redundant copies in memory.
+
+### 2.3. Anti-Logging Policy
+The `qbuem-logger` is prohibited from accepting `Secret<T>` types. Any attempt to log a secret result in a compilation error or a mandatory `[REDACTED]` string.
+
+## 3. Technical Specification
+
+### 3.1. Data Structure
+The configuration is stored as a flat, cache-aligned array of `std::variant` or a specialized `ConfigNode` tree for hierarchical access, optimized for O(1) or O(log N) lookup.
+
+### 3.2. Access Patterns
+```cpp
+// 1. Static Access (Recommended for hot-paths)
+const auto& db_cfg = app.config().get<DatabaseConfig>("database");
+
+// 2. Secret Retrieval
+std::expected<Secret<std::string>, std::error_code> apiKey = 
+    app.config().get_secret("external_api_key");
+```
+
+## 4. Implementation Details
+
+### 4.1. The ConfigManager Interface
+```cpp
+namespace qbuem::config {
+
+template <typename T>
+class Secret {
+public:
+    explicit Secret(T value) : value_(std::move(value)) {}
+    ~Secret() { 
+        // Zero out memory if T is a string or buffer
+        if constexpr (requires { value_.data(); value_.size(); }) {
+            std::fill_n(static_cast<volatile char*>(value_.data()), value_.size(), 0);
+        }
+    }
+    
+    // Prohibit accidental printing
+    friend std::ostream& operator<<(std::ostream& os, const Secret&) {
+        return os << "[REDACTED]";
+    }
+
+    const T& reveal() const { return value_; } // Explicit opt-in to use value
+
+private:
+    T value_;
+};
+
+class ConfigManager {
+public:
+    // Load from file and override with ENV
+    std::expected<void, std::error_code> load(std::string_view path);
+
+    // Fast typed access
+    template<typename T>
+    T get_or(std::string_view key, T default_val) const noexcept;
+
+    // Secure secret access
+    std::expected<Secret<std::string>, std::error_code> 
+    get_secret(std::string_view key) const noexcept;
+
+private:
+    // SIMD-accelerated internal storage (e.g., Flattened Hash Map)
+    LockFreeHashMap<uint64_t, ConfigValue> values_;
+};
+
+} // namespace qbuem::config
+```
+
+## 5. Security Checklist for Developers
+
+1. **Never** log the result of `secret.reveal()`.
+2. **Never** store `Secret<T>` in long-lived global objects if they are not needed.
+3. **Always** check `std::expected` return values when loading configuration.
+4. **Ensure** `.env` and `*.config.json` are in the project's `.gitignore`.
+5. **Use** environment variables for production credentials; use local files only for development.
+
+## 6. Performance Impact
+- **Loading**: ~1-5ms (SIMD-accelerated JSON/TOML parsing).
+- **Access**: ~5-10ns (O(1) hash lookup with `string_view` keys).
+- **Memory**: O(N) where N is the number of config keys.
+
+---
+
+## FILE: docs/roadmap.md
+---
+
+# qbuem-stack Roadmap
+
+## ⚡ Extreme Performance Standards (The Baseline)
+
+All modules must adhere to these quantitative benchmarks to be considered part of the `qbuem` elite stack.
+
+| Metric | Target | Industry Benchmark (Software-only) |
+| :--- | :--- | :--- |
+| **IPC Latency (SHM)** | **< 200ns** | Aeron ($5\mu s$), Disruptor ($<100ns$ intra-thread) |
+| **HTTP Throughput** | **> 40M RPS** | TechEmpower Elite ($7M$), AF_XDP Records ($20\sim40M$) |
+| **Network P99.9** | **< 10μs** | High-end HFT Software ($1\sim2\mu s$ tick-to-trade) |
+| **Coroutine Switch** | **< 50ns** | Common Boost.Context ($50\sim100ns$) |
+| **Jitter (Tick)** | **< 1μs** | Real-time Linux (PREEMPT_RT) target range |
+| **Zero Allocation** | **0 Bytes** | Mandatory for safety-critical/HFT systems |
+| **SIMD Parsing** | **> 4GB/s** | `simdjson` peak performance range |
+
+> [!IMPORTANT]
+> **Experimental Target**: While **10M RPS** is the entry-level for our elite stack, we aim for **20M~40M RPS** on 100GbE using `AF_XDP` bypass to define the true experimental frontier.
+
+> [!NOTE]
+> Our targets are set at the **absolute software frontier**. Achieving these requires hardware-level optimization (Mechanical Sympathy) including NUMA pinning, HugePages, and Kernel Bypass (io_uring/XDP).
+
+---
+
+## ✅ Completed: v2.3.0 — HTTP Client Full Feature Set
+
+> **Goal**: Complete curl-free HTTP client — async DNS, timeout, redirects, connection pool, kTLS HTTPS.
+
+### 1. Language Policy
+- [x] **English-only**: All code comments, docs, and user-facing strings must be in English. Rule added to `CLAUDE.md`.
+
+### 2. Async DNS Resolution (`include/qbuem/net/dns.hpp`)
+- [x] **`DnsResolver::resolve(host, port)`**: Non-blocking hostname → `SocketAddr` via detached thread + `Reactor::post()`.
+- [x] **IP literal fast-path**: `inet_pton` check in `await_ready()` — no thread spawned for numeric IPs.
+- [x] **IPv4 preference**: Prefers IPv4 results; falls back to IPv6 if no IPv4 record exists.
+- [x] **Reactor integration**: Coroutine resume posted to the originating reactor thread (thread-safe).
+
+### 3. Timeout Support (`include/qbuem/http/fetch.hpp`)
+- [x] **`FetchRequest::timeout(duration)`**: Reactor `register_timer()` fires and requests stop via combined stop_token.
+- [x] **Combined stop_token**: `CombinedStop` struct combines caller's stop_token with timeout stop_source.
+- [x] **Zero overhead when not set**: Timeout path is opt-in; no timer registered when `timeout_ms_ == 0`.
+
+### 4. Automatic Redirect Following (`include/qbuem/http/fetch.hpp`)
+- [x] **`FetchRequest::max_redirects(n)`**: Follow 3xx responses up to N hops.
+- [x] **303 → GET**: Automatically downgrades method to GET on `303 See Other`.
+- [x] **Location header**: Uses the `Location` response header as the next URL.
+
+### 5. DNS Integration in `fetch()` (`include/qbuem/http/fetch.hpp`)
+- [x] **Hostname resolution**: `send()` calls `DnsResolver::resolve()` — real hostname support (not just IP literals).
+- [x] **All comments English**: Entire `fetch.hpp` rewritten in English.
+
+### 6. FetchClient — Connection Pool + Keep-Alive (`include/qbuem/http/fetch_client.hpp`)
+- [x] **`FetchClient`**: Per-host TCP connection pool. `acquire()` / `release()` free-list.
+- [x] **Keep-Alive**: Sends `Connection: keep-alive`; returns sockets to pool on server keep-alive response.
+- [x] **Stale connection retry**: If a reused connection fails on write, retries with a fresh connection.
+- [x] **`set_max_idle_per_host(n)`**, **`set_timeout(d)`**, **`set_max_redirects(n)`** configuration.
+- [x] **`idle_count()`**, **`clear_pool()`** pool management.
+- [x] **Redirect + monadic chaining**: Full feature parity with `FetchRequest`.
+
+### 7. kTLS HTTPS (`include/qbuem/http/fetch_tls.hpp`)
+- [x] **`TlsStream`**: Wraps `TcpStream` + `io::enable_ktls()` activation. Graceful fallback on unsupported kernels.
+- [x] **`TlsSessionParams`**: Carries fd + TX/RX `KtlsSessionParams` from the caller's TLS handshake.
+- [x] **`TlsFetchRequest`**: HTTP/1.1 request builder over a kTLS-activated stream.
+- [x] **`fetch_tls(url, session)`**: Entry point. Caller provides post-handshake session; kernel handles AES-GCM.
+- [x] **Zero TLS library dependency**: kTLS offload path requires no OpenSSL/BoringSSL at I/O time.
+
+### 8. Example (`examples/02-network/http_fetch/`)
+- [x] **`http_fetch_example.cpp`**: 8 patterns: GET, POST, monadic chain, error, timeout, redirect, URL parser, FetchClient.
+- [x] **All English**: Comments and output strings translated to English.
+
+---
+
+---
+
+## ✅ Completed: v3.4.0 — Spatial Index & Build Fixes
+
+### 1. GridBitset Radius Query APIs (`include/qbuem/buf/grid_bitset.hpp`)
+- [x] **`any_in_radius(cx, cy, r, from, to)`**: Returns `true` if any set bit exists within Euclidean radius `r` on layers `[from, to]`. Per-row sqrt extent + AVX-512/AVX2/NEON SIMD scan — O(r) sqrt calls, O(r²) cell checks, early-exit on first hit.
+- [x] **`count_in_radius(cx, cy, r, from, to)`**: Counts set bits within radius. Full circular area scan via shared `detail::scan_row_count()` helper.
+- [x] **`for_each_set_in_radius(cx, cy, r, from, to, fn)`**: Invokes `fn(x, y, layer_mask)` for every non-empty cell within radius. Same per-row sqrt pattern.
+- [x] **`detail::scan_row_any()` / `detail::scan_row_count()`**: Extracted SIMD helpers (AVX-512 / AVX2 / NEON / scalar) shared by all spatial query methods, eliminating ~130 lines of duplicated SIMD code.
+- [x] **`row_ptr(y)`**: Public accessor returning a pointer to the first cell of row `y` — enables external cross-tile row scanning.
+
+### 2. TiledBitset — Infinite Dynamic Spatial Bitset (`include/qbuem/buf/tiled_bitset.hpp`)
+- [x] **`TiledBitset<TileW, TileH, D>`**: Infinite-coordinate dynamic spatial bitset using `GridBitset<TileW,TileH,D>` tiles stored in an `unordered_map`. World coordinates are `int64_t`; tile coordinates are `int32_t`. Negative coordinates fully supported.
+- [x] **TLS 4-slot cache**: Per-thread circular eviction cache (keyed by `instance_id_ + map generation + tile key`) gives mutex-free tile access on the hot path. `shared_mutex` only on TLS cache miss.
+- [x] **`instance_id_`**: Monotone atomic counter per `TiledBitset` instance prevents TLS cache collisions when allocator reuses heap addresses across object lifetimes.
+- [x] **Cross-tile row scan**: `scan_world_row_any()` / `scan_world_row_count()` split world-row queries at `TileW` boundaries and call the shared SIMD helpers per segment.
+- [x] **`raycast(wx, wy, dx, dy, from, to, max_steps)`**: Bresenham DDA raycast transparently crossing tile boundaries via `snapshot(wx, wy)` per step.
+- [x] **`evict_empty_tiles()`**: Scans all loaded tiles; frees tiles where `for_each_set` finds no occupied cells. Returns eviction count. Reclaims `sizeof(Tile)` per evicted tile.
+- [x] **Murmur3 finalizer hash** for `(int32_t cx, int32_t cy)` tile key pairs (good avalanche for packed int32 inputs).
+
+### 3. Open-World Example (`examples/11-advanced-apps/open_world/open_world_example.cpp`)
+- [x] **5-tick open-world simulation** using `TiledBitset<256,256,16>` with 5 semantic layers (wall, player, NPC, monster, item).
+- [x] **Three named zones** across tile(-2,-2) through tile(1,0): Ashfield Keep, Bridge of Fate (straddling a tile boundary at x=256), Shadowfen Vale (fully isolated tile).
+- [x] **Tick 1–5**: Demonstrates world spawn, aggro radius, AoE count, cross-tile line-of-sight raycast, minimap scan, player movement, zone despawn → tile eviction.
+
+### 4. Low-Level Primitive Fixes
+- [x] **`IntrusiveList` move semantics**: Added move constructor and move assignment operator that re-link the sentinel head pointers. Required by `std::sort` on arrays containing `PriceLevel` (which embeds an `IntrusiveList`).
+- [x] **`hft_matching.cpp`**: Replaced `uint32_t rng_` with `Xorshift32` callable struct (zero-allocation, no stdlib PRNG dependency). Fixed narrowing conversions in `GenerationHandle` construction.
+- [x] **`lockfree_bench.cpp`**: Added missing `using namespace std::chrono_literals` for `ms` duration literals.
+- [x] **`micro_ticker_example.cpp`**: Replaced non-existent `qbuem::create_reactor()` with `std::make_unique<EpollReactor>()`; replaced `reactor->schedule()` with `register_timer()`.
+
+### 5. Spatial Test Suite (`tests/grid_spatial_test.cpp`)
+- [x] **41 tests**: 10 `GridRadiusTest` (radius query correctness, layer filter, approximate circle area) + 31 `TiledBitsetTest` (all ops, negative coords, cross-tile box/radius/raycast, coordinate roundtrip, tile lifecycle, memory stats).
+- [x] **All 16 test suites pass** (full `ctest --output-on-failure` clean run).
+
+---
+
+## 🏗 Project Vision & Design
+- **Single System Image**: Unified I/O for WAS, IPC, and Stream Processing.
+- **Kernel-Native**: Directly leveraging `io_uring`, `kqueue`, `kTLS`, and `AF_XDP`.
+- **Mechanical Sympathy**: NUMA-aware, cache-aligned, and lock-free by default.
+
+**Documentation:**
+- [Pipeline Master Guide](./docs/pipeline-master-guide.md) | [IO Architecture](./docs/io-architecture.md) | [Library Strategy](./docs/library-strategy.md)
+- [DB Abstraction](./docs/db-abstraction.md) | [Strategic Vision](./docs/strategic-evaluation.md) | [Windows Support](./docs/windows-support.md) | [Versatility](./docs/versatility-guide.md)
+
+---
+
+## ✅ Completed: v1.4.0 — Unified DB & SHM Messaging
+> **Goal**: Achieve sub-microsecond IPC and zero-allocation database access.
+
+### 1. Unified Database Abstraction ([docs/db-abstraction.md](./docs/db-abstraction.md))
+- [x] **IDBDriver Interface**: O(1) connection handover and stateless protocol parsing. (`include/qbuem/db/driver.hpp`)
+- [x] **ConnectionPool & Statement**: Zero-allocation query preparation and result streaming. (`include/qbuem/db/driver.hpp`)
+- [x] **SIMD Protocol Parser**: AVX-512/NEON accelerated parsing for PostgreSQL/MySQL results. (`include/qbuem/db/simd_parser.hpp`)
+- [x] **db::Value**: Heap-free variant for parameter binding and result extraction. (`include/qbuem/db/value.hpp`)
+
+### 2. SHM Messaging Infrastructure ([docs/shm-messaging.md](./docs/shm-messaging.md))
+- [x] **SHMChannel**: 150ns latency cross-process messaging via `memfd_create`. (`include/qbuem/shm/shm_channel.hpp`)
+- [x] **Futex-uring Sync**: `IORING_OP_FUTEX` based wait/wake for lowest possible IPC jitter. (`include/qbuem/shm/shm_channel.hpp`)
+- [x] **Zero-copy Data Arena**: Direct memory access to shared segments without copies. (`include/qbuem/shm/shm_channel.hpp`)
+- [x] **Unified Message Bus**: Bridging intra-thread `AsyncChannel` and inter-process `SHMChannel`. (`include/qbuem/shm/shm_bus.hpp`)
+
+---
+
+## ✅ Completed: v1.5.0 — Zero-dep Security & TLS
+
+### v1.5.0 — Zero-dep Security & TLS ([docs/security-tls.md](./docs/security-tls.md))
+- [x] **kTLS Optimization**: `sendfile` + kTLS for zero-copy encrypted transmission. (`include/qbuem/io/ktls.hpp`)
+- [x] **SIMD Auth Parser**: High-speed JWT and token parsing using SIMD predicates. (`include/qbuem/security/simd_jwt.hpp`)
+- [x] **Hardware Entropy**: Direct integration with CPU `RDRAND`/`RDSEED` and kernel `getrandom`. (`include/qbuem/crypto.hpp`)
+
+## ✅ Completed: v1.6.0 — Embedded & PCIe Integration
+
+### v1.6.0 — Embedded & PCIe Integration ([docs/embedded-pcie.md](./docs/embedded-pcie.md))
+- [x] **qbuem::PCIeDevice**: Linux VFIO-based userspace PCIe control. (`include/qbuem/pcie/pcie_device.hpp`)
+- [x] **Interrupt to Reactor Bridge**: Mapping MSI-X interrupts to `eventfd` signals. (`include/qbuem/pcie/msix_reactor.hpp`)
+- [x] **UDS Advanced**: FD passing (SCM_RIGHTS) for process-level handle sharing. (`include/qbuem/net/uds_advanced.hpp`)
+
+## ✅ Completed: v1.7.0 — High-End Connectivity
+
+### v1.7.0 — High-End Connectivity
+- [x] **RDMA (RoCE)**: Extending zero-copy messaging cross-host via IBVerbs/RoCE. (`include/qbuem/rdma/rdma_channel.hpp`)
+- [x] **eBPF Observability**: Standardized cluster-wide tracing via BPF CO-RE. (`include/qbuem/ebpf/ebpf_tracer.hpp`)
+- [x] **User-space Storage (SPDK)**: io_uring passthrough for direct NVMe access. (`include/qbuem/spdk/nvme_io.hpp`)
+
+## ✅ Completed: v2.2.0 — v2.3.0 — Monadic HTTP Client (Full)
+
+### v2.2.0 — curl-free Monadic Fetch
+- [x] **Result::map/and_then/transform_error/value_or**: Functor/Monad operations on `Result<T>`. (`common.hpp`)
+- [x] **ParsedUrl**: RFC 3986 URL parser (scheme/host/port/path, IPv6 literal support).
+- [x] **FetchResponse**: Client HTTP response value type (status, headers, body, ok()).
+- [x] **FetchRequest**: Builder-pattern HTTP client (method/header/body/get/post/put/del/patch).
+- [x] **fetch()**: JavaScript-like factory entry point.
+- [x] **Zero-dependency HTTP/1.1**: Built directly on `TcpStream`. No curl. (`include/qbuem/http/fetch.hpp`)
+- [x] **http_fetch_example.cpp**: 8-pattern example file. (`examples/02-network/http_fetch/`)
+
+### v2.3.0 — Full Feature Set (async DNS, timeout, redirect, pool, kTLS)
+- [x] **DnsResolver**: Non-blocking `getaddrinfo` via thread + `Reactor::post()`. (`include/qbuem/net/dns.hpp`)
+- [x] **Timeout**: `FetchRequest::timeout(d)` — reactor timer + combined stop_token.
+- [x] **Redirect**: `FetchRequest::max_redirects(n)` — automatic 3xx follow with 303→GET downgrade.
+- [x] **FetchClient**: Per-host connection pool, Keep-Alive, stale-connection retry. (`include/qbuem/http/fetch_client.hpp`)
+- [x] **TlsStream / fetch_tls()**: kTLS kernel offload for HTTPS. Caller provides TLS handshake + session keys. (`include/qbuem/http/fetch_tls.hpp`)
+- [x] **English-only**: All code comments and docs translated to English. Rule added to `CLAUDE.md`.
+
+---
+
+## ✅ Completed: v2.1.0 — Pipeline ↔ IPC Full Integration
+
+### v2.1.0 — Pipeline IPC Bridge & Reliability
+
+- [x] **PipelineBuilder::with_source()**: Connects external sources (SHMSource, MessageBusSource) to the Pipeline Head. Automatically generates source pump coroutines. (`include/qbuem/pipeline/static_pipeline.hpp`)
+- [x] **PipelineBuilder::with_sink()**: Connects external sinks (SHMSink, MessageBusSink) to the Pipeline Tail. Automatically generates drain coroutines. (`include/qbuem/pipeline/static_pipeline.hpp`)
+- [x] **MessageBusSource\<T\>**: MessageBus topic subscription → Pipeline source bridge. `init()+next()` protocol. (`include/qbuem/pipeline/message_bus.hpp`)
+- [x] **MessageBusSink\<T\>**: Pipeline Tail → MessageBus publish bridge. `init()+sink()` protocol. (`include/qbuem/pipeline/message_bus.hpp`)
+- [x] **SHMSource\<T\>**: `SHMChannel<T>` consumer-side Pipeline adapter. Owns `name_` as `std::string` (prevents dangling reference). (`include/qbuem/shm/shm_bus.hpp`)
+- [x] **SHMSink\<T\>**: `SHMChannel<T>` producer-side Pipeline adapter. (`include/qbuem/shm/shm_bus.hpp`)
+- [x] **SHMChannel\<T\>::unlink()**: Removes SHM segment filesystem name (idempotent; ENOENT → ok). (`include/qbuem/shm/shm_channel.hpp`)
+- [x] **ipc_pipeline_example.cpp**: 5-scenario composite integration example (SHM→Pipeline, Pipeline→MessageBus, full chain). (`examples/ipc_pipeline_example.cpp`)
+- [x] **pipeline_ipc_test.cpp**: 7 Pipeline ↔ MessageBus IPC integration tests. (`tests/pipeline_ipc_test.cpp`)
+
+---
+
+## ✅ Completed: v2.0.0 — Enhancement
+
+### v2.0.0 — Lock-free Infrastructure & JWT Pipeline Integration
+- [x] **LockFreeConnectionPool**: LIFO FreeStack CAS-based O(1) lock-free acquire/release + PooledConnection RAII guard. (`include/qbuem/db/connection_pool.hpp`)
+- [x] **FutexSync**: `IORING_OP_FUTEX_WAIT/WAKE` non-blocking coroutine futex + syscall fallback. (`include/qbuem/shm/futex_sync.hpp`)
+- [x] **FutexMutex**: Cross-process RAII mutex (states: 0=Unlocked/1=Locked/2=Waiters). (`include/qbuem/shm/futex_sync.hpp`)
+- [x] **FutexSemaphore**: Cross-process counting semaphore. (`include/qbuem/shm/futex_sync.hpp`)
+- [x] **JwtAuthAction**: SIMD JWT Pipeline Action with LRU cache, Stats atomics, zero-copy JwtClaims Context injection. (`include/qbuem/security/jwt_action.hpp`)
+
+---
+
+## ✅ Completed: v2.4.0 — High-Performance Essential Primitives
+> **Reference Design**: [docs/high-performance-primitives.md](./docs/high-performance-primitives.md) / [docs/storage-optimization-guide.md](./docs/storage-optimization-guide.md) / [docs/epoll-optimization-guide.md](./docs/epoll-optimization-guide.md) / [docs/pcie-optimization-guide.md](./docs/pcie-optimization-guide.md)
+
+- [x] **`LockFreeHashMap<K, V>`**: MPMC non-blocking hash map with atomic CAS per slot. (`include/qbuem/buf/lock_free_hash_map.hpp`)
+- [x] **`GenerationPool<T>`**: Lock-free object pool with generation-indexed `Handle<T>` (ABA-safe). (`include/qbuem/buf/generation_pool.hpp`)
+- [x] **`IntrusiveList<T>`**: Zero-allocation linked list (objects carry pointers). (`include/qbuem/buf/intrusive_list.hpp`)
+- [x] **`MicroTicker`**: High-precision Reactor driver — nanosleep + busy-spin hybrid, <5µs jitter, drift compensation. (`include/qbuem/reactor/micro_ticker.hpp`)
+- [x] **`FileIO (O_DIRECT)`**: `DirectFile`, `FileSink<T>`, `FileSource<T>` — page-cache bypass with 512-byte aligned I/O. (`include/qbuem/io/direct_file.hpp`)
+- [x] **`Epoll (Edge-Triggered)`**: `EpollReactor` updated to `EPOLLET | EPOLLONESHOT` with automatic post-callback re-arming. (`src/core/epoll_reactor.cpp`)
+- [x] **`PCIeDevice (VFIO)`**: Full VFIO implementation — `open()`, `map_bar()`, `alloc_dma_buffer()`, MMIO read/write. (`src/pcie/pcie_device.cpp`)
+- [x] **C++23 Migration**: `CMAKE_CXX_STANDARD 23`, `std::unexpected` (via `<expected>`) replaces custom type, `std::println` from `<print>` in examples.
+
+---
+
+## ✅ Completed: v2.5.0 — High-Performance Stream Processing (Pipeline+)
+> **Reference Design**: [docs/ecosystem-expansion.md](./docs/ecosystem-expansion.md)
+
+- [x] **`StatefulWindow`**: Thread-local accumulation with TumblingFlush/CountFlush/HybridFlush strategies. (`include/qbuem/pipeline/stateful_window.hpp`)
+- [x] **`DynamicRouter`**: SIMD-accelerated (AVX2/SSE4.2/NEON) predicate evaluation for FirstMatch/AllMatch/LoadBalance fan-out routing. (`include/qbuem/pipeline/dynamic_router.hpp`)
+- [x] **`BackpressureMonitor`**: Cache-line-aligned per-stage atomic counters; latency histogram (8 buckets); P50/P99/P99.9 snapshot; threshold-based alerting. (`include/qbuem/pipeline/backpressure_monitor.hpp`)
+
+---
+
+## ✅ Completed: v2.6.0 — Advanced WAS & Middleware
+> **Reference Design**: [docs/ecosystem-expansion.md](./docs/ecosystem-expansion.md)
+
+- [x] **`TemplateEngine`**: Zero-copy pre-compiled template engine with `{{key}}`, `{{{raw}}}`, `{{#if}}`, `{{#each}}`, `{{> partial}}`, `{{! comment }}` syntax. Renders directly into caller buffer; thread-safe reentrant. (`include/qbuem/http/template_engine.hpp`)
+- [x] **`ReliableCast<T>`**: Zero-copy 1:N SHM multicast ring buffer. Single-write/N-consumer with DropSlow/BlockSlow/BestEffort slow-consumer policies; per-consumer cursors on separate cache lines. (`include/qbuem/shm/reliable_cast.hpp`)
+- [x] **`SIMDValidator`**: Wire-speed JSON structural validation (AVX2/SSE4.2/NEON) + binary frame validation (magic, length field, CRC32). `validate_batch()` for multi-message parallel validation. (`include/qbuem/security/simd_validator.hpp`)
+
+---
+
+## ✅ Completed: v2.7.0 — Next-Gen Networking (Fetch+)
+> **Reference Design**: [docs/fetch-advancement.md](./docs/fetch-advancement.md) / [docs/network-optimization-guide.md](./docs/network-optimization-guide.md)
+
+- [x] **`FetchStream`**: Zero-copy response body streaming. `FetchStreamClient::stream()` returns a `FetchStream` delivering body via `AsyncChannel<FetchChunk*>` from a fixed pool — constant 64 KiB × 64 slot memory overhead for any response size. Content-Length and chunked transfer-encoding supported. (`include/qbuem/http/fetch_stream.hpp`)
+- [x] **`Http2Client`**: HTTP/2 multiplexed fetch client. Binary framing (9-byte frame headers), HPACK static-table encoding/literal decoding, SETTINGS handshake, PING ACK, WINDOW_UPDATE flow control, RST_STREAM/GOAWAY handling. Multiple concurrent streams on one TCP connection. (`include/qbuem/http/http2_client.hpp`)
+- [x] **`Http3Client`**: HTTP/3 zero-dependency interface. `IHttp3Transport` injection point for quiche/ngtcp2/msquic/mvfst. QUIC varint encode/decode (RFC 9000 §16). H3 frame type constants (RFC 9114). `Http3Request`/`Http3Response` value types. 0-RTT and CMake integration guide. (`include/qbuem/http/http3_client.hpp`)
+
+---
+
+## ✅ Completed: v2.8.0 — Low-Latency UDP Infrastructure (UDP+)
+> **Reference Design**: [docs/udp-architecture.md](./docs/udp-architecture.md) / [docs/network-optimization-guide.md](./docs/network-optimization-guide.md)
+
+- [x] **`UdpMmsgSocket`**: `recvmmsg`/`sendmmsg` batching — up to 64 datagrams per syscall (64× syscall reduction). `RecvBatch<N,BufSize>` inline storage (zero heap), `SendBatch<N>` zero-copy span references, `MSG_WAITFORONE` for latency-optimal collection. 8 MiB `SO_RCVBUF` for burst absorption. (`include/qbuem/net/udp_mmsg.hpp`)
+- [x] **`RudpSocket`**: Reliable UDP with 32-bit sequencing, cumulative ACK, selective NACK (up to 8 gap entries per header), sliding window flow control (`kRudpWindow=128`), exponential-backoff retransmit. 12-byte base wire header. `connect()`/`listen()` factory, `send()`/`recv()` API, out-of-order reorder buffer. (`include/qbuem/net/rudp_socket.hpp`)
+- [x] **`MulticastSocket`**: IPv4 (`IP_ADD_MEMBERSHIP`) and IPv6 (`IPV6_JOIN_GROUP`) multicast. `create_sender()`/`create_receiver()` factories. `set_ttl()`, `set_loopback()`, `join_group()`, `leave_group()`. `SO_REUSEPORT` for multi-worker receive. Async `send()`/`recv_from()` via reactor. (`include/qbuem/net/udp_multicast.hpp`)
+
+---
+
+## ✅ Completed: v3.0.0 — The Ultimate Protocol Stack
+> **Reference Design**: [docs/feature-status-advancement.md](./docs/feature-status-advancement.md)
+
+- [x] **`AF_XDP Bypass`**: `XdpSource<T>` / `XdpSink<T>` bridging AF_XDP sockets into `StaticPipeline`. `RawPacket` zero-copy UMEM frame descriptor. Fill Ring replenishment on consume. (`include/qbuem/xdp/xdp_pipeline.hpp`)
+- [x] **`Distributed Storage (NVMe-oF)`**: `INvmeOfTransport` injection interface, `NvmeOfAddr::parse()` URL parser (`rdma://`/`tcp://`), scatter-gather `read_scatter()`, `trim()`, `flush()`. `NvmeOfConnection` retry logic + stats. (`include/qbuem/net/nvme_of.hpp`)
+- [x] **`SIMD Erasure Coding`**: GF(2^8) arithmetic (log/alog tables, Russian-peasant multiply), Vandermonde generator matrix, AVX2 VPSHUFB split-table GF multiply + scalar fallback. `ErasureCoder(k,m)`: `encode()`, `reconstruct()`, Gauss-Jordan inversion over GF(2^8). (`include/qbuem/buf/simd_erasure.hpp`)
+- [x] **`Distributed Pipelines`**: `IDistributedTransport` injection, `TrivialCodec<T>` memcpy codec, `DistributedPipeline<In,Out>` local/remote stage mixing, `DistributedPipelineWorker<In,Out>` listener. (`include/qbuem/pipeline/distributed_pipeline.hpp`)
+- [x] **`Post-Quantum Security`**: `IPqcBackend` injection (liboqs/BoringSSL/stub). `PqcKem` (ML-KEM-512/768/1024) + `PqcDsa` (ML-DSA-44/65/87) + SLH-DSA. `HybridKemConfig` X25519+ML-KEM-768. Constexpr size tables. (`include/qbuem/security/pqc.hpp`)
+- [x] **`Smart DB Cache`**: SHM-backed open-addressing hash table, seqlock (odd=write, even=read), FNV-1a hash, TTL expiry, LRU eviction. `SmartCacheStats` atomics. (`include/qbuem/db/smart_cache.hpp`)
+
+### 3. Secure Configuration Management
+- [x] **`ConfigManager`**: Hierarchical configuration loader with environment variable priority and SIMD-accelerated parsing. (`include/qbuem/config/config_manager.hpp`)
+- [x] **`Secret<T>` Wrapper**: Move-only sensitive data type with volatile RAII memory zeroing and `std::formatter` → always `[REDACTED]`. (`include/qbuem/config/config_manager.hpp`)
+- [x] **Layered Loader**: `set_default()`, `set()`, `load_env()`, `load_file()` layered config with `get_or<T>()` and `get_secret()`. Reference: [docs/secure-config-architecture.md](./docs/secure-config-architecture.md).
+
+---
+
+## ✅ Completed: v3.1.0 — Observability & Visual Tooling
+> **Reference Design**: [docs/observability-suite.md](./docs/observability-suite.md)
+
+- [x] **`qbuem-tracer`**: `LifecycleTracer<N>` — zero-allocation OTLP/SHM tracer. `ShmSpanRing<N>` MPSC lock-free ring. `SpanRecord` (128 bytes, trivially copyable). `ActiveSpan` RAII, `start_lifecycle()`, `start_span()`, `drain()`. (`include/qbuem/tracing/lifecycle_tracer.hpp`)
+- [x] **`qbuem-logger`**: `TraceLogger<Cap>` — trace-aware async logger. `TraceLogRing<N>` MPSC ring. `ILogSink` / `StderrLogSink` with W3C traceparent. `log()`/`info()`/`warn()`/`error()` hot path (~10 ns). Background flush via `std::jthread`. (`include/qbuem/tracing/trace_logger.hpp`)
+- [x] **`qbuem-cli`**: `CliServer` + `ICliDataSource` + `tui_render()` ANSI dashboard + `html_export()` self-contained snapshot. (`include/qbuem/tools/qbuem_cli.hpp`)
+- [x] **`qbuem-inspector`**: `JourneyCollector` (span grouping by trace_id), `Journey` Gantt timeline, `inspector_html()` embedded SSE UI, `InspectorServer` drain loop. (`include/qbuem/tools/qbuem_inspector.hpp`)
+- [x] **`eBPF Bridge`**: `MemleakBridge` — `IEbpfRuntime` injection, `AllocRecord` ring, `generate_report()` leak detection with configurable TTL, uprobe attachment API. (`include/qbuem/ebpf/memleak_bridge.hpp`)
+- [x] **`CoroExplorer`**: `CoroRegistry<N>` lock-free slab, `CoroGuard` RAII, `CoroExplorer::snapshot()` + `render_tui()` + `to_json()`. (`include/qbuem/tools/coro_explorer.hpp`)
+
+---
+
+## ✅ Completed: v3.2.0 — Elite Tooling & Chaos Engineering
+> **Reference Design**: [docs/observability-suite.md](./docs/observability-suite.md)
+
+- [x] **`Affinity Inspector`**: `AffinityInspector::refresh()` reads sysfs CPU/NUMA topology. `CpuInfo`, `ThreadAffinityInfo`, `NumaNodeInfo`, `AffinitySnapshot`. `render_tui()`. (`include/qbuem/tools/affinity_inspector.hpp`)
+- [x] **`Buffer Heatmap`**: `BufferHeatmapT<MaxSlots, RingCap>` — `on_alloc()`, `on_stage_enter()`, `on_stage_exit()`, `on_release()`, `find_stalls()`, `render_ascii()`. `HeatmapTicket` RAII handoff. (`include/qbuem/tools/buffer_heatmap.hpp`)
+- [x] **`Chaos-Hardware`**: `ChaosHardware` — probabilistic fault injection (`ErrorInjection`, `LatencySpike`, `BitFlip`, `PartialWrite`, `Reorder`, `DropCompletion`). `inject_pre()`/`inject_post()` lock-free hot path. Compile-out when `QBUEM_CHAOS_ENABLED` not defined. (`include/qbuem/tools/chaos_hardware.hpp`)
+- [x] **`Traffic-Twin`**: `TrafficRecorder` (captures via `ITraceWriter`) + `TrafficReplayer` (WallClock/AsFastAs/StepByStep modes via `ITraceReader`). `TraceFileHeader`/`TraceRecord`/`TraceFileFooter` binary format. (`include/qbuem/tools/traffic_twin.hpp`)
+
+---
+
+## ✅ Completed: v3.3.0 — C++23 Enforcement + ARM NEON SIMD Parity
+> **Reference Design**: [docs/cpp23-upgrade-strategy.md](./docs/cpp23-upgrade-strategy.md) / [docs/neon-optimization-strategy.md](./docs/neon-optimization-strategy.md)
+
+### 1. C++23 Modernization & Refactoring
+- [x] **`std::expected` Migration**: `qbuem::Result<T>` and `qbuem::unexpected` are aliases for `std::expected<T, std::error_code>` and `std::unexpected` — fully C++23 compliant.
+- [x] **`std::jthread` Adoption**: `std::thread` replaced with `std::jthread` in `Dispatcher` (src/core/dispatcher.cpp) and tests (tests/kqueue_test.cpp).
+- [x] **`std::print` / `std::println`**: All `printf`/`fprintf`/`std::cerr` replaced with `std::print`/`std::println` in bench/, observability.hpp, slo.hpp, trace_logger.hpp, exporter.hpp, coro_explorer.hpp.
+- [x] **`std::to_underlying`**: Manual `static_cast` on enums replaced with `std::to_underlying` in `WebSocketHandler`.
+- [x] **`std::format_to_n`**: `snprintf`/`__builtin_snprintf` replaced with `std::format_to_n` in `socket_addr.hpp` and `adaptive_rate_limiter.hpp`.
+
+### 2. ARM NEON SIMD Optimization
+- [x] **`SIMD Erasure Coding`**: NEON `vqtbl1q_u8` split-table lookup path for GF(2^8) `gf_mul_add` in `buf/simd_erasure.hpp`.
+- [x] **`SIMD Validator`**: ARM hardware CRC32 via `__crc32cd`/`__crc32cw`/`__crc32ch`/`__crc32cb` (`__ARM_FEATURE_CRC32`); NEON scan with `vmaxvq_u8` early-out + nibble-compaction bitmask in `security/simd_validator.hpp`.
+- [x] **`SIMD Cryptography`**: NEON `vorrq_u8` accumulator `constant_time_equal` + NEON `vqtbl1q_u8` split-alphabet `base64url_encode` (12B→16char/iter) in `crypto.hpp`.
+- [x] **`WebSocket Masking`**: NEON 16-byte/iter XOR masking path in `server/websocket_handler.hpp`.
+- [x] **`HTTP Parser`**: AArch64 `find_header_end` with `vmaxvq_u8` early-out, `vshrn_n_u16`/`vget_lane_u64` nibble compaction, `__builtin_ctzll>>2` O(1) first-match in `src/http/parser.cpp`.
+
+### 3. Zero-Allocation Config + Secret Management
+- [x] **`ConfigManager`**: `ConfigTable<512>` fixed-capacity FNV-1a open-addressing flat hash, zero heap at access. (`include/qbuem/config/config_manager.hpp`)
+- [x] **`Secret<T>`**: Move-only, volatile-wipe destructor, `std::formatter` specialization emits `[REDACTED]`. (`include/qbuem/config/config_manager.hpp`)
+
+---
+<details>
+<summary><b>v2.0.0 — Enhancement</b></summary>
+
+- [x] **LockFreeConnectionPool**: LIFO FreeStack (CAS push/pop, max 256 slots), O(1) lock-free `acquire()`/`release()`, waiter queue, idle timeout cleanup, `warmup()`, `drain()`.
+- [x] **PooledConnection**: RAII guard for pool-acquired connections. `acquire(pool)` factory. Move-only.
+- [x] **FutexWord**: 4-byte `alignas(4) atomic<uint32_t>` for cross-process futex. Static asserts for size/alignment.
+- [x] **FutexSync**: `IORING_OP_FUTEX_WAIT` SQE + syscall fallback. `wait()`, `wake()`, `wake_all()`, `has_uring_futex()`.
+- [x] **FutexMutex**: Cross-process RAII mutex (0=Unlocked, 1=Locked, 2=Locked+Waiters). `lock()`, `try_lock()`, `unlock()`, `LockGuard`.
+- [x] **FutexSemaphore**: Cross-process counting semaphore. `acquire()`, `try_acquire()`, `release()`, `value()`.
+- [x] **JwtClaims**: Zero-copy `string_view` fields (sub/iss/aud) + int64 exp/iat/nbf. `is_valid_at()` with leeway.
+- [x] **JwtAuthConfig**: leeway_sec, cache_size=256, require_exp, require_sub, auth_header, kBearerPrefixLen=7.
+- [x] **JwtAuthResult**: OK/NoToken/InvalidFormat/Expired/NotYetValid/SignatureInvalid/MissingClaim/CacheHit.
+- [x] **JwtAuthAction\<Msg\>**: Token extraction (duck typing), LRU cache (FNV-1a direct-mapped), SIMD parse, exp check, ITokenVerifier delegation, Context::put\<JwtClaims\>(), Stats atomics.
+</details>
+
+<details>
+<summary><b>v1.7.0 — High-End Connectivity</b></summary>
+
+- [x] **RDMAContext**: `open(dev_name)` IBVerbs device + PD allocation. Move-only.
+- [x] **RDMAChannel**: RC QP setup, `local_info()`/`connect()`, `write()`/`read()`/`send()`/`post_recv()`, `poll_cq()`. In-flight limiting.
+- [x] **QPInfo**: qp_num, lid, gid[16], psn for QP handshake.
+- [x] **Completion**: wr_id, bytes, status, opcode. `ok()` check.
+- [x] **EBPFTracer**: CO-RE BPF load, `enable()`/`disable()`, BPF ringbuf `poll()`, `subscribe()` callback, `read_stats()`, `reset_stats()`, `lookup_map<K,V>()`.
+- [x] **TraceEvent**: 64-byte cache-line aligned struct, `set_label()`/`get_label()`.
+- [x] **EventType**: TcpAccept/TcpClose/HttpParse/PipelineAction/IoUring/ShmChannel/RDMA/JwtVerify/Custom.
+- [x] **qbuem_trace_point**: `[[gnu::noinline]]` no-op uprobe attachment point. `QBUEM_TRACE` macro.
+- [x] **NVMeIOContext**: `open()`, `alloc_dma()`, `read()`/`write()`/`flush()`/`trim()`, `read_scatter()`, `identify_controller()`, `get_log_page()`.
+- [x] **DMABuffer**: Abstract base for `mmap(MAP_HUGETLB)` / `posix_memalign` buffers.
+- [x] **NVMeResult**: status, `ok()`, `sct()`, `sc()`.
+- [x] **NVMeDeviceInfo**: ns_size, lba_size, `total_bytes()`.
+- [x] **NVMeStats**: Atomic read_ops/write_ops/read_bytes/write_bytes/errors/avg_latency_ns.
+</details>
+
+<details>
+<summary><b>v1.6.0 — Embedded & PCIe Integration</b></summary>
+
+- [x] **BDF**: bus/device/function struct + `to_string()`.
+- [x] **BarMapping**: vaddr, size, bar_idx. `read32()`/`write32()` MMIO helpers.
+- [x] **DmaBuffer**: vaddr, iova, size, container_fd for IOMMU-mapped DMA.
+- [x] **PCIeDevice**: `open(bdf)` VFIO, `map_bar()`, `read_mmio32()`/`write_mmio32()`, `alloc_dma_buffer()`. Move-only.
+- [x] **VectorStats**: `alignas(64)` irq_count/missed/latency_ns atomics.
+- [x] **MSIXReactor**: `setup()`, `wait()` co_await eventfd, `try_consume()`, `mask()`/`unmask()`. Move-only.
+- [x] **PeerCredentials**: pid/uid/gid from `SO_PEERCRED`.
+- [x] **RecvFdsResult**: fd_count, data_bytes.
+- [x] **send_fds()**: `SCM_RIGHTS` FD passing via `sendmsg`.
+- [x] **recv_fds()**: `SCM_RIGHTS` FD receiving via `recvmsg`.
+- [x] **get_peer_credentials()**: `SO_PEERCRED` getsockopt.
+- [x] **bind_abstract()** / **connect_abstract()**: Linux abstract namespace Unix domain sockets.
+</details>
+
+<details>
+<summary><b>v1.5.0 — Zero-dep Security & TLS</b></summary>
+
+- [x] **kTLS Optimization**: `ktls_sendfile()` / `ktls_sendfile_all()` — sendfile + kTLS zero-copy encrypted transmission. Includes Linux fallback EAGAIN handling.
+- [x] **SIMD Auth Parser**: `SIMDJwtParser` — AVX2/SSE4.2/NEON/Scalar dot-scan, Base64url validation, claim extraction (zero-allocation). JwtView claim API (`claim()`, `claim_int()`, `is_expired()`).
+- [x] **Hardware Entropy**: `rdrand64()`, `rdseed64()` CPUID-based inline asm, `hw_entropy_fill()`, `hw_seed_fill()`, `has_rdrand()`, `has_rdseed()`. Transparent getrandom/arc4random fallback.
+</details>
+
+<details>
+<summary><b>v1.4.0 — Unified DB & SHM Messaging</b></summary>
+
+- [x] **IDBDriver Interface**: O(1) connection handover and stateless protocol parsing.
+- [x] **ConnectionPool & Statement**: Zero-allocation query preparation and result streaming.
+- [x] **SIMD Protocol Parser**: AVX-512/NEON accelerated parsing for PostgreSQL/MySQL results.
+- [x] **db::Value**: Heap-free variant (≤32B) for parameter binding and result extraction.
+- [x] **SHMChannel**: 150ns latency cross-process messaging via `memfd_create` / `shm_open`.
+- [x] **Futex-uring Sync**: `IORING_OP_FUTEX` based wait/wake for lowest possible IPC jitter.
+- [x] **Zero-copy Data Arena**: Direct memory access to shared segments without copies.
+- [x] **Unified SHMBus**: Bridging intra-thread `AsyncChannel` and inter-process `SHMChannel`, with `SHMSource`/`SHMSink` Pipeline integration.
+</details>
+
+<details>
+<summary><b>v1.3.0 — Kqueue Sophistication (macOS)</b></summary>
+
+- [x] **User-space Buffer Ring**: High-performance buffer selection mimicking `io_uring`.
+- [x] **Multi-event Batching**: `kevent` changelist optimization to minimize syscalls.
+- [x] **Pointer-direct Dispatch**: `udata`-based direct callback invocation.
+- [x] **Principle Alignment**: Integrated `TimerWheel` and `FixedPoolResource`.
+</details>
+
+<details>
+<summary><b>v1.2.0 — Performance Refinement</b></summary>
+
+- [x] **O(1) Timer Wheel**: 4-level hierarchical wheel for low-overhead timers.
+- [x] **Zero-allocation HTTP Params**: Heterogeneous map lookup for header/query params.
+- [x] **Context Cache**: Inline cache for `Context::get<T>()` lookups.
+- [x] **RadixTree Binary Search**: Faster child node traversal for long routes.
+</details>
+
+<details>
+<summary><b>v1.0.0 — Protocol Handlers & Pipelines</b></summary>
+
+- [x] **Static & Dynamic Pipelines**: Compiled type-chains and runtime configurable graphs.
+- [x] **HTTP/1.1 Handler**: Full keep-alive, chunked, and pipeline support.
+- [x] **WebSocket Handler**: RFC 6455 implementation with zero-alloc masking.
+- [x] **Message Bus**: Unary, Streaming, and Bidi-stream support.
+</details>
+
+<details>
+<summary><b>v0.x — Core Foundation</b></summary>
+
+- [x] `IReactor` abstraction (epoll, kqueue, io_uring).
+- [x] `Task<T>` Coroutines (symmetric transfer).
+- [x] `Arena` & `FixedPoolResource` allocators.
+- [x] SIMD HTTP Parser.
+- [x] Core Middleware (CORS, RateLimit, Security).
+</details>
+
+---
+
+## 🛠 Technical Reference: 9-Level Strategy ([docs/library-strategy.md](./docs/library-strategy.md))
+
+| Level | Component | Responsibility |
+| :--- | :--- | :--- |
+| **0** | `result`, `arena`, `crypto` | Memory & Error Handling (Foundation) |
+| **1** | `task`, `reactor`, `dispatcher` | Async Core (Event Loop & Coroutines) |
+| **2** | `epoll`, `kqueue`, `iouring` | OS-specific Reactor Implementations |
+| **3** | `net`, `buf`, `shm`, `file` | IO & Networking Primitives |
+| **4** | `transport`, `codec`, `server` | Framing & Session Management |
+| **5** | `http`, `http-server` | Web Application Layer |
+| **6** | `context`, `channel`, `pipeline` | Stream Processing Core |
+| **7** | `graph`, `resilience`, `db-core` | Advanced Orchestration & Reliability |
+| **8** | `ws`, `http2`, `grpc`, `db-pg` | Specialized Protocol Handlers |
+| **9** | `qbuem` | Umbrella Library |
+
+---
+
+## 📦 Dependency Principles
+- **No External Multi-purpose Libraries**: No Boost, no OpenSSL in headers, no libc++ extensions.
+- **Kernel-Aligned**: We implement protocols directly over kernel primitives (e.g., kTLS, SHM).
+- **Pay-for-what-you-use**: Modular CMake components allow linking only the necessary layers.
+
+---
+
+## FILE: examples/04-codec-security/crypto_primitives/README.md
+---
+
+# crypto_primitives
+
+**Category:** Codec & Security
+**File:** `crypto_primitives_example.cpp`
+**Complexity:** Intermediate
+
+## Overview
+
+Demonstrates all zero-dependency cryptographic primitives in `include/qbuem/crypto/` — hashing, message authentication, key derivation, Base64 encoding, and authenticated encryption — with **no external dependencies** (C++23 stdlib only).
+
+## Scenario
+
+A backend service needs to:
+1. Hash request payloads for deduplication
+2. Generate and verify HMAC-SHA-256 signatures on API tokens
+3. Derive per-session encryption keys from a shared ECDH secret using HKDF
+4. Hash user passwords for storage using PBKDF2
+5. Encrypt sensitive data with ChaCha20-Poly1305 (always available) or AES-256-GCM (hardware)
+6. Encode binary tokens as URL-safe Base64 for cookies and headers
+
+## Architecture
+
+```
+qbuem::crypto namespace
+──────────────────────────────────────────────────────────────
+Layer 1: Hashing
+  sha256() / sha512()      → std::array<uint8_t, 32/64>
+  Sha256Context::update()  → streaming interface
+  sha224() / sha384()      → truncated variants
+
+Layer 1: Message Authentication
+  hmac_sha256(key, msg)    → Sha256Digest (32 bytes)
+  verify_hmac_sha256(...)  → bool (constant-time)
+  HmacSha256{key}          → streaming; reset/reuse
+
+Layer 1: Key Derivation
+  pbkdf2_hmac_sha256<N>()  → std::array<uint8_t, N>
+  hkdf_extract_sha256()    → PRK (Sha256Digest)
+  hkdf_expand_sha256()     → writes OKM to span<uint8_t>
+
+Layer 2: Encoding
+  base64_encode()          → std::string (with '=' padding)
+  base64url_encode()       → std::string (no padding)
+  base64_decode()          → Result<std::string>
+
+Layer 3: AEAD
+  chacha20_poly1305_seal() → AeadTag (always available)
+  chacha20_poly1305_open() → Result<void>
+  AesGcm256::create()      → Result<AesGcm256> (AES-NI required)
+  AesGcm256::seal/open()
+
+Layer 0: CSPRNG
+  random_bytes<N>()        → Result<std::array<uint8_t, N>>
+  hw_random_fill()         → RDRAND or kernel fallback
+  hw_seed_fill()           → RDSEED or kernel fallback
+```
+
+## Key APIs
+
+| API | Standard | Output | Notes |
+|-----|----------|--------|-------|
+| `sha256(data)` | FIPS 180-4 | 32 bytes | SHA-NI / ARM SHA2 / scalar |
+| `sha512(data)` | FIPS 180-4 | 64 bytes | ARM SHA-512 / scalar |
+| `hmac_sha256(key, msg)` | RFC 2104 | 32 bytes | constant-time verify available |
+| `pbkdf2_hmac_sha256<N>(pw, salt, iter)` | RFC 2898 | N bytes | OWASP: ≥ 600 000 iterations |
+| `hkdf_extract_sha256(salt, ikm)` | RFC 5869 | PRK (32 B) | condense entropy |
+| `hkdf_expand_sha256(prk, info, out)` | RFC 5869 | out.size() bytes | sub-key derivation |
+| `base64_encode(data)` | RFC 4648 §4 | string | with '=' padding |
+| `base64url_encode(data)` | RFC 4648 §5 | string | no '+' '/' '=' |
+| `chacha20_poly1305_seal(key, nonce, aad, pt, ct, tag)` | RFC 8439 | 16-byte tag | constant-time, no AES-NI needed |
+| `AesGcm256::create(key)` | NIST SP 800-38D | context | requires AES-NI |
+| `random_bytes<N>()` | POSIX / x86 | N bytes | getrandom/RDRAND |
+
+## How to Build and Run
+
+```bash
+# Configure with Release build
+cmake -B build -DCMAKE_BUILD_TYPE=Release
+
+# Build only this example
+cmake --build build --target crypto_primitives_example
+
+# Run
+./build/examples/04-codec-security/crypto_primitives/crypto_primitives_example
+```
+
+## Expected Output
+
+```
+=== qbuem Cryptographic Primitives Example ===
+
+-- §1  SHA-256 / SHA-512 --
+  SHA-256("hello world") = b94d27b9934d3e08a52e52d7da7dabfac484efe04294e576...
+  SHA-512("hello world") = 309ecc489c12d6eb4cc40f50c902f2b4d0ed77ee511a7c7...
+  streaming == one-shot: yes
+  SHA-224("abc") = 23097d223405d8228642a477bda255b32aadbce4bda0b3f7...
+  SHA-384("abc") = cb00753f45a35e8bb5a03d699ac65007272c32ab0eded163...
+
+-- §2  HMAC-SHA-256 / HMAC-SHA-512 --
+  HMAC-SHA-256 tag = <32-byte hex>
+  verify (correct): OK
+  verify (tampered): correctly rejected
+  streaming == one-shot: yes
+
+-- §3  PBKDF2-HMAC-SHA-256 (password hashing) --
+  salt     = <random 16-byte hex>
+  dk[32B]  = <derived key hex>
+  deterministic: yes
+
+-- §4  HKDF-SHA-256 (session key derivation) --
+  PRK      = <32-byte PRK hex>
+  enc_key  = <32-byte enc key hex>
+  auth_key = <32-byte auth key hex>
+  keys differ: yes
+
+-- §5  Base64 / Base64url encoding --
+  base64("f")      = Zg==   OK
+  base64("foobar") = Zm9vYmFy OK
+  binary round-trip: yes
+  base64url(random 16B) = <22-char url-safe string> (no +/= chars: yes)
+
+-- §6  ChaCha20-Poly1305 AEAD --
+  plaintext  = "Confidential: Transfer $1,000,000 to Alice"
+  ciphertext = <hex>...
+  poly1305   = <16-byte tag>
+  decrypted  = "Confidential: Transfer $1,000,000 to Alice"
+  round-trip: yes
+  tamper detection: OK (forgery rejected)
+
+-- §7  AES-256-GCM (hardware AEAD) --
+  (skipped if AES-NI not available — ChaCha20-Poly1305 used as fallback)
+
+-- §8  CSPRNG & Hardware Entropy --
+  RDRAND available: yes/no
+  RDSEED available: yes/no
+  random_bytes<32>  = <hex>...
+  hw_random<32>     = <hex>...
+  session token     = <43-char Base64url string> (43 chars)
+
+=== Done ===
+```
+
+## Security Notes
+
+### Algorithm Selection Guide
+
+| Use case | Recommended API | Reason |
+|----------|----------------|--------|
+| Password storage | `pbkdf2_hmac_sha256<32>(pw, salt, 600'000)` | Slow by design; OWASP 2023 minimum |
+| Session key derivation | `hkdf_sha256` | Fast; takes arbitrary IKM |
+| Symmetric encryption | `chacha20_poly1305_seal` | Always safe; constant-time |
+| Symmetric encryption (HW) | `AesGcm256` with ChaCha20 fallback | ~5× faster when AES-NI available |
+| API request signing | `hmac_sha256` + `verify_hmac_sha256` | Timing-safe; RFC 2104 |
+| Session token generation | `random_bytes<32>` + `base64url_encode` | 256-bit entropy |
+
+### Nonce Management (ChaCha20-Poly1305 / AES-GCM)
+
+A 12-byte nonce **must never be reused** with the same key. Recommended strategies:
+- Random nonce (96-bit): call `random_bytes<12>()` per message
+- Counter nonce: prefix 4 fixed bytes + 8-byte message counter (monotonic)
+
+### Zero-Allocation Design
+
+All functions operate on caller-provided `std::span<uint8_t>` or return
+`std::array<uint8_t, N>` — no heap allocation occurs in any crypto hot path.
+
+---
