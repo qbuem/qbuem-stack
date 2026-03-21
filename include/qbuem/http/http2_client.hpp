@@ -346,7 +346,7 @@ public:
             auto fr = co_await read_frame(st);
             if (!fr) co_return std::unexpected(fr.error());
             if (fr->type == H2FrameType::Settings &&
-                !(fr->flags & H2Flags::Ack)) {
+                (fr->flags & H2Flags::Ack) == 0u) {
                 // Send SETTINGS ACK
                 co_await send_settings_ack(st);
             }
@@ -494,8 +494,8 @@ private:
         std::vector<std::pair<std::string,std::string>> all_hdrs;
         all_hdrs.reserve(extra_hdrs.size() + 1);
         if (!req_body.empty())
-            all_hdrs.push_back({"content-length", std::to_string(req_body.size())});
-        for (auto& h : extra_hdrs) all_hdrs.push_back(h);
+            all_hdrs.emplace_back("content-length", std::to_string(req_body.size()));
+        for (auto& h : extra_hdrs) all_hdrs.emplace_back(h);
         hpack_encode_request(hpack, method, path, host_, all_hdrs);
 
         // HEADERS frame
@@ -537,7 +537,7 @@ private:
 
             switch (fr->type) {
             case H2FrameType::Settings:
-                if (!(fr->flags & H2Flags::Ack))
+                if ((fr->flags & H2Flags::Ack) == 0u)
                     co_await send_settings_ack(st);
                 break;
 
@@ -570,7 +570,7 @@ private:
                 headers_done = true;
                 // Send WINDOW_UPDATE for connection level
                 co_await send_window_update(0, kDefaultWindowSize, st);
-                if (fr->flags & H2Flags::EndStream) goto done;
+                if ((fr->flags & H2Flags::EndStream) != 0u) goto done;
                 break;
             }
 
@@ -587,7 +587,7 @@ private:
                     co_await send_window_update(0,
                         static_cast<uint32_t>(fr->payload.size()), st);
                 }
-                if (fr->flags & H2Flags::EndStream) goto done;
+                if ((fr->flags & H2Flags::EndStream) != 0u) goto done;
                 break;
             }
 
@@ -643,7 +643,10 @@ private:
                     std::from_chars(val.data(), val.data() + val.size(), s);
                     resp.status = s;
                 } else if (!name.empty() && name[0] != ':') {
-                    resp.headers += name + ": " + val + "\r\n";
+                    resp.headers += name;
+                    resp.headers += ": ";
+                    resp.headers += val;
+                    resp.headers += "\r\n";
                 }
             } else {
                 // Literal without indexing / never indexed
@@ -655,7 +658,10 @@ private:
                     std::from_chars(val.data(), val.data() + val.size(), s);
                     resp.status = s;
                 } else if (!name.empty() && name[0] != ':') {
-                    resp.headers += name + ": " + val + "\r\n";
+                    resp.headers += name;
+                    resp.headers += ": ";
+                    resp.headers += val;
+                    resp.headers += "\r\n";
                 }
             }
         }

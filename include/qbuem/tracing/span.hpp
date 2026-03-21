@@ -155,7 +155,7 @@ public:
    * @param data   Span metadata. Moved in.
    * @param tracer Tracer pointer responsible for exporting (non-owning, nullable).
    */
-  Span(SpanData data, Tracer* tracer)
+  Span(SpanData data, Tracer* tracer) // NOLINT(performance-unnecessary-value-param)
       : data_(std::move(data)), tracer_(tracer) {}
 
   /**
@@ -216,7 +216,7 @@ public:
    * @brief Returns a const reference to the SpanData.
    * @returns Metadata for this span.
    */
-  const SpanData& data() const noexcept { return data_; }
+  [[nodiscard]] const SpanData& data() const noexcept { return data_; }
 
 private:
   SpanData data_;         ///< Span metadata

@@ -264,10 +264,10 @@ private:
 inline Task<Result<FetchResponse>> ClientRequest::send(const std::stop_token& st) {
   // Parse URL
   auto parsed = ParsedUrl::parse(url_);
-  if (!parsed) co_return unexpected(parsed.error());
+  if (!parsed) co_return std::unexpected(parsed.error());
 
   if (parsed->scheme == "https")
-    co_return unexpected(
+    co_return std::unexpected(
         std::make_error_code(std::errc::protocol_not_supported));
 
   // Pool key — uses to_chars to avoid to_string() heap allocation.
@@ -299,13 +299,13 @@ inline Task<Result<FetchResponse>> ClientRequest::send(const std::stop_token& st
   while (true) {
     if (effective_st.stop_requested()) {
       cancel_timer();
-      co_return unexpected(
+      co_return std::unexpected(
           std::make_error_code(std::errc::operation_canceled));
     }
 
     // Re-parse URL after potential redirect
     auto cur_parsed = ParsedUrl::parse(current_url);
-    if (!cur_parsed) { cancel_timer(); co_return unexpected(cur_parsed.error()); }
+    if (!cur_parsed) { cancel_timer(); co_return std::unexpected(cur_parsed.error()); }
 
     std::string cur_key = FetchClient::make_pool_key(cur_parsed->host, cur_parsed->port);
 
@@ -316,15 +316,15 @@ inline Task<Result<FetchResponse>> ClientRequest::send(const std::stop_token& st
     if (!stream_opt) {
       // DNS + TCP connect
       auto addr_r = co_await DnsResolver::resolve(cur_parsed->host, cur_parsed->port);
-      if (!addr_r) { cancel_timer(); co_return unexpected(addr_r.error()); }
+      if (!addr_r) { cancel_timer(); co_return std::unexpected(addr_r.error()); }
 
       if (effective_st.stop_requested()) {
         cancel_timer();
-        co_return unexpected(std::make_error_code(std::errc::operation_canceled));
+        co_return std::unexpected(std::make_error_code(std::errc::operation_canceled));
       }
 
       auto conn_r = co_await TcpStream::connect(*addr_r);
-      if (!conn_r) { cancel_timer(); co_return unexpected(conn_r.error()); }
+      if (!conn_r) { cancel_timer(); co_return std::unexpected(conn_r.error()); }
       stream_opt = std::move(*conn_r);
     }
 
@@ -341,7 +341,7 @@ inline Task<Result<FetchResponse>> ClientRequest::send(const std::stop_token& st
     while (!remaining.empty()) {
       if (effective_st.stop_requested()) {
         cancel_timer();
-        co_return unexpected(std::make_error_code(std::errc::operation_canceled));
+        co_return std::unexpected(std::make_error_code(std::errc::operation_canceled));
       }
       auto w = co_await stream.write(
           std::span<const std::byte>(
@@ -352,7 +352,7 @@ inline Task<Result<FetchResponse>> ClientRequest::send(const std::stop_token& st
         // with a fresh connection by falling through to re-open.
         if (reused) { reused = false; write_failed = true; break; }
         cancel_timer();
-        co_return unexpected(w.error());
+        co_return std::unexpected(w.error());
       }
       remaining.remove_prefix(*w);
     }
@@ -367,7 +367,7 @@ inline Task<Result<FetchResponse>> ClientRequest::send(const std::stop_token& st
 
     // ── Read response ─────────────────────────────────────────────────────
     auto raw_r = co_await detail::read_http_response(stream, effective_st);
-    if (!raw_r) { cancel_timer(); co_return unexpected(raw_r.error()); }
+    if (!raw_r) { cancel_timer(); co_return std::unexpected(raw_r.error()); }
 
     auto resp_r = detail::parse_response(*raw_r);
     if (!resp_r) { cancel_timer(); co_return resp_r; }

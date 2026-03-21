@@ -54,7 +54,7 @@
  * };
  *
  * auto resp = co_await fetch_tls("https://httpbin.org/get", session).send(st);
- * if (!resp) co_return unexpected(resp.error());
+ * if (!resp) co_return std::unexpected(resp.error());
  * std::string_view body = resp->body();
  * @endcode
  *
@@ -241,10 +241,10 @@ public:
    */
   Task<Result<FetchResponse>> send(const std::stop_token& st = {}) {
     auto parsed = ParsedUrl::parse(url_);
-    if (!parsed) co_return unexpected(parsed.error());
+    if (!parsed) co_return std::unexpected(parsed.error());
 
     if (parsed->scheme != "https" && parsed->scheme != "http")
-      co_return unexpected(std::make_error_code(std::errc::invalid_argument));
+      co_return std::unexpected(std::make_error_code(std::errc::invalid_argument));
 
     stream_->set_nodelay(true);
 
@@ -256,12 +256,12 @@ public:
     std::string_view remaining(req_text);
     while (!remaining.empty()) {
       if (st.stop_requested())
-        co_return unexpected(std::make_error_code(std::errc::operation_canceled));
+        co_return std::unexpected(std::make_error_code(std::errc::operation_canceled));
       auto w = co_await stream_->write(
           std::span<const std::byte>(
               reinterpret_cast<const std::byte *>(remaining.data()),
               remaining.size()));
-      if (!w) co_return unexpected(w.error());
+      if (!w) co_return std::unexpected(w.error());
       remaining.remove_prefix(*w);
     }
 
@@ -279,13 +279,13 @@ public:
 
     while (true) {
       if (st.stop_requested())
-        co_return unexpected(std::make_error_code(std::errc::operation_canceled));
+        co_return std::unexpected(std::make_error_code(std::errc::operation_canceled));
       auto n = co_await stream_->read(tmp);
-      if (!n) co_return unexpected(n.error());
+      if (!n) co_return std::unexpected(n.error());
       if (*n == 0) break;
       buf.append(reinterpret_cast<const char *>(tmp.data()), *n);
       if (buf.size() > kMax)
-        co_return unexpected(std::make_error_code(std::errc::message_size));
+        co_return std::unexpected(std::make_error_code(std::errc::message_size));
 
       if (header_end == std::string::npos) {
         auto pos = buf.find("\r\n\r\n");

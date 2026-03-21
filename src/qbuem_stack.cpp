@@ -1086,7 +1086,7 @@ Result<void> App::listen(int port, bool ipv6) {
                     [](AsyncHandler ah, Request areq, Response ares,       // NOLINT(performance-unnecessary-value-param)
                        int fd, Reactor *r, [[maybe_unused]] std::shared_ptr<ConnCtx> c, // NOLINT(performance-unnecessary-value-param)
                        bool ka_flag, bool head_fb,
-                       std::function<void()> arm,
+                       std::function<void()> arm, // NOLINT(performance-unnecessary-value-param)
                        decltype(send_response) sr_fn) -> Task<void> { // NOLINT(performance-unnecessary-value-param)
                   try {
                     co_await ah(areq, ares);
