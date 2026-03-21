@@ -23,7 +23,7 @@
  * ## Usage
  * @code
  * auto addr = co_await DnsResolver::resolve("httpbin.org", 80);
- * if (!addr) co_return unexpected(addr.error());
+ * if (!addr) co_return std::unexpected(addr.error());
  * auto stream = co_await TcpStream::connect(*addr);
  * @endcode
  *
@@ -68,7 +68,7 @@ public:
    *
    * @code
    * auto addr = co_await DnsResolver::resolve("example.com", 80);
-   * if (!addr) co_return unexpected(addr.error());
+   * if (!addr) co_return std::unexpected(addr.error());
    * @endcode
    */
   [[nodiscard]] static Task<Result<SocketAddr>> resolve(const std::string& host,

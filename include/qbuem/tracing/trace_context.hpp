@@ -68,7 +68,7 @@ struct TraceId {
   static TraceId generate() {
     TraceId id;
     auto raw = qbuem::random_bytes(16);
-    std::memcpy(id.bytes, raw.data(), 16);
+    std::memcpy(id.bytes.data(), raw.data(), 16);
     return id;
   }
 
@@ -127,7 +127,7 @@ struct SpanId {
   static SpanId generate() {
     SpanId id;
     auto raw = qbuem::random_bytes(8);
-    std::memcpy(id.bytes, raw.data(), 8);
+    std::memcpy(id.bytes.data(), raw.data(), 8);
     return id;
   }
 

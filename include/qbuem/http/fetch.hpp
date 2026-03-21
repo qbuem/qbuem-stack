@@ -19,7 +19,7 @@
  * @code
  * // Basic GET
  * auto resp = co_await fetch("http://httpbin.org/get").send(st);
- * if (!resp) co_return unexpected(resp.error());
+ * if (!resp) co_return std::unexpected(resp.error());
  *
  * // Monadic chaining
  * auto result = co_await fetch("http://api.example.com/users/1")
@@ -29,7 +29,7 @@
  *
  * auto name = result
  *     .and_then([](const FetchResponse& r) -> Result<std::string> {
- *         if (!r.ok()) return unexpected(std::make_error_code(std::errc::protocol_error));
+ *         if (!r.ok()) return std::unexpected(std::make_error_code(std::errc::protocol_error));
  *         return std::string(r.body());
  *     })
  *     .transform([](const std::string& body) { return "got: " + body; })

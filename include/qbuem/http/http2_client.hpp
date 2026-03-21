@@ -25,7 +25,7 @@
  * @code
  * Http2Client client;
  * auto conn = co_await client.connect("http://api.example.com", st);
- * if (!conn) co_return unexpected(conn.error());
+ * if (!conn) co_return std::unexpected(conn.error());
  *
  * // Fire three requests concurrently on the same TCP connection
  * auto [r1, r2, r3] = co_await TaskGroup{}
@@ -335,7 +335,7 @@ public:
             std::span<const std::byte>(
                 reinterpret_cast<const std::byte*>(kPreface.data()),
                 kPreface.size()), st);
-        if (!wr) co_return unexpected(wr.error());
+        if (!wr) co_return std::unexpected(wr.error());
 
         // Send empty SETTINGS frame
         co_await send_settings(st);
@@ -344,7 +344,7 @@ public:
         // (minimal: just drain 2 frames without strict validation)
         for (int i = 0; i < 2; ++i) {
             auto fr = co_await read_frame(st);
-            if (!fr) co_return unexpected(fr.error());
+            if (!fr) co_return std::unexpected(fr.error());
             if (fr->type == H2FrameType::Settings &&
                 !(fr->flags & H2Flags::Ack)) {
                 // Send SETTINGS ACK
@@ -406,11 +406,11 @@ private:
         size_t got = 0;
         while (got < 9) {
             if (st.stop_requested())
-                co_return unexpected(std::make_error_code(std::errc::operation_canceled));
+                co_return std::unexpected(std::make_error_code(std::errc::operation_canceled));
             auto n = co_await stream_.read(
                 std::span<std::byte>(hdr_buf.data() + got, 9 - got));
             if (!n || *n == 0)
-                co_return unexpected(std::make_error_code(std::errc::connection_reset));
+                co_return std::unexpected(std::make_error_code(std::errc::connection_reset));
             got += *n;
         }
 
@@ -425,11 +425,11 @@ private:
             size_t pgot = 0;
             while (pgot < length) {
                 if (st.stop_requested())
-                    co_return unexpected(std::make_error_code(std::errc::operation_canceled));
+                    co_return std::unexpected(std::make_error_code(std::errc::operation_canceled));
                 auto n = co_await stream_.read(
                     std::span<std::byte>(frame.payload.data() + pgot, length - pgot));
                 if (!n || *n == 0)
-                    co_return unexpected(std::make_error_code(std::errc::connection_reset));
+                    co_return std::unexpected(std::make_error_code(std::errc::connection_reset));
                 pgot += *n;
             }
         }
@@ -442,9 +442,9 @@ private:
         size_t sent = 0;
         while (sent < data.size()) {
             if (st.stop_requested())
-                co_return unexpected(std::make_error_code(std::errc::operation_canceled));
+                co_return std::unexpected(std::make_error_code(std::errc::operation_canceled));
             auto n = co_await stream_.write(data.subspan(sent));
-            if (!n) co_return unexpected(n.error());
+            if (!n) co_return std::unexpected(n.error());
             sent += *n;
         }
         co_return sent;
@@ -508,7 +508,7 @@ private:
             H2FrameType::Headers, flags, stream_id);
         std::memcpy(headers_frame.data() + 9, hpack.data(), hpack.size());
         auto wr = co_await write_raw(headers_frame, st);
-        if (!wr) co_return unexpected(wr.error());
+        if (!wr) co_return std::unexpected(wr.error());
 
         // DATA frame (if POST/PUT body)
         if (has_body) {
@@ -519,7 +519,7 @@ private:
                 H2FrameType::Data, H2Flags::EndStream, stream_id);
             std::memcpy(data_frame.data() + 9, req_body.data(), req_body.size());
             auto dw = co_await write_raw(data_frame, st);
-            if (!dw) co_return unexpected(dw.error());
+            if (!dw) co_return std::unexpected(dw.error());
         }
 
         // Receive frames until END_STREAM on our stream_id
@@ -528,7 +528,7 @@ private:
 
         while (!st.stop_requested()) {
             auto fr = co_await read_frame(st);
-            if (!fr) co_return unexpected(fr.error());
+            if (!fr) co_return std::unexpected(fr.error());
 
             if (fr->stream_id != 0 && fr->stream_id != stream_id) {
                 // Frame for another stream — ignore (minimal implementation)
@@ -558,10 +558,10 @@ private:
                 break;
 
             case H2FrameType::Goaway:
-                co_return unexpected(std::make_error_code(std::errc::connection_aborted));
+                co_return std::unexpected(std::make_error_code(std::errc::connection_aborted));
 
             case H2FrameType::RstStream:
-                co_return unexpected(std::make_error_code(std::errc::connection_reset));
+                co_return std::unexpected(std::make_error_code(std::errc::connection_reset));
 
             case H2FrameType::Headers: {
                 if (fr->stream_id != stream_id) break;
@@ -701,20 +701,20 @@ public:
     [[nodiscard]] Task<Result<std::shared_ptr<Http2Connection>>>
     connect(const std::string& url, const std::stop_token& st) {
         auto parsed = ParsedUrl::parse(url);
-        if (!parsed) co_return unexpected(std::make_error_code(std::errc::invalid_argument));
+        if (!parsed) co_return std::unexpected(std::make_error_code(std::errc::invalid_argument));
 
         auto addr = co_await DnsResolver::resolve(std::string(parsed->host), parsed->port);
         if (!addr)
-            co_return unexpected(std::make_error_code(std::errc::host_unreachable));
+            co_return std::unexpected(std::make_error_code(std::errc::host_unreachable));
 
         auto stream = co_await TcpStream::connect(*addr);
-        if (!stream) co_return unexpected(stream.error());
+        if (!stream) co_return std::unexpected(stream.error());
 
         auto conn = std::make_shared<Http2Connection>(std::move(*stream));
         conn->host_ = std::string(parsed->host);
 
         auto hs = co_await conn->handshake(st);
-        if (!hs) co_return unexpected(hs.error());
+        if (!hs) co_return std::unexpected(hs.error());
 
         co_return conn;
     }

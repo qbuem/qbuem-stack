@@ -167,7 +167,7 @@ public:
     [[nodiscard]] Result<size_t>
     encode(const T& msg, std::span<std::byte> out) noexcept override {
         if (out.size() < sizeof(T))
-            return unexpected(std::make_error_code(std::errc::no_buffer_space));
+            return std::unexpected(std::make_error_code(std::errc::no_buffer_space));
         std::memcpy(out.data(), &msg, sizeof(T));
         return sizeof(T);
     }
@@ -175,7 +175,7 @@ public:
     [[nodiscard]] Result<T>
     decode(std::span<const std::byte> in) noexcept override {
         if (in.size() < sizeof(T))
-            return unexpected(std::make_error_code(std::errc::message_size));
+            return std::unexpected(std::make_error_code(std::errc::message_size));
         T msg;
         std::memcpy(&msg, in.data(), sizeof(T));
         return msg;
@@ -229,8 +229,8 @@ public:
      * @param fn    Stage function: `Task<Result<Next>>(Prev, stop_token)`.
      */
     template<typename Fn>
-    DistributedPipeline& add_local_stage(std::string name, Fn fn) {
-        stages_.push_back({std::move(name), {}, 0});
+    DistributedPipeline& add_local_stage(const std::string& name, Fn fn) {
+        stages_.push_back({name, {}, 0});
         (void)fn;  // Stored by the concrete stage executor (type-erased)
         return *this;
     }
@@ -244,10 +244,10 @@ public:
      * @param port       Remote worker port.
      */
     DistributedPipeline& add_remote_stage(
-            std::string name,
+            const std::string& name,
             std::unique_ptr<IDistributedTransport> transport,
-            std::string host, uint16_t port) {
-        stages_.push_back({std::move(name), std::move(host), port});
+            const std::string& host, uint16_t port) {
+        stages_.push_back({name, host, port});
         transports_.push_back(std::move(transport));
         return *this;
     }
@@ -265,7 +265,7 @@ public:
             for (auto& sd : stages_) {
                 if (!sd.is_local() && t) {
                     auto r = co_await t->connect(sd.remote_host, sd.remote_port, st);
-                    if (!r) co_return unexpected(r.error());
+                    if (!r) co_return std::unexpected(r.error());
                     break;
                 }
             }

@@ -24,7 +24,7 @@
  *
  * // Start a streaming GET request
  * auto stream = co_await client.stream("http://files.example.com/large.bin", st);
- * if (!stream) co_return unexpected(stream.error());
+ * if (!stream) co_return std::unexpected(stream.error());
  *
  * size_t total = 0;
  * while (auto chunk = co_await stream->next(st)) {
@@ -491,7 +491,7 @@ public:
             // "HTTP/1.1 200 OK\r\n"
             auto sp1 = head.find(' ');
             if (sp1 == std::string_view::npos)
-                co_return unexpected(std::make_error_code(std::errc::protocol_error));
+                co_return std::unexpected(std::make_error_code(std::errc::protocol_error));
             auto sp2 = head.find(' ', sp1 + 1);
             auto code_sv = head.substr(sp1 + 1, sp2 - sp1 - 1);
             std::from_chars(code_sv.data(), code_sv.data() + code_sv.size(), status);

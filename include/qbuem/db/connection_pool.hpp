@@ -239,7 +239,7 @@ public:
         : conn_(std::move(conn)), pool_(pool) {}
 
     ~PooledConnection() {
-        if (pool_ != nullptr && conn_)
+        if (pool_ != nullptr && conn_ != nullptr)
             pool_->return_connection(std::move(conn_));
         conn_.reset();
     }

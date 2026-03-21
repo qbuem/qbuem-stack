@@ -341,7 +341,7 @@ public:
     connect(const std::string& url, const std::stop_token& st) {
         auto parsed = ParsedUrl::parse(url);
         if (!parsed)
-            co_return unexpected(std::make_error_code(std::errc::invalid_argument));
+            co_return std::unexpected(std::make_error_code(std::errc::invalid_argument));
 
         uint16_t port = 443;
         if (!parsed->port_str().empty()) {
@@ -352,7 +352,7 @@ public:
         }
 
         auto r = co_await transport_->connect(parsed->host, port, st);
-        if (!r) co_return unexpected(r.error());
+        if (!r) co_return std::unexpected(r.error());
         co_return this;
     }
 

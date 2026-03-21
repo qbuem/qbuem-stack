@@ -133,7 +133,7 @@ auto to_full_action_fn(Fn fn) {
       return fn(std::move(in), env.stop);
     };
   } else { // PlainActionFn
-    return [fn = std::move(fn)](In in, ActionEnv) mutable
+    return [fn = std::move(fn)](In in, const ActionEnv&) mutable
                -> Task<Result<Out>> {
       return fn(std::move(in));
     };

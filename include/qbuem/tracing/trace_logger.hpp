@@ -49,6 +49,7 @@
 #include <qbuem/core/async_logger.hpp>
 #include <qbuem/tracing/trace_context.hpp>
 
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cstddef>
@@ -105,13 +106,13 @@ struct TraceLogRecord {
     uint64_t    trace_id{0};           ///< W3C trace_id (low 64 bits)
     uint64_t    span_id{0};            ///< W3C span_id
     LogLevel    level{LogLevel::Info}; ///< Severity
-    char        service[16]{};         ///< Service name (NUL-terminated)
-    char        msg[kMsgLen]{};        ///< Formatted message (NUL-terminated)
+    std::array<char, 16>      service{}; ///< Service name (NUL-terminated)
+    std::array<char, kMsgLen> msg{};     ///< Formatted message (NUL-terminated)
 
     /** @brief Set message, truncating if necessary. */
     void set_message(std::string_view m) noexcept {
         size_t n = std::min(m.size(), kMsgLen - 1);
-        std::memcpy(msg, m.data(), n);
+        std::memcpy(msg.data(), m.data(), n);
         msg[n] = '\0';
     }
 };
@@ -129,9 +130,9 @@ struct TraceLogRing {
     static_assert((Cap & (Cap - 1)) == 0);
     static constexpr size_t kMask = Cap - 1;
 
-    alignas(64) std::atomic<uint64_t> head{0};
-    alignas(64) std::atomic<uint64_t> tail{0};
-    alignas(64) TraceLogRecord        slots[Cap];
+    alignas(64) std::atomic<uint64_t>    head{0};
+    alignas(64) std::atomic<uint64_t>    tail{0};
+    alignas(64) std::array<TraceLogRecord, Cap> slots{};
 
     bool try_push(const TraceLogRecord& rec) noexcept {
         uint64_t t = tail.load(std::memory_order_relaxed);
@@ -185,7 +186,7 @@ public:
         uint32_t ns = static_cast<uint32_t>(rec.timestamp_ns % 1'000'000'000ULL);
         struct tm tm_buf{};
         ::gmtime_r(&sec, &tm_buf);
-        char ts[32]{};
+        char ts[32]{}; // NOLINT(modernize-avoid-c-arrays)
         ::strftime(ts, sizeof(ts), "%Y-%m-%dT%H:%M:%S", &tm_buf);
 
         // W3C traceparent: 00-<trace_id_128_hex>-<span_id_hex>-01
@@ -195,8 +196,8 @@ public:
             ts, ns,
             level_str(rec.level),
             rec.trace_id, rec.span_id,
-            rec.service,
-            rec.msg);
+            rec.service.data(),
+            rec.msg.data());
     }
 };
 
@@ -231,10 +232,10 @@ public:
                          ILogSink* sink = nullptr,
                          LogLevel min_level = kDefaultLevel)
         : min_level_(min_level)
-        , sink_(sink ? sink : &default_sink_)
+        , sink_(sink != nullptr ? sink : &default_sink_)
     {
         size_t n = std::min(service_name.size(), size_t{15});
-        std::memcpy(service_, service_name.data(), n);
+        std::memcpy(service_.data(), service_name.data(), n);
         service_[n] = '\0';
     }
 
@@ -270,11 +271,11 @@ public:
         TraceLogRecord rec;
         rec.timestamp_ns = now_ns();
         // Extract low 64 bits from TraceId (stored as bytes[16])
-        std::memcpy(&rec.trace_id, ctx.trace_id.bytes + 8, 8);
+        std::memcpy(&rec.trace_id, ctx.trace_id.bytes.data() + 8, 8);
         // Extract uint64_t from SpanId (stored as bytes[8])
-        std::memcpy(&rec.span_id, ctx.parent_span_id.bytes, 8);
+        std::memcpy(&rec.span_id, ctx.parent_span_id.bytes.data(), 8);
         rec.level        = level;
-        std::memcpy(rec.service, service_, sizeof(service_));
+        std::memcpy(rec.service.data(), service_.data(), service_.size());
         rec.set_message(msg);
         if (!ring_.try_push(rec))
             dropped_.fetch_add(1, std::memory_order_relaxed);
@@ -332,7 +333,7 @@ private:
                static_cast<uint64_t>(ts.tv_nsec);
     }
 
-    void flush_loop(std::stop_token st) noexcept {
+    void flush_loop(const std::stop_token& st) noexcept {
         while (!st.stop_requested() || ring_.size() > 0) {
             TraceLogRecord rec;
             while (ring_.try_pop(rec)) sink_->write(rec);
@@ -344,7 +345,7 @@ private:
     LogLevel                           min_level_;
     ILogSink*                          sink_;
     StderrLogSink                      default_sink_;
-    char                               service_[16]{};
+    std::array<char, 16>               service_{};
     TraceLogRing<Cap>                  ring_;
     alignas(64) std::atomic<uint64_t>  dropped_{0};
     std::atomic<bool>                  running_{false};

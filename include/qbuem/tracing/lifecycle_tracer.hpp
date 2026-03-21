@@ -207,10 +207,10 @@ public:
         if (record_ == nullptr) return {};
         TraceContext ctx;
         // Reconstruct TraceId from hi/lo uint64_t fields
-        std::memcpy(ctx.trace_id.bytes,     &record_->trace_id_hi, 8);
-        std::memcpy(ctx.trace_id.bytes + 8, &record_->trace_id_lo, 8);
+        std::memcpy(ctx.trace_id.bytes.data(),     &record_->trace_id_hi, 8);
+        std::memcpy(ctx.trace_id.bytes.data() + 8, &record_->trace_id_lo, 8);
         // Reconstruct SpanId from span_id uint64_t field
-        std::memcpy(ctx.parent_span_id.bytes, &record_->span_id, 8);
+        std::memcpy(ctx.parent_span_id.bytes.data(), &record_->span_id, 8);
         // W3C sample flag
         ctx.flags = (record_->sampled != 0u) ? uint8_t{1} : uint8_t{0};
         return ctx;
@@ -281,7 +281,7 @@ public:
     [[nodiscard]] ActiveSpan start_span(std::string_view operation_name,
                                         const TraceContext& parent_ctx) noexcept {
         uint64_t parent_id{};
-        std::memcpy(&parent_id, parent_ctx.parent_span_id.bytes, 8);
+        std::memcpy(&parent_id, parent_ctx.parent_span_id.bytes.data(), 8);
         return make_span(operation_name, parent_id, false);
     }
 
