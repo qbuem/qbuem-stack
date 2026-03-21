@@ -1,8 +1,8 @@
 # qbuem-stack
 
-> Zero Latency · Zero Allocation · Zero Dependency — High-performance C++20 infrastructure library for WAS, IPC, and data pipelines. v2.3.0.
+> Zero Latency · Zero Allocation · Zero Dependency — High-performance C++23 infrastructure library for WAS, IPC, and data pipelines. v3.4.0.
 
-`qbuem-stack` is a header-centric C++20 library targeting ultra-low latency server workloads.
+`qbuem-stack` is a header-centric C++23 library targeting ultra-low latency server workloads.
 
 ## ⚡ Extreme Performance Standards (Baseline)
 - **IPC Latency**: < 200ns (SHM)
@@ -13,14 +13,18 @@
 ## Core Documentation
 
 - [README](README.md): Project overview, quick start, 40M RPS benchmark targets
-- [TODO / Roadmap](TODO.md): v2.3.0 status and upcoming milestones (v2.4.0 Primitives, v3.0.0 Ultimate Stack)
+- [Roadmap](docs/roadmap.md): v2.3.0–v3.4.0 milestone history and v3.5.0 next targets
 - [Feature Status & Advancement](docs/feature-status-advancement.md): Detailed audit and competitive analysis
+- [C++23 Upgrade Strategy](docs/cpp23-upgrade-strategy.md): Migration to pure C++23 types (`std::expected`, `std::jthread`, `std::print`)
 - [High-Performance Primitives](docs/high-performance-primitives.md): Lock-Free Map, GenerationPool, MicroTicker
 - [Network Optimization (Linux)](docs/network-optimization-guide.md): io_uring fixed buffers, multishot, AF_XDP
 - [kqueue Optimization (macOS)](docs/kqueue-optimization-guide.md): udata O(1) dispatch, changelist batching
+- [ARM NEON Optimization Strategy](docs/neon-optimization-strategy.md): NEON parity roadmap — WebSocket masking, GF(2⁸) erasure, base64url, CRC32
 - [Pipeline Master Guide](docs/pipeline-master-guide.md): Complete reference for Static/Dynamic Pipelines and IPC adapters
 - [SHM Messaging](docs/shm-messaging.md): Sub-microsecond IPC — SHMChannel, SHMBus
-- [Usability Refinement](docs/usability-enhancement.md): Fluent Pipelines, C++20 Concepts, Automated DI
+- [Cryptographic Primitives](docs/crypto-primitives.md): Zero-dependency crypto — SHA-256/512, HMAC, PBKDF2, HKDF, Base64, ChaCha20-Poly1305, AES-GCM
+- [Secure Configuration Architecture](docs/secure-config-architecture.md): `Secret<T>`, layered config loading, anti-logging policy
+- [Usability Refinement](docs/usability-enhancement.md): Fluent Pipelines, C++23 Concepts, Automated DI
 - [Library Strategy](docs/library-strategy.md): 9-level modular CMake build
 
 ## Reference Guides (Next-Gen)
@@ -33,11 +37,11 @@
 - [Security & TLS](docs/security-tls.md): kTLS offload, SIMD JWT, JwtAuthAction
 
 ## Examples Index
-- [Examples Overview](examples/README.md): 44 categorized examples with learning paths
+- [Examples Overview](examples/README.md): 58 categorized examples with learning paths
 
 ## API Reference
-- [Public Headers](include/qbuem/): All public C++20 headers — umbrella at `qbuem_stack.hpp`
+- [Public Headers](include/qbuem/): All public C++23 headers — umbrella at `qbuem_stack.hpp`
 
 ## Build & Test
-- [Root CMakeLists.txt](CMakeLists.txt): Top-level build — C++20, optional qbuem-json
+- [Root CMakeLists.txt](CMakeLists.txt): Top-level build — C++23, optional qbuem-json
 - [CONTRIBUTING](CONTRIBUTING.md): Contribution guidelines and code style
