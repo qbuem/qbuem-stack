@@ -161,7 +161,7 @@ public:
   Task<Result<void>> send(T value) {
     for (;;) {
       if (closed_.load(std::memory_order_relaxed))
-        co_return unexpected(std::make_error_code(std::errc::broken_pipe));
+        co_return std::unexpected(std::make_error_code(std::errc::broken_pipe));
 
       if (try_send_inner(value)) {
         wake_one_receiver();
@@ -298,7 +298,7 @@ private:
     AsyncChannel<T> *chan;
     Waiter           waiter;
 
-    bool await_ready() const noexcept {
+    [[nodiscard]] bool await_ready() const noexcept {
       return !chan->is_full() || chan->is_closed();
     }
 
@@ -326,7 +326,7 @@ private:
     AsyncChannel<T> *chan;
     Waiter           waiter;
 
-    bool await_ready() const noexcept {
+    [[nodiscard]] bool await_ready() const noexcept {
       return !chan->is_empty() || chan->is_closed();
     }
 
@@ -372,13 +372,13 @@ private:
     }
   }
 
-  bool is_full() const noexcept {
+  [[nodiscard]] bool is_full() const noexcept {
     size_t tail = tail_.load(std::memory_order_relaxed);
     size_t head = head_.load(std::memory_order_relaxed);
     return (tail - head) >= capacity_;
   }
 
-  bool is_empty() const noexcept {
+  [[nodiscard]] bool is_empty() const noexcept {
     size_t tail = tail_.load(std::memory_order_relaxed);
     size_t head = head_.load(std::memory_order_relaxed);
     return tail == head;
@@ -522,14 +522,14 @@ private:
   // try_send reads all three — single cache-line touch on the hot path.
   alignas(64) std::atomic<size_t>   tail_{0};         // producers write
   std::atomic<bool>                 closed_{false};   // co-located with tail_ (no alignas)
-  char                              _pad_p_[3];       // align recv_waiter_count_ to 4B
+  char                              _pad_p_[3]; // NOLINT(modernize-avoid-c-arrays)  // align recv_waiter_count_ to 4B
   std::atomic<uint32_t>             recv_waiter_count_{0}; // producers read in wake_one_receiver
 
   // Consumer cache line: head_ + send_waiter_count_
   // try_recv reads both — single cache-line touch on the hot path.
   alignas(64) std::atomic<size_t>   head_{0};         // consumers write
   std::atomic<uint32_t>             send_waiter_count_{0}; // consumers read in wake_one_sender
-  char                              _pad_c_[64 - sizeof(size_t) - sizeof(uint32_t)];
+  char                              _pad_c_[64 - sizeof(size_t) - sizeof(uint32_t)]; // NOLINT(modernize-avoid-c-arrays)
 
   // Waiter lists (cold path only — protected by their respective mutexes)
   std::mutex              send_waiters_mutex_;

@@ -165,9 +165,9 @@ private:
 
 /** @brief W3C Trace Context (W3C traceparent standard). */
 struct TraceCtx {
-  uint8_t trace_id[16]{};  ///< 128-bit trace identifier
-  uint8_t span_id[8]{};    ///< 64-bit span identifier
-  uint8_t flags = 0;       ///< trace-flags (bit 0 = sampled)
+  std::array<uint8_t, 16> trace_id{};  ///< 128-bit trace identifier
+  std::array<uint8_t, 8> span_id{};    ///< 64-bit span identifier
+  uint8_t flags = 0;                   ///< trace-flags (bit 0 = sampled)
 };
 
 /** @brief Unique HTTP request ID (UUID v4 format recommended). */
@@ -192,7 +192,7 @@ struct Deadline {
 
 /** @brief Active tracing Span ID (used for creating child spans). */
 struct ActiveSpan {
-  uint8_t span_id[8]{};
+  std::array<uint8_t, 8> span_id{};
 };
 
 /** @brief Original event occurrence timestamp (used for windowing and watermarking). */

@@ -193,7 +193,7 @@ struct DistributedStageDescriptor {
     std::string name;                    ///< Stage name (for tracing/logging)
     std::string remote_host;             ///< Remote host ("" = local stage)
     uint16_t    remote_port{0};          ///< Remote port (0 = local stage)
-    bool        is_local() const noexcept { return remote_host.empty(); }
+    [[nodiscard]] bool is_local() const noexcept { return remote_host.empty(); }
 };
 
 // ─── DistributedPipeline ─────────────────────────────────────────────────────
