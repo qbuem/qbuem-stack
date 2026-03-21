@@ -192,7 +192,7 @@ public:
                              static_cast<unsigned long long>(n.total_bytes / (1024*1024)),
                              static_cast<unsigned long long>(n.free_bytes  / (1024*1024)));
                 for (uint32_t c = 0; c < 64; ++c)
-                    if (n.cpu_mask & (1ULL << c)) std::fprintf(out, "%u ", c);
+                    if ((n.cpu_mask & (1ULL << c)) != 0ULL) std::fprintf(out, "%u ", c);
                 std::fputs("\n", out);
             }
         }

@@ -350,7 +350,7 @@ inline Task<Result<FetchResponse>> ClientRequest::send(const std::stop_token& st
       if (!w) {
         // If we had a reused connection it may have gone stale — retry once
         // with a fresh connection by falling through to re-open.
-        if (reused) { reused = false; write_failed = true; break; }
+        if (reused) { reused = false; write_failed = true; break; } // NOLINT(clang-analyzer-deadcode.DeadStores)
         cancel_timer();
         co_return std::unexpected(w.error());
       }
@@ -361,7 +361,7 @@ inline Task<Result<FetchResponse>> ClientRequest::send(const std::stop_token& st
       // Pooled connection was stale; open a fresh one (next loop iteration
       // will have stream_opt empty because we break before putting it back).
       stream_opt.reset();
-      reused = false;
+      reused = false; // NOLINT(clang-analyzer-deadcode.DeadStores)
       continue;
     }
 

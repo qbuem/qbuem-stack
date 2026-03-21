@@ -216,7 +216,7 @@ public:
 
         for (size_t i = 0; i < n; ++i) {
             const auto& rec = batch[i];
-            if (rec.freed) {
+            if (rec.freed != 0u) {
                 stats_.free_events.fetch_add(1, std::memory_order_relaxed);
                 stats_.outstanding.fetch_sub(1, std::memory_order_relaxed);
                 stats_.outstanding_bytes.fetch_sub(rec.size_bytes, std::memory_order_relaxed);
@@ -248,7 +248,7 @@ public:
         size_t n = runtime_->read_alloc_map(buf);
         for (size_t i = 0; i < n; ++i) {
             const auto& rec = buf[i];
-            if (!rec.freed && (now_ns - rec.timestamp_ns) > leak_ttl_ns_) {
+            if (rec.freed == 0u && (now_ns - rec.timestamp_ns) > leak_ttl_ns_) {
                 report.leaks.push_back(rec);
                 report.total_freed_bytes += 0; // freed bytes tracked separately
             }

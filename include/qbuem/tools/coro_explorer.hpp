@@ -280,12 +280,12 @@ public:
     CoroGuard& operator=(CoroGuard&&)      = delete;
 
     /** @brief Record a suspension point with an awaiter type name. */
-    void suspend(std::string_view awaiter_type) noexcept {
+    void suspend(std::string_view awaiter_type) const noexcept {
         global_coro_registry().on_suspend(id_, awaiter_type);
     }
 
     /** @brief Record a resumption. */
-    void resume() noexcept {
+    void resume() const noexcept {
         global_coro_registry().on_resume(id_);
     }
 
@@ -349,7 +349,7 @@ public:
                          rec.id,
                          rec.name);
 
-            if (rec.state == CoroState::Suspended && rec.awaiter[0])
+            if (rec.state == CoroState::Suspended && rec.awaiter[0] != '\0')
                 std::print(out, " (awaiting: {})", rec.awaiter);
 
             std::print(out, "  — suspended {:.1f} µs total, {} resumes\n",

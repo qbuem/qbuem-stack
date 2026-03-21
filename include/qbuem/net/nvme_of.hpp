@@ -306,7 +306,7 @@ public:
             if (attempt == max_retries_) co_return r;
             transport_->stats().errors.fetch_add(1, std::memory_order_relaxed);
         }
-        co_return unexpected(std::make_error_code(std::errc::io_error));
+        co_return std::unexpected(std::make_error_code(std::errc::io_error));
     }
 
     /**
@@ -323,7 +323,7 @@ public:
             }
             if (attempt == max_retries_) co_return r;
         }
-        co_return unexpected(std::make_error_code(std::errc::io_error));
+        co_return std::unexpected(std::make_error_code(std::errc::io_error));
     }
 
     /** @brief Scatter-gather read forwarded to transport. */
@@ -396,11 +396,11 @@ public:
             std::unique_ptr<INvmeOfTransport> transport,
             const std::stop_token& st) {
         auto addr = NvmeOfAddr::parse(url_or_nqn);
-        if (!addr) co_return unexpected(
+        if (!addr) co_return std::unexpected(
             std::make_error_code(std::errc::invalid_argument));
 
         auto r = co_await transport->connect(*addr, st);
-        if (!r) co_return unexpected(r.error());
+        if (!r) co_return std::unexpected(r.error());
 
         co_return std::make_unique<NvmeOfConnection>(std::move(transport));
     }

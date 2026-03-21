@@ -241,7 +241,7 @@ public:
      *
      * @param st  Cancellation token.
      */
-    Task<void> run_tui(const std::stop_token& st) {
+    [[nodiscard]] Task<void> run_tui(const std::stop_token& st) const {
         while (!st.stop_requested()) {
             auto groups = collect();
             tui_render(groups);

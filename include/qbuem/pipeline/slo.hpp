@@ -220,7 +220,7 @@ private:
  * Atomic counters (`total_`, `errors_`) are thread-safe.
  * `LatencyHistogram` may have minor inaccuracies under multiple producers.
  */
-class ErrorBudgetTracker {
+class ErrorBudgetTracker { // NOLINT(clang-analyzer-optin.performance.Padding)
 public:
   /** @brief Rolling window size used for error rate calculation. */
   static constexpr size_t kRollingWindow = 1000;

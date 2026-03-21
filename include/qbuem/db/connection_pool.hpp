@@ -122,7 +122,7 @@ public:
 
 private:
     // ─── Internal slot structure ─────────────────────────────────────────
-    struct alignas(64) Slot {
+    struct alignas(64) Slot { // NOLINT(clang-analyzer-optin.performance.Padding)
         std::unique_ptr<IConnection> conn;
         std::atomic<SlotState>       state{SlotState::Free};
         uint64_t                     last_used_ms{0}; ///< Timestamp of last use

@@ -80,7 +80,7 @@ enum class LogFormat {
   Json, ///< {"ts":"…","method":"…","path":"…","status":N,"duration_us":N}
 };
 
-class AsyncLogger {
+class AsyncLogger { // NOLINT(clang-analyzer-optin.performance.Padding)
 public:
   /**
    * @param capacity  Ring buffer size (must be a power of two).

@@ -243,7 +243,7 @@ private:
  * @tparam RingCapacity  SHM ring buffer size (power of 2, default 65536 slots).
  */
 template<size_t RingCapacity = 65536>
-class LifecycleTracer {
+class LifecycleTracer { // NOLINT(clang-analyzer-optin.performance.Padding)
 public:
     static constexpr size_t kDefaultRingCapacity = RingCapacity;
 

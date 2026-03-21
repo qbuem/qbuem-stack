@@ -123,7 +123,7 @@ struct FetchChunk {
  * 3. Caller calls `stream->release(chunk)` after each chunk.
  * 4. Destructor closes the TCP connection and drains the channel.
  */
-class FetchStream {
+class FetchStream { // NOLINT(clang-analyzer-optin.performance.Padding)
 public:
     static constexpr size_t kPoolSlots   = 64;  ///< Pre-allocated chunk pool depth
     static constexpr size_t kChanCap     = 32;  ///< AsyncChannel capacity (slots)

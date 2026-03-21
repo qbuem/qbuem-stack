@@ -371,7 +371,7 @@ void App::enable_structured_log() {
     std::time_t now = std::time(nullptr);
     std::tm tm{};
     gmtime_r(&now, &tm);
-    char ts[32];
+    char ts[32]; // NOLINT(modernize-avoid-c-arrays)
     std::strftime(ts, sizeof(ts), "%Y-%m-%dT%H:%M:%SZ", &tm);
     auto line = std::format(
         "{{\"ts\":\"{}\",\"method\":\"{}\",\"path\":\"{}\","
@@ -391,7 +391,7 @@ void App::enable_access_log() {
     std::time_t now = std::time(nullptr);
     std::tm tm{};
     gmtime_r(&now, &tm);
-    char ts[32];
+    char ts[32]; // NOLINT(modernize-avoid-c-arrays)
     std::strftime(ts, sizeof(ts), "%Y-%m-%dT%H:%M:%SZ", &tm);
     auto line = std::format("[{}] {} {} {} {}µs\n",
                             ts, method, path, status, duration_us);
@@ -405,7 +405,7 @@ void App::enable_json_log() {
     std::time_t now = std::time(nullptr);
     std::tm tm{};
     gmtime_r(&now, &tm);
-    char ts[32];
+    char ts[32]; // NOLINT(modernize-avoid-c-arrays)
     std::strftime(ts, sizeof(ts), "%Y-%m-%dT%H:%M:%SZ", &tm);
     auto line = std::format(
         "{{\"ts\":\"{}\",\"method\":\"{}\","
@@ -1018,7 +1018,7 @@ Result<void> App::listen(int port, bool ipv6) {
                     decltype(async_tail) tail) -> Task<void> {
                   co_await run_mw_chain(mws, 0, rqp, rsp, std::move(tail));
                 }(&router_.middlewares(), rqp, rsp, std::move(async_tail));
-                chain_task.resume();
+                (void)chain_task.resume();
                 chain_task.detach();
                 return; // sync callback done; coroutine owns everything
               }

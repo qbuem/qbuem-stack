@@ -57,7 +57,7 @@ namespace qbuem {
  * @tparam T Type of value to transmit (must be movable).
  */
 template <typename T>
-class AsyncChannel {
+class AsyncChannel { // NOLINT(clang-analyzer-optin.performance.Padding)
 public:
   /**
    * @brief Creates the channel with the specified capacity.

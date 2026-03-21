@@ -303,7 +303,7 @@ public:
         // For now the background collection loop runs until stopped.
         while (!st.stop_requested()) {
             // Drain tracer ring → journey collector
-            if (tracer_) {
+            if (tracer_ != nullptr) {
                 tracer_->drain([this](const SpanRecord& rec) {
                     collector_.ingest(rec);
                     return true;

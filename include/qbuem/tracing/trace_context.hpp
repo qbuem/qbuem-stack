@@ -256,14 +256,14 @@ struct TraceContext {
   static Result<TraceContext> from_traceparent(std::string_view header) {
     // Minimum length: "00-{32}-{16}-{2}" = 55 chars
     if (header.size() < 55) {
-      return unexpected(std::make_error_code(std::errc::invalid_argument));
+      return std::unexpected(std::make_error_code(std::errc::invalid_argument));
     }
     // Verify version ("00")
     if (header[0] != '0' || header[1] != '0') {
-      return unexpected(std::make_error_code(std::errc::invalid_argument));
+      return std::unexpected(std::make_error_code(std::errc::invalid_argument));
     }
     if (header[2] != '-' || header[35] != '-' || header[52] != '-') {
-      return unexpected(std::make_error_code(std::errc::invalid_argument));
+      return std::unexpected(std::make_error_code(std::errc::invalid_argument));
     }
 
     auto hex_digit = [](char c) -> int {
@@ -280,7 +280,7 @@ struct TraceContext {
       int hi = hex_digit(header[3 + i * 2]);
       int lo = hex_digit(header[3 + i * 2 + 1]);
       if (hi < 0 || lo < 0)
-        return unexpected(std::make_error_code(std::errc::invalid_argument));
+        return std::unexpected(std::make_error_code(std::errc::invalid_argument));
       ctx.trace_id.bytes[i] = static_cast<uint8_t>((hi << 4) | lo);
     }
 
@@ -289,7 +289,7 @@ struct TraceContext {
       int hi = hex_digit(header[36 + i * 2]);
       int lo = hex_digit(header[36 + i * 2 + 1]);
       if (hi < 0 || lo < 0)
-        return unexpected(std::make_error_code(std::errc::invalid_argument));
+        return std::unexpected(std::make_error_code(std::errc::invalid_argument));
       ctx.parent_span_id.bytes[i] = static_cast<uint8_t>((hi << 4) | lo);
     }
 
@@ -297,12 +297,12 @@ struct TraceContext {
     int fhi = hex_digit(header[53]);
     int flo = hex_digit(header[54]);
     if (fhi < 0 || flo < 0)
-      return unexpected(std::make_error_code(std::errc::invalid_argument));
+      return std::unexpected(std::make_error_code(std::errc::invalid_argument));
     ctx.flags = static_cast<uint8_t>((fhi << 4) | flo);
 
     // Validity check
     if (!ctx.trace_id.is_valid() || !ctx.parent_span_id.is_valid())
-      return unexpected(std::make_error_code(std::errc::invalid_argument));
+      return std::unexpected(std::make_error_code(std::errc::invalid_argument));
 
     return ctx;
   }

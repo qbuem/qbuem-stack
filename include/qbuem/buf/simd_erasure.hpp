@@ -353,7 +353,7 @@ public:
         int avail = 0;
         for (bool p : present) if (p) ++avail;
         if (avail < k_)
-            return unexpected(std::make_error_code(std::errc::not_enough_memory));
+            return std::unexpected(std::make_error_code(std::errc::not_enough_memory));
 
         // Build decode matrix from first k available rows of generator matrix
         size_t sz = 0;
@@ -374,7 +374,7 @@ public:
 
         // Invert decode sub-matrix
         auto inv_mat = invert_matrix(sub, k_);
-        if (!inv_mat) return unexpected(std::make_error_code(std::errc::invalid_argument));
+        if (!inv_mat) return std::unexpected(std::make_error_code(std::errc::invalid_argument));
 
         // Reconstruct missing data shards
         std::vector<std::byte> tmp(sz);
@@ -405,7 +405,7 @@ private:
             // Find pivot
             int pivot = -1;
             for (int row = col; row < n; ++row)
-                if (mat[static_cast<size_t>(row * n + col)]) { pivot = row; break; }
+                if (mat[static_cast<size_t>(row * n + col)] != 0u) { pivot = row; break; }
             if (pivot < 0) return std::nullopt;
 
             // Swap rows
