@@ -137,12 +137,18 @@ static void demo_pbkdf2() {
 
     // Derive a 32-byte key.
     // Use 100 000 iterations here for demo speed; production should use 600 000+.
-    const auto dk = pbkdf2_hmac_sha256<32>(password, salt, 100'000);
+    const auto dk = pbkdf2_hmac_sha256<32>(
+        std::span<const uint8_t>{reinterpret_cast<const uint8_t*>(password.data()), password.size()},
+        std::span<const uint8_t>{salt},
+        100'000);
     std::println("  salt     = {}", to_hex(salt));
     std::println("  dk[32B]  = {}", to_hex(dk));
 
     // Determinism check: same inputs → same output
-    const auto dk2 = pbkdf2_hmac_sha256<32>(password, salt, 100'000);
+    const auto dk2 = pbkdf2_hmac_sha256<32>(
+        std::span<const uint8_t>{reinterpret_cast<const uint8_t*>(password.data()), password.size()},
+        std::span<const uint8_t>{salt},
+        100'000);
     std::println("  deterministic: {}\n", (dk == dk2) ? "yes" : "no");
 }
 
@@ -222,7 +228,7 @@ static void demo_base64() {
 
     // Base64url (no '+', '/', '=' — safe for URLs and JWT)
     std::array<uint8_t, 16> token_bytes{};
-    random_fill(token_bytes);
+    (void)random_fill(token_bytes);  // NOLINT(bugprone-unused-return-value)
     const auto b64url = base64url_encode({token_bytes.data(), token_bytes.size()});
     std::println("  base64url(random 16B) = {} (no +/= chars: {})\n",
                  b64url,
@@ -386,7 +392,7 @@ static void demo_random() {
 
     // Base64url token (suitable as session ID or CSRF token)
     std::array<uint8_t, 32> token_raw{};
-    random_fill(token_raw);
+    (void)random_fill(token_raw);  // NOLINT(bugprone-unused-return-value)
     const std::string token = base64url_encode({token_raw.data(), token_raw.size()});
     std::println("  session token     = {} ({} chars)\n", token, token.size());
 }
@@ -395,7 +401,7 @@ static void demo_random() {
 // main
 // ─────────────────────────────────────────────────────────────────────────────
 
-int main() {
+int main() {  // NOLINT(bugprone-exception-escape)
     std::println("=== qbuem Cryptographic Primitives Example ===\n");
 
     demo_sha();

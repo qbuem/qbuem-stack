@@ -77,7 +77,7 @@ TEST(Sha256, AbcKAT) {
     const std::string_view msg = "abc";
     auto digest = sha256(msg);
     EXPECT_EQ(to_hex(digest),
-              "ba7816bf8f01cfea414140de5dae2ec73b003618bef0469f491c3f0cb96c72c2");
+              "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
 }
 
 TEST(Sha256, DigestSizeIs32Bytes) {
@@ -222,7 +222,7 @@ TEST(HmacSha256, Rfc4231TestVector2) {
     const std::string_view data = "what do ya want for nothing?";
     const auto tag = hmac_sha256(key, data);
     EXPECT_EQ(to_hex(tag),
-              "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964a72020");
+              "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843");
 }
 
 TEST(HmacSha256, DigestSizeIs32) {

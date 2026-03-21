@@ -147,8 +147,8 @@ inline void block_scalar(const uint8_t* key,
     }
 
     // Add initial state
-    for (int i = 0; i < 16; ++i)
-        store_le32(out + i * 4, s[i] + x[i]);
+    for (size_t i = 0; i < 16; ++i)
+        store_le32(out + i * 4u, s[i] + x[i]);
 }
 
 // ─── NEON block (4 parallel blocks) ──────────────────────────────────────────

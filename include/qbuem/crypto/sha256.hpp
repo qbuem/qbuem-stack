@@ -476,7 +476,7 @@ public:
     }
 
     /** @brief Select the hash variant for construction. */
-    enum class Variant { SHA256, SHA224 };
+    enum class Variant : uint8_t { SHA256, SHA224 };
 
     /** @brief Construct with explicit variant selection. */
     explicit constexpr Sha256Context(Variant v) noexcept {

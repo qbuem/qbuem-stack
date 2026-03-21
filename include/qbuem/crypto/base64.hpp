@@ -60,17 +60,17 @@ using Result = std::expected<T, std::error_code>;
 // ─── Compile-time size calculations ──────────────────────────────────────────
 
 /** @brief Number of Base64 output characters for @p input_bytes bytes (no padding). */
-[[nodiscard]] consteval size_t base64_encoded_size_nopad(size_t input_bytes) noexcept {
+[[nodiscard]] constexpr size_t base64_encoded_size_nopad(size_t input_bytes) noexcept {
     return (input_bytes * 4 + 2) / 3;
 }
 
 /** @brief Number of Base64 output characters (with padding to 4-byte boundary). */
-[[nodiscard]] consteval size_t base64_encoded_size(size_t input_bytes) noexcept {
+[[nodiscard]] constexpr size_t base64_encoded_size(size_t input_bytes) noexcept {
     return ((input_bytes + 2) / 3) * 4;
 }
 
 /** @brief Maximum decoded byte count from @p base64_len encoded characters. */
-[[nodiscard]] consteval size_t base64_decoded_max(size_t base64_len) noexcept {
+[[nodiscard]] constexpr size_t base64_decoded_max(size_t base64_len) noexcept {
     return (base64_len / 4) * 3;
 }
 
@@ -325,7 +325,7 @@ inline Result<size_t> decode_impl(const char* src, size_t src_len,
  * @returns Base64-encoded string.
  */
 [[nodiscard]] inline std::string base64_encode(std::span<const uint8_t> data) {
-    const size_t enc_len = detail::b64::base64_encoded_size(data.size());
+    const size_t enc_len = base64_encoded_size(data.size());
     std::string  out(enc_len, '\0');
     detail::b64::encode_impl(data.data(), data.size(),
                               out.data(), detail::b64::kStdAlpha, true);
@@ -360,8 +360,8 @@ inline size_t base64_encode(std::span<const uint8_t> data,
 [[nodiscard]] inline std::string base64url_encode(std::span<const uint8_t> data,
                                                    bool padding = false) {
     const size_t enc_len = padding
-        ? detail::b64::base64_encoded_size(data.size())
-        : detail::b64::base64_encoded_size_nopad(data.size());
+        ? base64_encoded_size(data.size())
+        : base64_encoded_size_nopad(data.size());
     std::string out(enc_len + 4, '\0');  // +4 for potential padding
     const size_t written = detail::b64::encode_impl(
         data.data(), data.size(), out.data(), detail::b64::kUrlAlpha, padding);

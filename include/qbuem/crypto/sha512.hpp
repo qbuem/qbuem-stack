@@ -241,7 +241,7 @@ inline void compress_block(std::array<uint64_t, 8>& state,
  */
 class alignas(64) Sha512Context {
 public:
-    enum class Variant { SHA512, SHA384, SHA512_256, SHA512_224 };
+    enum class Variant : uint8_t { SHA512, SHA384, SHA512_256, SHA512_224 };
 
     explicit constexpr Sha512Context(Variant v = Variant::SHA512) noexcept
         : variant_(v) {
