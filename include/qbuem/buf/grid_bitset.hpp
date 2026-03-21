@@ -225,7 +225,7 @@ inline void morton2d_decode(uint32_t m, uint32_t& x, uint32_t& y) noexcept {
     for (; i + 2u <= len; i += 2u) {
         uint64x2_t v = vld1q_u64(reinterpret_cast<const uint64_t*>(row + i));
         uint64x2_t r = vandq_u64(v, vmask);
-        if (vmaxvq_u64(r)) return true;
+        if (vmaxvq_u32(vreinterpretq_u32_u64(r))) return true;
     }
     for (; i < len; ++i)
         if (row[i].load(std::memory_order_relaxed) & mask) return true;
