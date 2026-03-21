@@ -43,7 +43,7 @@ KqueueReactor::~KqueueReactor() {
 Result<void> KqueueReactor::register_event(int fd, EventType type,
                                          std::function<void(int)> callback) {
     auto* entry = get_or_create_entry(fd);
-    if (!entry) return unexpected(std::make_error_code(std::errc::not_enough_memory));
+    if (!entry) return std::unexpected(std::make_error_code(std::errc::not_enough_memory));
 
     short filter = (type == EventType::Read) ? EVFILT_READ : EVFILT_WRITE;
     if (type == EventType::Read) entry->read_cb = std::move(callback);
@@ -104,7 +104,7 @@ Result<int> KqueueReactor::register_timer(int timeout_ms,
 
 Result<void> KqueueReactor::register_signal(int sig, std::function<void(int)> callback) {
     auto* entry = get_or_create_entry(sig);
-    if (!entry) return unexpected(std::make_error_code(std::errc::not_enough_memory));
+    if (!entry) return std::unexpected(std::make_error_code(std::errc::not_enough_memory));
 
     entry->signal_cb = std::move(callback);
 
