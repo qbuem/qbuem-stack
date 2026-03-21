@@ -1362,7 +1362,7 @@ void StackController::run() {
   // Install signal handlers — delegate to stop().
   static StackController *g_ctrl = nullptr;
   g_ctrl = this;
-  auto sig_handler = [](int) { if (g_ctrl) g_ctrl->stop(); };
+  auto sig_handler = [](int) { if (g_ctrl != nullptr) g_ctrl->stop(); };
   std::signal(SIGTERM, sig_handler);
   std::signal(SIGINT,  sig_handler);
 
