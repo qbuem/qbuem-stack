@@ -154,12 +154,12 @@ public:
    * @param blocking  If true, `co_await channel.send()` (back-pressure);
    *                  if false, `channel.try_send()` (drop if full).
    */
-  void add_route(std::string name,
+  void add_route(const std::string& name,
                  AsyncChannel<T>& channel,
                  std::function<bool(const T&)> predicate = nullptr,
                  bool blocking = true)
   {
-    routes_.emplace_back(std::move(name), std::move(predicate), channel, blocking);
+    routes_.emplace_back(name, std::move(predicate), channel, blocking);
   }
 
   /**

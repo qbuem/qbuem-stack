@@ -45,6 +45,7 @@
 
 #include <qbuem/common.hpp>
 
+#include <algorithm>
 #include <cstdint>
 #include <cstring>
 #include <optional>
@@ -206,7 +207,7 @@ private:
                 reinterpret_cast<const __m256i*>(data + i));
             uint32_t mask = static_cast<uint32_t>(
                 _mm256_movemask_epi8(_mm256_cmpeq_epi8(chunk, dot_vec)));
-            if (mask) {
+            if (mask != 0u) {
                 first = i + static_cast<size_t>(__builtin_ctz(mask));
             }
         }
@@ -222,7 +223,7 @@ private:
                 reinterpret_cast<const __m256i*>(data + i));
             uint32_t mask = static_cast<uint32_t>(
                 _mm256_movemask_epi8(_mm256_cmpeq_epi8(chunk, dot_vec)));
-            if (mask) {
+            if (mask != 0u) {
                 second = i + static_cast<size_t>(__builtin_ctz(mask));
             }
         }
@@ -320,15 +321,13 @@ private:
      * A single pshufb (`_mm_shuffle_epi8`) instruction checks 16 bytes simultaneously.
      */
     [[nodiscard]] static bool is_base64url(std::string_view s) noexcept {
-        for (unsigned char c : s) {
-            // Base64url character set: A-Z(65-90), a-z(97-122), 0-9(48-57), -(45), _(95)
-            bool valid = (c >= 'A' && c <= 'Z')
-                      || (c >= 'a' && c <= 'z')
-                      || (c >= '0' && c <= '9')
-                      || c == '-' || c == '_';
-            if (!valid) return false;
-        }
-        return true;
+        // Base64url character set: A-Z(65-90), a-z(97-122), 0-9(48-57), -(45), _(95)
+        return std::ranges::all_of(s, [](unsigned char c) {
+            return (c >= 'A' && c <= 'Z')
+                || (c >= 'a' && c <= 'z')
+                || (c >= '0' && c <= '9')
+                || c == '-' || c == '_';
+        });
     }
 };
 
@@ -353,7 +352,7 @@ namespace detail {
 [[nodiscard]] inline size_t base64url_decode(std::string_view b64,
                                               uint8_t* out,
                                               size_t out_len) noexcept {
-    static constexpr int8_t kDecTable[256] = {
+    static constexpr int8_t kDecTable[256] = { // NOLINT(modernize-avoid-c-arrays)
         // RFC 4648 §5 base64url decode table: -1 = invalid
         -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1, // 0x00-0x0F
         -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1, // 0x10-0x1F
@@ -471,7 +470,7 @@ json_find_int(std::string_view json, std::string_view key) noexcept {
 inline std::optional<std::string_view>
 JwtView::claim(std::string_view key) const noexcept {
     // payload is Base64url-encoded — must be decoded first
-    static thread_local uint8_t decode_buf[8192];
+    static thread_local uint8_t decode_buf[8192]; // NOLINT(modernize-avoid-c-arrays)
     size_t n = detail::base64url_decode(payload, decode_buf, sizeof(decode_buf));
     if (n == 0) return std::nullopt;
     std::string_view json{reinterpret_cast<const char*>(decode_buf), n};
@@ -480,7 +479,7 @@ JwtView::claim(std::string_view key) const noexcept {
 
 inline std::optional<int64_t>
 JwtView::claim_int(std::string_view key) const noexcept {
-    static thread_local uint8_t decode_buf[8192];
+    static thread_local uint8_t decode_buf[8192]; // NOLINT(modernize-avoid-c-arrays)
     size_t n = detail::base64url_decode(payload, decode_buf, sizeof(decode_buf));
     if (n == 0) return std::nullopt;
     std::string_view json{reinterpret_cast<const char*>(decode_buf), n};

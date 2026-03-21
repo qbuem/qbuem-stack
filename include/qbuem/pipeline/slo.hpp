@@ -270,7 +270,7 @@ public:
    *
    * Does nothing if `on_violation` is not set.
    */
-  void check_slo() {
+  void check_slo() const {
     if (!cfg_.on_violation) return;
 
     bool violated = false;
@@ -386,7 +386,7 @@ private:
  */
 class SloObserver : public PipelineObserver {
 public:
-  virtual ~SloObserver() = default;
+  ~SloObserver() override = default;
 
   /**
    * @brief Called when an SLO violation is detected.

@@ -273,7 +273,7 @@ private:
             std::string_view auth = msg.header(config_.auth_header);
             if (auth.size() <= JwtAuthConfig::kBearerPrefixLen) return std::nullopt;
             // Check "Bearer " prefix (case-insensitive)
-            static constexpr char kBearer[] = "bearer ";
+            static constexpr char kBearer[] = "bearer "; // NOLINT(modernize-avoid-c-arrays)
             for (size_t i = 0; i < JwtAuthConfig::kBearerPrefixLen; ++i) {
                 char c = auth[i];
                 if (c >= 'A' && c <= 'Z') c |= 0x20; // tolower
