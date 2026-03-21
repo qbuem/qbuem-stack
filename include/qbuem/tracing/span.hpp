@@ -156,7 +156,7 @@ public:
    * @param tracer Tracer pointer responsible for exporting (non-owning, nullable).
    */
   Span(SpanData data, Tracer* tracer)
-      : data_(std::move(data)), tracer_(tracer), ended_(false) {}
+      : data_(std::move(data)), tracer_(tracer) {}
 
   /**
    * @brief Ends and exports the span upon destruction.
@@ -173,7 +173,7 @@ public:
   }
   Span& operator=(Span&& other) noexcept {
     if (this != &other) {
-      if (!ended_ && tracer_) {
+      if (!ended_ && tracer_ != nullptr) {
         data_.end_time = std::chrono::system_clock::now();
         // Explicit flush before move-assignment is the caller's responsibility if needed
       }
@@ -219,9 +219,9 @@ public:
   const SpanData& data() const noexcept { return data_; }
 
 private:
-  SpanData data_;    ///< Span metadata
-  Tracer*  tracer_;  ///< Tracer responsible for exporting (non-owning)
-  bool     ended_;   ///< Flag to prevent double-export
+  SpanData data_;         ///< Span metadata
+  Tracer*  tracer_;       ///< Tracer responsible for exporting (non-owning)
+  bool     ended_{false}; ///< Flag to prevent double-export
 };
 
 } // namespace qbuem::tracing

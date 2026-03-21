@@ -439,16 +439,16 @@ public:
         (void)st;
         // Parse URL
         auto parsed = ParsedUrl::parse(url);
-        if (!parsed) co_return unexpected(std::make_error_code(std::errc::invalid_argument));
+        if (!parsed) co_return std::unexpected(std::make_error_code(std::errc::invalid_argument));
 
         // DNS resolve
         auto addr = co_await DnsResolver::resolve(std::string(parsed->host), parsed->port);
         if (!addr)
-            co_return unexpected(std::make_error_code(std::errc::host_unreachable));
+            co_return std::unexpected(std::make_error_code(std::errc::host_unreachable));
 
         // Connect
         auto conn = co_await TcpStream::connect(*addr);
-        if (!conn) co_return unexpected(conn.error());
+        if (!conn) co_return std::unexpected(conn.error());
 
         // Send HTTP/1.1 GET request
         std::string req =
@@ -462,7 +462,7 @@ public:
         auto wr = co_await conn->write(
             std::span<const std::byte>(
                 reinterpret_cast<const std::byte*>(req.data()), req.size()));
-        if (!wr) co_return unexpected(wr.error());
+        if (!wr) co_return std::unexpected(wr.error());
 
         // Read response head (status line + headers)
         std::array<std::byte, 8192> head_buf{};
@@ -472,7 +472,7 @@ public:
         while (head_len < head_buf.size()) {
             auto n = co_await conn->read(
                 std::span<std::byte>(head_buf.data() + head_len, 1));
-            if (!n || *n == 0) co_return unexpected(std::make_error_code(std::errc::connection_reset));
+            if (!n || *n == 0) co_return std::unexpected(std::make_error_code(std::errc::connection_reset));
             head_len += *n;
             if (head_len >= 4) {
                 auto* p = reinterpret_cast<const char*>(head_buf.data());
