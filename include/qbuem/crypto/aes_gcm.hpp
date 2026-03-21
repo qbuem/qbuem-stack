@@ -83,8 +83,8 @@ using AesGcmTag   = std::array<uint8_t, 16>;
 [[nodiscard]] inline bool has_aes_ni() noexcept {
 #if defined(QBUEM_AES_NI)
     static const bool cached = []() noexcept -> bool {
-        uint32_t ecx = 0;
-        __asm__ volatile("cpuid" : "=c"(ecx) : "a"(1u), "c"(0u) : "ebx", "edx");
+        uint32_t eax = 1u, ebx = 0u, ecx = 0u, edx = 0u;
+        __asm__ volatile("cpuid" : "+a"(eax), "=b"(ebx), "+c"(ecx), "=d"(edx));
         // ECX bit 25 = AES-NI, bit 1 = PCLMULQDQ
         return ((ecx >> 25) & 1u) && ((ecx >> 1) & 1u);
     }();

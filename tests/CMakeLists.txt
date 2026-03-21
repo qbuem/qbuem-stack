@@ -67,6 +67,17 @@ target_link_libraries(qbuem_v15_tests
     GTest::gtest_main
 )
 
+# ── Crypto primitives: SHA, HMAC, Base64, PBKDF2, HKDF, ChaCha20-Poly1305, AES-GCM
+add_executable(qbuem_crypto_tests
+    crypto_primitives_test.cpp
+    ${QBUEM_TLS_FIX}
+)
+target_link_libraries(qbuem_crypto_tests
+    PRIVATE
+    qbuem-stack::qbuem
+    GTest::gtest_main
+)
+
 # ── v1.6.0: PCIe/VFIO + MSI-X + UDS Advanced tests ──────────────────────────
 add_executable(qbuem_v16_tests
     pcie_layout_test.cpp
@@ -217,6 +228,7 @@ add_test(NAME qbuem_tests                  COMMAND qbuem_tests)
 add_test(NAME qbuem_ext_tests              COMMAND qbuem_ext_tests)
 add_test(NAME qbuem_v14_tests              COMMAND qbuem_v14_tests)
 add_test(NAME qbuem_v15_tests              COMMAND qbuem_v15_tests)
+add_test(NAME qbuem_crypto_tests           COMMAND qbuem_crypto_tests)
 add_test(NAME qbuem_v16_tests              COMMAND qbuem_v16_tests)
 add_test(NAME qbuem_v17_tests              COMMAND qbuem_v17_tests)
 add_test(NAME qbuem_enhancement_tests      COMMAND qbuem_enhancement_tests)

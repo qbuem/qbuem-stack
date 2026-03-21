@@ -8,7 +8,7 @@
 #   01-foundation/        hello_world, async_timer
 #   02-network/           tcp_echo_server, udp_unix_socket, websocket, http_fetch
 #   03-memory/            arena, zero_copy_arena_channel, numa_hugepages
-#   04-codec-security/    codec, crypto_url, security_middleware
+#   04-codec-security/    codec, crypto_url, security_middleware, crypto_primitives
 #   05-pipeline/          fanout, hardware_batching, dynamic_hotswap,
 #                         sensor_fusion, observer_health, factory (json),
 #                         subpipeline_migration, stream_ops, windowed_action
@@ -89,6 +89,10 @@ target_link_libraries(crypto_url_example PRIVATE qbuem-stack::qbuem)
 add_executable(security_middleware_example
     04-codec-security/security_middleware/security_middleware_example.cpp)
 target_link_libraries(security_middleware_example PRIVATE qbuem-stack::qbuem)
+
+add_executable(crypto_primitives_example
+    04-codec-security/crypto_primitives/crypto_primitives_example.cpp)
+target_link_libraries(crypto_primitives_example PRIVATE qbuem-stack::qbuem)
 
 # ── 05 Pipeline ───────────────────────────────────────────────────────────────
 

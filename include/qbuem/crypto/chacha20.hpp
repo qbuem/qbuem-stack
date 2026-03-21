@@ -147,8 +147,8 @@ inline void block_scalar(const uint8_t* key,
     }
 
     // Add initial state
-    for (int i = 0; i < 16; ++i)
-        store_le32(out + i * 4, s[i] + x[i]);
+    for (size_t i = 0; i < 16; ++i)
+        store_le32(out + i * 4u, s[i] + x[i]);
 }
 
 // ─── NEON block (4 parallel blocks) ──────────────────────────────────────────
@@ -197,7 +197,10 @@ inline void block4_neon(const uint8_t* key,
     s[ 9] = vdupq_n_u32(load_le32(key + 20));
     s[10] = vdupq_n_u32(load_le32(key + 24));
     s[11] = vdupq_n_u32(load_le32(key + 28));
-    s[12] = {counter, counter + 1u, counter + 2u, counter + 3u};
+    s[12] = vsetq_lane_u32(counter + 3u,
+              vsetq_lane_u32(counter + 2u,
+                vsetq_lane_u32(counter + 1u,
+                  vdupq_n_u32(counter), 1), 2), 3);
     s[13] = vdupq_n_u32(load_le32(nonce + 0));
     s[14] = vdupq_n_u32(load_le32(nonce + 4));
     s[15] = vdupq_n_u32(load_le32(nonce + 8));
@@ -219,11 +222,13 @@ inline void block4_neon(const uint8_t* key,
     for (int i = 0; i < 16; ++i)
         t[i] = vaddq_u32(t[i], s[i]);
 
-    // De-interleave: write 4 × 64-byte blocks
-    // block b gets word w at out[b*64 + w*4]
-    for (int b = 0; b < 4; ++b) {
-        for (int w = 0; w < 16; ++w)
-            store_le32(out + b * 64 + w * 4, vgetq_lane_u32(t[w], b));
+    // De-interleave: write 4 × 64-byte blocks.
+    // Lane index must be a compile-time constant — unroll the block dimension.
+    for (int w = 0; w < 16; ++w) {
+        store_le32(out +   0 + w * 4, vgetq_lane_u32(t[w], 0));
+        store_le32(out +  64 + w * 4, vgetq_lane_u32(t[w], 1));
+        store_le32(out + 128 + w * 4, vgetq_lane_u32(t[w], 2));
+        store_le32(out + 192 + w * 4, vgetq_lane_u32(t[w], 3));
     }
 
     (void)r0; (void)r1; (void)r2; (void)r3;

@@ -68,6 +68,7 @@ To maintain world-class performance, every PR must satisfy these quantifiable be
 | **Observability** | [Observability Suite](./docs/observability-suite.md) | OTLP, eBPF memleak, qbuem-inspector |
 | **Windows** | [Windows Support](./docs/windows-support.md) | IOCP, Registered I/O (RIO), Named Pipes |
 | **Security/TLS** | [Security & TLS](./docs/security-tls.md) | kTLS, Hardware Offload, AES-NI, SIMD JWT |
+| **Crypto Primitives** | [Crypto Primitives](./docs/crypto-primitives.md) | SHA-256/512, HMAC, PBKDF2, HKDF, Base64, ChaCha20-Poly1305, AES-GCM |
 | **Hardware/PCIe** | [PCIe Optimization](./docs/pcie-optimization-guide.md) | VFIO, P2PDMA, CXL, MSI-X Affinity |
 | **Storage / File**| [Storage Optimization](./docs/storage-optimization-guide.md) | `O_DIRECT`, `copy_file_range`, SPDK |
 | **Legacy Linux** | [epoll Optimization](./docs/epoll-optimization-guide.md) | `EPOLLET`, `EPOLLONESHOT`, `pwait2` |
@@ -319,7 +320,7 @@ The [`examples/`](./examples/) directory contains **58 programs** organized into
 | [01](./examples/01-foundation/) | Foundation | 3 | `hello_world`, `async_timer`, `micro_ticker` |
 | [02](./examples/02-network/) | Network | 7 | TCP echo, UDP advanced, Unix socket, WebSocket, HTTP fetch, HTTP/2, FetchStream |
 | [03](./examples/03-memory/) | Memory | 4 | Arena, zero-copy, NUMA + huge pages, lock-free bench |
-| [04](./examples/04-codec-security/) | Codec & Security | 3 | Length-prefix/line codecs, crypto, security middleware |
+| [04](./examples/04-codec-security/) | Codec & Security | 4 | Length-prefix/line codecs, crypto URL utilities, security middleware, **crypto primitives** (SHA/HMAC/PBKDF2/HKDF/AEAD) |
 | [05](./examples/05-pipeline/) | Pipeline | 12 | Fan-out, hot-swap, batching, dynamic router, backpressure, stateful window, windowed action |
 | [06](./examples/06-ipc-messaging/) | IPC & Messaging | 4 | SHMChannel, **flagship IPC pipeline**, MessageBus, SPSC |
 | [07](./examples/07-resilience/) | Resilience | 6 | Retry + CircuitBreaker + DLQ, Saga, Canary, Checkpoint, SLO |
