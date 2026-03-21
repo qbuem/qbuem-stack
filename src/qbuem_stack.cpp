@@ -20,7 +20,6 @@
 #include <unistd.h>
 #include <variant>
 #ifdef __linux__
-#  include <fcntl.h>
 #  include <sys/sendfile.h>
 #endif
 
@@ -31,7 +30,7 @@ namespace qbuem {
 namespace {
 
 std::atomic<std::time_t> g_date_ts{0};
-char                      g_date_buf[48] = {};
+char                      g_date_buf[48] = {}; // NOLINT(modernize-avoid-c-arrays)
 std::mutex                g_date_mu;
 
 // vDSO fast monotonic second — no syscall overhead on Linux (CLOCK_MONOTONIC_COARSE

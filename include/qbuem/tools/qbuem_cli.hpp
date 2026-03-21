@@ -241,7 +241,7 @@ public:
      *
      * @param st  Cancellation token.
      */
-    Task<void> run_tui(std::stop_token st) {
+    Task<void> run_tui(const std::stop_token& st) {
         while (!st.stop_requested()) {
             auto groups = collect();
             tui_render(groups);
@@ -255,7 +255,7 @@ public:
      * @param st  Cancellation token — stop the server gracefully.
      * @returns `Result<void>` — error if bind fails.
      */
-    [[nodiscard]] Task<Result<void>> listen(std::stop_token st) {
+    [[nodiscard]] Task<Result<void>> listen(const std::stop_token& st) {
         // Minimal HTTP server implementation using TcpListener
         // (detailed implementation would use qbuem::http::App)
         std::println("[CliServer] Listening on :{}", port_);

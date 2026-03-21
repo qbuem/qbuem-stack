@@ -699,7 +699,7 @@ public:
      * @returns Shared pointer to a ready `Http2Connection`, or error.
      */
     [[nodiscard]] Task<Result<std::shared_ptr<Http2Connection>>>
-    connect(std::string url, const std::stop_token& st) {
+    connect(const std::string& url, const std::stop_token& st) {
         auto parsed = ParsedUrl::parse(url);
         if (!parsed) co_return unexpected(std::make_error_code(std::errc::invalid_argument));
 

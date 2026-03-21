@@ -111,14 +111,14 @@ struct ParsedUrl {
     // Scheme
     auto scheme_end = url.find("://");
     if (scheme_end == std::string_view::npos)
-      return unexpected(std::make_error_code(std::errc::invalid_argument));
+      return std::unexpected(std::make_error_code(std::errc::invalid_argument));
 
     out.scheme = std::string(url.substr(0, scheme_end));
     url.remove_prefix(scheme_end + 3);
 
     if (out.scheme == "http")       out.port = 80;
     else if (out.scheme == "https") out.port = 443;
-    else return unexpected(std::make_error_code(std::errc::invalid_argument));
+    else return std::unexpected(std::make_error_code(std::errc::invalid_argument));
 
     // Authority vs path
     auto path_start = url.find('/');
@@ -133,7 +133,7 @@ struct ParsedUrl {
     if (!authority.empty() && authority[0] == '[') {
       auto bracket = authority.find(']');
       if (bracket == std::string_view::npos)
-        return unexpected(std::make_error_code(std::errc::invalid_argument));
+        return std::unexpected(std::make_error_code(std::errc::invalid_argument));
       out.host = std::string(authority.substr(1, bracket - 1));
       authority.remove_prefix(bracket + 1);
       if (!authority.empty() && authority[0] == ':') {
@@ -142,7 +142,7 @@ struct ParsedUrl {
         auto [ptr, ec] = std::from_chars(
             authority.data(), authority.data() + authority.size(), p);
         if (ec != std::errc{})
-          return unexpected(std::make_error_code(std::errc::invalid_argument));
+          return std::unexpected(std::make_error_code(std::errc::invalid_argument));
         out.port = p;
       }
     } else {
@@ -156,13 +156,13 @@ struct ParsedUrl {
         auto [ptr, ec] = std::from_chars(
             port_sv.data(), port_sv.data() + port_sv.size(), p);
         if (ec != std::errc{})
-          return unexpected(std::make_error_code(std::errc::invalid_argument));
+          return std::unexpected(std::make_error_code(std::errc::invalid_argument));
         out.port = p;
       }
     }
 
     if (out.host.empty())
-      return unexpected(std::make_error_code(std::errc::invalid_argument));
+      return std::unexpected(std::make_error_code(std::errc::invalid_argument));
 
     return out;
   }
@@ -326,26 +326,26 @@ inline Result<FetchResponse> parse_response(std::string_view raw) {
   // Status line
   auto crlf = raw.find("\r\n");
   if (crlf == std::string_view::npos)
-    return unexpected(std::make_error_code(std::errc::protocol_error));
+    return std::unexpected(std::make_error_code(std::errc::protocol_error));
 
   std::string_view status_line = raw.substr(0, crlf);
   raw.remove_prefix(crlf + 2);
 
   if (status_line.size() < 12 || status_line.substr(0, 5) != "HTTP/")
-    return unexpected(std::make_error_code(std::errc::protocol_error));
+    return std::unexpected(std::make_error_code(std::errc::protocol_error));
 
   int code{};
   auto [ptr, ec] = std::from_chars(
       status_line.data() + 9, status_line.data() + 12, code);
   if (ec != std::errc{})
-    return unexpected(std::make_error_code(std::errc::protocol_error));
+    return std::unexpected(std::make_error_code(std::errc::protocol_error));
   resp.set_status(code);
 
   // Headers
   while (true) {
     auto nl = raw.find("\r\n");
     if (nl == std::string_view::npos)
-      return unexpected(std::make_error_code(std::errc::protocol_error));
+      return std::unexpected(std::make_error_code(std::errc::protocol_error));
     if (nl == 0) { raw.remove_prefix(2); break; } // blank line = end of headers
 
     std::string_view line = raw.substr(0, nl);
@@ -421,16 +421,16 @@ inline Task<Result<std::string>> read_http_response(TcpStream &stream,
 
   while (true) {
     if (st.stop_requested())
-      co_return unexpected(std::make_error_code(std::errc::operation_canceled));
+      co_return std::unexpected(std::make_error_code(std::errc::operation_canceled));
 
     auto n = co_await stream.read(tmp);
-    if (!n) co_return unexpected(n.error());
+    if (!n) co_return std::unexpected(n.error());
     if (*n == 0) break; // EOF / server closed connection
 
     buf.append(reinterpret_cast<const char *>(tmp.data()), *n);
 
     if (buf.size() > kMaxResponseSize)
-      co_return unexpected(std::make_error_code(std::errc::message_size));
+      co_return std::unexpected(std::make_error_code(std::errc::message_size));
 
     // Parse header boundary on first discovery.
     // Use icase_find() to avoid creating a full lowercase copy of the
@@ -651,25 +651,25 @@ private:
                                        const std::stop_token& st) {
     // Parse URL
     auto parsed = ParsedUrl::parse(url);
-    if (!parsed) co_return unexpected(parsed.error());
+    if (!parsed) co_return std::unexpected(parsed.error());
 
     if (parsed->scheme == "https")
-      co_return unexpected(
+      co_return std::unexpected(
           std::make_error_code(std::errc::protocol_not_supported));
 
     if (st.stop_requested())
-      co_return unexpected(std::make_error_code(std::errc::operation_canceled));
+      co_return std::unexpected(std::make_error_code(std::errc::operation_canceled));
 
     // Async DNS resolution
     auto addr_r = co_await DnsResolver::resolve(parsed->host, parsed->port);
-    if (!addr_r) co_return unexpected(addr_r.error());
+    if (!addr_r) co_return std::unexpected(addr_r.error());
 
     if (st.stop_requested())
-      co_return unexpected(std::make_error_code(std::errc::operation_canceled));
+      co_return std::unexpected(std::make_error_code(std::errc::operation_canceled));
 
     // TCP connect
     auto stream_r = co_await TcpStream::connect(*addr_r);
-    if (!stream_r) co_return unexpected(stream_r.error());
+    if (!stream_r) co_return std::unexpected(stream_r.error());
 
     TcpStream stream = std::move(*stream_r);
     stream.set_nodelay(true);
@@ -682,19 +682,19 @@ private:
     std::string_view remaining(req_text);
     while (!remaining.empty()) {
       if (st.stop_requested())
-        co_return unexpected(
+        co_return std::unexpected(
             std::make_error_code(std::errc::operation_canceled));
       auto w = co_await stream.write(
           std::span<const std::byte>(
               reinterpret_cast<const std::byte *>(remaining.data()),
               remaining.size()));
-      if (!w) co_return unexpected(w.error());
+      if (!w) co_return std::unexpected(w.error());
       remaining.remove_prefix(*w);
     }
 
     // Read response
     auto raw_r = co_await detail::read_http_response(stream, st);
-    if (!raw_r) co_return unexpected(raw_r.error());
+    if (!raw_r) co_return std::unexpected(raw_r.error());
 
     co_return detail::parse_response(*raw_r);
   }

@@ -294,7 +294,7 @@ public:
      * @param st  Cancellation token.
      * @returns `Result<void>` — error if bind fails.
      */
-    [[nodiscard]] Task<Result<void>> start(std::stop_token st) {
+    [[nodiscard]] Task<Result<void>> start(const std::stop_token& st) {
         std::println("[Inspector] Serving qbuem-inspector at http://localhost:{}", port_);
         std::println("[Inspector] Open in a browser to see Full Journey timelines");
 

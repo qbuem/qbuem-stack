@@ -83,7 +83,7 @@ struct SocketAddr {
     a.family_ = Family::IPv4;
     a.port_   = port;
     if (inet_pton(AF_INET, ip, &a.addr_.ipv4_) != 1)
-      return unexpected(
+      return std::unexpected(
           std::make_error_code(std::errc::invalid_argument));
     return a;
   }
@@ -100,7 +100,7 @@ struct SocketAddr {
     a.family_ = Family::IPv6;
     a.port_   = port;
     if (inet_pton(AF_INET6, ip, &a.addr_.ipv6_) != 1)
-      return unexpected(
+      return std::unexpected(
           std::make_error_code(std::errc::invalid_argument));
     return a;
   }
@@ -117,7 +117,7 @@ struct SocketAddr {
     a.port_   = 0;
     size_t len = __builtin_strlen(path);
     if (len >= sizeof(a.addr_.unix_))
-      return unexpected(
+      return std::unexpected(
           std::make_error_code(std::errc::invalid_argument));
     __builtin_memcpy(a.addr_.unix_, path, len + 1);
     return a;
@@ -198,7 +198,7 @@ struct SocketAddr {
       return Result<void>{};
     }
     }
-    return unexpected(std::make_error_code(std::errc::address_family_not_supported));
+    return std::unexpected(std::make_error_code(std::errc::address_family_not_supported));
   }
 
   // ─── String Conversion (zero-alloc) ────────────────────────────────────────

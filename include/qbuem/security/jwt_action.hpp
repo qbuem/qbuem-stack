@@ -304,7 +304,7 @@ private:
     public:
         explicit LRUCache(size_t cap) : entries_(cap) {}
 
-        std::optional<JwtClaims> get(std::string_view token) const noexcept {
+        [[nodiscard]] std::optional<JwtClaims> get(std::string_view token) const noexcept {
             uint64_t h = hash(token);
             size_t   idx = h % entries_.size();
             const auto& e = entries_[idx];

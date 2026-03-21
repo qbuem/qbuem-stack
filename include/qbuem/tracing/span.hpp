@@ -29,6 +29,7 @@
 
 #include <qbuem/tracing/trace_context.hpp>
 
+#include <array>
 #include <chrono>
 #include <string>
 #include <string_view>
@@ -100,7 +101,7 @@ struct SpanData {
   };
 
   /** @brief Attribute array (fixed-size, no heap allocation). */
-  Attribute attributes[kMaxAttributes];
+  std::array<Attribute, kMaxAttributes> attributes{};
 
   /** @brief Number of attributes currently stored. */
   size_t attribute_count = 0;

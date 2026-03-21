@@ -165,7 +165,7 @@ public:
     int so_err = co_await ConnectAwaiter{fd};
     if (so_err != 0) {
       ::close(fd);
-      co_return unexpected(std::error_code(so_err, std::system_category()));
+      co_return std::unexpected(std::error_code(so_err, std::system_category()));
     }
     co_return TcpStream(fd);
   }

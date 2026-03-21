@@ -435,7 +435,7 @@ public:
      * @returns Shared pointer to a ready-to-pump `FetchStream`, or error.
      */
     [[nodiscard]] Task<Result<std::shared_ptr<FetchStream>>>
-    stream(std::string url, const std::stop_token& st) {
+    stream(const std::string& url, const std::stop_token& st) {
         (void)st;
         // Parse URL
         auto parsed = ParsedUrl::parse(url);

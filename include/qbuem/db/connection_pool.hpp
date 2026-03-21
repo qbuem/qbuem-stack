@@ -127,7 +127,7 @@ private:
         std::atomic<SlotState>       state{SlotState::Free};
         uint64_t                     last_used_ms{0}; ///< Timestamp of last use
         uint32_t                     index{0};        ///< Slot index (self-reference)
-        uint8_t                      _pad[64 - sizeof(void*)
+        uint8_t                      _pad[64 - sizeof(void*)   // NOLINT(modernize-avoid-c-arrays)
                                               - sizeof(std::atomic<SlotState>)
                                               - sizeof(uint64_t)
                                               - sizeof(uint32_t)]{};
@@ -239,7 +239,7 @@ public:
         : conn_(std::move(conn)), pool_(pool) {}
 
     ~PooledConnection() {
-        if (pool_ && conn_)
+        if (pool_ != nullptr && conn_)
             pool_->return_connection(std::move(conn_));
         conn_.reset();
     }
@@ -258,7 +258,7 @@ public:
      */
     static Task<Result<PooledConnection>> acquire(IConnectionPool& pool) {
         auto r = co_await pool.acquire();
-        if (!r) co_return unexpected(r.error());
+        if (!r) co_return std::unexpected(r.error());
         co_return PooledConnection(std::move(*r), &pool);
     }
 
@@ -285,7 +285,7 @@ inline LockFreeConnectionPool::~LockFreeConnectionPool() {
 inline Task<Result<void>> LockFreeConnectionPool::warmup() noexcept {
     for (size_t i = 0; i < config_.min_size; ++i) {
         auto r = co_await factory_();
-        if (!r) co_return unexpected(r.error());
+        if (!r) co_return std::unexpected(r.error());
         std::lock_guard lock(waiter_mutex_);
         idle_conns_.push_back(std::move(*r));
         idle_count_.fetch_add(1, std::memory_order_relaxed);
@@ -296,7 +296,7 @@ inline Task<Result<void>> LockFreeConnectionPool::warmup() noexcept {
 
 inline Task<Result<std::unique_ptr<IConnection>>> LockFreeConnectionPool::acquire() {
     if (draining_.load(std::memory_order_acquire))
-        co_return unexpected(std::make_error_code(std::errc::operation_canceled));
+        co_return std::unexpected(std::make_error_code(std::errc::operation_canceled));
 
     {
         std::lock_guard lock(waiter_mutex_);
@@ -312,13 +312,13 @@ inline Task<Result<std::unique_ptr<IConnection>>> LockFreeConnectionPool::acquir
     // No idle connection — create a new one if under max
     if (total_count_.load(std::memory_order_relaxed) < config_.max_size) {
         auto r = co_await factory_();
-        if (!r) co_return unexpected(r.error());
+        if (!r) co_return std::unexpected(r.error());
         total_count_.fetch_add(1, std::memory_order_relaxed);
         active_count_.fetch_add(1, std::memory_order_relaxed);
         co_return std::move(*r);
     }
 
-    co_return unexpected(std::make_error_code(std::errc::resource_unavailable_try_again));
+    co_return std::unexpected(std::make_error_code(std::errc::resource_unavailable_try_again));
 }
 
 inline Task<void> LockFreeConnectionPool::drain() {

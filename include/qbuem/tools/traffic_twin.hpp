@@ -71,7 +71,7 @@ struct TraceFileHeader {
     uint64_t start_ns{0};                ///< Absolute capture start time (CLOCK_REALTIME ns)
     uint64_t end_ns{0};                  ///< Absolute capture end time
     uint64_t total_bytes{0};             ///< Total payload bytes captured
-    char     pipeline_name[16]{};        ///< Originating pipeline name (NUL-terminated)
+    char     pipeline_name[16]{};        ///< Originating pipeline name (NUL-terminated) // NOLINT(modernize-avoid-c-arrays)
 };
 static_assert(sizeof(TraceFileHeader) == 64);
 static_assert(std::is_trivially_copyable_v<TraceFileHeader>);
@@ -227,7 +227,7 @@ public:
      * @brief Start recording (writes trace file header).
      */
     bool start() noexcept {
-        if (!writer_) return false;
+        if (writer_ == nullptr) return false;
         TraceFileHeader hdr;
         hdr.start_ns = now_ns();
         std::memcpy(hdr.pipeline_name, pipeline_name_, sizeof(pipeline_name_));
@@ -242,7 +242,7 @@ public:
      */
     void stop() noexcept {
         running_.store(false, std::memory_order_relaxed);
-        if (!writer_) return;
+        if (writer_ == nullptr) return;
         TraceFileFooter ftr;
         ftr.record_count = stats_.records_captured.load();
         writer_->write_footer(ftr);
@@ -271,7 +271,7 @@ public:
         rec.flags        = 0;
         rec.checksum     = 0;
 
-        if (writer_) {
+        if (writer_ != nullptr) {
             if (writer_->write_record(rec, data.subspan(0, rec.payload_size))) {
                 stats_.records_captured.fetch_add(1, std::memory_order_relaxed);
                 stats_.bytes_captured.fetch_add(rec.payload_size, std::memory_order_relaxed);
@@ -291,7 +291,7 @@ private:
     }
 
     ITraceWriter*          writer_{nullptr};
-    char                   pipeline_name_[16]{};
+    char                   pipeline_name_[16]{}; // NOLINT(modernize-avoid-c-arrays)
     uint64_t               start_ns_{0};
     std::atomic<bool>      running_{false};
     std::atomic<uint64_t>  seq_{0};
@@ -316,8 +316,8 @@ public:
      * @param st  Stop token for cancellation.
      * @returns Number of messages replayed, or -1 on open error.
      */
-    [[nodiscard]] Task<int64_t> replay(std::stop_token st) {
-        if (!reader_ || !sink_) co_return -1;
+    [[nodiscard]] Task<int64_t> replay(const std::stop_token& st) {
+        if (reader_ == nullptr || sink_ == nullptr) co_return -1;
         auto hdr = reader_->open();
         if (!hdr) co_return -1;
 
@@ -363,7 +363,7 @@ public:
      * @returns false if there are no more records.
      */
     bool step() noexcept {
-        if (!reader_ || !sink_) return false;
+        if (reader_ == nullptr || sink_ == nullptr) return false;
         TraceRecord rec;
         std::vector<std::byte> payload;
         if (!reader_->next(rec, payload)) return false;

@@ -81,7 +81,7 @@ private:
 
   struct State {
     Result<SocketAddr> result{
-        unexpected(std::make_error_code(std::errc::address_not_available))};
+        std::unexpected(std::make_error_code(std::errc::address_not_available))};
   };
 
   // ── Coroutine awaiter ─────────────────────────────────────────────────────
@@ -128,7 +128,7 @@ private:
         addrinfo* res = nullptr;
         int rc = ::getaddrinfo(host.c_str(), nullptr, &hints, &res);
         if (rc != 0 || res == nullptr) {
-          st->result = unexpected(
+          st->result = std::unexpected(
               std::make_error_code(std::errc::address_not_available));
         } else {
           // Prefer IPv4; fall back to IPv6.

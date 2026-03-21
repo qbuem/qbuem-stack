@@ -35,6 +35,8 @@
 #include <qbuem/common.hpp>
 #include <qbuem/crypto.hpp>
 
+#include <algorithm>
+#include <array>
 #include <cstdint>
 #include <cstring>
 #include <string>
@@ -55,7 +57,7 @@ namespace qbuem::tracing {
  */
 struct TraceId {
   /** @brief Raw bytes of the 128-bit trace ID. */
-  uint8_t bytes[16]{};
+  std::array<uint8_t, 16> bytes{};
 
   /**
    * @brief Generates a new TraceId using a cryptographically secure random number.
@@ -76,11 +78,8 @@ struct TraceId {
    * Per the W3C spec, all bytes being 0x00 indicates an invalid identifier.
    * @returns true if valid, false if all bytes are zero.
    */
-  bool is_valid() const noexcept {
-    for (uint8_t b : bytes) {
-      if (b != 0x00) return true;
-    }
-    return false;
+  [[nodiscard]] bool is_valid() const noexcept {
+    return std::ranges::any_of(bytes, [](uint8_t b) { return b != 0x00; });
   }
 
   /**
@@ -94,7 +93,7 @@ struct TraceId {
    */
   size_t to_chars(char* buf, size_t n) const {
     if (n < 33) return 0;
-    static constexpr char kHex[] = "0123456789abcdef";
+    static constexpr char kHex[] = "0123456789abcdef"; // NOLINT(modernize-avoid-c-arrays)
     for (size_t i = 0; i < 16; ++i) {
       buf[i * 2]     = kHex[(bytes[i] >> 4) & 0x0F];
       buf[i * 2 + 1] = kHex[bytes[i] & 0x0F];
@@ -117,7 +116,7 @@ struct TraceId {
  */
 struct SpanId {
   /** @brief Raw bytes of the 64-bit span ID. */
-  uint8_t bytes[8]{};
+  std::array<uint8_t, 8> bytes{};
 
   /**
    * @brief Generates a new SpanId using a cryptographically secure random number.
@@ -138,11 +137,8 @@ struct SpanId {
    * Per the W3C spec, all bytes being 0x00 indicates an invalid identifier.
    * @returns true if valid, false if all bytes are zero.
    */
-  bool is_valid() const noexcept {
-    for (uint8_t b : bytes) {
-      if (b != 0x00) return true;
-    }
-    return false;
+  [[nodiscard]] bool is_valid() const noexcept {
+    return std::ranges::any_of(bytes, [](uint8_t b) { return b != 0x00; });
   }
 
   /**
@@ -156,7 +152,7 @@ struct SpanId {
    */
   size_t to_chars(char* buf, size_t n) const {
     if (n < 17) return 0;
-    static constexpr char kHex[] = "0123456789abcdef";
+    static constexpr char kHex[] = "0123456789abcdef"; // NOLINT(modernize-avoid-c-arrays)
     for (size_t i = 0; i < 8; ++i) {
       buf[i * 2]     = kHex[(bytes[i] >> 4) & 0x0F];
       buf[i * 2 + 1] = kHex[bytes[i] & 0x0F];
@@ -217,7 +213,7 @@ struct TraceContext {
    *
    * @returns A child TraceContext with a new SpanId.
    */
-  TraceContext child_span() const {
+  [[nodiscard]] TraceContext child_span() const {
     TraceContext child;
     child.trace_id       = trace_id;
     child.parent_span_id = SpanId::generate();
@@ -233,15 +229,15 @@ struct TraceContext {
    *
    * @returns traceparent header string (fixed 55 characters).
    */
-  std::string to_traceparent() const {
+  [[nodiscard]] std::string to_traceparent() const {
     // "00-" + 32 + "-" + 16 + "-" + 2 = 55 chars
-    char buf[56];
+    char buf[56]; // NOLINT(modernize-avoid-c-arrays)
     buf[0] = '0'; buf[1] = '0'; buf[2] = '-';
     trace_id.to_chars(buf + 3, 33);
     buf[35] = '-';
     parent_span_id.to_chars(buf + 36, 17);
     buf[52] = '-';
-    static constexpr char kHex[] = "0123456789abcdef";
+    static constexpr char kHex[] = "0123456789abcdef"; // NOLINT(modernize-avoid-c-arrays)
     buf[53] = kHex[(flags >> 4) & 0x0F];
     buf[54] = kHex[flags & 0x0F];
     buf[55] = '\0';
@@ -315,7 +311,7 @@ struct TraceContext {
    * @brief Checks whether this trace is being sampled.
    * @returns true if bit 0 of flags is set.
    */
-  bool is_sampled() const noexcept { return (flags & 0x01) != 0; }
+  [[nodiscard]] bool is_sampled() const noexcept { return (flags & 0x01) != 0; }
 };
 
 } // namespace qbuem::tracing
