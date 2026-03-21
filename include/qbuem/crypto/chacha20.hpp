@@ -222,11 +222,13 @@ inline void block4_neon(const uint8_t* key,
     for (int i = 0; i < 16; ++i)
         t[i] = vaddq_u32(t[i], s[i]);
 
-    // De-interleave: write 4 × 64-byte blocks
-    // block b gets word w at out[b*64 + w*4]
-    for (int b = 0; b < 4; ++b) {
-        for (int w = 0; w < 16; ++w)
-            store_le32(out + b * 64 + w * 4, vgetq_lane_u32(t[w], b));
+    // De-interleave: write 4 × 64-byte blocks.
+    // Lane index must be a compile-time constant — unroll the block dimension.
+    for (int w = 0; w < 16; ++w) {
+        store_le32(out +   0 + w * 4, vgetq_lane_u32(t[w], 0));
+        store_le32(out +  64 + w * 4, vgetq_lane_u32(t[w], 1));
+        store_le32(out + 128 + w * 4, vgetq_lane_u32(t[w], 2));
+        store_le32(out + 192 + w * 4, vgetq_lane_u32(t[w], 3));
     }
 
     (void)r0; (void)r1; (void)r2; (void)r3;
