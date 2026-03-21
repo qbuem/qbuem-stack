@@ -174,7 +174,7 @@ private:
     int*        eventfds_{nullptr};   // [num_vectors_]
 
     // Per-vector statistics
-    VectorStats stats_[kMaxMSIXVectors];
+    VectorStats stats_[kMaxMSIXVectors]; // NOLINT(modernize-avoid-c-arrays)
 
     std::atomic<bool> initialized_{false};
 };

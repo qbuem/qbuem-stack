@@ -1113,7 +1113,7 @@ Result<void> App::listen(int port, bool ipv6) {
 
                 auto task = run_async(h, std::move(req), std::move(res),
                                       cfd, reactor, ctx, ka, hfb, arm_idle, sr);
-                task.resume();
+                (void)task.resume();
                 task.detach();
               }
             });

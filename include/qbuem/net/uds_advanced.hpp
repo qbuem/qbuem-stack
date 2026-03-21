@@ -101,12 +101,12 @@ struct PeerCredentials {
     std::span<const uint8_t>  data = {}) noexcept {
 #if defined(__linux__) || defined(__APPLE__)
     if (fds.empty() || fds.size() > kMaxFdsPerMsg)
-        return unexpected(std::make_error_code(std::errc::invalid_argument));
+        return std::unexpected(std::make_error_code(std::errc::invalid_argument));
 
     // Compute ancillary data buffer size
     const size_t cmsg_space = CMSG_SPACE(fds.size() * sizeof(int));
     // Stack-allocated buffer (max kMaxFdsPerMsg FDs -> up to ~4KB)
-    alignas(struct cmsghdr) uint8_t cmsg_buf[CMSG_SPACE(kMaxFdsPerMsg * sizeof(int))]{};
+    alignas(struct cmsghdr) uint8_t cmsg_buf[CMSG_SPACE(kMaxFdsPerMsg * sizeof(int))]{}; // NOLINT(modernize-avoid-c-arrays)
 
     // iovec: sendmsg on Linux SOCK_STREAM requires at least 1 byte even for FD-only sends
     uint8_t dummy_byte = 0;
@@ -134,11 +134,11 @@ struct PeerCredentials {
 
     ssize_t sent = ::sendmsg(sockfd, &msg, MSG_NOSIGNAL);
     if (sent < 0)
-        return unexpected(std::error_code{errno, std::system_category()});
+        return std::unexpected(std::error_code{errno, std::system_category()});
     return sent;
 #else
     (void)sockfd; (void)fds; (void)data;
-    return unexpected(std::make_error_code(std::errc::not_supported));
+    return std::unexpected(std::make_error_code(std::errc::not_supported));
 #endif
 }
 
@@ -160,7 +160,7 @@ struct RecvFdsResult {
     std::span<int>       fds_out,
     std::span<uint8_t>   data_buf = {}) noexcept {
 #if defined(__linux__) || defined(__APPLE__)
-    alignas(struct cmsghdr) uint8_t cmsg_buf[CMSG_SPACE(kMaxFdsPerMsg * sizeof(int))]{};
+    alignas(struct cmsghdr) uint8_t cmsg_buf[CMSG_SPACE(kMaxFdsPerMsg * sizeof(int))]{}; // NOLINT(modernize-avoid-c-arrays)
 
     uint8_t dummy_byte = 0;
     struct iovec iov{};
@@ -180,7 +180,7 @@ struct RecvFdsResult {
 
     ssize_t n = ::recvmsg(sockfd, &msg, MSG_WAITALL);
     if (n < 0)
-        return unexpected(std::error_code{errno, std::system_category()});
+        return std::unexpected(std::error_code{errno, std::system_category()});
 
     RecvFdsResult result;
     result.data_bytes = data_buf.empty() ? 0 : n;
@@ -205,7 +205,7 @@ struct RecvFdsResult {
     return result;
 #else
     (void)sockfd; (void)fds_out; (void)data_buf;
-    return unexpected(std::make_error_code(std::errc::not_supported));
+    return std::unexpected(std::make_error_code(std::errc::not_supported));
 #endif
 }
 
@@ -225,18 +225,18 @@ struct RecvFdsResult {
     struct ucred cred{};
     socklen_t len = sizeof(cred);
     if (::getsockopt(sockfd, SOL_SOCKET, SO_PEERCRED, &cred, &len) < 0)
-        return unexpected(std::error_code{errno, std::system_category()});
+        return std::unexpected(std::error_code{errno, std::system_category()});
     return PeerCredentials{cred.pid, cred.uid, cred.gid};
 #elif defined(__APPLE__)
     struct xucred cred{};
     socklen_t len = sizeof(cred);
     if (::getsockopt(sockfd, SOL_LOCAL, LOCAL_PEERCRED, &cred, &len) < 0)
-        return unexpected(std::error_code{errno, std::system_category()});
+        return std::unexpected(std::error_code{errno, std::system_category()});
     // macOS xucred does not include PID; use SCM_CREDS separately if needed
     return PeerCredentials{-1, cred.cr_uid, cred.cr_gid};
 #else
     (void)sockfd;
-    return unexpected(std::make_error_code(std::errc::not_supported));
+    return std::unexpected(std::make_error_code(std::errc::not_supported));
 #endif
 }
 
@@ -259,7 +259,7 @@ struct RecvFdsResult {
 #if defined(__linux__)
     listener = ::socket(AF_UNIX, type | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
     if (listener < 0)
-        return unexpected(std::error_code{errno, std::system_category()});
+        return std::unexpected(std::error_code{errno, std::system_category()});
 
     struct sockaddr_un addr{};
     addr.sun_family = AF_UNIX;
@@ -273,16 +273,16 @@ struct RecvFdsResult {
 
     if (::bind(listener, reinterpret_cast<struct sockaddr*>(&addr), addrlen) < 0) {
         ::close(listener); listener = -1;
-        return unexpected(std::error_code{errno, std::system_category()});
+        return std::unexpected(std::error_code{errno, std::system_category()});
     }
     if (type == SOCK_STREAM && ::listen(listener, 128) < 0) {
         ::close(listener); listener = -1;
-        return unexpected(std::error_code{errno, std::system_category()});
+        return std::unexpected(std::error_code{errno, std::system_category()});
     }
     return {};
 #else
     (void)name; (void)type; (void)listener;
-    return unexpected(std::make_error_code(std::errc::not_supported));
+    return std::unexpected(std::make_error_code(std::errc::not_supported));
 #endif
 }
 
@@ -298,7 +298,7 @@ struct RecvFdsResult {
 #if defined(__linux__)
     int fd = ::socket(AF_UNIX, type | SOCK_CLOEXEC, 0);
     if (fd < 0)
-        return unexpected(std::error_code{errno, std::system_category()});
+        return std::unexpected(std::error_code{errno, std::system_category()});
 
     struct sockaddr_un addr{};
     addr.sun_family = AF_UNIX;
@@ -311,12 +311,12 @@ struct RecvFdsResult {
 
     if (::connect(fd, reinterpret_cast<struct sockaddr*>(&addr), addrlen) < 0) {
         ::close(fd);
-        return unexpected(std::error_code{errno, std::system_category()});
+        return std::unexpected(std::error_code{errno, std::system_category()});
     }
     return fd;
 #else
     (void)name; (void)type;
-    return unexpected(std::make_error_code(std::errc::not_supported));
+    return std::unexpected(std::make_error_code(std::errc::not_supported));
 #endif
 }
 

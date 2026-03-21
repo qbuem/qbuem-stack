@@ -71,8 +71,8 @@ struct BufferEvent {
     uint64_t    timestamp_ns{0};       ///< Event time (CLOCK_MONOTONIC)
     uint64_t    duration_ns{0};        ///< Time since last event for this slot
     BufferState state{BufferState::Free};
-    uint8_t     _pad[7]{};
-    char        stage[kStageLen]{};    ///< Stage name at transition
+    uint8_t     _pad[7]{}; // NOLINT(modernize-avoid-c-arrays)
+    char        stage[kStageLen]{};    ///< Stage name at transition // NOLINT(modernize-avoid-c-arrays)
 
     void set_stage(std::string_view s) noexcept {
         size_t len = std::min(s.size(), kStageLen - 1);
@@ -95,8 +95,8 @@ struct SlotRecord {
     uint64_t    stage_enter_ns{0};     ///< When the current stage acquired it
     uint64_t    total_hold_ns{0};      ///< Cumulative hold time across all stages
     BufferState state{BufferState::Free};
-    uint8_t     _pad[7]{};
-    char        stage[kStageLen]{};
+    uint8_t     _pad[7]{}; // NOLINT(modernize-avoid-c-arrays)
+    char        stage[kStageLen]{}; // NOLINT(modernize-avoid-c-arrays)
     uint32_t    stage_count{0};        ///< Number of pipeline stages visited
 
     void set_stage(std::string_view s) noexcept {
@@ -158,7 +158,7 @@ private:
     void*    heatmap_{nullptr};  ///< Actually BufferHeatmap* — cast after type alias is visible
     uint64_t slot_idx_{0};
     bool     released_{false};
-    char     stage_[kStageLen]{};
+    char     stage_[kStageLen]{}; // NOLINT(modernize-avoid-c-arrays)
 };
 
 // ─── BufferHeatmap ───────────────────────────────────────────────────────────
@@ -334,12 +334,12 @@ using BufferHeatmap = BufferHeatmapT<4096, 65536>;
 // ─── HeatmapTicket destructor and release (inline, needs BufferHeatmap def) ──
 
 inline HeatmapTicket::~HeatmapTicket() noexcept {
-    if (!released_ && heatmap_)
+    if (!released_ && heatmap_ != nullptr)
         release();
 }
 
 inline void HeatmapTicket::release(std::string_view next_stage) noexcept {
-    if (released_ || !heatmap_) return;
+    if (released_ || heatmap_ == nullptr) return;
     reinterpret_cast<BufferHeatmap*>(heatmap_)->on_stage_exit(slot_idx_, next_stage);
     released_ = true;
 }

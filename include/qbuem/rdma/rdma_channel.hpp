@@ -69,7 +69,7 @@ namespace qbuem::rdma {
 struct QPInfo {
     uint32_t qp_num{0};    ///< QP number
     uint16_t lid{0};       ///< LID (InfiniBand only; 0 for RoCE)
-    uint8_t  gid[16]{};    ///< GID (for RoCEv2)
+    uint8_t  gid[16]{};    ///< GID (for RoCEv2) // NOLINT(modernize-avoid-c-arrays)
     uint32_t psn{0};       ///< Initial packet sequence number
     uint8_t  port{1};      ///< HCA port number
     uint8_t  gid_index{0}; ///< GID index

@@ -108,7 +108,7 @@ public:
 struct TopicDescriptor {
     static constexpr size_t kMaxNameLen = 63;
 
-    char       name[kMaxNameLen + 1]{};
+    char       name[kMaxNameLen + 1]{}; // NOLINT(modernize-avoid-c-arrays)
     TopicScope scope{TopicScope::LOCAL_ONLY};
     uint64_t   type_id{0};          ///< Type identifier (sizeof(T) XOR typeid-based)
     size_t     capacity{0};         ///< Ring buffer capacity
@@ -147,7 +147,7 @@ public:
         size_t n = topic_count_.load(std::memory_order_acquire);
         for (size_t i = 0; i < n; ++i) {
             auto& desc = topics_[i];
-            if (desc.channel_ptr && desc.channel_deleter) {
+            if (desc.channel_ptr != nullptr && desc.channel_deleter) {
                 desc.channel_deleter(desc.channel_ptr);
                 desc.channel_ptr = nullptr;
             }
@@ -219,8 +219,8 @@ public:
     template <typename T>
     Task<Result<void>> publish(std::string_view name, const T& msg) {
         auto* desc = find_topic(name);
-        if (!desc) co_return unexpected(std::make_error_code(std::errc::no_such_file_or_directory));
-        if (desc->type_id != make_type_id<T>()) co_return unexpected(std::make_error_code(std::errc::invalid_argument));
+        if (!desc) co_return std::unexpected(std::make_error_code(std::errc::no_such_file_or_directory));
+        if (desc->type_id != make_type_id<T>()) co_return std::unexpected(std::make_error_code(std::errc::invalid_argument));
 
         if (desc->scope == TopicScope::LOCAL_ONLY) {
             auto* ch = static_cast<AsyncChannel<T>*>(desc->channel_ptr);
@@ -329,7 +329,7 @@ private:
 
     // ── Topic registry ─────────────────────────────────────────────────────
 
-    TopicDescriptor*       find_topic(std::string_view name) noexcept {
+    [[nodiscard]] TopicDescriptor*       find_topic(std::string_view name) noexcept {
         size_t n = topic_count_.load(std::memory_order_acquire);
         for (size_t i = 0; i < n; ++i) {
             if (topics_[i].get_name() == name) return &topics_[i];
@@ -337,7 +337,7 @@ private:
         return nullptr;
     }
 
-    const TopicDescriptor* find_topic(std::string_view name) const noexcept {
+    [[nodiscard]] const TopicDescriptor* find_topic(std::string_view name) const noexcept {
         size_t n = topic_count_.load(std::memory_order_acquire);
         for (size_t i = 0; i < n; ++i) {
             if (topics_[i].get_name() == name) return &topics_[i];
@@ -351,7 +351,7 @@ private:
         return (uint64_t(sizeof(T)) << 32) | uint64_t(alignof(T));
     }
 
-    TopicDescriptor      topics_[kMaxTopics]{};
+    TopicDescriptor      topics_[kMaxTopics]{}; // NOLINT(modernize-avoid-c-arrays)
     std::atomic<size_t>  topic_count_{0};
 };
 
@@ -382,7 +382,7 @@ public:
      */
     Result<void> init() noexcept {
         auto res = SHMChannel<T>::open(name_);
-        if (!res) return unexpected(res.error());
+        if (!res) return std::unexpected(res.error());
         channel_ = std::move(*res);
         return Result<void>{};
     }
@@ -424,7 +424,7 @@ public:
      */
     Result<void> init() noexcept {
         auto res = SHMChannel<T>::create(name_, capacity_);
-        if (!res) return unexpected(res.error());
+        if (!res) return std::unexpected(res.error());
         channel_ = std::move(*res);
         return Result<void>{};
     }

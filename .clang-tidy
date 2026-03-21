@@ -58,3 +58,4 @@ HeaderFilterRegex: '^.*/include/qbuem/.*'
 ExtraArgs:
   - -std=c++23
   - -D__cpp_concepts=202002L
+  - -Wno-builtin-macro-redefined

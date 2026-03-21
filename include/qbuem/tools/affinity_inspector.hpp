@@ -63,7 +63,7 @@ struct ThreadAffinityInfo {
     static constexpr size_t kNameLen = 32;
 
     uint64_t tid{0};                  ///< Thread ID (gettid)
-    char     name[kNameLen]{};        ///< Thread name (pthread_getname_np)
+    char     name[kNameLen]{};        ///< Thread name (pthread_getname_np) // NOLINT(modernize-avoid-c-arrays)
     uint64_t cpu_mask{0};             ///< Bitmask of allowed CPUs (first 64)
     uint32_t current_cpu{0};          ///< CPU currently running on
     uint32_t numa_node{0};            ///< NUMA node of current_cpu
@@ -135,7 +135,7 @@ public:
         snap.online_cpus = read_uint_from_sys("/sys/devices/system/cpu/online",   0);
 
         // Populate CPU info (simplified — full impl reads sysfs per CPU)
-        uint32_t ncpus = snap.total_cpus ? snap.total_cpus : get_nprocs_conf();
+        uint32_t ncpus = (snap.total_cpus != 0u) ? snap.total_cpus : get_nprocs_conf();
         snap.cpus.reserve(ncpus);
         for (uint32_t i = 0; i < ncpus; ++i) {
             CpuInfo ci;

@@ -456,7 +456,7 @@ private:
 
     // ── Control frames ────────────────────────────────────────────────────────
 
-    Task<Result<void>> send_ctrl(uint8_t flags, const std::stop_token& st) const {
+    [[nodiscard]] Task<Result<void>> send_ctrl(uint8_t flags, const std::stop_token& st) const {
         (void)st; // stop_token reserved for future send cancellation
         RudpHeader hdr;
         hdr.seq    = send_seq_;
@@ -475,7 +475,7 @@ private:
         co_await send_ctrl(RudpFlags::Ack, st);
     }
 
-    Task<void> send_nack(const std::stop_token& st) const {
+    [[nodiscard]] Task<void> send_nack(const std::stop_token& st) const {
         (void)st; // stop_token reserved for future send cancellation
         RudpHeader hdr;
         hdr.seq    = send_seq_;

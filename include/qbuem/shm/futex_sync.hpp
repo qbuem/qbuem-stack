@@ -198,7 +198,7 @@ public:
         FutexMutex* mtx{nullptr};
         explicit LockGuard(FutexMutex* m) noexcept : mtx(m) {}
         LockGuard(LockGuard&& o) noexcept : mtx(o.mtx) { o.mtx = nullptr; }
-        ~LockGuard() { if (mtx) mtx->unlock(); }
+        ~LockGuard() { if (mtx != nullptr) mtx->unlock(); }
         LockGuard(const LockGuard&) = delete;
         LockGuard& operator=(const LockGuard&) = delete;
     };
