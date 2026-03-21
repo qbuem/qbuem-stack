@@ -197,7 +197,10 @@ inline void block4_neon(const uint8_t* key,
     s[ 9] = vdupq_n_u32(load_le32(key + 20));
     s[10] = vdupq_n_u32(load_le32(key + 24));
     s[11] = vdupq_n_u32(load_le32(key + 28));
-    s[12] = {counter, counter + 1u, counter + 2u, counter + 3u};
+    s[12] = vsetq_lane_u32(counter + 3u,
+              vsetq_lane_u32(counter + 2u,
+                vsetq_lane_u32(counter + 1u,
+                  vdupq_n_u32(counter), 1), 2), 3);
     s[13] = vdupq_n_u32(load_le32(nonce + 0));
     s[14] = vdupq_n_u32(load_le32(nonce + 4));
     s[15] = vdupq_n_u32(load_le32(nonce + 8));
