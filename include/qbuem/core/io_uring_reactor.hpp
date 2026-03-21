@@ -32,7 +32,7 @@ public:
    * true if the kernel accepted IORING_SETUP_SQPOLL.
    * false if fallen back to normal mode (e.g., insufficient permissions).
    */
-  bool is_sqpoll() const noexcept;
+  [[nodiscard]] bool is_sqpoll() const noexcept;
 
   IOUringReactor();
   ~IOUringReactor() override;
@@ -50,7 +50,7 @@ public:
   Result<int> poll(int timeout_ms) override;
 
   void stop() override;
-  bool is_running() const override;
+  [[nodiscard]] bool is_running() const override;
 
   void post(std::function<void()> fn) override;
 
@@ -85,7 +85,7 @@ public:
   /**
    * @brief Return the number of currently registered fixed buffers.
    */
-  size_t fixed_buffer_count() const noexcept;
+  [[nodiscard]] size_t fixed_buffer_count() const noexcept;
 
   /**
    * @brief `IORING_OP_READ_FIXED` — asynchronous read into a fixed buffer.
