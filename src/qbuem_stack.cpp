@@ -19,10 +19,6 @@
 #include <sys/un.h>
 #include <unistd.h>
 #include <variant>
-#ifdef __linux__
-#  include <fcntl.h>
-#  include <sys/sendfile.h>
-#endif
 
 namespace qbuem {
 
@@ -31,7 +27,7 @@ namespace qbuem {
 namespace {
 
 std::atomic<std::time_t> g_date_ts{0};
-char                      g_date_buf[48] = {};
+char                      g_date_buf[48] = {}; // NOLINT(modernize-avoid-c-arrays)
 std::mutex                g_date_mu;
 
 // vDSO fast monotonic second — no syscall overhead on Linux (CLOCK_MONOTONIC_COARSE
@@ -123,7 +119,7 @@ static void send_file_body(int sock_fd, std::string_view path, size_t size) noex
 // Send HTTP header + body in a single writev() syscall — no heap concat.
 // Falls back to write_all for the body if writev() is short.
 void writev_response(int fd, const std::string &hdr, std::string_view body) {
-  struct iovec iov[2];
+  struct iovec iov[2]; // NOLINT(modernize-avoid-c-arrays)
   iov[0].iov_base = const_cast<char *>(hdr.data());
   iov[0].iov_len  = hdr.size();
   iov[1].iov_base = const_cast<char *>(body.data());
@@ -161,7 +157,7 @@ void writev_response(int fd, const std::string &hdr, std::string_view body) {
 static App *g_app_instance = nullptr;
 
 static void on_shutdown_signal(int) {
-  if (g_app_instance)
+  if (g_app_instance != nullptr)
     g_app_instance->stop();
 }
 
@@ -228,30 +224,30 @@ App::App(size_t thread_count) : dispatcher_(thread_count) {
             << thread_count << " reactor threads)..." << std::endl;
 }
 
-void App::use(Middleware mw) { router_.use(std::move(mw)); }
+void App::use(Middleware mw) { router_.use(std::move(mw)); } // NOLINT(performance-unnecessary-value-param)
 void App::use_async(AsyncMiddleware mw) { router_.use_async(std::move(mw)); }
 
-void App::on_error(ErrorHandler handler) { error_handler_ = std::move(handler); }
+void App::on_error(ErrorHandler handler) { error_handler_ = std::move(handler); } // NOLINT(performance-unnecessary-value-param)
 
-void App::get(std::string_view path, HandlerVariant handler) {
+void App::get(std::string_view path, HandlerVariant handler) { // NOLINT(performance-unnecessary-value-param)
   router_.add_route(Method::Get, path, std::move(handler));
 }
-void App::post(std::string_view path, HandlerVariant handler) {
+void App::post(std::string_view path, HandlerVariant handler) { // NOLINT(performance-unnecessary-value-param)
   router_.add_route(Method::Post, path, std::move(handler));
 }
-void App::put(std::string_view path, HandlerVariant handler) {
+void App::put(std::string_view path, HandlerVariant handler) { // NOLINT(performance-unnecessary-value-param)
   router_.add_route(Method::Put, path, std::move(handler));
 }
-void App::del(std::string_view path, HandlerVariant handler) {
+void App::del(std::string_view path, HandlerVariant handler) { // NOLINT(performance-unnecessary-value-param)
   router_.add_route(Method::Delete, path, std::move(handler));
 }
-void App::patch(std::string_view path, HandlerVariant handler) {
+void App::patch(std::string_view path, HandlerVariant handler) { // NOLINT(performance-unnecessary-value-param)
   router_.add_route(Method::Patch, path, std::move(handler));
 }
-void App::head(std::string_view path, HandlerVariant handler) {
+void App::head(std::string_view path, HandlerVariant handler) { // NOLINT(performance-unnecessary-value-param)
   router_.add_route(Method::Head, path, std::move(handler));
 }
-void App::options(std::string_view path, HandlerVariant handler) {
+void App::options(std::string_view path, HandlerVariant handler) { // NOLINT(performance-unnecessary-value-param)
   router_.add_route(Method::Options, path, std::move(handler));
 }
 void App::serve_static(std::string_view url_prefix, std::string_view root_dir) {
@@ -375,7 +371,7 @@ void App::enable_structured_log() {
     std::time_t now = std::time(nullptr);
     std::tm tm{};
     gmtime_r(&now, &tm);
-    char ts[32];
+    char ts[32]; // NOLINT(modernize-avoid-c-arrays)
     std::strftime(ts, sizeof(ts), "%Y-%m-%dT%H:%M:%SZ", &tm);
     auto line = std::format(
         "{{\"ts\":\"{}\",\"method\":\"{}\",\"path\":\"{}\","
@@ -395,7 +391,7 @@ void App::enable_access_log() {
     std::time_t now = std::time(nullptr);
     std::tm tm{};
     gmtime_r(&now, &tm);
-    char ts[32];
+    char ts[32]; // NOLINT(modernize-avoid-c-arrays)
     std::strftime(ts, sizeof(ts), "%Y-%m-%dT%H:%M:%SZ", &tm);
     auto line = std::format("[{}] {} {} {} {}µs\n",
                             ts, method, path, status, duration_us);
@@ -409,7 +405,7 @@ void App::enable_json_log() {
     std::time_t now = std::time(nullptr);
     std::tm tm{};
     gmtime_r(&now, &tm);
-    char ts[32];
+    char ts[32]; // NOLINT(modernize-avoid-c-arrays)
     std::strftime(ts, sizeof(ts), "%Y-%m-%dT%H:%M:%SZ", &tm);
     auto line = std::format(
         "{{\"ts\":\"{}\",\"method\":\"{}\","
@@ -562,7 +558,7 @@ Result<void> App::listen(int port, bool ipv6) {
         }
 
         // Extract remote peer IP address for use in Request::remote_addr().
-        char peer_ip[INET6_ADDRSTRLEN] = {};
+        char peer_ip[INET6_ADDRSTRLEN] = {}; // NOLINT(modernize-avoid-c-arrays)
         if (client_addr.ss_family == AF_INET6) {
           const auto *a6 = reinterpret_cast<const struct sockaddr_in6 *>(&client_addr);
           inet_ntop(AF_INET6, &a6->sin6_addr, peer_ip, sizeof(peer_ip));
@@ -706,7 +702,7 @@ Result<void> App::listen(int port, bool ipv6) {
               __builtin_prefetch(&ctx->buf,        0, 3);
               __builtin_prefetch(&ctx->handled,    0, 1);
               __builtin_prefetch(&ctx->idle_timer_id, 0, 1);
-              char tmp[8192];
+              char tmp[8192]; // NOLINT(modernize-avoid-c-arrays)
               ssize_t n = read(cfd, tmp, sizeof(tmp));
               if (n <= 0) [[unlikely]] {
                 cancel_read_timeout();
@@ -729,7 +725,7 @@ Result<void> App::listen(int port, bool ipv6) {
               // ── Hard parse error (400 / 413) ──────────────────────────
               if (!parsed) [[unlikely]] {
                 cancel_read_timeout();
-                int status = parser.error_status() ? parser.error_status() : 400;
+                int status = parser.error_status() != 0 ? parser.error_status() : 400;
                 Response err;
                 err.status(status)
                    .header("Connection", "close")
@@ -746,7 +742,7 @@ Result<void> App::listen(int port, bool ipv6) {
                 if (!ctx->sent_100) {
                   std::string_view expect = req.header("Expect");
                   if (expect == "100-continue") {
-                    static constexpr char k100[] =
+                    static constexpr char k100[] = // NOLINT(modernize-avoid-c-arrays)
                         "HTTP/1.1 100 Continue\r\n\r\n";
                     [[maybe_unused]] ssize_t r100 =
                         write(cfd, k100, sizeof(k100) - 1);
@@ -1022,7 +1018,7 @@ Result<void> App::listen(int port, bool ipv6) {
                     decltype(async_tail) tail) -> Task<void> {
                   co_await run_mw_chain(mws, 0, rqp, rsp, std::move(tail));
                 }(&router_.middlewares(), rqp, rsp, std::move(async_tail));
-                chain_task.resume();
+                (void)chain_task.resume();
                 chain_task.detach();
                 return; // sync callback done; coroutine owns everything
               }
@@ -1087,11 +1083,11 @@ Result<void> App::listen(int port, bool ipv6) {
                 auto sr  = send_response;
 
                 auto run_async =
-                    [](AsyncHandler ah, Request areq, Response ares,
-                       int fd, Reactor *r, [[maybe_unused]] std::shared_ptr<ConnCtx> c,
+                    [](AsyncHandler ah, Request areq, Response ares,       // NOLINT(performance-unnecessary-value-param)
+                       int fd, Reactor *r, [[maybe_unused]] std::shared_ptr<ConnCtx> c, // NOLINT(performance-unnecessary-value-param)
                        bool ka_flag, bool head_fb,
-                       std::function<void()> arm,
-                       decltype(send_response) sr_fn) -> Task<void> {
+                       std::function<void()> arm, // NOLINT(performance-unnecessary-value-param)
+                       decltype(send_response) sr_fn) -> Task<void> { // NOLINT(performance-unnecessary-value-param)
                   try {
                     co_await ah(areq, ares);
                   } catch (const std::exception &ex) {
@@ -1113,7 +1109,7 @@ Result<void> App::listen(int port, bool ipv6) {
 
                 auto task = run_async(h, std::move(req), std::move(res),
                                       cfd, reactor, ctx, ka, hfb, arm_idle, sr);
-                task.resume();
+                (void)task.resume();
                 task.detach();
               }
             });
@@ -1249,7 +1245,7 @@ Result<void> App::listen_unix(std::string_view path) {
                 reactor->unregister_timer(ctx->idle_timer_id);
                 ctx->idle_timer_id = -1;
               }
-              char tmp[8192];
+              char tmp[8192]; // NOLINT(modernize-avoid-c-arrays)
               ssize_t n = read(cfd, tmp, sizeof(tmp));
               if (n <= 0) [[unlikely]] {
                 cancel_read_timeout();
@@ -1366,7 +1362,7 @@ void StackController::run() {
   // Install signal handlers — delegate to stop().
   static StackController *g_ctrl = nullptr;
   g_ctrl = this;
-  auto sig_handler = [](int) { if (g_ctrl) g_ctrl->stop(); };
+  auto sig_handler = [](int) { if (g_ctrl != nullptr) g_ctrl->stop(); };
   std::signal(SIGTERM, sig_handler);
   std::signal(SIGINT,  sig_handler);
 

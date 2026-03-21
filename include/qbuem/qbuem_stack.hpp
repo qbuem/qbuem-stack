@@ -357,7 +357,7 @@ public:
   void metrics_endpoint(std::string_view path = "/metrics");
 
   /** @brief Return a snapshot of current application metrics. */
-  Metrics snapshot_metrics() const;
+  [[nodiscard]] Metrics snapshot_metrics() const;
 
   /**
    * @brief Start listening on a port (blocks until stop() is called).

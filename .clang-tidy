@@ -1,8 +1,8 @@
-# clang-tidy configuration for draco-was
+# clang-tidy configuration for qbuem-stack
 #
 # Run locally:
-#   cmake -B build -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DDRACO_BUILD_TESTS=OFF
-#   run-clang-tidy -p build src/
+#   cmake -B build -DCMAKE_CXX_COMPILER=g++ -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DQBUEM_BUILD_TESTS=OFF
+#   run-clang-tidy-18 -p build src/
 
 Checks: >
   clang-analyzer-*,
@@ -49,9 +49,13 @@ Checks: >
 # Treat all enabled checks as errors in CI.
 WarningsAsErrors: '*'
 
-# Only diagnose issues in draco's own headers (not in vendored / fetched deps).
-HeaderFilterRegex: '^.*/include/draco/.*'
+# Only diagnose issues in qbuem's own headers (not in vendored / fetched deps).
+HeaderFilterRegex: '^.*/include/qbuem/.*'
 
-# Draco uses C++23.
+# qbuem-stack requires C++23.
+# __cpp_concepts: clang-18 emits 201907L but libstdc++-13 <expected> requires
+# >= 202002L (C++20 final value).  Override so the header guard passes.
 ExtraArgs:
   - -std=c++23
+  - -D__cpp_concepts=202002L
+  - -Wno-builtin-macro-redefined

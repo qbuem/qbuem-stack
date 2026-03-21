@@ -48,7 +48,7 @@ void Dispatcher::stop() {
 Result<void> Dispatcher::register_listener(int fd,
                                            std::function<void(int)> callback) {
   if (reactors_.empty()) {
-    return unexpected(std::make_error_code(std::errc::no_such_device));
+    return std::unexpected(std::make_error_code(std::errc::no_such_device));
   }
   return reactors_[0]->register_event(fd, EventType::Read, std::move(callback));
 }
@@ -56,7 +56,7 @@ Result<void> Dispatcher::register_listener(int fd,
 Result<void> Dispatcher::register_listener_at(int fd, size_t reactor_idx,
                                                std::function<void(int)> callback) {
   if (reactor_idx >= reactors_.size()) {
-    return unexpected(std::make_error_code(std::errc::invalid_argument));
+    return std::unexpected(std::make_error_code(std::errc::invalid_argument));
   }
   return reactors_[reactor_idx]->register_event(fd, EventType::Read,
                                                  std::move(callback));

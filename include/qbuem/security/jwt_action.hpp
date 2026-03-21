@@ -273,7 +273,7 @@ private:
             std::string_view auth = msg.header(config_.auth_header);
             if (auth.size() <= JwtAuthConfig::kBearerPrefixLen) return std::nullopt;
             // Check "Bearer " prefix (case-insensitive)
-            static constexpr char kBearer[] = "bearer ";
+            static constexpr char kBearer[] = "bearer "; // NOLINT(modernize-avoid-c-arrays)
             for (size_t i = 0; i < JwtAuthConfig::kBearerPrefixLen; ++i) {
                 char c = auth[i];
                 if (c >= 'A' && c <= 'Z') c |= 0x20; // tolower
@@ -304,7 +304,7 @@ private:
     public:
         explicit LRUCache(size_t cap) : entries_(cap) {}
 
-        std::optional<JwtClaims> get(std::string_view token) const noexcept {
+        [[nodiscard]] std::optional<JwtClaims> get(std::string_view token) const noexcept {
             uint64_t h = hash(token);
             size_t   idx = h % entries_.size();
             const auto& e = entries_[idx];

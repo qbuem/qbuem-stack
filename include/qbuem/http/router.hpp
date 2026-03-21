@@ -86,7 +86,7 @@ private:
 
     static constexpr size_t kBinarySearchThreshold = 4;
 
-    const Node *find_child(char c) const noexcept {
+    [[nodiscard]] const Node *find_child(char c) const noexcept {
       if (children.size() > kBinarySearchThreshold) {
         // Binary search on sorted children.
         auto it = std::lower_bound(children.begin(), children.end(), c,
@@ -163,12 +163,12 @@ public:
    * Return true if @p path is registered for ANY method.
    * Used to distinguish 404 (path unknown) from 405 (method not allowed).
    */
-  bool path_exists(std::string_view path) const;
+  [[nodiscard]] bool path_exists(std::string_view path) const;
 
-  const std::vector<AnyMiddleware> &middlewares() const { return middlewares_; }
+  [[nodiscard]] const std::vector<AnyMiddleware> &middlewares() const { return middlewares_; }
 
   /** @brief Returns true if at least one async middleware is registered. */
-  bool has_async_middlewares() const { return has_async_mw_; }
+  [[nodiscard]] bool has_async_middlewares() const { return has_async_mw_; }
 
 private:
   struct PrefixRoute {

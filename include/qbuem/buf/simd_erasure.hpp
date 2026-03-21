@@ -209,13 +209,13 @@ inline void gf_mul_add(uint8_t coeff, std::span<const std::byte> in,
 #ifdef QBUEM_ERASURE_AVX2
     // AVX2 path: VPSHUFB split-table GF multiply
     // Build lo/hi 4-bit nibble tables
-    alignas(32) uint8_t tbl_lo[16], tbl_hi[16];
+    alignas(32) std::array<uint8_t, 16> tbl_lo{}, tbl_hi{};
     for (int i = 0; i < 16; ++i) {
-        tbl_lo[i] = gf256::fast_mul(coeff, static_cast<uint8_t>(i));
-        tbl_hi[i] = gf256::fast_mul(coeff, static_cast<uint8_t>(i << 4));
+        tbl_lo[static_cast<size_t>(i)] = gf256::fast_mul(coeff, static_cast<uint8_t>(i));
+        tbl_hi[static_cast<size_t>(i)] = gf256::fast_mul(coeff, static_cast<uint8_t>(i << 4));
     }
-    __m256i lo = _mm256_broadcastsi128_si256(_mm_loadu_si128((__m128i*)tbl_lo));
-    __m256i hi = _mm256_broadcastsi128_si256(_mm_loadu_si128((__m128i*)tbl_hi));
+    __m256i lo = _mm256_broadcastsi128_si256(_mm_loadu_si128(reinterpret_cast<const __m128i*>(tbl_lo.data())));
+    __m256i hi = _mm256_broadcastsi128_si256(_mm_loadu_si128(reinterpret_cast<const __m128i*>(tbl_hi.data())));
     __m256i mask_lo = _mm256_set1_epi8(0x0F);
 
     size_t i = 0;
@@ -319,7 +319,7 @@ public:
      *                data; shards[k..k+m-1] will be overwritten with parity.
      *                All spans must have equal size.
      */
-    void encode(std::span<std::span<std::byte>> shards) noexcept {
+    void encode(std::span<std::span<std::byte>> shards) const noexcept {
         assert(static_cast<int>(shards.size()) == k_ + m_);
         size_t sz = shards[0].size();
 
@@ -353,7 +353,7 @@ public:
         int avail = 0;
         for (bool p : present) if (p) ++avail;
         if (avail < k_)
-            return unexpected(std::make_error_code(std::errc::not_enough_memory));
+            return std::unexpected(std::make_error_code(std::errc::not_enough_memory));
 
         // Build decode matrix from first k available rows of generator matrix
         size_t sz = 0;
@@ -374,7 +374,7 @@ public:
 
         // Invert decode sub-matrix
         auto inv_mat = invert_matrix(sub, k_);
-        if (!inv_mat) return unexpected(std::make_error_code(std::errc::invalid_argument));
+        if (!inv_mat) return std::unexpected(std::make_error_code(std::errc::invalid_argument));
 
         // Reconstruct missing data shards
         std::vector<std::byte> tmp(sz);
@@ -405,7 +405,7 @@ private:
             // Find pivot
             int pivot = -1;
             for (int row = col; row < n; ++row)
-                if (mat[static_cast<size_t>(row * n + col)]) { pivot = row; break; }
+                if (mat[static_cast<size_t>(row * n + col)] != 0u) { pivot = row; break; }
             if (pivot < 0) return std::nullopt;
 
             // Swap rows
@@ -431,7 +431,7 @@ private:
             for (int row = 0; row < n; ++row) {
                 if (row == col) continue;
                 uint8_t factor = mat[static_cast<size_t>(row * n + col)];
-                if (!factor) continue;
+                if (factor == 0U) continue;
                 for (int c = 0; c < n; ++c) {
                     mat[static_cast<size_t>(row * n + c)] ^=
                         gf256::fast_mul(factor, mat[static_cast<size_t>(col * n + c)]);

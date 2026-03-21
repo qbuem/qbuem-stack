@@ -118,7 +118,7 @@ public:
     return slots_[worker_idx].value;
   }
 
-  size_t size() const noexcept { return slots_.size(); }
+  [[nodiscard]] size_t size() const noexcept { return slots_.size(); }
 
 private:
   // alignas(64) prevents false sharing.

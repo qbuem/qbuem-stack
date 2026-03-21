@@ -222,7 +222,7 @@ public:
     [[nodiscard]] static Result<UdpMmsgSocket> bind(SocketAddr addr) noexcept {
         int domain = (addr.family() == SocketAddr::Family::IPv6) ? AF_INET6 : AF_INET;
         int fd = ::socket(domain, SOCK_DGRAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
-        if (fd < 0) return unexpected(std::error_code(errno, std::system_category()));
+        if (fd < 0) return std::unexpected(std::error_code(errno, std::system_category()));
 
         {
             int opt = 1;
@@ -237,12 +237,12 @@ public:
         sockaddr_storage ss{};
         socklen_t len{};
         auto r = addr.to_sockaddr(ss, len);
-        if (!r) { ::close(fd); return unexpected(r.error()); }
+        if (!r) { ::close(fd); return std::unexpected(r.error()); }
 
         if (::bind(fd, reinterpret_cast<const sockaddr*>(&ss), len) != 0) {
             auto ec = std::error_code(errno, std::system_category());
             ::close(fd);
-            return unexpected(ec);
+            return std::unexpected(ec);
         }
         return UdpMmsgSocket(fd);
     }
@@ -261,18 +261,18 @@ public:
      *          cancellation. error_code on syscall failure.
      */
     [[nodiscard]] Task<Result<RecvBatch<kDefaultBatch, kDefaultBufSize>>>
-    recv_batch(std::stop_token st) {
+    recv_batch(const std::stop_token& st) {
         if (st.stop_requested())
-            co_return unexpected(std::make_error_code(std::errc::operation_canceled));
+            co_return std::unexpected(std::make_error_code(std::errc::operation_canceled));
 
         // Wait for readability via reactor
         struct ReadyAwaiter {
             int fd_;
             bool ready_{false};
-            bool await_ready() const noexcept { return false; }
+            [[nodiscard]] bool await_ready() const noexcept { return false; }
             void await_suspend(std::coroutine_handle<> h) {
                 auto* r = Reactor::current();
-                if (!r) { ready_ = true; h.resume(); return; }
+                if (r == nullptr) { ready_ = true; h.resume(); return; }
                 r->register_event(fd_, EventType::Read, [h, this](int f) {
                     ready_ = true;
                     Reactor::current()->unregister_event(f, EventType::Read);
@@ -285,7 +285,7 @@ public:
         co_await aw;
 
         if (st.stop_requested())
-            co_return unexpected(std::make_error_code(std::errc::operation_canceled));
+            co_return std::unexpected(std::make_error_code(std::errc::operation_canceled));
 
         // Prepare mmsghdr array on the stack
         using Batch = RecvBatch<kDefaultBatch, kDefaultBufSize>;
@@ -319,7 +319,7 @@ public:
                 batch.count = 0;
                 co_return batch;
             }
-            co_return unexpected(std::error_code(errno, std::system_category()));
+            co_return std::unexpected(std::error_code(errno, std::system_category()));
         }
 
         batch.count = static_cast<size_t>(n);
@@ -353,10 +353,10 @@ public:
      */
     template<size_t MaxBatch>
     [[nodiscard]] Task<Result<size_t>>
-    send_batch(const SendBatch<MaxBatch>& batch, std::stop_token st) {
+    send_batch(const SendBatch<MaxBatch>& batch, const std::stop_token& st) {
         if (batch.empty()) co_return size_t{0};
         if (st.stop_requested())
-            co_return unexpected(std::make_error_code(std::errc::operation_canceled));
+            co_return std::unexpected(std::make_error_code(std::errc::operation_canceled));
 
         size_t n = batch.size();
         std::array<mmsghdr,          MaxBatch> msgs{};
@@ -383,7 +383,7 @@ public:
 
         int sent = ::sendmmsg(fd_, msgs.data(), static_cast<unsigned>(n), 0);
         if (sent < 0)
-            co_return unexpected(std::error_code(errno, std::system_category()));
+            co_return std::unexpected(std::error_code(errno, std::system_category()));
 
         co_return static_cast<size_t>(sent);
     }

@@ -220,7 +220,7 @@ private:
  * Atomic counters (`total_`, `errors_`) are thread-safe.
  * `LatencyHistogram` may have minor inaccuracies under multiple producers.
  */
-class ErrorBudgetTracker {
+class ErrorBudgetTracker { // NOLINT(clang-analyzer-optin.performance.Padding)
 public:
   /** @brief Rolling window size used for error rate calculation. */
   static constexpr size_t kRollingWindow = 1000;
@@ -270,7 +270,7 @@ public:
    *
    * Does nothing if `on_violation` is not set.
    */
-  void check_slo() {
+  void check_slo() const {
     if (!cfg_.on_violation) return;
 
     bool violated = false;
@@ -386,7 +386,7 @@ private:
  */
 class SloObserver : public PipelineObserver {
 public:
-  virtual ~SloObserver() = default;
+  ~SloObserver() override = default;
 
   /**
    * @brief Called when an SLO violation is detected.

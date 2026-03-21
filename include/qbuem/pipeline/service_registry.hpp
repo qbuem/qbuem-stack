@@ -186,7 +186,7 @@ private:
       }
     }
     // Delegate to parent scope
-    if (parent_)
+    if (parent_ != nullptr)
       return parent_->lookup(key);
     return nullptr;
   }

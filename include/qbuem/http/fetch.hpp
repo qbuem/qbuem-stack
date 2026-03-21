@@ -19,7 +19,7 @@
  * @code
  * // Basic GET
  * auto resp = co_await fetch("http://httpbin.org/get").send(st);
- * if (!resp) co_return unexpected(resp.error());
+ * if (!resp) co_return std::unexpected(resp.error());
  *
  * // Monadic chaining
  * auto result = co_await fetch("http://api.example.com/users/1")
@@ -29,7 +29,7 @@
  *
  * auto name = result
  *     .and_then([](const FetchResponse& r) -> Result<std::string> {
- *         if (!r.ok()) return unexpected(std::make_error_code(std::errc::protocol_error));
+ *         if (!r.ok()) return std::unexpected(std::make_error_code(std::errc::protocol_error));
  *         return std::string(r.body());
  *     })
  *     .transform([](const std::string& body) { return "got: " + body; })
@@ -61,6 +61,7 @@
 #include <qbuem/net/tcp_stream.hpp>
 
 #include <algorithm>
+#include <array>
 #include <charconv>
 #include <chrono>
 #include <cstddef>
@@ -110,14 +111,14 @@ struct ParsedUrl {
     // Scheme
     auto scheme_end = url.find("://");
     if (scheme_end == std::string_view::npos)
-      return unexpected(std::make_error_code(std::errc::invalid_argument));
+      return std::unexpected(std::make_error_code(std::errc::invalid_argument));
 
     out.scheme = std::string(url.substr(0, scheme_end));
     url.remove_prefix(scheme_end + 3);
 
     if (out.scheme == "http")       out.port = 80;
     else if (out.scheme == "https") out.port = 443;
-    else return unexpected(std::make_error_code(std::errc::invalid_argument));
+    else return std::unexpected(std::make_error_code(std::errc::invalid_argument));
 
     // Authority vs path
     auto path_start = url.find('/');
@@ -132,7 +133,7 @@ struct ParsedUrl {
     if (!authority.empty() && authority[0] == '[') {
       auto bracket = authority.find(']');
       if (bracket == std::string_view::npos)
-        return unexpected(std::make_error_code(std::errc::invalid_argument));
+        return std::unexpected(std::make_error_code(std::errc::invalid_argument));
       out.host = std::string(authority.substr(1, bracket - 1));
       authority.remove_prefix(bracket + 1);
       if (!authority.empty() && authority[0] == ':') {
@@ -141,7 +142,7 @@ struct ParsedUrl {
         auto [ptr, ec] = std::from_chars(
             authority.data(), authority.data() + authority.size(), p);
         if (ec != std::errc{})
-          return unexpected(std::make_error_code(std::errc::invalid_argument));
+          return std::unexpected(std::make_error_code(std::errc::invalid_argument));
         out.port = p;
       }
     } else {
@@ -155,13 +156,13 @@ struct ParsedUrl {
         auto [ptr, ec] = std::from_chars(
             port_sv.data(), port_sv.data() + port_sv.size(), p);
         if (ec != std::errc{})
-          return unexpected(std::make_error_code(std::errc::invalid_argument));
+          return std::unexpected(std::make_error_code(std::errc::invalid_argument));
         out.port = p;
       }
     }
 
     if (out.host.empty())
-      return unexpected(std::make_error_code(std::errc::invalid_argument));
+      return std::unexpected(std::make_error_code(std::errc::invalid_argument));
 
     return out;
   }
@@ -180,25 +181,25 @@ public:
   FetchResponse() = default;
 
   /** @brief HTTP status code (e.g. 200, 404, 500). */
-  int status() const noexcept { return status_; }
+  [[nodiscard]] int status() const noexcept { return status_; }
 
   /** @brief Returns true for 2xx success responses. */
-  bool ok() const noexcept { return status_ >= 200 && status_ < 300; }
+  [[nodiscard]] bool ok() const noexcept { return status_ >= 200 && status_ < 300; }
 
   /**
    * @brief Return a response header value (case-insensitive key lookup).
    * @returns Header value, or empty string_view if the header is absent.
    */
-  std::string_view header(std::string_view key) const {
+  [[nodiscard]] std::string_view header(std::string_view key) const {
     // Keys are stored pre-lowercased by add_header(); just lowercase
     // the (typically short) lookup key without a heap allocation.
-    char  buf[64];
-    const bool fits = key.size() < sizeof(buf);
+    std::array<char, 64> buf{};
+    const bool fits = key.size() < buf.size();
     if (fits) {
       for (size_t i = 0; i < key.size(); ++i)
         buf[i] = static_cast<char>(
             std::tolower(static_cast<unsigned char>(key[i])));
-      std::string_view lower_key(buf, key.size());
+      std::string_view lower_key(buf.data(), key.size());
       auto it = headers_.find(std::string(lower_key));
       return (it != headers_.end()) ? std::string_view(it->second)
                                      : std::string_view{};
@@ -212,7 +213,7 @@ public:
   }
 
   /** @brief Response body as a string_view (raw bytes). */
-  std::string_view body() const noexcept { return body_; }
+  [[nodiscard]] std::string_view body() const noexcept { return body_; }
 
   /** @brief Move the response body out (avoids a copy). */
   std::string take_body() && { return std::move(body_); }
@@ -225,7 +226,7 @@ public:
                    [](unsigned char c) { return std::tolower(c); });
     headers_[std::move(key)] = std::string(v);
   }
-  void set_body(std::string b) { body_ = std::move(b); }
+  void set_body(std::string_view b) { body_ = b; }
   void append_body(std::string_view chunk) { body_ += chunk; }
 
 private:
@@ -325,26 +326,26 @@ inline Result<FetchResponse> parse_response(std::string_view raw) {
   // Status line
   auto crlf = raw.find("\r\n");
   if (crlf == std::string_view::npos)
-    return unexpected(std::make_error_code(std::errc::protocol_error));
+    return std::unexpected(std::make_error_code(std::errc::protocol_error));
 
   std::string_view status_line = raw.substr(0, crlf);
   raw.remove_prefix(crlf + 2);
 
   if (status_line.size() < 12 || status_line.substr(0, 5) != "HTTP/")
-    return unexpected(std::make_error_code(std::errc::protocol_error));
+    return std::unexpected(std::make_error_code(std::errc::protocol_error));
 
   int code{};
   auto [ptr, ec] = std::from_chars(
       status_line.data() + 9, status_line.data() + 12, code);
   if (ec != std::errc{})
-    return unexpected(std::make_error_code(std::errc::protocol_error));
+    return std::unexpected(std::make_error_code(std::errc::protocol_error));
   resp.set_status(code);
 
   // Headers
   while (true) {
     auto nl = raw.find("\r\n");
     if (nl == std::string_view::npos)
-      return unexpected(std::make_error_code(std::errc::protocol_error));
+      return std::unexpected(std::make_error_code(std::errc::protocol_error));
     if (nl == 0) { raw.remove_prefix(2); break; } // blank line = end of headers
 
     std::string_view line = raw.substr(0, nl);
@@ -404,7 +405,7 @@ inline Result<FetchResponse> parse_response(std::string_view raw) {
  * termination. Enforces an 8 MiB guard to prevent unbounded allocation.
  */
 inline Task<Result<std::string>> read_http_response(TcpStream &stream,
-                                                     std::stop_token st) {
+                                                     const std::stop_token& st) {
   static constexpr size_t kChunkSize       = 4096;
   static constexpr size_t kMaxResponseSize = 8 * 1024 * 1024; // 8 MiB
 
@@ -420,16 +421,16 @@ inline Task<Result<std::string>> read_http_response(TcpStream &stream,
 
   while (true) {
     if (st.stop_requested())
-      co_return unexpected(std::make_error_code(std::errc::operation_canceled));
+      co_return std::unexpected(std::make_error_code(std::errc::operation_canceled));
 
     auto n = co_await stream.read(tmp);
-    if (!n) co_return unexpected(n.error());
+    if (!n) co_return std::unexpected(n.error());
     if (*n == 0) break; // EOF / server closed connection
 
     buf.append(reinterpret_cast<const char *>(tmp.data()), *n);
 
     if (buf.size() > kMaxResponseSize)
-      co_return unexpected(std::make_error_code(std::errc::message_size));
+      co_return std::unexpected(std::make_error_code(std::errc::message_size));
 
     // Parse header boundary on first discovery.
     // Use icase_find() to avoid creating a full lowercase copy of the
@@ -439,18 +440,18 @@ inline Task<Result<std::string>> read_http_response(TcpStream &stream,
       if (pos != std::string::npos) {
         header_end = pos + 4;
 
-        if (icase_find(buf.data(), header_end, "transfer-encoding: chunked"))
+        if (icase_find(buf.data(), header_end, "transfer-encoding: chunked") != nullptr)
           chunked = true;
 
         if (!chunked) {
           const char *cl_ptr =
               icase_find(buf.data(), header_end, "content-length: ");
-          if (cl_ptr) {
+          if (cl_ptr != nullptr) {
             cl_ptr += 16; // skip "content-length: "
             const char *eol =
                 static_cast<const char *>(
                     ::memchr(cl_ptr, '\r', buf.data() + header_end - cl_ptr));
-            size_t cl_len = eol ? static_cast<size_t>(eol - cl_ptr)
+            size_t cl_len = (eol != nullptr) ? static_cast<size_t>(eol - cl_ptr)
                                 : static_cast<size_t>(buf.data() + header_end - cl_ptr);
             std::from_chars(cl_ptr, cl_ptr + cl_len, content_length);
             // Pre-allocate based on Content-Length to avoid incremental growth.
@@ -488,11 +489,11 @@ struct CombinedStop {
   std::stop_callback<std::function<void()>> cb_a;
   std::stop_callback<std::function<void()>> cb_b;
 
-  CombinedStop(std::stop_token a, std::stop_token b)
+  CombinedStop(const std::stop_token& a, const std::stop_token& b)
       : cb_a(a, [this] { source.request_stop(); })
       , cb_b(b, [this] { source.request_stop(); }) {}
 
-  std::stop_token token() { return source.get_token(); }
+  [[nodiscard]] std::stop_token token() const { return source.get_token(); }
 };
 
 } // namespace detail
@@ -589,13 +590,13 @@ public:
    * @param st  Cancellation token. Checked before every I/O operation.
    * @returns   FetchResponse on success, or an error_code on failure.
    */
-  Task<Result<FetchResponse>> send(std::stop_token st = {}) {
+  Task<Result<FetchResponse>> send(const std::stop_token& st = {}) {
     // ── Build combined stop_token (user + optional timeout timer) ───────
     std::stop_source  timeout_ss;
     int               timer_id = -1;
     Reactor*          reactor  = Reactor::current();
 
-    if (timeout_ms_ > 0 && reactor) {
+    if (timeout_ms_ > 0 && reactor != nullptr) {
       auto r = reactor->register_timer(
           static_cast<int>(timeout_ms_),
           [&timeout_ss](int) { timeout_ss.request_stop(); });
@@ -614,7 +615,7 @@ public:
 
       if (!result) {
         // Cancel timer before returning
-        if (timer_id >= 0 && reactor) reactor->unregister_timer(timer_id);
+        if (timer_id >= 0 && reactor != nullptr) reactor->unregister_timer(timer_id);
         co_return result;
       }
 
@@ -634,7 +635,7 @@ public:
       }
 
       // Done — cancel timer and return
-      if (timer_id >= 0 && reactor) reactor->unregister_timer(timer_id);
+      if (timer_id >= 0 && reactor != nullptr) reactor->unregister_timer(timer_id);
       co_return result;
     }
   }
@@ -647,28 +648,28 @@ private:
    * @param st   Effective stop_token (combined user + timeout).
    */
   Task<Result<FetchResponse>> send_one(const std::string &url,
-                                       std::stop_token st) {
+                                       const std::stop_token& st) {
     // Parse URL
     auto parsed = ParsedUrl::parse(url);
-    if (!parsed) co_return unexpected(parsed.error());
+    if (!parsed) co_return std::unexpected(parsed.error());
 
     if (parsed->scheme == "https")
-      co_return unexpected(
+      co_return std::unexpected(
           std::make_error_code(std::errc::protocol_not_supported));
 
     if (st.stop_requested())
-      co_return unexpected(std::make_error_code(std::errc::operation_canceled));
+      co_return std::unexpected(std::make_error_code(std::errc::operation_canceled));
 
     // Async DNS resolution
     auto addr_r = co_await DnsResolver::resolve(parsed->host, parsed->port);
-    if (!addr_r) co_return unexpected(addr_r.error());
+    if (!addr_r) co_return std::unexpected(addr_r.error());
 
     if (st.stop_requested())
-      co_return unexpected(std::make_error_code(std::errc::operation_canceled));
+      co_return std::unexpected(std::make_error_code(std::errc::operation_canceled));
 
     // TCP connect
     auto stream_r = co_await TcpStream::connect(*addr_r);
-    if (!stream_r) co_return unexpected(stream_r.error());
+    if (!stream_r) co_return std::unexpected(stream_r.error());
 
     TcpStream stream = std::move(*stream_r);
     stream.set_nodelay(true);
@@ -681,19 +682,19 @@ private:
     std::string_view remaining(req_text);
     while (!remaining.empty()) {
       if (st.stop_requested())
-        co_return unexpected(
+        co_return std::unexpected(
             std::make_error_code(std::errc::operation_canceled));
       auto w = co_await stream.write(
           std::span<const std::byte>(
               reinterpret_cast<const std::byte *>(remaining.data()),
               remaining.size()));
-      if (!w) co_return unexpected(w.error());
+      if (!w) co_return std::unexpected(w.error());
       remaining.remove_prefix(*w);
     }
 
     // Read response
     auto raw_r = co_await detail::read_http_response(stream, st);
-    if (!raw_r) co_return unexpected(raw_r.error());
+    if (!raw_r) co_return std::unexpected(raw_r.error());
 
     co_return detail::parse_response(*raw_r);
   }

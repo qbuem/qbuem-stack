@@ -54,7 +54,7 @@
  * };
  *
  * auto resp = co_await fetch_tls("https://httpbin.org/get", session).send(st);
- * if (!resp) co_return unexpected(resp.error());
+ * if (!resp) co_return std::unexpected(resp.error());
  * std::string_view body = resp->body();
  * @endcode
  *
@@ -171,16 +171,16 @@ public:
   }
 
   /** @brief Returns true if kTLS offload was successfully activated. */
-  bool ktls_active() const noexcept { return ktls_active_; }
+  [[nodiscard]] bool ktls_active() const noexcept { return ktls_active_; }
 
   /** @brief Server hostname (informational). */
-  std::string_view hostname() const noexcept { return hostname_; }
+  [[nodiscard]] std::string_view hostname() const noexcept { return hostname_; }
 
   /** @brief Server port. */
-  uint16_t port() const noexcept { return port_; }
+  [[nodiscard]] uint16_t port() const noexcept { return port_; }
 
   /** @brief Underlying socket fd. */
-  int fd() const noexcept { return stream_.fd(); }
+  [[nodiscard]] int fd() const noexcept { return stream_.fd(); }
 
   /** @brief Enable TCP_NODELAY. */
   void set_nodelay(bool v) noexcept { stream_.set_nodelay(v); }
@@ -205,9 +205,9 @@ private:
  */
 class TlsFetchRequest {
 public:
-  TlsFetchRequest(std::string url, TlsSessionParams session)
+  TlsFetchRequest(std::string url, const TlsSessionParams& session)
       : url_(std::move(url))
-      , stream_(std::make_unique<TlsStream>(std::move(session))) {}
+      , stream_(std::make_unique<TlsStream>(session)) {}
 
   /** @brief Set the HTTP method (default: GET). */
   TlsFetchRequest &method(Method m)                  { method_ = m; return *this; }
@@ -239,12 +239,12 @@ public:
    * @param st  Cancellation token.
    * @returns   FetchResponse on success, error_code on failure.
    */
-  Task<Result<FetchResponse>> send(std::stop_token st = {}) {
+  Task<Result<FetchResponse>> send(const std::stop_token& st = {}) {
     auto parsed = ParsedUrl::parse(url_);
-    if (!parsed) co_return unexpected(parsed.error());
+    if (!parsed) co_return std::unexpected(parsed.error());
 
     if (parsed->scheme != "https" && parsed->scheme != "http")
-      co_return unexpected(std::make_error_code(std::errc::invalid_argument));
+      co_return std::unexpected(std::make_error_code(std::errc::invalid_argument));
 
     stream_->set_nodelay(true);
 
@@ -256,12 +256,12 @@ public:
     std::string_view remaining(req_text);
     while (!remaining.empty()) {
       if (st.stop_requested())
-        co_return unexpected(std::make_error_code(std::errc::operation_canceled));
+        co_return std::unexpected(std::make_error_code(std::errc::operation_canceled));
       auto w = co_await stream_->write(
           std::span<const std::byte>(
               reinterpret_cast<const std::byte *>(remaining.data()),
               remaining.size()));
-      if (!w) co_return unexpected(w.error());
+      if (!w) co_return std::unexpected(w.error());
       remaining.remove_prefix(*w);
     }
 
@@ -279,13 +279,13 @@ public:
 
     while (true) {
       if (st.stop_requested())
-        co_return unexpected(std::make_error_code(std::errc::operation_canceled));
+        co_return std::unexpected(std::make_error_code(std::errc::operation_canceled));
       auto n = co_await stream_->read(tmp);
-      if (!n) co_return unexpected(n.error());
+      if (!n) co_return std::unexpected(n.error());
       if (*n == 0) break;
       buf.append(reinterpret_cast<const char *>(tmp.data()), *n);
       if (buf.size() > kMax)
-        co_return unexpected(std::make_error_code(std::errc::message_size));
+        co_return std::unexpected(std::make_error_code(std::errc::message_size));
 
       if (header_end == std::string::npos) {
         auto pos = buf.find("\r\n\r\n");
@@ -357,8 +357,8 @@ private:
  * @endcode
  */
 [[nodiscard]] inline TlsFetchRequest fetch_tls(std::string_view url,
-                                                TlsSessionParams session) {
-  return TlsFetchRequest(std::string(url), std::move(session));
+                                                const TlsSessionParams& session) {
+  return TlsFetchRequest(std::string(url), session);
 }
 
 } // namespace qbuem

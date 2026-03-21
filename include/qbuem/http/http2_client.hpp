@@ -25,7 +25,7 @@
  * @code
  * Http2Client client;
  * auto conn = co_await client.connect("http://api.example.com", st);
- * if (!conn) co_return unexpected(conn.error());
+ * if (!conn) co_return std::unexpected(conn.error());
  *
  * // Fire three requests concurrently on the same TCP connection
  * auto [r1, r2, r3] = co_await TaskGroup{}
@@ -176,7 +176,7 @@ h2_decode_frame_header(std::span<const std::byte, 9> in) noexcept {
  */
 inline int hpack_static_index(std::string_view name, std::string_view value = "") noexcept {
     // Partial static table covering method + common pseudo-headers
-    static constexpr std::pair<std::string_view, std::string_view> kTable[] = {
+    static constexpr std::array<std::pair<std::string_view, std::string_view>, 23> kTable = {{
         {"",                   ""},          // 0 unused
         {":authority",         ""},          // 1
         {":method",            "GET"},       // 2
@@ -200,8 +200,8 @@ inline int hpack_static_index(std::string_view name, std::string_view value = ""
         {"content-length",     ""},          // 28
         {"content-type",       ""},          // 31
         {"host",               ""},          // 38
-    };
-    for (int i = 1; i < static_cast<int>(std::size(kTable)); ++i) {
+    }};
+    for (int i = 1; i < static_cast<int>(kTable.size()); ++i) {
         if (kTable[i].first == name && (value.empty() || kTable[i].second == value))
             return i;
     }
@@ -285,7 +285,7 @@ struct Http2Response {
     int         status{0};     ///< HTTP status code (from :status pseudo-header)
     std::string headers;       ///< Raw decoded header block (name: value\r\n …)
     std::string body;          ///< Response body (full, accumulated DATA frames)
-    bool        ok() const noexcept { return status >= 200 && status < 300; }
+    [[nodiscard]] bool ok() const noexcept { return status >= 200 && status < 300; }
 };
 
 // ─── Http2Connection ─────────────────────────────────────────────────────────
@@ -327,7 +327,7 @@ public:
      * @param st Cancellation token.
      * @returns `Result<void>` — ok on success, error on write failure.
      */
-    [[nodiscard]] Task<Result<void>> handshake(std::stop_token st) {
+    [[nodiscard]] Task<Result<void>> handshake(const std::stop_token& st) {
         // Client connection preface (RFC 7540 §3.5)
         static constexpr std::string_view kPreface =
             "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n";
@@ -335,7 +335,7 @@ public:
             std::span<const std::byte>(
                 reinterpret_cast<const std::byte*>(kPreface.data()),
                 kPreface.size()), st);
-        if (!wr) co_return unexpected(wr.error());
+        if (!wr) co_return std::unexpected(wr.error());
 
         // Send empty SETTINGS frame
         co_await send_settings(st);
@@ -344,9 +344,9 @@ public:
         // (minimal: just drain 2 frames without strict validation)
         for (int i = 0; i < 2; ++i) {
             auto fr = co_await read_frame(st);
-            if (!fr) co_return unexpected(fr.error());
+            if (!fr) co_return std::unexpected(fr.error());
             if (fr->type == H2FrameType::Settings &&
-                !(fr->flags & H2Flags::Ack)) {
+                (fr->flags & H2Flags::Ack) == 0u) {
                 // Send SETTINGS ACK
                 co_await send_settings_ack(st);
             }
@@ -367,7 +367,7 @@ public:
      */
     [[nodiscard]] Task<Result<Http2Response>> get(
             std::string_view path,
-            std::stop_token st,
+            const std::stop_token& st,
             std::span<const std::pair<std::string,std::string>> hdrs = {}) {
         co_return co_await send_request("GET", path, st, {}, hdrs);
     }
@@ -384,7 +384,7 @@ public:
     [[nodiscard]] Task<Result<Http2Response>> post(
             std::string_view path,
             std::string_view body,
-            std::stop_token st,
+            const std::stop_token& st,
             std::span<const std::pair<std::string,std::string>> hdrs = {}) {
         co_return co_await send_request("POST", path, st, body, hdrs);
     }
@@ -400,17 +400,17 @@ private:
         std::vector<std::byte> payload;
     };
 
-    [[nodiscard]] Task<Result<H2Frame>> read_frame(std::stop_token st) {
+    [[nodiscard]] Task<Result<H2Frame>> read_frame(const std::stop_token& st) {
         // Read 9-byte frame header
         std::array<std::byte, 9> hdr_buf{};
         size_t got = 0;
         while (got < 9) {
             if (st.stop_requested())
-                co_return unexpected(std::make_error_code(std::errc::operation_canceled));
+                co_return std::unexpected(std::make_error_code(std::errc::operation_canceled));
             auto n = co_await stream_.read(
                 std::span<std::byte>(hdr_buf.data() + got, 9 - got));
             if (!n || *n == 0)
-                co_return unexpected(std::make_error_code(std::errc::connection_reset));
+                co_return std::unexpected(std::make_error_code(std::errc::connection_reset));
             got += *n;
         }
 
@@ -425,11 +425,11 @@ private:
             size_t pgot = 0;
             while (pgot < length) {
                 if (st.stop_requested())
-                    co_return unexpected(std::make_error_code(std::errc::operation_canceled));
+                    co_return std::unexpected(std::make_error_code(std::errc::operation_canceled));
                 auto n = co_await stream_.read(
                     std::span<std::byte>(frame.payload.data() + pgot, length - pgot));
                 if (!n || *n == 0)
-                    co_return unexpected(std::make_error_code(std::errc::connection_reset));
+                    co_return std::unexpected(std::make_error_code(std::errc::connection_reset));
                 pgot += *n;
             }
         }
@@ -438,19 +438,19 @@ private:
     }
 
     [[nodiscard]] Task<Result<size_t>> write_raw(
-            std::span<const std::byte> data, std::stop_token st) {
+            std::span<const std::byte> data, const std::stop_token& st) {
         size_t sent = 0;
         while (sent < data.size()) {
             if (st.stop_requested())
-                co_return unexpected(std::make_error_code(std::errc::operation_canceled));
+                co_return std::unexpected(std::make_error_code(std::errc::operation_canceled));
             auto n = co_await stream_.write(data.subspan(sent));
-            if (!n) co_return unexpected(n.error());
+            if (!n) co_return std::unexpected(n.error());
             sent += *n;
         }
         co_return sent;
     }
 
-    Task<void> send_settings(std::stop_token st) {
+    Task<void> send_settings(const std::stop_token& st) {
         // Empty SETTINGS frame (stream_id = 0)
         std::array<std::byte, 9> hdr{};
         h2_encode_frame_header(std::span<std::byte,9>(hdr), 0,
@@ -458,7 +458,7 @@ private:
         co_await write_raw(hdr, st);
     }
 
-    Task<void> send_settings_ack(std::stop_token st) {
+    Task<void> send_settings_ack(const std::stop_token& st) {
         std::array<std::byte, 9> hdr{};
         h2_encode_frame_header(std::span<std::byte,9>(hdr), 0,
                                H2FrameType::Settings, H2Flags::Ack, 0);
@@ -466,7 +466,7 @@ private:
     }
 
     Task<void> send_window_update(uint32_t stream_id, uint32_t increment,
-                                  std::stop_token st) {
+                                  const std::stop_token& st) {
         std::array<std::byte, 9 + 4> buf{};
         h2_encode_frame_header(std::span<std::byte>(buf).first<9>(), 4,
                                H2FrameType::WindowUpdate, 0, stream_id);
@@ -482,7 +482,7 @@ private:
     [[nodiscard]] Task<Result<Http2Response>> send_request(
             std::string_view method,
             std::string_view path,
-            std::stop_token st,
+            const std::stop_token& st,
             std::string_view req_body,
             std::span<const std::pair<std::string,std::string>> extra_hdrs) {
         uint32_t stream_id = next_stream_id_;
@@ -494,8 +494,8 @@ private:
         std::vector<std::pair<std::string,std::string>> all_hdrs;
         all_hdrs.reserve(extra_hdrs.size() + 1);
         if (!req_body.empty())
-            all_hdrs.push_back({"content-length", std::to_string(req_body.size())});
-        for (auto& h : extra_hdrs) all_hdrs.push_back(h);
+            all_hdrs.emplace_back("content-length", std::to_string(req_body.size()));
+        for (auto& h : extra_hdrs) all_hdrs.emplace_back(h);
         hpack_encode_request(hpack, method, path, host_, all_hdrs);
 
         // HEADERS frame
@@ -508,7 +508,7 @@ private:
             H2FrameType::Headers, flags, stream_id);
         std::memcpy(headers_frame.data() + 9, hpack.data(), hpack.size());
         auto wr = co_await write_raw(headers_frame, st);
-        if (!wr) co_return unexpected(wr.error());
+        if (!wr) co_return std::unexpected(wr.error());
 
         // DATA frame (if POST/PUT body)
         if (has_body) {
@@ -519,7 +519,7 @@ private:
                 H2FrameType::Data, H2Flags::EndStream, stream_id);
             std::memcpy(data_frame.data() + 9, req_body.data(), req_body.size());
             auto dw = co_await write_raw(data_frame, st);
-            if (!dw) co_return unexpected(dw.error());
+            if (!dw) co_return std::unexpected(dw.error());
         }
 
         // Receive frames until END_STREAM on our stream_id
@@ -528,7 +528,7 @@ private:
 
         while (!st.stop_requested()) {
             auto fr = co_await read_frame(st);
-            if (!fr) co_return unexpected(fr.error());
+            if (!fr) co_return std::unexpected(fr.error());
 
             if (fr->stream_id != 0 && fr->stream_id != stream_id) {
                 // Frame for another stream — ignore (minimal implementation)
@@ -537,7 +537,7 @@ private:
 
             switch (fr->type) {
             case H2FrameType::Settings:
-                if (!(fr->flags & H2Flags::Ack))
+                if ((fr->flags & H2Flags::Ack) == 0u)
                     co_await send_settings_ack(st);
                 break;
 
@@ -558,10 +558,10 @@ private:
                 break;
 
             case H2FrameType::Goaway:
-                co_return unexpected(std::make_error_code(std::errc::connection_aborted));
+                co_return std::unexpected(std::make_error_code(std::errc::connection_aborted));
 
             case H2FrameType::RstStream:
-                co_return unexpected(std::make_error_code(std::errc::connection_reset));
+                co_return std::unexpected(std::make_error_code(std::errc::connection_reset));
 
             case H2FrameType::Headers: {
                 if (fr->stream_id != stream_id) break;
@@ -570,7 +570,7 @@ private:
                 headers_done = true;
                 // Send WINDOW_UPDATE for connection level
                 co_await send_window_update(0, kDefaultWindowSize, st);
-                if (fr->flags & H2Flags::EndStream) goto done;
+                if ((fr->flags & H2Flags::EndStream) != 0u) goto done;
                 break;
             }
 
@@ -587,7 +587,7 @@ private:
                     co_await send_window_update(0,
                         static_cast<uint32_t>(fr->payload.size()), st);
                 }
-                if (fr->flags & H2Flags::EndStream) goto done;
+                if ((fr->flags & H2Flags::EndStream) != 0u) goto done;
                 break;
             }
 
@@ -621,7 +621,7 @@ private:
         while (p < end) {
             uint8_t first = std::to_underlying(*p);
 
-            if (first & 0x80) {
+            if ((first & 0x80u) != 0u) {
                 // Indexed representation — look up static table :status
                 uint8_t idx = first & 0x7F;
                 ++p;
@@ -643,7 +643,10 @@ private:
                     std::from_chars(val.data(), val.data() + val.size(), s);
                     resp.status = s;
                 } else if (!name.empty() && name[0] != ':') {
-                    resp.headers += name + ": " + val + "\r\n";
+                    resp.headers += name;
+                    resp.headers += ": ";
+                    resp.headers += val;
+                    resp.headers += "\r\n";
                 }
             } else {
                 // Literal without indexing / never indexed
@@ -655,7 +658,10 @@ private:
                     std::from_chars(val.data(), val.data() + val.size(), s);
                     resp.status = s;
                 } else if (!name.empty() && name[0] != ':') {
-                    resp.headers += name + ": " + val + "\r\n";
+                    resp.headers += name;
+                    resp.headers += ": ";
+                    resp.headers += val;
+                    resp.headers += "\r\n";
                 }
             }
         }
@@ -699,22 +705,22 @@ public:
      * @returns Shared pointer to a ready `Http2Connection`, or error.
      */
     [[nodiscard]] Task<Result<std::shared_ptr<Http2Connection>>>
-    connect(std::string url, std::stop_token st) {
+    connect(const std::string& url, const std::stop_token& st) {
         auto parsed = ParsedUrl::parse(url);
-        if (!parsed) co_return unexpected(std::make_error_code(std::errc::invalid_argument));
+        if (!parsed) co_return std::unexpected(std::make_error_code(std::errc::invalid_argument));
 
         auto addr = co_await DnsResolver::resolve(std::string(parsed->host), parsed->port);
         if (!addr)
-            co_return unexpected(std::make_error_code(std::errc::host_unreachable));
+            co_return std::unexpected(std::make_error_code(std::errc::host_unreachable));
 
         auto stream = co_await TcpStream::connect(*addr);
-        if (!stream) co_return unexpected(stream.error());
+        if (!stream) co_return std::unexpected(stream.error());
 
         auto conn = std::make_shared<Http2Connection>(std::move(*stream));
         conn->host_ = std::string(parsed->host);
 
         auto hs = co_await conn->handshake(st);
-        if (!hs) co_return unexpected(hs.error());
+        if (!hs) co_return std::unexpected(hs.error());
 
         co_return conn;
     }

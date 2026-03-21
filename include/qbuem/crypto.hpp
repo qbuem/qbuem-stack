@@ -197,7 +197,7 @@ namespace detail {
 
 inline std::string base64url_encode(const uint8_t *data, size_t len) {
   // Base64url alphabet (RFC 4648 §5): A-Z, a-z, 0-9, '-', '_' (no padding)
-  static constexpr char kTable[] =
+  static constexpr std::string_view kTable =
       "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
 
   std::string out;
@@ -354,7 +354,7 @@ inline std::string base64url_encode(const uint8_t *data, size_t len) {
   static constexpr int kMaxRetries = 10;
   for (int i = 0; i < kMaxRetries; ++i) {
     unsigned long long val = 0;
-    if (_rdrand64_step(&val)) {
+    if (_rdrand64_step(&val) != 0) {
       out = static_cast<uint64_t>(val);
       return true;
     }
@@ -371,7 +371,7 @@ inline std::string base64url_encode(const uint8_t *data, size_t len) {
     :
     : "cc"
   );
-  if (cf) { out = val; return true; }
+  if (cf != 0u) { out = val; return true; }
   return false;
 #else
   (void)out;
@@ -394,7 +394,7 @@ inline std::string base64url_encode(const uint8_t *data, size_t len) {
   static constexpr int kMaxRetries = 10;
   for (int i = 0; i < kMaxRetries; ++i) {
     unsigned long long val = 0;
-    if (_rdseed64_step(&val)) {
+    if (_rdseed64_step(&val) != 0) {
       out = static_cast<uint64_t>(val);
       return true;
     }
@@ -410,7 +410,7 @@ inline std::string base64url_encode(const uint8_t *data, size_t len) {
     :
     : "cc"
   );
-  if (cf) { out = val; return true; }
+  if (cf != 0u) { out = val; return true; }
   return false;
 #else
   (void)out;
@@ -515,7 +515,7 @@ inline void hw_seed_fill(void *buf, size_t len) {
       : "ebx", "edx"
     );
 #  endif
-    return (ecx >> 30) & 1u;
+    return ((ecx >> 30) & 1u) != 0u;
   }();
   return cached;
 #else
@@ -543,7 +543,7 @@ inline void hw_seed_fill(void *buf, size_t len) {
     );
     (void)eax; (void)ecx; (void)edx;
 #  endif
-    return (ebx >> 18) & 1u;
+    return ((ebx >> 18) & 1u) != 0u;
   }();
   return cached;
 #else

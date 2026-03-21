@@ -84,7 +84,7 @@ struct alignas(64) VectorStats {
  * - **Per-vector eventfd**: Each vector has its own eventfd for IRQ affinity support.
  * - **Lock-free dispatch**: IRQ receipt → co_await resume operates without locks.
  */
-class MSIXReactor {
+class MSIXReactor { // NOLINT(clang-analyzer-optin.performance.Padding)
 public:
     /**
      * @brief Constructs an MSIXReactor.
@@ -174,7 +174,7 @@ private:
     int*        eventfds_{nullptr};   // [num_vectors_]
 
     // Per-vector statistics
-    VectorStats stats_[kMaxMSIXVectors];
+    VectorStats stats_[kMaxMSIXVectors]; // NOLINT(modernize-avoid-c-arrays)
 
     std::atomic<bool> initialized_{false};
 };

@@ -24,7 +24,7 @@
  *
  * // Start a streaming GET request
  * auto stream = co_await client.stream("http://files.example.com/large.bin", st);
- * if (!stream) co_return unexpected(stream.error());
+ * if (!stream) co_return std::unexpected(stream.error());
  *
  * size_t total = 0;
  * while (auto chunk = co_await stream->next(st)) {
@@ -123,7 +123,7 @@ struct FetchChunk {
  * 3. Caller calls `stream->release(chunk)` after each chunk.
  * 4. Destructor closes the TCP connection and drains the channel.
  */
-class FetchStream {
+class FetchStream { // NOLINT(clang-analyzer-optin.performance.Padding)
 public:
     static constexpr size_t kPoolSlots   = 64;  ///< Pre-allocated chunk pool depth
     static constexpr size_t kChanCap     = 32;  ///< AsyncChannel capacity (slots)
@@ -218,7 +218,7 @@ public:
      *
      * @note The caller **must** call `release(chunk)` after processing each chunk.
      */
-    [[nodiscard]] Task<std::optional<FetchChunk*>> next(std::stop_token st) {
+    [[nodiscard]] Task<std::optional<FetchChunk*>> next(const std::stop_token& st) {
         if (st.stop_requested()) co_return std::nullopt;
         auto item = co_await chan_.recv();
         if (!item) co_return std::nullopt;  // EOS
@@ -249,7 +249,7 @@ public:
      *
      * @param st  Cancellation token that stops the pump.
      */
-    Task<void> start_pump(std::stop_token st) {
+    Task<void> start_pump(const std::stop_token& st) { // NOLINT(readability-make-member-function-const)
         int64_t remaining = content_len_;  // -1 = unknown
 
         if (chunked_) {
@@ -292,7 +292,7 @@ private:
 
     // ── Content-Length / connection-close pump ────────────────────────────────
 
-    Task<void> pump_fixed(std::stop_token st, int64_t content_len) {
+    Task<void> pump_fixed(const std::stop_token& st, int64_t content_len) {
         int64_t received = 0;
 
         while (!st.stop_requested()) {
@@ -319,7 +319,7 @@ private:
 
     // ── Chunked transfer-encoding pump ───────────────────────────────────────
 
-    Task<void> pump_chunked(std::stop_token st) {
+    Task<void> pump_chunked(const std::stop_token& st) {
         // Read and decode HTTP/1.1 chunked transfer encoding
         // chunk-line: "<hex-size>\r\n<data>\r\n" repeated, terminated by "0\r\n\r\n"
         std::array<std::byte, 32> linebuf{};
@@ -342,7 +342,7 @@ private:
             if (done) break;
 
             // Parse hex chunk size
-            char hexbuf[16]{};
+            std::array<char, 16> hexbuf{};
             size_t hexlen = 0;
             for (size_t i = 0; i < linelen && hexlen < 15; ++i) {
                 char c = static_cast<char>(linebuf[i]);
@@ -350,7 +350,7 @@ private:
                 if (c != '\r') hexbuf[hexlen++] = c;
             }
             size_t chunk_size = 0;
-            auto [ptr, ec] = std::from_chars(hexbuf, hexbuf + hexlen, chunk_size, 16);
+            auto [ptr, ec] = std::from_chars(hexbuf.data(), hexbuf.data() + hexlen, chunk_size, 16);
             if (ec != std::errc{} || chunk_size == 0) break;  // zero chunk = end
 
             // Read chunk data
@@ -385,8 +385,8 @@ private:
     AsyncChannel<FetchChunk*> chan_;            ///< Chunk delivery channel
 
     // Fixed pool — no heap allocation on hot path
-    alignas(64) FetchChunk         pool_[kPoolSlots];
-    FetchChunk*                    free_stack_[kPoolSlots];
+    alignas(64) std::array<FetchChunk, kPoolSlots>    pool_{};
+    std::array<FetchChunk*, kPoolSlots>               free_stack_{};
     alignas(64) std::atomic<size_t> free_count_{0};
 };
 
@@ -435,20 +435,20 @@ public:
      * @returns Shared pointer to a ready-to-pump `FetchStream`, or error.
      */
     [[nodiscard]] Task<Result<std::shared_ptr<FetchStream>>>
-    stream(std::string url, std::stop_token st) {
+    stream(const std::string& url, const std::stop_token& st) {
         (void)st;
         // Parse URL
         auto parsed = ParsedUrl::parse(url);
-        if (!parsed) co_return unexpected(std::make_error_code(std::errc::invalid_argument));
+        if (!parsed) co_return std::unexpected(std::make_error_code(std::errc::invalid_argument));
 
         // DNS resolve
         auto addr = co_await DnsResolver::resolve(std::string(parsed->host), parsed->port);
         if (!addr)
-            co_return unexpected(std::make_error_code(std::errc::host_unreachable));
+            co_return std::unexpected(std::make_error_code(std::errc::host_unreachable));
 
         // Connect
         auto conn = co_await TcpStream::connect(*addr);
-        if (!conn) co_return unexpected(conn.error());
+        if (!conn) co_return std::unexpected(conn.error());
 
         // Send HTTP/1.1 GET request
         std::string req =
@@ -462,7 +462,7 @@ public:
         auto wr = co_await conn->write(
             std::span<const std::byte>(
                 reinterpret_cast<const std::byte*>(req.data()), req.size()));
-        if (!wr) co_return unexpected(wr.error());
+        if (!wr) co_return std::unexpected(wr.error());
 
         // Read response head (status line + headers)
         std::array<std::byte, 8192> head_buf{};
@@ -472,7 +472,7 @@ public:
         while (head_len < head_buf.size()) {
             auto n = co_await conn->read(
                 std::span<std::byte>(head_buf.data() + head_len, 1));
-            if (!n || *n == 0) co_return unexpected(std::make_error_code(std::errc::connection_reset));
+            if (!n || *n == 0) co_return std::unexpected(std::make_error_code(std::errc::connection_reset));
             head_len += *n;
             if (head_len >= 4) {
                 auto* p = reinterpret_cast<const char*>(head_buf.data());
@@ -491,7 +491,7 @@ public:
             // "HTTP/1.1 200 OK\r\n"
             auto sp1 = head.find(' ');
             if (sp1 == std::string_view::npos)
-                co_return unexpected(std::make_error_code(std::errc::protocol_error));
+                co_return std::unexpected(std::make_error_code(std::errc::protocol_error));
             auto sp2 = head.find(' ', sp1 + 1);
             auto code_sv = head.substr(sp1 + 1, sp2 - sp1 - 1);
             std::from_chars(code_sv.data(), code_sv.data() + code_sv.size(), status);

@@ -48,6 +48,7 @@
 
 #include <qbuem/common.hpp>
 
+#include <array>
 #include <atomic>
 #include <cstdint>
 #include <memory>
@@ -111,12 +112,12 @@ struct BarMapping {
             static_cast<const uint8_t*>(vaddr) + offset);
     }
     /** @brief 32-bit register write (MMIO volatile). */
-    void write32(size_t offset, uint32_t val) noexcept {
+    void write32(size_t offset, uint32_t val) const noexcept {
         *reinterpret_cast<volatile uint32_t*>(
             static_cast<uint8_t*>(vaddr) + offset) = val;
     }
     /** @brief 64-bit register write. */
-    void write64(size_t offset, uint64_t val) noexcept {
+    void write64(size_t offset, uint64_t val) const noexcept {
         *reinterpret_cast<volatile uint64_t*>(
             static_cast<uint8_t*>(vaddr) + offset) = val;
     }
@@ -124,7 +125,7 @@ struct BarMapping {
 private:
     void unmap() noexcept {
 #if defined(__linux__)
-        if (vaddr && size) ::munmap(vaddr, size);
+        if (vaddr != nullptr && size != 0u) ::munmap(vaddr, size);
 #endif
         vaddr = nullptr; size = 0;
     }
@@ -156,13 +157,13 @@ struct DmaBuffer {
     [[nodiscard]] bool valid() const noexcept { return vaddr != nullptr; }
 
     /** @brief Zero-initializes the DMA buffer. */
-    void zero() noexcept {
-        if (vaddr && size) __builtin_memset(vaddr, 0, size);
+    void zero() const noexcept {
+        if (vaddr != nullptr && size != 0u) __builtin_memset(vaddr, 0, size);
     }
 
 private:
     void free() noexcept {
-        if (vaddr && size) {
+        if (vaddr != nullptr && size != 0u) {
 #if defined(__linux__)
             ::munmap(vaddr, size);
 #endif
@@ -258,7 +259,7 @@ public:
     [[nodiscard]] int device_fd() const noexcept { return device_fd_; }
 
     /** @brief BDF address string. */
-    [[nodiscard]] std::string_view bdf() const noexcept { return bdf_; }
+    [[nodiscard]] std::string_view bdf() const noexcept { return bdf_.data(); }
 
 private:
     explicit PCIeDevice(int container_fd, int group_fd, int device_fd,
@@ -272,7 +273,7 @@ private:
     int  group_fd_{-1};
     int  device_fd_{-1};
     int  iommu_group_{-1};
-    char bdf_[16]{};
+    std::array<char, 16> bdf_{};
 
     uint16_t vendor_id_{0};
     uint16_t device_id_{0};
@@ -297,7 +298,7 @@ private:
  * @returns Number of devices found.
  */
 template <size_t N = 64>
-size_t enumerate_pcie_devices(char (&out)[N][16]) noexcept;
+size_t enumerate_pcie_devices(std::array<std::array<char, 16>, N>& out) noexcept;
 
 /**
  * @brief Converts a PCI BDF to an IOMMU group number.

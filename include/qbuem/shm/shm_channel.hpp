@@ -40,6 +40,7 @@
 #include <qbuem/core/awaiters.hpp>
 #include <qbuem/core/task.hpp>
 
+#include <array>
 #include <atomic>
 #include <cstdint>
 #include <cstring>
@@ -76,7 +77,7 @@ struct alignas(kCacheLineSize) SHMHeader {
     uint32_t              capacity{0};  ///< Ring buffer slot count (power of two)
     uint32_t              magic{kSHMMagic}; ///< Integrity check
     std::atomic<uint32_t> state{1};     ///< bit0: Active, bit1: Draining, bit2: Error
-    uint8_t               _pad[64 - sizeof(std::atomic<uint64_t>) * 2
+    uint8_t               _pad[64 - sizeof(std::atomic<uint64_t>) * 2  // NOLINT(modernize-avoid-c-arrays)
                                    - sizeof(uint32_t) * 2
                                    - sizeof(std::atomic<uint32_t>)]{};
 };
@@ -107,11 +108,11 @@ static_assert(sizeof(MetadataSlot) == 32, "MetadataSlot must be exactly 32 bytes
  * Contains W3C Trace Context, span ID, type ID, and authentication token.
  */
 struct alignas(16) SHMEnvelope {
-    uint8_t  trace_id[16]{};     ///< W3C Trace ID (128-bit)
-    uint64_t span_id{0};         ///< Span ID
-    uint64_t type_id{0};         ///< Type identifier
-    uint8_t  auth_token[32]{};   ///< Authentication token
-    uint8_t  reserved[64]{};     ///< Reserved padding for future extension (128B alignment)
+    std::array<uint8_t, 16> trace_id{};     ///< W3C Trace ID (128-bit)
+    uint64_t                span_id{0};     ///< Span ID
+    uint64_t                type_id{0};     ///< Type identifier
+    std::array<uint8_t, 32> auth_token{};   ///< Authentication token
+    std::array<uint8_t, 64> reserved{};     ///< Reserved padding for future extension (128B alignment)
 };
 static_assert(sizeof(SHMEnvelope) == 128, "SHMEnvelope must be exactly 128 bytes");
 
@@ -273,9 +274,9 @@ private:
     MetadataSlot* ring() noexcept;
     uint8_t*      arena() noexcept;
 
-    const SHMHeader*    header() const noexcept;
-    const MetadataSlot* ring()   const noexcept;
-    const uint8_t*      arena()  const noexcept;
+    [[nodiscard]] const SHMHeader*    header() const noexcept;
+    [[nodiscard]] const MetadataSlot* ring()   const noexcept;
+    [[nodiscard]] const uint8_t*      arena()  const noexcept;
 
     // Compute DataArena offset from slot index
     [[nodiscard]] uint32_t slot_to_offset(size_t slot_idx) const noexcept;
@@ -317,7 +318,7 @@ private:
 // ─── SHMSegment implementation ───────────────────────────────────────────────
 
 inline SHMSegment::~SHMSegment() {
-    if (base_ && base_ != MAP_FAILED)
+    if (base_ != nullptr && base_ != MAP_FAILED)
         ::munmap(base_, size_);
     if (fd_ >= 0)
         ::close(fd_);
@@ -332,7 +333,7 @@ inline SHMSegment::SHMSegment(SHMSegment&& o) noexcept
 
 inline SHMSegment& SHMSegment::operator=(SHMSegment&& o) noexcept {
     if (this != &o) {
-        if (base_ && base_ != MAP_FAILED) ::munmap(base_, size_);
+        if (base_ != nullptr && base_ != MAP_FAILED) ::munmap(base_, size_);
         if (fd_ >= 0) ::close(fd_);
         base_ = o.base_; size_ = o.size_; fd_ = o.fd_;
         o.base_ = nullptr; o.size_ = 0; o.fd_ = -1;
@@ -349,19 +350,19 @@ inline Result<SHMSegment> SHMSegment::create(std::string_view name,
 
     int fd = shm_open(shm_name.c_str(), O_CREAT | O_RDWR | O_TRUNC, 0600);
     if (fd < 0)
-        return unexpected(std::make_error_code(std::errc::io_error));
+        return std::unexpected(std::make_error_code(std::errc::io_error));
 
     if (::ftruncate(fd, static_cast<off_t>(size)) < 0) {
         ::close(fd);
         shm_unlink(shm_name.c_str());
-        return unexpected(std::make_error_code(std::errc::io_error));
+        return std::unexpected(std::make_error_code(std::errc::io_error));
     }
 
     void* base = ::mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
     if (base == MAP_FAILED) {
         ::close(fd);
         shm_unlink(shm_name.c_str());
-        return unexpected(std::make_error_code(std::errc::io_error));
+        return std::unexpected(std::make_error_code(std::errc::io_error));
     }
 
     SHMSegment seg;
@@ -379,19 +380,19 @@ inline Result<SHMSegment> SHMSegment::open(std::string_view name) noexcept {
 
     int fd = shm_open(shm_name.c_str(), O_RDWR, 0600);
     if (fd < 0)
-        return unexpected(std::make_error_code(std::errc::no_such_file_or_directory));
+        return std::unexpected(std::make_error_code(std::errc::no_such_file_or_directory));
 
     struct stat st{};
     if (::fstat(fd, &st) < 0) {
         ::close(fd);
-        return unexpected(std::make_error_code(std::errc::io_error));
+        return std::unexpected(std::make_error_code(std::errc::io_error));
     }
     size_t size = static_cast<size_t>(st.st_size);
 
     void* base = ::mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
     if (base == MAP_FAILED) {
         ::close(fd);
-        return unexpected(std::make_error_code(std::errc::io_error));
+        return std::unexpected(std::make_error_code(std::errc::io_error));
     }
 
     SHMSegment seg;
@@ -454,7 +455,7 @@ SHMChannel<T>::create(std::string_view name, size_t capacity) noexcept {
 
     size_t seg_size = calc_segment_size(cap, sizeof(T));
     auto seg_res = SHMSegment::create(name, seg_size);
-    if (!seg_res) return unexpected(seg_res.error());
+    if (!seg_res) return std::unexpected(seg_res.error());
 
     // Placement-init header
     auto* hdr = static_cast<SHMHeader*>(seg_res->base());
@@ -478,11 +479,11 @@ template <typename T>
 Result<typename SHMChannel<T>::Ptr>
 SHMChannel<T>::open(std::string_view name) noexcept {
     auto seg_res = SHMSegment::open(name);
-    if (!seg_res) return unexpected(seg_res.error());
+    if (!seg_res) return std::unexpected(seg_res.error());
 
     auto* hdr = static_cast<const SHMHeader*>(seg_res->base());
     if (hdr->magic != kSHMMagic)
-        return unexpected(std::make_error_code(std::errc::invalid_argument));
+        return std::unexpected(std::make_error_code(std::errc::invalid_argument));
 
     size_t cap = hdr->capacity;
     return Ptr(new SHMChannel<T>(std::move(*seg_res), cap));
@@ -496,7 +497,7 @@ Result<void> SHMChannel<T>::unlink(std::string_view name) noexcept {
     shm_name.append(name.data(), name.size());
 
     if (shm_unlink(shm_name.c_str()) < 0 && errno != ENOENT)
-        return unexpected(std::make_error_code(std::errc::no_such_file_or_directory));
+        return std::unexpected(std::make_error_code(std::errc::no_such_file_or_directory));
     return Result<void>{};
 }
 
@@ -565,7 +566,7 @@ Task<Result<void>> SHMChannel<T>::send(const T& msg) noexcept {
     size_t spins = 0;
     while (!try_send(msg)) {
         if (!is_open())
-            co_return unexpected(std::make_error_code(std::errc::broken_pipe));
+            co_return std::unexpected(std::make_error_code(std::errc::broken_pipe));
         if (++spins > 128) {
             co_await futex_wait_send();
             spins = 0;

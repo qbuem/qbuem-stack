@@ -1,5 +1,6 @@
 #include <qbuem/core/epoll_reactor.hpp>
 
+#include <array>
 #include <cerrno>
 #include <cstdint>
 #include <mutex>
@@ -131,7 +132,7 @@ Result<int> EpollReactor::register_timer(int timeout_ms,
                                          std::function<void(int)> callback) {
   int tfd = timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK | TFD_CLOEXEC);
   if (tfd == -1) {
-    return unexpected(std::make_error_code(std::errc::resource_unavailable_try_again));
+    return std::unexpected(std::make_error_code(std::errc::resource_unavailable_try_again));
   }
 
   struct itimerspec ts{};
@@ -141,7 +142,7 @@ Result<int> EpollReactor::register_timer(int timeout_ms,
 
   if (timerfd_settime(tfd, 0, &ts, nullptr) == -1) {
     close(tfd);
-    return unexpected(std::make_error_code(std::errc::invalid_argument));
+    return std::unexpected(std::make_error_code(std::errc::invalid_argument));
   }
 
   struct epoll_event ev{};
@@ -149,7 +150,7 @@ Result<int> EpollReactor::register_timer(int timeout_ms,
   ev.data.fd = tfd;
   if (epoll_ctl(epoll_fd_, EPOLL_CTL_ADD, tfd, &ev) == -1) {
     close(tfd);
-    return unexpected(std::make_error_code(std::errc::io_error));
+    return std::unexpected(std::make_error_code(std::errc::io_error));
   }
 
   int timer_id = next_timer_id_++;
@@ -172,12 +173,12 @@ Result<void> EpollReactor::unregister_timer(int timer_id) {
 }
 
 Result<int> EpollReactor::poll(int timeout_ms) {
-  struct epoll_event events[64];
-  int nev = epoll_wait(epoll_fd_, events, 64, timeout_ms);
+  std::array<struct epoll_event, 64> events{};
+  int nev = epoll_wait(epoll_fd_, events.data(), 64, timeout_ms);
   if (nev == -1) {
     if (errno == EINTR)
       return 0;
-    return unexpected(std::make_error_code(std::errc::io_error));
+    return std::unexpected(std::make_error_code(std::errc::io_error));
   }
 
   for (int i = 0; i < nev; ++i) {
@@ -222,10 +223,10 @@ Result<int> EpollReactor::poll(int timeout_ms) {
       continue;
 
     FdCallbacks cbs = cb_it->second;
-    if ((ev & EPOLLIN) && cbs.read_cb) {
+    if (((ev & EPOLLIN) != 0u) && cbs.read_cb) {
       cbs.read_cb(fd);
     }
-    if ((ev & EPOLLOUT) && cbs.write_cb) {
+    if (((ev & EPOLLOUT) != 0u) && cbs.write_cb) {
       cbs.write_cb(fd);
     }
 

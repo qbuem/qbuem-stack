@@ -36,6 +36,7 @@
 
 #include <qbuem/common.hpp>
 
+#include <array>
 #include <atomic>
 #include <cstdint>
 #include <functional>
@@ -79,17 +80,17 @@ struct alignas(64) TraceEvent {
     uint32_t  cpu{0};           ///< CPU number the event ran on
     EventType type{EventType::Custom};
     uint16_t  flags{0};         ///< Per-event flags
-    uint8_t   label[24]{};      ///< Event label (null-terminated, max 23 chars)
+    std::array<uint8_t, 24> label{};  ///< Event label (null-terminated, max 23 chars)
     uint64_t  val{0};           ///< Per-event extra data (e.g. fd, bytes)
 
     /** @brief Safely sets the event label. */
     void set_label(std::string_view s) noexcept {
         size_t n = s.size() < 23 ? s.size() : 23;
-        __builtin_memcpy(label, s.data(), n);
-        label[n] = '\0';
+        __builtin_memcpy(label.data(), s.data(), n);
+        label[n] = 0;
     }
     [[nodiscard]] std::string_view get_label() const noexcept {
-        return {reinterpret_cast<const char*>(label)};
+        return {reinterpret_cast<const char*>(label.data())};
     }
 };
 static_assert(sizeof(TraceEvent) == 64, "TraceEvent must be exactly 64 bytes (one cache line)");

@@ -32,7 +32,7 @@ static size_t find_header_end(const char *data, size_t len) noexcept {
   for (; i + 32 <= len; i += 32) {
     __m256i chunk = _mm256_loadu_si256(reinterpret_cast<const __m256i *>(data + i));
     uint32_t mask = static_cast<uint32_t>(_mm256_movemask_epi8(_mm256_cmpeq_epi8(chunk, v_cr)));
-    while (mask) {
+    while (mask != 0u) {
       int bit = __builtin_ctz(mask);
       size_t off = i + static_cast<size_t>(bit);
       if (off + 3 < len &&
@@ -52,7 +52,7 @@ static size_t find_header_end(const char *data, size_t len) noexcept {
   for (; i + 16 <= len; i += 16) {
     __m128i chunk = _mm_loadu_si128(reinterpret_cast<const __m128i *>(data + i));
     uint32_t mask = static_cast<uint32_t>(_mm_movemask_epi8(_mm_cmpeq_epi8(chunk, v_cr)));
-    while (mask) {
+    while (mask != 0u) {
       int bit = __builtin_ctz(mask);
       size_t off = i + static_cast<size_t>(bit);
       if (off + 3 < len &&

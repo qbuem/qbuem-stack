@@ -106,8 +106,8 @@ public:
    * @param key   Variable name (must match `{{key}}` in template).
    * @param value String value (caller must keep alive for the render duration).
    */
-  void set(std::string key, std::string value) {
-    scalars_.insert_or_assign(std::move(key), std::move(value));
+  void set(const std::string& key, const std::string& value) {
+    scalars_.insert_or_assign(key, value);
   }
 
   /**
@@ -116,8 +116,8 @@ public:
    * @param key    Variable name.
    * @param items  List of string values.
    */
-  void set_list(std::string key, std::vector<std::string> items) {
-    lists_.insert_or_assign(std::move(key), std::move(items));
+  void set_list(const std::string& key, std::vector<std::string> items) {
+    lists_.insert_or_assign(key, std::move(items));
   }
 
   /** @brief Look up a scalar value (returns empty string_view if not found). */
@@ -257,7 +257,7 @@ private:
 
         } else if constexpr (std::is_same_v<SType, SegEachBlock>) {
           const auto* list = ctx.get_list(s.key);
-          if (list) {
+          if (list != nullptr) {
             for (const auto& item : *list)
               render_segments(s.body, ctx, out, item);
           }
@@ -294,8 +294,8 @@ public:
    * @param name    Partial name (referenced as `{{> name}}`).
    * @param source  Partial template source.
    */
-  void add_partial(std::string name, std::string source) {
-    partials_.insert_or_assign(std::move(name), std::move(source));
+  void add_partial(const std::string& name, const std::string& source) {
+    partials_.insert_or_assign(name, source);
   }
 
   /**
@@ -304,9 +304,9 @@ public:
    * @param source  Template source (copied internally).
    * @return        Compiled template ready for rendering.
    */
-  [[nodiscard]] CompiledTemplate compile(std::string source) const {
+  [[nodiscard]] CompiledTemplate compile(const std::string& source) const {
     CompiledTemplate tmpl;
-    tmpl.source_owned_ = std::move(source);
+    tmpl.source_owned_ = source;
     tmpl.source_       = tmpl.source_owned_;
     parse(tmpl.source_owned_, tmpl.segments_);
     // Estimate output size from literal text length
@@ -321,10 +321,10 @@ public:
    * @param source  Template source.
    * @return        Reference to the cached `CompiledTemplate`.
    */
-  const CompiledTemplate& compile_cached(std::string name, std::string source) {
+  const CompiledTemplate& compile_cached(const std::string& name, const std::string& source) {
     auto it = cache_.find(name);
     if (it == cache_.end()) {
-      auto [ins, ok] = cache_.emplace(std::move(name), compile(std::move(source)));
+      auto [ins, ok] = cache_.emplace(name, compile(source));
       return ins->second;
     }
     return it->second;

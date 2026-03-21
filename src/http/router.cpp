@@ -1,5 +1,8 @@
 #include <qbuem/http/router.hpp>
 
+#include <algorithm>
+#include <ranges>
+
 namespace qbuem {
 
 // RadixTree Implementation
@@ -23,7 +26,7 @@ void RadixTree::insert(std::string_view path, HandlerVariant handler) {
       i = j;
     } else {
       Node *child = curr->find_child(path[i]);
-      if (!child) {
+      if (child == nullptr) {
         curr->children.emplace_back(path[i], std::make_unique<Node>());
         child = curr->children.back().second.get();
       }
@@ -49,7 +52,7 @@ HandlerVariant RadixTree::search_recursive(
 
   // Try exact character child first
   const Node *child = node->find_child(path[pos]);
-  if (child) {
+  if (child != nullptr) {
     auto res = search_recursive(child, path, pos + 1, params);
     if (!std::holds_alternative<std::monostate>(res))
       return res;
@@ -81,10 +84,10 @@ void Router::add_route(Method method, std::string_view path,
   routes_[static_cast<size_t>(method)].insert(path, std::move(handler));
 }
 
-void Router::use(Middleware mw) { middlewares_.push_back(std::move(mw)); }
+void Router::use(Middleware mw) { middlewares_.emplace_back(std::move(mw)); }
 
 void Router::use_async(AsyncMiddleware mw) {
-  middlewares_.push_back(std::move(mw));
+  middlewares_.emplace_back(std::move(mw));
   has_async_mw_ = true;
 }
 
@@ -120,11 +123,8 @@ bool Router::path_exists(std::string_view path) const {
     dummy.clear();
   }
   // Also check prefix routes
-  for (const auto &pr : prefix_routes_) {
-    if (path.starts_with(pr.prefix))
-      return true;
-  }
-  return false;
+  return std::ranges::any_of(prefix_routes_,
+      [&](const auto& pr) { return path.starts_with(pr.prefix); });
 }
 
 } // namespace qbuem

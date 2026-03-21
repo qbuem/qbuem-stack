@@ -1,6 +1,6 @@
 name: Release
 
-# Triggered by a version tag push: git tag v0.3.0 && git push origin v0.3.0
+# Triggered by a version tag push: git tag v0.1.0 && git push origin v0.1.0
 on:
   push:
     tags:
@@ -13,52 +13,66 @@ permissions:
 # Job graph:
 #
 #   analyze ──┐
-#             ├─► build/macos-arm64    ──┐
-#   test    ──┤   build/linux-x86_64   ──┼─► publish (single release upload)
+#             ├─► build/linux-x86_64   ──┐
+#   test    ──┤                           ├─► publish (single release upload)
 #             └─► build/linux-aarch64  ──┘
 #
-# Each build job saves its tarball as a GitHub Actions artifact.
-# The publish job downloads all three and creates the GitHub Release in one
-# shot — no race condition on the release body.
+# Compiler baseline:
+#   All jobs run on Ubuntu 24.04 which ships GCC 13 + libstdc++-13 by default.
+#   GCC 13 provides complete C++23 support (<expected>, std::print, ranges…).
+#
+#   x86_64 : ubuntu-24.04      (GitHub-hosted)
+#   aarch64: ubuntu-24.04-arm  (GitHub-hosted ARM runner)
+#
+# Distribution format — each tarball contains both variants:
+#   include/qbuem/          ← all public headers (umbrella: qbuem_stack.hpp)
+#   lib/*.a                 ← static libraries  (BUILD_SHARED_LIBS=OFF pass)
+#   lib/*.so                ← shared libraries  (BUILD_SHARED_LIBS=ON  pass)
+#   lib/cmake/qbuem-stack/  ← CMake package config for find_package()
 # ============================================================================
 
 jobs:
   # ── 1. Static analysis (clang-tidy) ─────────────────────────────────────────
   analyze:
     name: Static Analysis (clang-tidy)
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install dependencies
+      - name: Install Clang 18 + clang-tidy-18 + liburing
         run: |
           sudo apt-get update -q
-          sudo apt-get install -y clang clang-tidy liburing-dev
+          sudo apt-get install -y clang-18 clang-tidy-18 clang-tools-18 liburing-dev
 
+      # Generate compile_commands.json with g++ (GCC 13, full C++23 stdlib).
+      # clang-tidy-18 reads these commands; ExtraArgs in .clang-tidy patches
+      # the __cpp_concepts mismatch between clang-18 and libstdc++-13.
       - name: Configure (generate compile_commands.json)
         run: |
           cmake -B build \
             -DCMAKE_BUILD_TYPE=Debug \
-            -DCMAKE_CXX_COMPILER=clang++ \
+            -DCMAKE_CXX_COMPILER=g++ \
             -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+            -DBUILD_SHARED_LIBS=OFF \
             -DQBUEM_BUILD_TESTS=OFF \
             -DQBUEM_BUILD_EXAMPLES=OFF
 
-      # Build library targets so FetchContent headers are materialised and
-      # clang-tidy can resolve all includes.
+      # Build library targets so FetchContent headers are materialised before
+      # clang-tidy tries to resolve all includes.
       - name: Materialise FetchContent headers
         run: cmake --build build --target qbuem_core --target qbuem_http --target qbuem -j$(nproc) || true
 
+      # clang-tidy auto-discovers .clang-tidy walking up from each source file;
+      # -config-file is not accepted by the run-clang-tidy Python wrapper.
       - name: Run clang-tidy
         run: |
-          run-clang-tidy \
+          run-clang-tidy-18 \
             -p build \
-            -config-file .clang-tidy \
             -j$(nproc) \
             $(find src -name '*.cpp' | sort)
 
-  # ── 2. Test (all release platforms) ─────────────────────────────────────────
+  # ── 2. Test (both release architectures) ─────────────────────────────────────
   test:
     name: Test / ${{ matrix.platform }}
     runs-on: ${{ matrix.os }}
@@ -67,9 +81,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: macos-14
-            platform: macos-arm64
-          - os: ubuntu-22.04
+          - os: ubuntu-24.04
             platform: linux-x86_64
           - os: ubuntu-24.04-arm
             platform: linux-aarch64
@@ -77,25 +89,26 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install liburing (Linux)
-        if: runner.os == 'Linux'
+      - name: Install liburing
         run: sudo apt-get update -q && sudo apt-get install -y liburing-dev
 
       - name: Configure
         run: |
           cmake -B build \
             -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_CXX_COMPILER=g++ \
+            -DBUILD_SHARED_LIBS=OFF \
             -DQBUEM_BUILD_TESTS=ON \
             -DQBUEM_BUILD_EXAMPLES=ON
 
       - name: Build
-        run: cmake --build build -j$(nproc 2>/dev/null || sysctl -n hw.logicalcpu)
+        run: cmake --build build -j$(nproc)
 
       - name: Test
         working-directory: build
         run: ctest --output-on-failure -C Release
 
-  # ── 3. Build release artifacts ───────────────────────────────────────────────
+  # ── 3. Build release artifacts (static + shared, both architectures) ─────────
   build:
     name: Build / ${{ matrix.platform }}
     runs-on: ${{ matrix.os }}
@@ -105,9 +118,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: macos-14
-            platform: macos-arm64
-          - os: ubuntu-22.04
+          - os: ubuntu-24.04
             platform: linux-x86_64
           - os: ubuntu-24.04-arm
             platform: linux-aarch64
@@ -115,42 +126,91 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install liburing (Linux)
-        if: runner.os == 'Linux'
+      - name: Install liburing
         run: sudo apt-get update -q && sudo apt-get install -y liburing-dev
 
-      - name: Configure
+      # ── Pass 1: static libraries (.a) ──────────────────────────────────────
+      - name: Configure (static pass)
         run: |
-          cmake -B build \
+          cmake -B build_static \
             -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_CXX_COMPILER=g++ \
+            -DBUILD_SHARED_LIBS=OFF \
             -DQBUEM_BUILD_TESTS=OFF \
-            -DQBUEM_BUILD_EXAMPLES=OFF
+            -DQBUEM_BUILD_EXAMPLES=OFF \
+            -DQBUEM_BUILD_BENCH=OFF
 
-      - name: Build
-        run: cmake --build build -j$(nproc 2>/dev/null || sysctl -n hw.logicalcpu)
+      - name: Build (static pass)
+        run: cmake --build build_static -j$(nproc)
 
-      - name: Install
-        run: cmake --install build --prefix dist
+      - name: Install static pass → dist/
+        run: cmake --install build_static --prefix dist
 
-      - name: Package
+      # ── Pass 2: shared libraries (.so) ─────────────────────────────────────
+      - name: Configure (shared pass)
         run: |
-          ARCHIVE="qbuem-stack-${GITHUB_REF_NAME}-${{ matrix.platform }}.tar.gz"
+          cmake -B build_shared \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_CXX_COMPILER=g++ \
+            -DBUILD_SHARED_LIBS=ON \
+            -DQBUEM_BUILD_TESTS=OFF \
+            -DQBUEM_BUILD_EXAMPLES=OFF \
+            -DQBUEM_BUILD_BENCH=OFF
+
+      - name: Build (shared pass)
+        run: cmake --build build_shared -j$(nproc)
+
+      - name: Install shared libs into dist/lib/
+        # Headers and CMake configs come from the static pass; only .so files
+        # are pulled from the shared pass to avoid overwriting config files.
+        run: |
+          cmake --install build_shared --prefix dist_shared
+          find dist_shared/lib -name "*.so*" -exec cp -P {} dist/lib/ \;
+
+      # ── Verify combined layout ──────────────────────────────────────────────
+      - name: Verify include-lib layout
+        run: |
+          echo "=== Full install tree ==="
+          find dist -type f | sort
+
+          test -d dist/include/qbuem \
+            || (echo "ERROR: include/qbuem missing"        && exit 1)
+          test -f dist/include/qbuem/qbuem_stack.hpp \
+            || (echo "ERROR: umbrella header missing"      && exit 1)
+          ls dist/lib/*.a   > /dev/null 2>&1 \
+            || (echo "ERROR: no .a libs in dist/lib/"      && exit 1)
+          ls dist/lib/*.so* > /dev/null 2>&1 \
+            || (echo "ERROR: no .so libs in dist/lib/"     && exit 1)
+          test -f dist/lib/cmake/qbuem-stack/qbuem-stack-config.cmake \
+            || (echo "ERROR: CMake package config missing" && exit 1)
+
+          echo "=== Static libraries ==="; ls -lh dist/lib/*.a
+          echo "=== Shared libraries ==="; ls -lh dist/lib/*.so*
+          echo "Install layout verified."
+
+      # ── Package ─────────────────────────────────────────────────────────────
+      - name: Package as tarball
+        run: |
+          VERSION="${GITHUB_REF_NAME}"
+          ARCHIVE="qbuem-stack-${VERSION}-${{ matrix.platform }}.tar.gz"
           tar -czf "${ARCHIVE}" -C dist .
           echo "ARCHIVE=${ARCHIVE}" >> "$GITHUB_ENV"
+          sha256sum "${ARCHIVE}" > "${ARCHIVE}.sha256"
+          echo "SHA-256:"; cat "${ARCHIVE}.sha256"
 
-      # Store tarball as a GitHub Actions artifact so the publish job can
-      # collect all three and upload them in a single release API call.
-      - name: Save artifact
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ env.ARCHIVE }}
-          path: ${{ env.ARCHIVE }}
+          path: |
+            ${{ env.ARCHIVE }}
+            ${{ env.ARCHIVE }}.sha256
           retention-days: 1
 
-  # ── 4. Publish GitHub Release (single job — no race condition) ───────────────
+  # ── 4. Publish GitHub Release ────────────────────────────────────────────────
   publish:
     name: Publish GitHub Release
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     needs: [build]
 
     steps:
@@ -158,36 +218,67 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           pattern: qbuem-stack-*
-          merge-multiple: true   # flatten into cwd
+          merge-multiple: true
 
       - name: List artifacts
-        run: ls -lh qbuem-stack-*.tar.gz
+        run: |
+          echo "=== Release artifacts ==="; ls -lh qbuem-stack-*.tar.gz
+          echo "=== Checksums ===";         cat qbuem-stack-*.sha256
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: qbuem-stack-*.tar.gz
+          files: |
+            qbuem-stack-*.tar.gz
+            qbuem-stack-*.sha256
           body: |
             ## qbuem-stack ${{ github.ref_name }}
 
-            ### Platforms
-            | Artifact | OS | Arch |
-            |----------|----|------|
-            | `qbuem-stack-*-macos-arm64.tar.gz`   | macOS 14     | Apple Silicon (arm64) |
-            | `qbuem-stack-*-linux-x86_64.tar.gz`  | Ubuntu 22.04 | x86-64 |
-            | `qbuem-stack-*-linux-aarch64.tar.gz` | Ubuntu 24.04 | AArch64 |
+            Zero Latency · Zero Allocation · Zero Dependency
+            C++23 high-performance infrastructure library.
 
-            ### Usage
-            Download the tarball for your platform, extract it, then:
+            ---
+
+            ### Distribution Packages
+
+            | Artifact | OS | Architecture |
+            |----------|----|--------------|
+            | `qbuem-stack-${{ github.ref_name }}-linux-x86_64.tar.gz`  | Ubuntu 24.04 (glibc 2.39+) | x86-64  |
+            | `qbuem-stack-${{ github.ref_name }}-linux-aarch64.tar.gz` | Ubuntu 24.04 (glibc 2.39+) | AArch64 |
+
+            Each tarball contains **both static and shared** library variants:
+            ```
+            include/qbuem/          ← all public headers (umbrella: qbuem_stack.hpp)
+            lib/*.a                 ← static libraries
+            lib/*.so                ← shared libraries
+            lib/cmake/qbuem-stack/  ← CMake package config for find_package()
+            ```
+
+            Verify integrity:
+            ```bash
+            sha256sum -c qbuem-stack-${{ github.ref_name }}-linux-x86_64.tar.gz.sha256
+            ```
+
+            ---
+
+            ### Integration
 
             ```cmake
             list(APPEND CMAKE_PREFIX_PATH "/path/to/qbuem-stack-dist")
             find_package(qbuem-stack REQUIRED)
 
-            target_link_libraries(myapp PRIVATE qbuem-stack::qbuem)  # full (App + HTTP + core)
-            target_link_libraries(myapp PRIVATE qbuem-stack::http)   # HTTP + core
-            target_link_libraries(myapp PRIVATE qbuem-stack::core)   # reactor only
+            target_link_libraries(myapp PRIVATE qbuem-stack::qbuem)     # full stack
+            target_link_libraries(myapp PRIVATE qbuem-stack::http)      # HTTP/1.1 only
+            target_link_libraries(myapp PRIVATE qbuem-stack::pipeline)  # pipeline only
+            target_link_libraries(myapp PRIVATE qbuem-stack::core)      # reactor only
             ```
 
-            > JSON 라이브러리는 포함되지 않습니다. 원하는 라이브러리(simdjson, nlohmann/json, glaze 등)를 직접 선택하여 `req.body()`를 파싱하세요.
+            Choose static or shared at configure time:
+            ```bash
+            cmake -DBUILD_SHARED_LIBS=OFF ..   # static  (default)
+            cmake -DBUILD_SHARED_LIBS=ON  ..   # shared
+            ```
+
+            > **Requirements:** GCC 13+ or Clang 17+, CMake ≥ 3.20,
+            > `liburing-dev` for `io_uring` support.
           generate_release_notes: true

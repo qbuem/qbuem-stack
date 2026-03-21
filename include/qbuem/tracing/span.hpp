@@ -29,6 +29,7 @@
 
 #include <qbuem/tracing/trace_context.hpp>
 
+#include <array>
 #include <chrono>
 #include <string>
 #include <string_view>
@@ -100,7 +101,7 @@ struct SpanData {
   };
 
   /** @brief Attribute array (fixed-size, no heap allocation). */
-  Attribute attributes[kMaxAttributes];
+  std::array<Attribute, kMaxAttributes> attributes{};
 
   /** @brief Number of attributes currently stored. */
   size_t attribute_count = 0;
@@ -154,8 +155,8 @@ public:
    * @param data   Span metadata. Moved in.
    * @param tracer Tracer pointer responsible for exporting (non-owning, nullable).
    */
-  Span(SpanData data, Tracer* tracer)
-      : data_(std::move(data)), tracer_(tracer), ended_(false) {}
+  Span(SpanData data, Tracer* tracer) // NOLINT(performance-unnecessary-value-param)
+      : data_(std::move(data)), tracer_(tracer) {}
 
   /**
    * @brief Ends and exports the span upon destruction.
@@ -172,7 +173,7 @@ public:
   }
   Span& operator=(Span&& other) noexcept {
     if (this != &other) {
-      if (!ended_ && tracer_) {
+      if (!ended_ && tracer_ != nullptr) {
         data_.end_time = std::chrono::system_clock::now();
         // Explicit flush before move-assignment is the caller's responsibility if needed
       }
@@ -215,12 +216,12 @@ public:
    * @brief Returns a const reference to the SpanData.
    * @returns Metadata for this span.
    */
-  const SpanData& data() const noexcept { return data_; }
+  [[nodiscard]] const SpanData& data() const noexcept { return data_; }
 
 private:
-  SpanData data_;    ///< Span metadata
-  Tracer*  tracer_;  ///< Tracer responsible for exporting (non-owning)
-  bool     ended_;   ///< Flag to prevent double-export
+  SpanData data_;         ///< Span metadata
+  Tracer*  tracer_;       ///< Tracer responsible for exporting (non-owning)
+  bool     ended_{false}; ///< Flag to prevent double-export
 };
 
 } // namespace qbuem::tracing

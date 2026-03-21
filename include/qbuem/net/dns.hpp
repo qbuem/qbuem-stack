@@ -23,7 +23,7 @@
  * ## Usage
  * @code
  * auto addr = co_await DnsResolver::resolve("httpbin.org", 80);
- * if (!addr) co_return unexpected(addr.error());
+ * if (!addr) co_return std::unexpected(addr.error());
  * auto stream = co_await TcpStream::connect(*addr);
  * @endcode
  *
@@ -68,12 +68,12 @@ public:
    *
    * @code
    * auto addr = co_await DnsResolver::resolve("example.com", 80);
-   * if (!addr) co_return unexpected(addr.error());
+   * if (!addr) co_return std::unexpected(addr.error());
    * @endcode
    */
-  [[nodiscard]] static Task<Result<SocketAddr>> resolve(std::string host,
+  [[nodiscard]] static Task<Result<SocketAddr>> resolve(const std::string& host,
                                                          uint16_t port) {
-    co_return co_await Awaiter{std::move(host), port};
+    co_return co_await Awaiter{host, port};
   }
 
 private:
@@ -81,7 +81,7 @@ private:
 
   struct State {
     Result<SocketAddr> result{
-        unexpected(std::make_error_code(std::errc::address_not_available))};
+        std::unexpected(std::make_error_code(std::errc::address_not_available))};
   };
 
   // ── Coroutine awaiter ─────────────────────────────────────────────────────
@@ -93,7 +93,7 @@ private:
 
     // ── Try fast-path: numeric IP literal ────────────────────────────────
 
-    bool await_ready() noexcept {
+    [[nodiscard]] bool await_ready() noexcept {
       // Try IPv4 literal
       {
         auto r = SocketAddr::from_ipv4(host.c_str(), port);
@@ -107,7 +107,7 @@ private:
       return false; // needs async resolution
     }
 
-    void await_suspend(std::coroutine_handle<> handle) {
+    void await_suspend(std::coroutine_handle<> handle) const {
       // Capture reactor pointer before spawning — Reactor::current() is
       // thread-local and only valid on the reactor thread.
       Reactor* reactor = Reactor::current();
@@ -115,7 +115,7 @@ private:
 
       // Move host into the lambda to avoid an extra string copy.
       // port is a struct member — capture by value via explicit init-capture.
-      std::jthread([host = std::move(host),
+      std::jthread([host = host,
                    port = port,
                    st,
                    handle,
@@ -128,7 +128,7 @@ private:
         addrinfo* res = nullptr;
         int rc = ::getaddrinfo(host.c_str(), nullptr, &hints, &res);
         if (rc != 0 || res == nullptr) {
-          st->result = unexpected(
+          st->result = std::unexpected(
               std::make_error_code(std::errc::address_not_available));
         } else {
           // Prefer IPv4; fall back to IPv6.
@@ -160,7 +160,7 @@ private:
         }
 
         // ── Resume coroutine on the reactor thread ────────────────────────
-        if (reactor) {
+        if (reactor != nullptr) {
           reactor->post([handle]() mutable { handle.resume(); });
         } else {
           handle.resume(); // no reactor (e.g. unit test context)
@@ -168,7 +168,7 @@ private:
       }).detach();
     }
 
-    Result<SocketAddr> await_resume() {
+    [[nodiscard]] Result<SocketAddr> await_resume() {
       return std::move(state->result);
     }
   };

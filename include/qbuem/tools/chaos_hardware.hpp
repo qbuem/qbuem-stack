@@ -112,8 +112,8 @@ struct FaultEvent {
     uint64_t    timestamp_ns{0};
     uint64_t    io_size{0};         ///< Requested I/O size
     FaultClass  fault{FaultClass::None};
-    uint8_t     _pad[7]{};
-    char        target[kTargetLen]{}; ///< Target identifier (e.g. "nvme0n1", "mlx5_0")
+    uint8_t     _pad[7]{}; // NOLINT(modernize-avoid-c-arrays)
+    char        target[kTargetLen]{}; ///< Target identifier (e.g. "nvme0n1", "mlx5_0") // NOLINT(modernize-avoid-c-arrays)
     int32_t     injected_error{0};  ///< Actual error code injected (0 = no error)
     uint64_t    latency_ns{0};      ///< Injected latency
 

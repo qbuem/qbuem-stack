@@ -4,7 +4,7 @@ cmake_minimum_required(VERSION 3.20)
 # qbuem-stack — Zero Latency · Zero Cost · Zero Dependency WAS Layer
 # ============================================================================
 project(qbuem-stack
-    VERSION 1.0.0
+    VERSION 0.1.0
     LANGUAGES CXX
     DESCRIPTION "qbuem-stack: zero-dependency C++23 async server framework (HTTP/1.1, HTTP/2, WebSocket, gRPC, Pipeline)"
 )
@@ -113,6 +113,10 @@ if(QBUEM_COVERAGE)
     add_link_options(--coverage)
 endif()
 
+# Position-Independent Code — required for shared library builds and
+# harmless for static builds (enables downstream shared-lib linking).
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+
 # ============================================================================
 include(FetchContent)
 include(GNUInstallDirs)
@@ -192,7 +196,7 @@ else()
     endif()
 endif()
 
-add_library(qbuem_reactor STATIC ${CORE_SOURCES})
+add_library(qbuem_reactor ${CORE_SOURCES})
 add_library(qbuem-stack::reactor ALIAS qbuem_reactor)
 target_include_directories(qbuem_reactor
     PUBLIC ${QBUEM_INCLUDE_DIR} ${QBUEM_INSTALL_INCLUDE})
@@ -241,7 +245,7 @@ target_link_libraries(qbuem_io INTERFACE qbuem_reactor qbuem_buf qbuem_net)
 
 # qbuem::pcie — PCIeDevice (VFIO), MSIXReactor, DmaBuffer
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-    add_library(qbuem_pcie STATIC src/pcie/pcie_device.cpp)
+    add_library(qbuem_pcie src/pcie/pcie_device.cpp)
     add_library(qbuem-stack::pcie ALIAS qbuem_pcie)
     target_include_directories(qbuem_pcie PUBLIC ${QBUEM_INCLUDE_DIR} ${QBUEM_INSTALL_INCLUDE})
     target_compile_features(qbuem_pcie PUBLIC cxx_std_23)
@@ -284,7 +288,7 @@ target_link_libraries(qbuem_server_base INTERFACE
 # ============================================================================
 
 # qbuem::http — SIMD HTTP/1.1 FSM parser, Radix Tree router, Request/Response
-add_library(qbuem_http STATIC
+add_library(qbuem_http
     src/http/parser.cpp
     src/http/request.cpp
     src/http/response.cpp
@@ -436,7 +440,7 @@ endif()
 # ============================================================================
 
 # Full-stack App + StackController (qbuem_stack.cpp)
-add_library(qbuem STATIC src/qbuem_stack.cpp)
+add_library(qbuem src/qbuem_stack.cpp)
 add_library(qbuem-stack::qbuem ALIAS qbuem)
 target_link_libraries(qbuem PUBLIC
     qbuem_reactor

@@ -25,6 +25,7 @@
 #include <qbuem/pcie/pcie_device.hpp>
 #include <qbuem/common.hpp>
 
+#include <array>
 #include <cerrno>
 #include <cstdio>
 #include <cstdlib>
@@ -48,21 +49,21 @@ namespace qbuem::pcie {
 Result<int> PCIeDevice::find_iommu_group(BDF bdf) noexcept {
     // Resolve the IOMMU group via the sysfs symlink:
     //   /sys/bus/pci/devices/<BDF>/iommu_group -> ../../../kernel/iommu_groups/<N>
-    char path[256];
-    std::snprintf(path, sizeof(path),
+    std::array<char, 256> path{};
+    std::snprintf(path.data(), path.size(),
                   "/sys/bus/pci/devices/%.*s/iommu_group",
                   static_cast<int>(bdf.size()), bdf.data());
 
-    char resolved[256];
-    ssize_t n = ::readlink(path, resolved, sizeof(resolved) - 1);
+    std::array<char, 256> resolved{};
+    ssize_t n = ::readlink(path.data(), resolved.data(), resolved.size() - 1);
     if (n < 0)
-        return unexpected(std::error_code{errno, std::system_category()});
-    resolved[n] = '\0';
+        return std::unexpected(std::error_code{errno, std::system_category()});
+    resolved[static_cast<size_t>(n)] = '\0';
 
     // Extract the group number from the last path component.
-    const char* last_slash = std::strrchr(resolved, '/');
-    if (!last_slash)
-        return unexpected(std::make_error_code(std::errc::invalid_argument));
+    const char* last_slash = std::strrchr(resolved.data(), '/');
+    if (last_slash == nullptr)
+        return std::unexpected(std::make_error_code(std::errc::invalid_argument));
 
     const int group = std::atoi(last_slash + 1);
     return group;
@@ -71,47 +72,47 @@ Result<int> PCIeDevice::find_iommu_group(BDF bdf) noexcept {
 Result<int> PCIeDevice::open_vfio_container() noexcept {
     int container_fd = ::open("/dev/vfio/vfio", O_RDWR | O_CLOEXEC);
     if (container_fd < 0)
-        return unexpected(std::error_code{errno, std::system_category()});
+        return std::unexpected(std::error_code{errno, std::system_category()});
 
     // Verify VFIO API version.
     if (::ioctl(container_fd, VFIO_GET_API_VERSION) != VFIO_API_VERSION) {
         ::close(container_fd);
-        return unexpected(std::make_error_code(std::errc::not_supported));
+        return std::unexpected(std::make_error_code(std::errc::not_supported));
     }
 
     // Enable the IOMMU type 1 driver (required for DMA mapping).
     if (::ioctl(container_fd, VFIO_CHECK_EXTENSION, VFIO_TYPE1_IOMMU) != 1) {
         ::close(container_fd);
-        return unexpected(std::make_error_code(std::errc::not_supported));
+        return std::unexpected(std::make_error_code(std::errc::not_supported));
     }
 
     return container_fd;
 }
 
 Result<int> PCIeDevice::open_vfio_group(int container_fd, int group_num) noexcept {
-    char path[64];
-    std::snprintf(path, sizeof(path), "/dev/vfio/%d", group_num);
+    std::array<char, 64> path{};
+    std::snprintf(path.data(), path.size(), "/dev/vfio/%d", group_num);
 
-    int group_fd = ::open(path, O_RDWR | O_CLOEXEC);
+    int group_fd = ::open(path.data(), O_RDWR | O_CLOEXEC);
     if (group_fd < 0)
-        return unexpected(std::error_code{errno, std::system_category()});
+        return std::unexpected(std::error_code{errno, std::system_category()});
 
     // Verify the group is viable.
     struct vfio_group_status gs{};
     gs.argsz = sizeof(gs);
     if (::ioctl(group_fd, VFIO_GROUP_GET_STATUS, &gs) < 0) {
         ::close(group_fd);
-        return unexpected(std::error_code{errno, std::system_category()});
+        return std::unexpected(std::error_code{errno, std::system_category()});
     }
-    if (!(gs.flags & VFIO_GROUP_FLAGS_VIABLE)) {
+    if ((gs.flags & VFIO_GROUP_FLAGS_VIABLE) == 0u) {
         ::close(group_fd);
-        return unexpected(std::make_error_code(std::errc::operation_not_permitted));
+        return std::unexpected(std::make_error_code(std::errc::operation_not_permitted));
     }
 
     // Attach group to container.
     if (::ioctl(group_fd, VFIO_GROUP_SET_CONTAINER, &container_fd) < 0) {
         ::close(group_fd);
-        return unexpected(std::error_code{errno, std::system_category()});
+        return std::unexpected(std::error_code{errno, std::system_category()});
     }
 
     // Enable IOMMU on the container now that a group is attached.
@@ -119,7 +120,7 @@ Result<int> PCIeDevice::open_vfio_group(int container_fd, int group_num) noexcep
         // EBUSY means IOMMU was already set — that's fine.
         if (errno != EBUSY) {
             ::close(group_fd);
-            return unexpected(std::error_code{errno, std::system_category()});
+            return std::unexpected(std::error_code{errno, std::system_category()});
         }
     }
 
@@ -135,13 +136,13 @@ PCIeDevice::PCIeDevice(int container_fd, int group_fd, int device_fd,
     , device_fd_(device_fd)
     , iommu_group_(iommu_group)
 {
-    const size_t n = std::min(bdf.size(), sizeof(bdf_) - 1);
-    std::memcpy(bdf_, bdf.data(), n);
+    const size_t n = std::min(bdf.size(), bdf_.size() - 1);
+    std::memcpy(bdf_.data(), bdf.data(), n);
     bdf_[n] = '\0';
 }
 
 PCIeDevice::~PCIeDevice() {
-    if (bar0_vaddr_ && bar0_size_)
+    if (bar0_vaddr_ != nullptr && bar0_size_ != 0u)
         ::munmap(bar0_vaddr_, bar0_size_);
     if (device_fd_    >= 0) ::close(device_fd_);
     if (group_fd_     >= 0) ::close(group_fd_);
@@ -153,32 +154,32 @@ PCIeDevice::~PCIeDevice() {
 Result<std::unique_ptr<PCIeDevice>> PCIeDevice::open(BDF bdf) noexcept {
     // 1. Find the IOMMU group for this BDF.
     auto group_res = find_iommu_group(bdf);
-    if (!group_res) return unexpected(group_res.error());
+    if (!group_res) return std::unexpected(group_res.error());
     const int group_num = *group_res;
 
     // 2. Open the VFIO container.
     auto container_res = open_vfio_container();
-    if (!container_res) return unexpected(container_res.error());
+    if (!container_res) return std::unexpected(container_res.error());
     const int container_fd = *container_res;
 
     // 3. Open the VFIO group and attach it to the container.
     auto group_res2 = open_vfio_group(container_fd, group_num);
     if (!group_res2) {
         ::close(container_fd);
-        return unexpected(group_res2.error());
+        return std::unexpected(group_res2.error());
     }
     const int group_fd = *group_res2;
 
     // 4. Open the device fd within the group.
-    char bdf_cstr[17]{};
-    const size_t n = std::min(bdf.size(), sizeof(bdf_cstr) - 1);
-    std::memcpy(bdf_cstr, bdf.data(), n);
+    std::array<char, 17> bdf_cstr{};
+    const size_t n = std::min(bdf.size(), bdf_cstr.size() - 1);
+    std::memcpy(bdf_cstr.data(), bdf.data(), n);
 
-    int device_fd = ::ioctl(group_fd, VFIO_GROUP_GET_DEVICE_FD, bdf_cstr);
+    int device_fd = ::ioctl(group_fd, VFIO_GROUP_GET_DEVICE_FD, bdf_cstr.data());
     if (device_fd < 0) {
         ::close(group_fd);
         ::close(container_fd);
-        return unexpected(std::error_code{errno, std::system_category()});
+        return std::unexpected(std::error_code{errno, std::system_category()});
     }
 
     // 5. Read vendor/device IDs from config space (offset 0x00, 0x02).
@@ -189,8 +190,8 @@ Result<std::unique_ptr<PCIeDevice>> PCIeDevice::open(BDF bdf) noexcept {
     cfg.argsz = sizeof(cfg);
     cfg.index = VFIO_PCI_CONFIG_REGION_INDEX;
     if (::ioctl(device_fd, VFIO_DEVICE_GET_REGION_INFO, &cfg) == 0) {
-        uint16_t ids[2]{};
-        [[maybe_unused]] auto n = ::pread(device_fd, ids, sizeof(ids), static_cast<off_t>(cfg.offset));
+        std::array<uint16_t, 2> ids{};
+        [[maybe_unused]] auto n = ::pread(device_fd, ids.data(), ids.size() * sizeof(uint16_t), static_cast<off_t>(cfg.offset));
         dev->vendor_id_ = ids[0];
         dev->device_id_ = ids[1];
     }
@@ -202,23 +203,23 @@ Result<std::unique_ptr<PCIeDevice>> PCIeDevice::open(BDF bdf) noexcept {
 
 Result<BarMapping> PCIeDevice::map_bar(uint8_t bar_idx) noexcept {
     if (bar_idx > 5)
-        return unexpected(std::make_error_code(std::errc::invalid_argument));
+        return std::unexpected(std::make_error_code(std::errc::invalid_argument));
 
     struct vfio_region_info ri{};
     ri.argsz = sizeof(ri);
     ri.index = static_cast<uint32_t>(VFIO_PCI_BAR0_REGION_INDEX) + bar_idx;
 
     if (::ioctl(device_fd_, VFIO_DEVICE_GET_REGION_INFO, &ri) < 0)
-        return unexpected(std::error_code{errno, std::system_category()});
+        return std::unexpected(std::error_code{errno, std::system_category()});
 
     if (ri.size == 0)
-        return unexpected(std::make_error_code(std::errc::no_such_device));
+        return std::unexpected(std::make_error_code(std::errc::no_such_device));
 
     void* vaddr = ::mmap(nullptr, ri.size,
                          PROT_READ | PROT_WRITE, MAP_SHARED,
                          device_fd_, static_cast<off_t>(ri.offset));
     if (vaddr == MAP_FAILED)
-        return unexpected(std::error_code{errno, std::system_category()});
+        return std::unexpected(std::error_code{errno, std::system_category()});
 
     // Cache BAR 0 for direct read_mmio32/write_mmio32 access.
     if (bar_idx == 0) {
@@ -257,7 +258,7 @@ Result<DmaBuffer> PCIeDevice::alloc_dma_buffer(size_t size,
                          PROT_READ | PROT_WRITE,
                          MAP_SHARED | MAP_ANONYMOUS | MAP_LOCKED, -1, 0);
     if (vaddr == MAP_FAILED)
-        return unexpected(std::error_code{errno, std::system_category()});
+        return std::unexpected(std::error_code{errno, std::system_category()});
 
     // Assign IOVA: use hint if provided, otherwise auto-increment.
     const uint64_t iova = (iova_hint != 0)
@@ -274,7 +275,7 @@ Result<DmaBuffer> PCIeDevice::alloc_dma_buffer(size_t size,
 
     if (::ioctl(container_fd_, VFIO_IOMMU_MAP_DMA, &dma_map) < 0) {
         ::munmap(vaddr, alloc_size);
-        return unexpected(std::error_code{errno, std::system_category()});
+        return std::unexpected(std::error_code{errno, std::system_category()});
     }
 
     DmaBuffer buf;
@@ -288,16 +289,16 @@ Result<DmaBuffer> PCIeDevice::alloc_dma_buffer(size_t size,
 // ─── enumerate_pcie_devices ──────────────────────────────────────────────────
 
 template <size_t N>
-size_t enumerate_pcie_devices(char (&out)[N][16]) noexcept {
+size_t enumerate_pcie_devices(std::array<std::array<char, 16>, N>& out) noexcept {
     DIR* dir = ::opendir("/sys/bus/pci/devices");
-    if (!dir) return 0;
+    if (dir == nullptr) return 0;
 
     size_t count = 0;
-    struct dirent* ent;
+    struct dirent* ent = nullptr;
     while ((ent = ::readdir(dir)) != nullptr && count < N) {
         if (ent->d_name[0] == '.') continue;
         const size_t len = std::min(std::strlen(ent->d_name), size_t{15});
-        std::memcpy(out[count], ent->d_name, len);
+        std::memcpy(out[count].data(), ent->d_name, len);
         out[count][len] = '\0';
         ++count;
     }
@@ -306,23 +307,23 @@ size_t enumerate_pcie_devices(char (&out)[N][16]) noexcept {
 }
 
 // Explicit instantiation for the default N=64.
-template size_t enumerate_pcie_devices<64>(char (&)[64][16]) noexcept;
+template size_t enumerate_pcie_devices<64>(std::array<std::array<char, 16>, 64>&) noexcept;
 
 // ─── bdf_to_iommu_group ──────────────────────────────────────────────────────
 
 Result<int> bdf_to_iommu_group(std::string_view bdf) noexcept {
     // Resolve the IOMMU group via the sysfs symlink directly.
-    char path[256];
-    std::snprintf(path, sizeof(path),
+    std::array<char, 256> path{};
+    std::snprintf(path.data(), path.size(),
                   "/sys/bus/pci/devices/%.*s/iommu_group",
                   static_cast<int>(bdf.size()), bdf.data());
-    char resolved[256];
-    ssize_t n = ::readlink(path, resolved, sizeof(resolved) - 1);
+    std::array<char, 256> resolved{};
+    ssize_t n = ::readlink(path.data(), resolved.data(), resolved.size() - 1);
     if (n < 0)
         return std::unexpected(std::error_code{errno, std::system_category()});
-    resolved[n] = '\0';
-    const char* last_slash = std::strrchr(resolved, '/');
-    if (!last_slash)
+    resolved[static_cast<size_t>(n)] = '\0';
+    const char* last_slash = std::strrchr(resolved.data(), '/');
+    if (last_slash == nullptr)
         return std::unexpected(std::make_error_code(std::errc::invalid_argument));
     return std::atoi(last_slash + 1);
 }
@@ -336,32 +337,32 @@ Result<int> bdf_to_iommu_group(std::string_view bdf) noexcept {
 namespace qbuem::pcie {
 
 Result<std::unique_ptr<PCIeDevice>> PCIeDevice::open(BDF) noexcept {
-    return unexpected(std::make_error_code(std::errc::not_supported));
+    return std::unexpected(std::make_error_code(std::errc::not_supported));
 }
 Result<BarMapping> PCIeDevice::map_bar(uint8_t) noexcept {
-    return unexpected(std::make_error_code(std::errc::not_supported));
+    return std::unexpected(std::make_error_code(std::errc::not_supported));
 }
 uint32_t PCIeDevice::read_mmio32(size_t) const noexcept { return 0; }
 void     PCIeDevice::write_mmio32(size_t, uint32_t) noexcept {}
 Result<DmaBuffer> PCIeDevice::alloc_dma_buffer(size_t, uint64_t) noexcept {
-    return unexpected(std::make_error_code(std::errc::not_supported));
+    return std::unexpected(std::make_error_code(std::errc::not_supported));
 }
 PCIeDevice::~PCIeDevice() {}
 PCIeDevice::PCIeDevice(int, int, int, int, std::string_view) noexcept {}
 Result<int> PCIeDevice::find_iommu_group(BDF) noexcept {
-    return unexpected(std::make_error_code(std::errc::not_supported));
+    return std::unexpected(std::make_error_code(std::errc::not_supported));
 }
 Result<int> PCIeDevice::open_vfio_container() noexcept {
-    return unexpected(std::make_error_code(std::errc::not_supported));
+    return std::unexpected(std::make_error_code(std::errc::not_supported));
 }
 Result<int> PCIeDevice::open_vfio_group(int, int) noexcept {
-    return unexpected(std::make_error_code(std::errc::not_supported));
+    return std::unexpected(std::make_error_code(std::errc::not_supported));
 }
 template <size_t N>
-size_t enumerate_pcie_devices(char (&)[N][16]) noexcept { return 0; }
-template size_t enumerate_pcie_devices<64>(char (&)[64][16]) noexcept;
+size_t enumerate_pcie_devices(std::array<std::array<char, 16>, N>&) noexcept { return 0; }
+template size_t enumerate_pcie_devices<64>(std::array<std::array<char, 16>, 64>&) noexcept;
 Result<int> bdf_to_iommu_group(std::string_view) noexcept {
-    return unexpected(std::make_error_code(std::errc::not_supported));
+    return std::unexpected(std::make_error_code(std::errc::not_supported));
 }
 
 } // namespace qbuem::pcie

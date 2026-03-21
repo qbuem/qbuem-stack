@@ -54,6 +54,10 @@ public:
 
   void post(std::function<void()> fn) override;
 
+  Result<void> register_signal(int sig,
+                               std::function<void(int)> callback) override;
+  Result<void> unregister_signal(int sig) override;
+
   // -------------------------------------------------------------------------
   // Fixed Buffer API  (io_uring_register_buffers — direct DMA writes)
   // -------------------------------------------------------------------------
@@ -172,8 +176,5 @@ private:
   struct Impl;
   Impl *impl_;
 };
-
-} // namespace qbuem
-
 
 } // namespace qbuem

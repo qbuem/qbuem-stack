@@ -87,15 +87,15 @@ struct alignas(64) SpanRecord {
 
     uint8_t  status{0};       ///< SpanStatus (0=unset, 1=ok, 2=error)
     uint8_t  sampled{1};      ///< W3C sample flag
-    uint8_t  _pad[6]{};
+    uint8_t  _pad[6]{};       // NOLINT(modernize-avoid-c-arrays)
 
-    char     name[kNameLen]{};      ///< Operation name (NUL-terminated)
-    char     service[16]{};         ///< Service name (NUL-terminated)
+    std::array<char, kNameLen> name{};      ///< Operation name (NUL-terminated)
+    std::array<char, 16>       service{};   ///< Service name (NUL-terminated)
 
     /** @brief Set the operation name (truncated to kNameLen-1). */
     void set_name(std::string_view n) noexcept {
         size_t len = std::min(n.size(), kNameLen - 1);
-        std::memcpy(name, n.data(), len);
+        std::memcpy(name.data(), n.data(), len);
         name[len] = '\0';
     }
 };
@@ -125,7 +125,7 @@ struct ShmSpanRing {
 
     alignas(64) std::atomic<uint64_t> head{0}; ///< Consumer read cursor
     alignas(64) std::atomic<uint64_t> tail{0}; ///< Producer write cursor
-    alignas(64) SpanRecord            slots[Capacity];
+    alignas(64) SpanRecord            slots[Capacity]; // NOLINT(modernize-avoid-c-arrays)
 
     /** @brief Try to enqueue a span record (MPSC, non-blocking).
      *  @returns True if enqueued; false if ring is full (span dropped). */
@@ -170,7 +170,7 @@ public:
         : record_(record), ring_(ring) {}
 
     ~ActiveSpan() noexcept {
-        if (record_ && !ended_) end(SpanStatus::Ok);
+        if (record_ != nullptr && !ended_) end(SpanStatus::Ok);
     }
 
     ActiveSpan(ActiveSpan&& o) noexcept
@@ -187,32 +187,32 @@ public:
      * @param status  Completion status.
      */
     void end(SpanStatus status = SpanStatus::Ok) noexcept {
-        if (!record_ || ended_) return;
+        if (record_ == nullptr || ended_) return;
         record_->end_ns = now_ns();
         record_->status = static_cast<uint8_t>(status);
-        if (ring_) ring_->try_push(*record_);
+        if (ring_ != nullptr) ring_->try_push(*record_);
         ended_ = true;
     }
 
     /** @brief Set a string attribute (stored in the service field for now). */
     void set_attribute(std::string_view /*key*/, std::string_view val) noexcept {
-        if (!record_) return;
+        if (record_ == nullptr) return;
         size_t len = std::min(val.size(), size_t{15});
-        std::memcpy(record_->service, val.data(), len);
+        std::memcpy(record_->service.data(), val.data(), len);
         record_->service[len] = '\0';
     }
 
     /** @brief The trace context for this span. */
     [[nodiscard]] TraceContext context() const noexcept {
-        if (!record_) return {};
+        if (record_ == nullptr) return {};
         TraceContext ctx;
         // Reconstruct TraceId from hi/lo uint64_t fields
-        std::memcpy(ctx.trace_id.bytes,     &record_->trace_id_hi, 8);
-        std::memcpy(ctx.trace_id.bytes + 8, &record_->trace_id_lo, 8);
+        std::memcpy(ctx.trace_id.bytes.data(),     &record_->trace_id_hi, 8);
+        std::memcpy(ctx.trace_id.bytes.data() + 8, &record_->trace_id_lo, 8);
         // Reconstruct SpanId from span_id uint64_t field
-        std::memcpy(ctx.parent_span_id.bytes, &record_->span_id, 8);
+        std::memcpy(ctx.parent_span_id.bytes.data(), &record_->span_id, 8);
         // W3C sample flag
-        ctx.flags = record_->sampled ? uint8_t{1} : uint8_t{0};
+        ctx.flags = (record_->sampled != 0u) ? uint8_t{1} : uint8_t{0};
         return ctx;
     }
 
@@ -243,7 +243,7 @@ private:
  * @tparam RingCapacity  SHM ring buffer size (power of 2, default 65536 slots).
  */
 template<size_t RingCapacity = 65536>
-class LifecycleTracer {
+class LifecycleTracer { // NOLINT(clang-analyzer-optin.performance.Padding)
 public:
     static constexpr size_t kDefaultRingCapacity = RingCapacity;
 
@@ -254,7 +254,7 @@ public:
      */
     explicit LifecycleTracer(std::string_view service_name) noexcept {
         size_t len = std::min(service_name.size(), size_t{15});
-        std::memcpy(service_name_, service_name.data(), len);
+        std::memcpy(service_name_.data(), service_name.data(), len);
         service_name_[len] = '\0';
     }
 
@@ -281,7 +281,7 @@ public:
     [[nodiscard]] ActiveSpan start_span(std::string_view operation_name,
                                         const TraceContext& parent_ctx) noexcept {
         uint64_t parent_id{};
-        std::memcpy(&parent_id, parent_ctx.parent_span_id.bytes, 8);
+        std::memcpy(&parent_id, parent_ctx.parent_span_id.bytes.data(), 8);
         return make_span(operation_name, parent_id, false);
     }
 
@@ -328,7 +328,7 @@ private:
         rec->start_ns       = now_ns();
         rec->sampled        = 1;
         rec->set_name(name);
-        std::memcpy(rec->service, service_name_, sizeof(service_name_));
+        std::memcpy(rec->service.data(), service_name_.data(), service_name_.size());
         span_counter_.fetch_add(1, std::memory_order_relaxed);
         return ActiveSpan{rec, reinterpret_cast<ShmSpanRing<>*>(&ring_)};
     }
@@ -345,7 +345,7 @@ private:
                static_cast<uint64_t>(ts.tv_nsec);
     }
 
-    char service_name_[16]{};
+    std::array<char, 16> service_name_{};
     ShmSpanRing<RingCapacity> ring_;
     alignas(64) std::atomic<uint64_t> span_counter_{0};
     alignas(64) std::atomic<uint64_t> dropped_{0};

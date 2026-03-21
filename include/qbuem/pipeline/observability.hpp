@@ -166,7 +166,7 @@ struct alignas(64) ActionMetrics {
    * - [2]: < 100,000 µs (< 100ms)
    * - [3]: >= 100,000 µs (>= 100ms)
    */
-  std::atomic<uint64_t> lat_buckets[4] = {};
+  std::atomic<uint64_t> lat_buckets[4] = {}; // NOLINT(modernize-avoid-c-arrays)
 
   /**
    * @brief Optional user-defined bucket histogram.

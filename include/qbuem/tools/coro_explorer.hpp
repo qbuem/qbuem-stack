@@ -94,8 +94,8 @@ struct CoroRecord {
     uint16_t   depth{0};           ///< Depth in the coroutine tree (root = 0)
     CoroState  state{CoroState::Running};
     uint8_t    _pad{};
-    char       name[kNameLen]{};   ///< Human-readable name (e.g. "process_order")
-    char       awaiter[kAwaiterLen]{}; ///< Current awaiter type name (NUL-term)
+    char       name[kNameLen]{};   ///< Human-readable name (e.g. "process_order") // NOLINT(modernize-avoid-c-arrays)
+    char       awaiter[kAwaiterLen]{}; ///< Current awaiter type name (NUL-term) // NOLINT(modernize-avoid-c-arrays)
 
     void set_name(std::string_view n) noexcept {
         size_t len = std::min(n.size(), kNameLen - 1);
@@ -271,7 +271,7 @@ public:
         : id_(global_coro_registry().track(name, parent_id, depth)) {}
 
     ~CoroGuard() noexcept {
-        if (id_) global_coro_registry().on_done(id_);
+        if (id_ != 0u) global_coro_registry().on_done(id_);
     }
 
     CoroGuard(const CoroGuard&)            = delete;
@@ -280,12 +280,12 @@ public:
     CoroGuard& operator=(CoroGuard&&)      = delete;
 
     /** @brief Record a suspension point with an awaiter type name. */
-    void suspend(std::string_view awaiter_type) noexcept {
+    void suspend(std::string_view awaiter_type) const noexcept {
         global_coro_registry().on_suspend(id_, awaiter_type);
     }
 
     /** @brief Record a resumption. */
-    void resume() noexcept {
+    void resume() const noexcept {
         global_coro_registry().on_resume(id_);
     }
 
@@ -349,7 +349,7 @@ public:
                          rec.id,
                          rec.name);
 
-            if (rec.state == CoroState::Suspended && rec.awaiter[0])
+            if (rec.state == CoroState::Suspended && rec.awaiter[0] != '\0')
                 std::print(out, " (awaiting: {})", rec.awaiter);
 
             std::print(out, "  — suspended {:.1f} µs total, {} resumes\n",

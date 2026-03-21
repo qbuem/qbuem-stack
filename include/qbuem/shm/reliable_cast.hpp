@@ -141,7 +141,7 @@ public:
   }
 
   ~ReliableCast() {
-    if (map_ && map_ != MAP_FAILED) {
+    if (map_ != nullptr && map_ != MAP_FAILED) {
       munmap(map_, mapped_size_);
       map_ = nullptr;
     }
@@ -257,7 +257,7 @@ private:
   struct alignas(64) ConsumerHead {
     std::atomic<uint64_t> value{0};
     // Pad to full cache line (std::atomic<uint64_t> = 8 bytes; pad 56 bytes)
-    char _pad[56];
+    char _pad[56]; // NOLINT(modernize-avoid-c-arrays)
   };
 
   // ── Members ───────────────────────────────────────────────────────────────

@@ -55,6 +55,7 @@
 #include <qbuem/net/dns.hpp>
 #include <qbuem/net/tcp_stream.hpp>
 
+#include <array>
 #include <charconv>
 #include <chrono>
 #include <deque>
@@ -105,7 +106,7 @@ public:
    *
    * @param st  Cancellation token.
    */
-  Task<Result<FetchResponse>> send(std::stop_token st = {});
+  Task<Result<FetchResponse>> send(const std::stop_token& st = {});
 
 private:
   FetchClient  *client_;
@@ -202,13 +203,13 @@ public:
    * temporary allocation on every request.
    */
   static std::string make_pool_key(std::string_view host, uint16_t port) {
-    char port_buf[6]; // max "65535"
-    auto [ptr, ec] = std::to_chars(port_buf, port_buf + sizeof(port_buf), port);
+    std::array<char, 6> port_buf{}; // max "65535"
+    auto [ptr, ec] = std::to_chars(port_buf.data(), port_buf.data() + port_buf.size(), port);
     std::string key;
-    key.reserve(host.size() + 1 + static_cast<size_t>(ptr - port_buf));
+    key.reserve(host.size() + 1 + static_cast<size_t>(ptr - port_buf.data()));
     key.append(host);
     key += ':';
-    key.append(port_buf, ptr);
+    key.append(port_buf.data(), ptr);
     return key;
   }
 
@@ -229,10 +230,10 @@ public:
   }
 
   /** @brief Return the default timeout in milliseconds (0 = none). */
-  long long default_timeout_ms() const noexcept { return default_timeout_ms_; }
+  [[nodiscard]] long long default_timeout_ms() const noexcept { return default_timeout_ms_; }
 
   /** @brief Return the default maximum redirect count. */
-  int default_max_redirects() const noexcept { return default_max_redirects_; }
+  [[nodiscard]] int default_max_redirects() const noexcept { return default_max_redirects_; }
 
   /**
    * @brief Close and discard all pooled connections.
@@ -242,7 +243,7 @@ public:
   void clear_pool() { pool_.clear(); }
 
   /** @brief Return the total number of idle connections across all hosts. */
-  size_t idle_count() const noexcept {
+  [[nodiscard]] size_t idle_count() const noexcept {
     size_t n = 0;
     for (auto &[k, v] : pool_) n += v.size();
     return n;
@@ -260,13 +261,13 @@ private:
 
 // ─── ClientRequest::send implementation ──────────────────────────────────────
 
-inline Task<Result<FetchResponse>> ClientRequest::send(std::stop_token st) {
+inline Task<Result<FetchResponse>> ClientRequest::send(const std::stop_token& st) {
   // Parse URL
   auto parsed = ParsedUrl::parse(url_);
-  if (!parsed) co_return unexpected(parsed.error());
+  if (!parsed) co_return std::unexpected(parsed.error());
 
   if (parsed->scheme == "https")
-    co_return unexpected(
+    co_return std::unexpected(
         std::make_error_code(std::errc::protocol_not_supported));
 
   // Pool key — uses to_chars to avoid to_string() heap allocation.
@@ -278,7 +279,7 @@ inline Task<Result<FetchResponse>> ClientRequest::send(std::stop_token st) {
   Reactor*         reactor  = Reactor::current();
 
   long long tms = client_->default_timeout_ms();
-  if (tms > 0 && reactor) {
+  if (tms > 0 && reactor != nullptr) {
     auto r = reactor->register_timer(
         static_cast<int>(tms),
         [&timeout_ss](int) { timeout_ss.request_stop(); });
@@ -289,7 +290,7 @@ inline Task<Result<FetchResponse>> ClientRequest::send(std::stop_token st) {
   auto effective_st = combined.token();
 
   auto cancel_timer = [&] {
-    if (timer_id >= 0 && reactor) reactor->unregister_timer(timer_id);
+    if (timer_id >= 0 && reactor != nullptr) reactor->unregister_timer(timer_id);
   };
 
   int redirects = 0;
@@ -298,13 +299,13 @@ inline Task<Result<FetchResponse>> ClientRequest::send(std::stop_token st) {
   while (true) {
     if (effective_st.stop_requested()) {
       cancel_timer();
-      co_return unexpected(
+      co_return std::unexpected(
           std::make_error_code(std::errc::operation_canceled));
     }
 
     // Re-parse URL after potential redirect
     auto cur_parsed = ParsedUrl::parse(current_url);
-    if (!cur_parsed) { cancel_timer(); co_return unexpected(cur_parsed.error()); }
+    if (!cur_parsed) { cancel_timer(); co_return std::unexpected(cur_parsed.error()); }
 
     std::string cur_key = FetchClient::make_pool_key(cur_parsed->host, cur_parsed->port);
 
@@ -315,15 +316,15 @@ inline Task<Result<FetchResponse>> ClientRequest::send(std::stop_token st) {
     if (!stream_opt) {
       // DNS + TCP connect
       auto addr_r = co_await DnsResolver::resolve(cur_parsed->host, cur_parsed->port);
-      if (!addr_r) { cancel_timer(); co_return unexpected(addr_r.error()); }
+      if (!addr_r) { cancel_timer(); co_return std::unexpected(addr_r.error()); }
 
       if (effective_st.stop_requested()) {
         cancel_timer();
-        co_return unexpected(std::make_error_code(std::errc::operation_canceled));
+        co_return std::unexpected(std::make_error_code(std::errc::operation_canceled));
       }
 
       auto conn_r = co_await TcpStream::connect(*addr_r);
-      if (!conn_r) { cancel_timer(); co_return unexpected(conn_r.error()); }
+      if (!conn_r) { cancel_timer(); co_return std::unexpected(conn_r.error()); }
       stream_opt = std::move(*conn_r);
     }
 
@@ -340,7 +341,7 @@ inline Task<Result<FetchResponse>> ClientRequest::send(std::stop_token st) {
     while (!remaining.empty()) {
       if (effective_st.stop_requested()) {
         cancel_timer();
-        co_return unexpected(std::make_error_code(std::errc::operation_canceled));
+        co_return std::unexpected(std::make_error_code(std::errc::operation_canceled));
       }
       auto w = co_await stream.write(
           std::span<const std::byte>(
@@ -349,9 +350,9 @@ inline Task<Result<FetchResponse>> ClientRequest::send(std::stop_token st) {
       if (!w) {
         // If we had a reused connection it may have gone stale — retry once
         // with a fresh connection by falling through to re-open.
-        if (reused) { reused = false; write_failed = true; break; }
+        if (reused) { reused = false; write_failed = true; break; } // NOLINT(clang-analyzer-deadcode.DeadStores)
         cancel_timer();
-        co_return unexpected(w.error());
+        co_return std::unexpected(w.error());
       }
       remaining.remove_prefix(*w);
     }
@@ -360,13 +361,13 @@ inline Task<Result<FetchResponse>> ClientRequest::send(std::stop_token st) {
       // Pooled connection was stale; open a fresh one (next loop iteration
       // will have stream_opt empty because we break before putting it back).
       stream_opt.reset();
-      reused = false;
+      reused = false; // NOLINT(clang-analyzer-deadcode.DeadStores)
       continue;
     }
 
     // ── Read response ─────────────────────────────────────────────────────
     auto raw_r = co_await detail::read_http_response(stream, effective_st);
-    if (!raw_r) { cancel_timer(); co_return unexpected(raw_r.error()); }
+    if (!raw_r) { cancel_timer(); co_return std::unexpected(raw_r.error()); }
 
     auto resp_r = detail::parse_response(*raw_r);
     if (!resp_r) { cancel_timer(); co_return resp_r; }

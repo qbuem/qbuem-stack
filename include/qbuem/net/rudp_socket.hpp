@@ -130,7 +130,7 @@ struct RudpHeader {
     std::array<uint32_t, kRudpMaxNacks> nacks{}; ///< Selective NACK sequence numbers
 
     /** @brief Serialise into wire format. Returns bytes written. */
-    size_t encode(std::span<std::byte> out) const noexcept {
+    [[nodiscard]] size_t encode(std::span<std::byte> out) const noexcept {
         if (out.size() < kRudpHeaderBase) return 0;
         auto store32 = [&](size_t off, uint32_t v) {
             out[off+0] = std::byte((v >> 24) & 0xFF);
@@ -219,9 +219,9 @@ public:
      * @returns Connected `RudpSocket`, or error.
      */
     [[nodiscard]] static Task<Result<std::unique_ptr<RudpSocket>>>
-    connect(SocketAddr local, SocketAddr remote, std::stop_token st) {
+    connect(SocketAddr local, SocketAddr remote, const std::stop_token& st) {
         auto udp = UdpSocket::bind(local);
-        if (!udp) co_return unexpected(udp.error());
+        if (!udp) co_return std::unexpected(udp.error());
 
         auto sock = std::make_unique<RudpSocket>(std::move(*udp), remote);
         sock->send_seq_ = 0;
@@ -229,18 +229,18 @@ public:
 
         // Send SYN
         auto r = co_await sock->send_ctrl(RudpFlags::Syn, st);
-        if (!r) co_return unexpected(r.error());
+        if (!r) co_return std::unexpected(r.error());
 
         // Wait for SYN+ACK (simple: receive next segment)
         std::array<std::byte, kRudpHeaderMax + kRudpMtu> buf{};
         auto res_sa = co_await sock->udp_.recv_from(buf);
-        if (!res_sa) co_return unexpected(res_sa.error());
+        if (!res_sa) co_return std::unexpected(res_sa.error());
         auto& [n, from] = *res_sa;
         (void)from;
         RudpHeader hdr;
         hdr.decode(buf);
-        if (!(hdr.flags & RudpFlags::Ack))
-            co_return unexpected(std::make_error_code(std::errc::connection_refused));
+        if ((hdr.flags & RudpFlags::Ack) == 0u)
+            co_return std::unexpected(std::make_error_code(std::errc::connection_refused));
 
         sock->remote_window_ = hdr.window;
         co_return sock;
@@ -256,21 +256,21 @@ public:
      * @returns `RudpSocket` for the first incoming connection.
      */
     [[nodiscard]] static Task<Result<std::unique_ptr<RudpSocket>>>
-    listen(SocketAddr local, std::stop_token st) {
+    listen(SocketAddr local, const std::stop_token& st) {
         auto udp = UdpSocket::bind(local);
-        if (!udp) co_return unexpected(udp.error());
+        if (!udp) co_return std::unexpected(udp.error());
 
         // Wait for SYN
         std::array<std::byte, kRudpHeaderMax + kRudpMtu> buf{};
         while (!st.stop_requested()) {
             auto res = co_await udp->recv_from(buf);
-            if (!res) co_return unexpected(res.error());
+            if (!res) co_return std::unexpected(res.error());
             auto& [n, from] = *res;
 
             RudpHeader hdr;
             size_t hlen = hdr.decode(std::span<const std::byte>(buf.data(), n));
             if (hlen == 0) continue;
-            if (!(hdr.flags & RudpFlags::Syn)) continue;
+            if ((hdr.flags & RudpFlags::Syn) == 0u) continue;
 
             // Found SYN — create socket
             auto sock = std::make_unique<RudpSocket>(std::move(*udp), from);
@@ -280,7 +280,7 @@ public:
             co_await sock->send_ctrl(RudpFlags::Syn | RudpFlags::Ack, st);
             co_return sock;
         }
-        co_return unexpected(std::make_error_code(std::errc::operation_canceled));
+        co_return std::unexpected(std::make_error_code(std::errc::operation_canceled));
     }
 
     // ── Send ──────────────────────────────────────────────────────────────────
@@ -297,11 +297,11 @@ public:
      * @returns Number of application bytes sent, or error.
      */
     [[nodiscard]] Task<Result<size_t>>
-    send(std::span<const std::byte> data, std::stop_token st) {
+    send(std::span<const std::byte> data, const std::stop_token& st) {
         size_t total = 0;
         while (!data.empty()) {
             if (st.stop_requested())
-                co_return unexpected(std::make_error_code(std::errc::operation_canceled));
+                co_return std::unexpected(std::make_error_code(std::errc::operation_canceled));
 
             // Respect remote window
             while (unacked_count() >= remote_window_ && !st.stop_requested())
@@ -310,7 +310,7 @@ public:
             size_t chunk = std::min(data.size(), kRudpMtu);
             auto seg = make_data_segment(data.subspan(0, chunk));
             auto r = co_await transmit(seg, st);
-            if (!r) co_return unexpected(r.error());
+            if (!r) co_return std::unexpected(r.error());
 
             data = data.subspan(chunk);
             total += chunk;
@@ -331,7 +331,7 @@ public:
      * @returns Number of bytes written into `out`, or error.
      */
     [[nodiscard]] Task<Result<size_t>>
-    recv(std::span<std::byte> out, std::stop_token st) {
+    recv(std::span<std::byte> out, const std::stop_token& st) {
         while (!st.stop_requested()) {
             // Check in-order receive buffer first
             if (auto it = recv_buf_.find(recv_seq_); it != recv_buf_.end()) {
@@ -346,7 +346,7 @@ public:
             // Wait for next UDP datagram
             std::array<std::byte, kRudpHeaderMax + kRudpMtu> buf{};
             auto res = co_await udp_.recv_from(buf);
-            if (!res) co_return unexpected(res.error());
+            if (!res) co_return std::unexpected(res.error());
             auto& [n, from] = *res;
             (void)from;
 
@@ -355,19 +355,19 @@ public:
             if (hlen == 0 || n < hlen) continue;
 
             // Process ACK
-            if (hdr.flags & RudpFlags::Ack) process_ack(hdr);
+            if ((hdr.flags & RudpFlags::Ack) != 0u) process_ack(hdr);
 
             // Process NACK
-            if (hdr.flags & RudpFlags::Nack) process_nack(hdr, st);
+            if ((hdr.flags & RudpFlags::Nack) != 0u) process_nack(hdr, st);
 
             // FIN — connection close
-            if (hdr.flags & RudpFlags::Fin) {
+            if ((hdr.flags & RudpFlags::Fin) != 0u) {
                 co_await send_ctrl(RudpFlags::Fin | RudpFlags::Ack, st);
                 co_return size_t{0};
             }
 
             // Data segment
-            if (hdr.flags & RudpFlags::Data) {
+            if ((hdr.flags & RudpFlags::Data) != 0u) {
                 size_t payload_len = n - hlen;
                 std::vector<std::byte> payload(
                     buf.data() + hlen, buf.data() + hlen + payload_len);
@@ -387,7 +387,7 @@ public:
                 // Past segment (duplicate): silently discard
             }
         }
-        co_return unexpected(std::make_error_code(std::errc::operation_canceled));
+        co_return std::unexpected(std::make_error_code(std::errc::operation_canceled));
     }
 
     // ── Close ─────────────────────────────────────────────────────────────────
@@ -396,7 +396,7 @@ public:
      * @brief Gracefully close the RUDP connection (sends FIN).
      * @param st Cancellation token.
      */
-    Task<void> close(std::stop_token st) {
+    Task<void> close(const std::stop_token& st) {
         co_await send_ctrl(RudpFlags::Fin, st);
     }
 
@@ -433,7 +433,7 @@ private:
 
     // ── Transmit / retransmit ─────────────────────────────────────────────────
 
-    Task<Result<void>> transmit(RudpSegment& seg, std::stop_token st) {
+    Task<Result<void>> transmit(RudpSegment& seg, const std::stop_token& st) {
         (void)st; // stop_token reserved for future retransmit cancellation
         std::array<std::byte, kRudpHeaderMax + kRudpMtu> frame{};
         size_t hlen = seg.header.encode(frame);
@@ -442,13 +442,13 @@ private:
         auto r = co_await udp_.send_to(
             std::span<const std::byte>(frame.data(), hlen + seg.payload.size()),
             remote_);
-        if (!r) co_return unexpected(r.error());
+        if (!r) co_return std::unexpected(r.error());
 
         retransmit_q_.push_back(std::move(seg));
         co_return {};
     }
 
-    Task<void> drain_acks(std::stop_token st) {
+    Task<void> drain_acks(const std::stop_token& st) {
         // Non-blocking drain: just yield once to let reactor process events
         co_await udp_.recv_from(std::span<std::byte>{});
         (void)st;
@@ -456,7 +456,7 @@ private:
 
     // ── Control frames ────────────────────────────────────────────────────────
 
-    Task<Result<void>> send_ctrl(uint8_t flags, std::stop_token st) {
+    [[nodiscard]] Task<Result<void>> send_ctrl(uint8_t flags, const std::stop_token& st) {
         (void)st; // stop_token reserved for future send cancellation
         RudpHeader hdr;
         hdr.seq    = send_seq_;
@@ -465,17 +465,17 @@ private:
         hdr.window = kRudpWindow;
 
         std::array<std::byte, kRudpHeaderBase> frame{};
-        hdr.encode(frame);
+        (void)hdr.encode(frame);
         auto r = co_await udp_.send_to(frame, remote_);
-        if (!r) co_return unexpected(r.error());
+        if (!r) co_return std::unexpected(r.error());
         co_return {};
     }
 
-    Task<void> send_ack(std::stop_token st) {
+    Task<void> send_ack(const std::stop_token& st) {
         co_await send_ctrl(RudpFlags::Ack, st);
     }
 
-    Task<void> send_nack(std::stop_token st) {
+    [[nodiscard]] Task<void> send_nack(const std::stop_token& st) {
         (void)st; // stop_token reserved for future send cancellation
         RudpHeader hdr;
         hdr.seq    = send_seq_;
@@ -507,7 +507,7 @@ private:
         remote_window_ = hdr.window;
     }
 
-    void process_nack(const RudpHeader& hdr, std::stop_token /*st*/) {
+    void process_nack(const RudpHeader& hdr, const std::stop_token& /*st*/) {
         // Mark segments listed in the NACK for immediate retransmission
         for (size_t i = 0; i < hdr.nack_count && i < kRudpMaxNacks; ++i) {
             for (auto& seg : retransmit_q_) {

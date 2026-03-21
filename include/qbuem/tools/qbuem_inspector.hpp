@@ -294,7 +294,7 @@ public:
      * @param st  Cancellation token.
      * @returns `Result<void>` — error if bind fails.
      */
-    [[nodiscard]] Task<Result<void>> start(std::stop_token st) {
+    [[nodiscard]] Task<Result<void>> start(const std::stop_token& st) {
         std::println("[Inspector] Serving qbuem-inspector at http://localhost:{}", port_);
         std::println("[Inspector] Open in a browser to see Full Journey timelines");
 
@@ -303,7 +303,7 @@ public:
         // For now the background collection loop runs until stopped.
         while (!st.stop_requested()) {
             // Drain tracer ring → journey collector
-            if (tracer_) {
+            if (tracer_ != nullptr) {
                 tracer_->drain([this](const SpanRecord& rec) {
                     collector_.ingest(rec);
                     return true;

@@ -481,7 +481,7 @@ public:
       for (uint32_t i = 0; i < 256; ++i) {
         uint32_t c = i;
         for (int j = 0; j < 8; ++j)
-          c = (c & 1) ? (0xEDB8'8320u ^ (c >> 1)) : (c >> 1);
+          c = ((c & 1u) != 0u) ? (0xEDB8'8320u ^ (c >> 1)) : (c >> 1);
         t[i] = c;
       }
       return t;

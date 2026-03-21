@@ -97,7 +97,7 @@ public:
     int domain = (addr.family() == SocketAddr::Family::IPv6) ? AF_INET6 : AF_INET;
     int fd = ::socket(domain, SOCK_DGRAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
     if (fd < 0)
-      return unexpected(std::error_code(errno, std::system_category()));
+      return std::unexpected(std::error_code(errno, std::system_category()));
 
     // SO_REUSEPORT: allow multiple workers to share the same port
     {
@@ -110,13 +110,13 @@ public:
     auto r = addr.to_sockaddr(ss, len);
     if (!r) {
       ::close(fd);
-      return unexpected(r.error());
+      return std::unexpected(r.error());
     }
 
     if (::bind(fd, reinterpret_cast<const sockaddr *>(&ss), len) != 0) {
       auto ec = std::error_code(errno, std::system_category());
       ::close(fd);
-      return unexpected(ec);
+      return std::unexpected(ec);
     }
 
     return UdpSocket(fd);
@@ -139,7 +139,7 @@ public:
     socklen_t len{};
     auto r = dest.to_sockaddr(ss, len);
     if (!r) {
-      co_return unexpected(r.error());
+      co_return std::unexpected(r.error());
     }
 
     struct SendToAwaiter {
@@ -151,11 +151,11 @@ public:
       ssize_t result_ = -1;
       int err_ = 0;
 
-      bool await_ready() const noexcept { return false; }
+      [[nodiscard]] bool await_ready() const noexcept { return false; }
 
       void await_suspend(std::coroutine_handle<> handle) {
         auto *reactor = Reactor::current();
-        if (!reactor) { handle.resume(); return; }
+        if (reactor == nullptr) { handle.resume(); return; }
         reactor->register_event(fd_, EventType::Write, [handle, this](int f) {
           result_ = ::sendto(f, data_, size_, 0,
                              reinterpret_cast<const sockaddr *>(ss_), sslen_);
@@ -172,7 +172,7 @@ public:
     co_await aw;
 
     if (aw.result_ < 0) {
-      co_return unexpected(std::error_code(aw.err_, std::system_category()));
+      co_return std::unexpected(std::error_code(aw.err_, std::system_category()));
     }
     co_return static_cast<size_t>(aw.result_);
   }
@@ -196,11 +196,11 @@ public:
       ssize_t result_ = -1;
       int err_ = 0;
 
-      bool await_ready() const noexcept { return false; }
+      [[nodiscard]] bool await_ready() const noexcept { return false; }
 
       void await_suspend(std::coroutine_handle<> handle) {
         auto *reactor = Reactor::current();
-        if (!reactor) { handle.resume(); return; }
+        if (reactor == nullptr) { handle.resume(); return; }
         reactor->register_event(fd_, EventType::Read, [handle, this](int f) {
           result_ = ::recvfrom(f, data_, size_, 0,
                                reinterpret_cast<sockaddr *>(&from_), &fromlen_);
@@ -217,7 +217,7 @@ public:
     co_await aw;
 
     if (aw.result_ < 0) {
-      co_return unexpected(std::error_code(aw.err_, std::system_category()));
+      co_return std::unexpected(std::error_code(aw.err_, std::system_category()));
     }
 
     // Convert sockaddr_storage to SocketAddr
@@ -243,7 +243,7 @@ public:
    * @brief Returns the underlying file descriptor.
    * @returns Socket fd. -1 if invalid.
    */
-  int fd() const noexcept { return fd_; }
+  [[nodiscard]] int fd() const noexcept { return fd_; }
 
 private:
   /** @brief The managed UDP socket file descriptor. */
