@@ -221,7 +221,7 @@ public:
     [[nodiscard]] static Task<Result<std::unique_ptr<RudpSocket>>>
     connect(SocketAddr local, SocketAddr remote, const std::stop_token& st) {
         auto udp = UdpSocket::bind(local);
-        if (!udp) co_return unexpected(udp.error());
+        if (!udp) co_return std::unexpected(udp.error());
 
         auto sock = std::make_unique<RudpSocket>(std::move(*udp), remote);
         sock->send_seq_ = 0;
@@ -229,18 +229,18 @@ public:
 
         // Send SYN
         auto r = co_await sock->send_ctrl(RudpFlags::Syn, st);
-        if (!r) co_return unexpected(r.error());
+        if (!r) co_return std::unexpected(r.error());
 
         // Wait for SYN+ACK (simple: receive next segment)
         std::array<std::byte, kRudpHeaderMax + kRudpMtu> buf{};
         auto res_sa = co_await sock->udp_.recv_from(buf);
-        if (!res_sa) co_return unexpected(res_sa.error());
+        if (!res_sa) co_return std::unexpected(res_sa.error());
         auto& [n, from] = *res_sa;
         (void)from;
         RudpHeader hdr;
         hdr.decode(buf);
         if ((hdr.flags & RudpFlags::Ack) == 0u)
-            co_return unexpected(std::make_error_code(std::errc::connection_refused));
+            co_return std::unexpected(std::make_error_code(std::errc::connection_refused));
 
         sock->remote_window_ = hdr.window;
         co_return sock;
@@ -258,13 +258,13 @@ public:
     [[nodiscard]] static Task<Result<std::unique_ptr<RudpSocket>>>
     listen(SocketAddr local, const std::stop_token& st) {
         auto udp = UdpSocket::bind(local);
-        if (!udp) co_return unexpected(udp.error());
+        if (!udp) co_return std::unexpected(udp.error());
 
         // Wait for SYN
         std::array<std::byte, kRudpHeaderMax + kRudpMtu> buf{};
         while (!st.stop_requested()) {
             auto res = co_await udp->recv_from(buf);
-            if (!res) co_return unexpected(res.error());
+            if (!res) co_return std::unexpected(res.error());
             auto& [n, from] = *res;
 
             RudpHeader hdr;
@@ -280,7 +280,7 @@ public:
             co_await sock->send_ctrl(RudpFlags::Syn | RudpFlags::Ack, st);
             co_return sock;
         }
-        co_return unexpected(std::make_error_code(std::errc::operation_canceled));
+        co_return std::unexpected(std::make_error_code(std::errc::operation_canceled));
     }
 
     // ── Send ──────────────────────────────────────────────────────────────────
@@ -301,7 +301,7 @@ public:
         size_t total = 0;
         while (!data.empty()) {
             if (st.stop_requested())
-                co_return unexpected(std::make_error_code(std::errc::operation_canceled));
+                co_return std::unexpected(std::make_error_code(std::errc::operation_canceled));
 
             // Respect remote window
             while (unacked_count() >= remote_window_ && !st.stop_requested())
@@ -310,7 +310,7 @@ public:
             size_t chunk = std::min(data.size(), kRudpMtu);
             auto seg = make_data_segment(data.subspan(0, chunk));
             auto r = co_await transmit(seg, st);
-            if (!r) co_return unexpected(r.error());
+            if (!r) co_return std::unexpected(r.error());
 
             data = data.subspan(chunk);
             total += chunk;
@@ -346,7 +346,7 @@ public:
             // Wait for next UDP datagram
             std::array<std::byte, kRudpHeaderMax + kRudpMtu> buf{};
             auto res = co_await udp_.recv_from(buf);
-            if (!res) co_return unexpected(res.error());
+            if (!res) co_return std::unexpected(res.error());
             auto& [n, from] = *res;
             (void)from;
 
@@ -387,7 +387,7 @@ public:
                 // Past segment (duplicate): silently discard
             }
         }
-        co_return unexpected(std::make_error_code(std::errc::operation_canceled));
+        co_return std::unexpected(std::make_error_code(std::errc::operation_canceled));
     }
 
     // ── Close ─────────────────────────────────────────────────────────────────
@@ -396,7 +396,7 @@ public:
      * @brief Gracefully close the RUDP connection (sends FIN).
      * @param st Cancellation token.
      */
-    Task<void> close(const std::stop_token& st) {
+    Task<void> close(const std::stop_token& st) const {
         co_await send_ctrl(RudpFlags::Fin, st);
     }
 
@@ -442,7 +442,7 @@ private:
         auto r = co_await udp_.send_to(
             std::span<const std::byte>(frame.data(), hlen + seg.payload.size()),
             remote_);
-        if (!r) co_return unexpected(r.error());
+        if (!r) co_return std::unexpected(r.error());
 
         retransmit_q_.push_back(std::move(seg));
         co_return {};
@@ -467,7 +467,7 @@ private:
         std::array<std::byte, kRudpHeaderBase> frame{};
         hdr.encode(frame);
         auto r = co_await udp_.send_to(frame, remote_);
-        if (!r) co_return unexpected(r.error());
+        if (!r) co_return std::unexpected(r.error());
         co_return {};
     }
 
