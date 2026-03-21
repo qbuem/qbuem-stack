@@ -2,6 +2,10 @@
 
 This document specifies the high-performance security architecture, focusing on **Kernel-offloaded TLS** and **SIMD-accelerated Cryptography**.
 
+> **See also**: [`docs/crypto-primitives.md`](crypto-primitives.md) for the complete
+> `qbuem::crypto` API reference — SHA-256/512, HMAC, PBKDF2, HKDF, Base64,
+> ChaCha20-Poly1305, and AES-GCM primitives.
+
 ---
 
 ## 1. Transport Security (TLS)
@@ -33,10 +37,29 @@ For internal data protection (e.g., Shm communication between processes).
 
 ---
 
-## 3. Implementation Priorities
+## 3. Intra-Pipeline Crypto Primitives
+
+The `qbuem::crypto` module (see [`crypto-primitives.md`](crypto-primitives.md)) provides
+zero-dependency, zero-allocation primitives used throughout the pipeline:
+
+| Primitive | Header | Notes |
+| :--- | :--- | :--- |
+| SHA-256 / SHA-512 | `crypto/sha256.hpp`, `crypto/sha512.hpp` | SHA-NI / ARM SHA2 acceleration |
+| HMAC-SHA-256/512 | `crypto/hmac.hpp` | Constant-time verification |
+| PBKDF2 | `crypto/pbkdf2.hpp` | Password hashing (OWASP 2023) |
+| HKDF | `crypto/hkdf.hpp` | Session key derivation |
+| Base64 / Base64url | `crypto/base64.hpp` | JWT, cookie, URL encoding |
+| ChaCha20-Poly1305 | `crypto/chacha20_poly1305.hpp` | AEAD (always safe, no AES-NI) |
+| AES-128/256-GCM | `crypto/aes_gcm.hpp` | AEAD (AES-NI / ARM AES only) |
+| CSPRNG | `crypto/random.hpp` | getrandom / arc4random / RDRAND |
+
+---
+
+## 4. Implementation Priorities
 
 | Feature | Technique | Priority |
 | :--- | :--- | :--- |
+| **Crypto Primitives** | `qbuem::crypto` zero-dependency module | ✅ Done |
 | **TLS Core** | Linux kTLS Integration | 🔥 High |
 | **TLS Hardware**| NIC Hardware Offload (TLS_HW) | ✅ Medium |
 | **Intra-Pipe** | AES-NI Intrinsics | ✅ Medium |
