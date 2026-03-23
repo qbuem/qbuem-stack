@@ -39,6 +39,12 @@
 ## Examples Index
 - [Examples Overview](examples/README.md): 58 categorized examples with learning paths
 
+## HTTP Client & Middleware
+
+- `<qbuem/http/backoff.hpp>` — `qbuem::backoff` namespace: `BackoffFn`, `fixed()`, `linear()`, `exponential()`, `jitter()` (AWS Full Jitter), `decorrelated()`, `RetryConfig`, `async_sleep()` (non-blocking, `Reactor::register_timer()`; works on Linux and macOS)
+- `<qbuem/http/fetch_pipeline.hpp>` — `qbuem::http` namespace: `FetchCall` (single-call wrapper), `retry()`, `retry_fixed()`, `retry_jitter()`, `FetchCircuitBreaker` (Closed/Open/HalfOpen, shared_ptr state), `circuit_breaker()`, `rate_limit_guard_wrap()`
+- `<qbuem/middleware/content_type.hpp>` — `qbuem::middleware` namespace: `require_json()`, `require_content_type(type, methods)` — sync `Middleware` returning `bool`; returns 415 and halts chain on rejection
+
 ## API Reference
 - [Public Headers](include/qbuem/): All public C++23 headers — umbrella at `qbuem_stack.hpp`
 

@@ -398,3 +398,46 @@ Tests mirror the `include/` structure under `tests/`. Pipeline components must t
 - **macOS**: `kqueue` — `EVFILT_TIMER`, `EVFILT_USER`, `EVFILT_READ`, batched `kevent64()`.
 - `kqueue_sophistication` example is macOS-only (`if(APPLE)` in CMakeLists.txt).
 - `NUMA` and hugepage examples require Linux kernel ≥ 5.x with appropriate permissions.
+
+---
+
+## Cross-Repo Guidelines
+
+### Ecosystem Map
+
+| Repo | Role | Key headers |
+|------|------|-------------|
+| **qbuem-stack** | Platform: async I/O, HTTP, pipelines, crypto, middleware | `<qbuem/http/*>`, `<qbuem/pipeline/*>`, `<qbuem/middleware/*>`, `<qbuem/crypto/*>` |
+| **qbuem-auth** | Auth layer: JWT, HTTPS client, OAuth2 | `src/auth/jwt.hpp`, `src/auth/https_client.hpp`, `src/auth/oauth.hpp` |
+| **qbuem-db** | DB layer: async drivers, ORM, migrations | `src/db/orm.hpp`, `src/db/*_driver.hpp` |
+| **application repos** | WAS applications built on the above | depend on stack + auth + db; must not duplicate platform code |
+
+### Naming Conventions
+
+To avoid confusion between same-concept files in different repos:
+
+| File | Repo | Purpose |
+|------|------|---------|
+| `<qbuem/http/fetch.hpp>` | stack | Core HTTP/1.1 fetch client |
+| `<qbuem/http/fetch_pipeline.hpp>` | stack | Simple retry/CB wrappers for a single `fetch()` call |
+| `<qbuem/http/backoff.hpp>` | stack | Backoff strategy library (`BackoffFn`, `RetryConfig`, `async_sleep`) |
+| `<qbuem/middleware/content_type.hpp>` | stack | `require_json()` / `require_content_type()` inbound middleware |
+
+**Rule**: Never create a file in an application repo that duplicates functionality
+already present or clearly belonging in a platform repo (`qbuem-stack`, `qbuem-auth`, `qbuem-db`).
+
+### Filing Platform-Level Issues
+
+When implementing a feature in an application repo requires functionality that belongs in a
+lower-level library, **file an issue in the correct repo** rather than implementing it locally.
+
+| Need | File issue at |
+|------|--------------|
+| New async primitive, protocol, or middleware | [qbuem-stack issues](https://github.com/qbuem/qbuem-stack/issues) |
+| HTTPS client feature, JWT, OAuth provider | [qbuem-auth issues](https://github.com/qbuem/qbuem-auth/issues) |
+| DB driver, ORM, migration feature | [qbuem-db issues](https://github.com/qbuem/qbuem-db/issues) |
+
+If a temporary local workaround is necessary while waiting for the upstream fix, mark it:
+```cpp
+// TODO: remove after qbuem-stack#NNN is merged
+```
