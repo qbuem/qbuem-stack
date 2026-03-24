@@ -192,9 +192,12 @@ struct SocketAddr {
     case Family::Unix: {
       auto *sa = reinterpret_cast<sockaddr_un *>(&out);
       sa->sun_family = AF_UNIX;
-      __builtin_strncpy(sa->sun_path, addr_.unix_, sizeof(sa->sun_path) - 1);
+      const auto path_len = __builtin_strlen(addr_.unix_);
+      const auto copy_len = path_len < sizeof(sa->sun_path) ? path_len : sizeof(sa->sun_path) - 1;
+      __builtin_memcpy(sa->sun_path, addr_.unix_, copy_len);
+      sa->sun_path[copy_len] = '\0';
       len = static_cast<socklen_t>(
-          offsetof(sockaddr_un, sun_path) + __builtin_strlen(addr_.unix_) + 1);
+          offsetof(sockaddr_un, sun_path) + path_len + 1);
       return Result<void>{};
     }
     }

@@ -104,7 +104,7 @@ using BackoffFn = std::function<std::chrono::milliseconds(int attempt)>;
 {
     return [base, cap](int attempt) -> std::chrono::milliseconds {
         const int    shift  = std::min(attempt, 62);
-        const long long ceil = std::min(base.count() * (1LL << shift), cap.count());
+        const long long ceil = std::min<long long>(base.count() * (1LL << shift), cap.count());
         if (ceil <= 0) return std::chrono::milliseconds{0};
         thread_local std::mt19937_64 rng{std::random_device{}()};
         std::uniform_int_distribution<long long> dist{0, ceil};
@@ -130,7 +130,7 @@ using BackoffFn = std::function<std::chrono::milliseconds(int attempt)>;
     return [base, cap, prev](int) -> std::chrono::milliseconds {
         thread_local std::mt19937_64 rng{std::random_device{}()};
         const long long lo   = base.count();
-        const long long hi   = std::min(*prev * 3, cap.count());
+        const long long hi   = std::min<long long>(*prev * 3, cap.count());
         const long long hi2  = std::max(lo, hi); // guard lo > hi if cap < base
         std::uniform_int_distribution<long long> dist{lo, hi2};
         *prev = dist(rng);
@@ -207,7 +207,7 @@ inline Task<void> async_sleep(std::chrono::milliseconds delay) {
     }
 
     const int ms = static_cast<int>(
-        std::min(delay.count(),
+        std::min<long long>(delay.count(),
                  static_cast<long long>(std::numeric_limits<int>::max())));
     co_await detail::TimerAwaiter{ms, reactor};
 }
