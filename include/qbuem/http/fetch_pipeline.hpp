@@ -164,7 +164,8 @@ public:
         std::chrono::seconds      reset_after{30};        ///< Open → HalfOpen timeout
     };
 
-    explicit FetchCircuitBreaker(Config cfg = {}) : cfg_(cfg) {}
+    FetchCircuitBreaker() : cfg_{} {}
+    explicit FetchCircuitBreaker(Config cfg) : cfg_(std::move(cfg)) {}
 
     /** @brief Returns true when a request should be allowed through. */
     bool allow() noexcept {

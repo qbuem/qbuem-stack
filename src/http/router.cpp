@@ -27,8 +27,9 @@ void RadixTree::insert(std::string_view path, HandlerVariant handler) {
     } else {
       Node *child = curr->find_child(path[i]);
       if (child == nullptr) {
-        curr->children.emplace_back(path[i], std::make_unique<Node>());
-        child = curr->children.back().second.get();
+        // Use add_child to maintain sorted order — required by find_child's
+        // binary search for nodes with more than kBinarySearchThreshold children.
+        child = curr->add_child(path[i]);
       }
       curr = child;
       i++;

@@ -137,6 +137,30 @@ class Router {
 public:
   void add_route(Method method, std::string_view path, HandlerVariant handler);
 
+  /** @brief Callable overload — deduces Handler vs AsyncHandler from the callable's return type.
+   *
+   *  Resolves the libc++ variant conversion ambiguity when passing a capturing
+   *  lambda that returns Task<void>: the two std::function alternatives
+   *  (Handler and AsyncHandler) cannot be disambiguated by implicit conversion,
+   *  so this template selects the correct one explicitly.
+   *
+   *  The requires constraint excludes HandlerVariant itself to prevent infinite
+   *  recursion: without it, calling add_route(..., Handler{fn}) would match this
+   *  template (exact match) instead of the non-template overload (requires
+   *  implicit conversion), causing unbounded recursion.
+   */
+  template<typename Fn>
+  requires (!std::is_same_v<std::decay_t<Fn>, HandlerVariant>)
+  void add_route(Method method, std::string_view path, Fn&& fn) {
+    HandlerVariant hv;
+    if constexpr (std::is_invocable_r_v<Task<void>, Fn, const Request&, Response&>) {
+      hv = AsyncHandler{std::forward<Fn>(fn)};
+    } else {
+      hv = Handler{std::forward<Fn>(fn)};
+    }
+    add_route(method, path, std::move(hv));
+  }
+
   /** @brief Add a synchronous middleware to the chain. */
   void use(Middleware mw);
 
