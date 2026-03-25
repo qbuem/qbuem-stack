@@ -21,7 +21,7 @@ Existing Korean comments in legacy files should be translated to English when to
 
 ## Project Identity
 
-**qbuem-stack v2.2.0** — Zero Latency · Zero Allocation · Zero Dependency
+**qbuem-stack v3.4.0** — Zero Latency · Zero Allocation · Zero Dependency
 C++23 high-performance infrastructure library for WAS (Web Application Servers), IPC, and data pipelines.
 
 - **Language**: C++23 (concepts, coroutines `co_await`/`co_return`, `std::expected`, `std::span`, `std::format`, `std::print`/`std::println`, `std::unreachable()`, `if consteval`, `std::to_underlying`)
@@ -78,18 +78,18 @@ include/qbuem/          ← ALL public headers (header-centric library)
 
 src/                    ← Non-inline implementations
 tests/                  ← Unit tests (mirrors include/ structure)
-examples/               ← 44 examples in 11 category subdirectories
-  01-foundation/        → hello_world, async_timer
-  02-network/           → tcp_echo_server, udp, websocket
-  03-memory/            → arena, zero_copy, numa_hugepages
-  04-codec-security/    → codec, crypto_url, security_middleware
-  05-pipeline/          → fanout, hardware_batching, dynamic_hotswap, sensor_fusion, observer_health, factory, subpipeline_migration, stream_ops, windowed_action
+examples/               ← 58 examples in 11 category subdirectories
+  01-foundation/        → hello_world, async_timer, micro_ticker
+  02-network/           → tcp_echo_server, udp_advanced, unix_socket, websocket, http_fetch, http2, fetch_stream
+  03-memory/            → arena, zero_copy, numa_hugepages, lockfree_bench
+  04-codec-security/    → codec, crypto_url, security_middleware, crypto_primitives
+  05-pipeline/          → fanout, hardware_batching, dynamic_hotswap, sensor_fusion, observer_health, factory, subpipeline_migration, stream_ops, windowed_action, backpressure, stateful_window, dynamic_router
   06-ipc-messaging/     → shm_channel, ipc_pipeline (flagship), message_bus, priority_spsc_channel
   07-resilience/        → canary, checkpoint, resilience, saga, scatter_gather, idempotency_slo
-  08-observability/     → tracing, timer_wheel, task_group
+  08-observability/     → tracing, lifecycle_tracer, inspector_dashboard, timer_wheel, task_group
   09-database/          → db_session, coro_json
   10-hardware/          → hardware_io, kqueue_sophistication (macOS only)
-  11-advanced-apps/     → autonomous_driving, sensor_fusion, io_metrics_dashboard, trading_platform, game_server, middleware
+  11-advanced-apps/     → autonomous_driving, hft_matching, open_world_spatial, trading_platform, game_server, hardware_chaos, sensor_fusion, io_metrics_dashboard, middleware, micro_ticker_example
 docs/                   ← Design documents (all English Markdown)
 bench/                  ← Benchmarks
 ```
@@ -227,7 +227,7 @@ pool.release(e);
 Every code contribution — human or AI — is evaluated against the pillars below.
 **A single violation in a hot path is a review failure and must be fixed before merge.**
 
-### Pillar 0 — Extreme Performance Implementation (v2.3.0+)
+### Pillar 0 — Extreme Performance Implementation
 
 > [!IMPORTANT]
 > **RULE #1**: ALL implementation work MUST strictly follow the technical specifications and research findings found in the `docs/` directory. Any deviation from the established high-performance patterns (e.g., using standard heap allocation instead of `Arena` or `FixedPoolResource`) is a critical review failure.
