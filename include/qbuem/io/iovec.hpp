@@ -17,6 +17,7 @@
 
 #include <qbuem/common.hpp>
 
+#include <array>
 #include <cassert>
 #include <cstddef>
 #include <span>
@@ -47,7 +48,7 @@ namespace qbuem {
 template <size_t N>
 struct IOVec {
   /** @brief Array of iovec entries. */
-  iovec vecs[N];
+  std::array<iovec, N> vecs{};
 
   /** @brief Number of currently valid entries. */
   size_t count = 0;
@@ -96,7 +97,7 @@ struct IOVec {
    * @returns Mutable span over `iovec[0..count)`.
    */
   [[nodiscard]] std::span<iovec> as_span() noexcept {
-    return {vecs, count};
+    return {vecs.data(), count};
   }
 
   /**
@@ -105,7 +106,7 @@ struct IOVec {
    * @returns Const span over `iovec[0..count)`.
    */
   [[nodiscard]] std::span<const iovec> as_const_span() const noexcept {
-    return {vecs, count};
+    return {vecs.data(), count};
   }
 
   /**

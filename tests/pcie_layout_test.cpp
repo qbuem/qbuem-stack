@@ -100,10 +100,14 @@ TEST(UdsAdvanced, RecvFdsResultFields) {
 }
 
 TEST(UdsAdvanced, SendFdsReturnTypeCheck) {
-    // send_fds / recv_fds return qbuem::Result<ssize_t> / Result<RecvFdsResult> (noexcept)
+    // send_fds is overloaded (flat-buffer and scattered_span variants).
+    // Disambiguate by assigning to the specific function pointer type; the
+    // assignment is a compile-time proof that the overload with this exact
+    // signature exists.
     using F1 = qbuem::Result<ssize_t>(*)(int, std::span<const int>, std::span<const uint8_t>) noexcept;
     using F2 = qbuem::Result<qbuem::uds::RecvFdsResult>(*)(int, std::span<int>, std::span<uint8_t>) noexcept;
-    EXPECT_TRUE((std::is_same_v<F1, decltype(&qbuem::uds::send_fds)>));
+    [[maybe_unused]] constexpr F1 send_fds_flat = &qbuem::uds::send_fds;
+    EXPECT_NE(send_fds_flat, nullptr);
     EXPECT_TRUE((std::is_same_v<F2, decltype(&qbuem::uds::recv_fds)>));
 }
 

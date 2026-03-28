@@ -93,7 +93,7 @@ TEST(ScatteredSpanTest, IovDataPointsToFirstIovec) {
     vec.push(kB, sizeof(kB));
     scattered_span s{vec};
 
-    EXPECT_EQ(s.iov_data(), vec.vecs);
+    EXPECT_EQ(s.iov_data(), vec.vecs.data());
     EXPECT_EQ(s.iov_count(), 2);
 }
 
@@ -105,7 +105,7 @@ TEST(ScatteredSpanTest, AsIovecMatchesUnderlying) {
 
     auto sv = s.as_iovec();
     EXPECT_EQ(sv.size(), 2u);
-    EXPECT_EQ(sv.data(), vec.vecs);
+    EXPECT_EQ(sv.data(), vec.vecs.data());
 }
 
 TEST(ScatteredSpanTest, ImplicitConversionToSpan) {
@@ -115,7 +115,7 @@ TEST(ScatteredSpanTest, ImplicitConversionToSpan) {
 
     std::span<const iovec> sv = s;  // implicit conversion
     EXPECT_EQ(sv.size(), 1u);
-    EXPECT_EQ(sv.data(), vec.vecs);
+    EXPECT_EQ(sv.data(), vec.vecs.data());
 }
 
 // ─── Size / total_bytes ───────────────────────────────────────────────────────
