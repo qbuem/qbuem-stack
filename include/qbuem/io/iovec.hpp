@@ -22,6 +22,9 @@
 #include <span>
 #include <sys/uio.h>
 
+// Forward declaration — include scattered_span.hpp directly if you need the full type.
+namespace qbuem { class scattered_span; }
+
 namespace qbuem {
 
 /**
@@ -133,6 +136,21 @@ struct IOVec {
    * @returns true if `count == N`.
    */
   [[nodiscard]] bool full() const noexcept { return count == N; }
+
+  /**
+   * @brief Returns a `scattered_span` view over the current entries.
+   *
+   * The returned `scattered_span` is valid as long as this `IOVec` is in scope.
+   * Include `<qbuem/io/scattered_span.hpp>` to use the full `scattered_span` API.
+   *
+   * @code
+   * IOVec<2> vec;
+   * vec.push(header.data(), header.size());
+   * vec.push(body.data(),   body.size());
+   * co_await stream.writev(vec.as_scattered());  // single writev syscall
+   * @endcode
+   */
+  [[nodiscard]] scattered_span as_scattered() const noexcept;  // defined in scattered_span.hpp
 };
 
 } // namespace qbuem

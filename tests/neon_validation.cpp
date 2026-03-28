@@ -29,6 +29,7 @@
 // via <format> + fputs for compilers that lack it (e.g. GCC 13 on CI).
 #if __has_include(<print>)
 #  include <print>
+using std::println;
 #else
 namespace {
 template <class... Args>

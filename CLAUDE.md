@@ -102,7 +102,7 @@ bench/                  ← Benchmarks
 |---|---|---|
 | 1 Foundation | `result`, `arena`, `crypto` | `Result<T>`, `Arena`, `FixedPoolResource` |
 | 2 Async Core | `task`, `reactor`, `dispatcher` | `Task<T>`, `Dispatcher`, `Reactor` |
-| 3 IO Primitives | `net`, `buf`, `file`, `shm` | `TcpSocket`, `SHMChannel<T>`, `AsyncFile` |
+| 3 IO Primitives | `net`, `buf`, `file`, `shm`, `io` | `TcpSocket`, `SHMChannel<T>`, `AsyncFile`, `IOVec<N>`, `scattered_span` |
 | 4 Transport | `transport`, `codec`, `server` | `LengthPrefixCodec`, `LineCodec` |
 | 5 Web/HTTP | `http`, `http-server` | `Request`, `Response`, `App` |
 | 6 Pipeline | `context`, `channel`, `pipeline` | `StaticPipeline`, `DynamicPipeline`, `AsyncChannel<T>` |
@@ -338,6 +338,54 @@ All code MUST use pure C++23 features. Using older equivalents or custom aliases
 
 ---
 
+### Scatter-Gather I/O — `IOVec<N>` and `scattered_span`
+
+```cpp
+// IOVec<N> — stack-allocated iovec array (zero allocation)
+// Include: <qbuem/io/iovec.hpp>
+IOVec<2> vec;
+vec.push(header.data(), header.size());
+vec.push(body.data(),   body.size());
+
+// scattered_span — non-owning view over the iovec array
+// Include: <qbuem/io/scattered_span.hpp>
+scattered_span scatter{vec};              // from IOVec<N>
+auto scatter2 = vec.as_scattered();       // equivalent shorthand
+
+// POSIX syscall interface (zero copy)
+::writev(fd, scatter.iov_data(), scatter.iov_count());
+// or implicit conversion:
+::writev(fd, scatter.as_iovec().data(), (int)scatter.as_iovec().size());
+
+// UDS FD passing with multi-segment payload (one sendmsg syscall)
+// Include: <qbuem/net/uds_advanced.hpp>
+IOVec<3> payload;
+payload.push(header_buf);
+payload.push(body_buf);
+auto r = uds::send_fds(sockfd, {shm_fd}, scattered_span{payload});
+
+// make_scattered_span — factory from BufferView pack
+IOVec<4> storage;
+auto s = make_scattered_span(storage, buf1, buf2, buf3);
+
+// Http1Handler uses IOVec<2> + scattered_span for header+body writev
+// (one writev syscall, no heap allocation for body copy)
+```
+
+**Lifetime contract**: `scattered_span` does NOT own the iovec array.
+The `IOVec<N>` must remain in scope for as long as the `scattered_span` is used.
+
+**Integration points**:
+
+| Use site | How scattered_span is used |
+|----------|---------------------------|
+| `Http1Handler::on_frame()` | `IOVec<2>{header, body}` → single `writev` syscall |
+| `uds::send_fds(sockfd, fds, scattered_span)` | Multi-segment `sendmsg` — no gather copy |
+| `TcpStream::writev(span<const iovec>)` | Implicit `scattered_span → span<const iovec>` conversion |
+| Raw syscall | `::writev(fd, s.iov_data(), s.iov_count())` |
+
+---
+
 ## Critical Design Rules
 
 1. **No exceptions** — `Task<T>::unhandled_exception()` calls `std::terminate()`. Always return `Task<std::expected<T, E>>` and propagate errors as values via `std::unexpected(errc)`.
@@ -441,3 +489,6 @@ If a temporary local workaround is necessary while waiting for the upstream fix,
 ```cpp
 // TODO: remove after qbuem-stack#NNN is merged
 ```
+
+> **Cross-repo development workflow and documentation update policy:**
+> See root workspace CLAUDE.md at `/Users/goodboy/Projects/qbuem/CLAUDE.md`.

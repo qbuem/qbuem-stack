@@ -36,6 +36,7 @@
  */
 
 #include <qbuem/common.hpp>
+#include <qbuem/io/scattered_span.hpp>
 
 #include <array>
 #include <cstdint>
@@ -126,6 +127,75 @@ struct PeerCredentials {
     msg.msg_controllen = static_cast<socklen_t>(cmsg_space);
 
     // Set CMSG header
+    struct cmsghdr* cmsg = CMSG_FIRSTHDR(&msg);
+    cmsg->cmsg_level = SOL_SOCKET;
+    cmsg->cmsg_type  = SCM_RIGHTS;
+    cmsg->cmsg_len   = static_cast<socklen_t>(CMSG_LEN(fds.size() * sizeof(int)));
+    std::memcpy(CMSG_DATA(cmsg), fds.data(), fds.size() * sizeof(int));
+
+    ssize_t sent = ::sendmsg(sockfd, &msg, MSG_NOSIGNAL);
+    if (sent < 0)
+        return std::unexpected(std::error_code{errno, std::system_category()});
+    return sent;
+#else
+    (void)sockfd; (void)fds; (void)data;
+    return std::unexpected(std::make_error_code(std::errc::not_supported));
+#endif
+}
+
+/**
+ * @brief Send an array of FDs alongside a multi-segment payload (SCM_RIGHTS, scatter-gather).
+ *
+ * Vectored variant of `send_fds`: the payload is supplied as a `scattered_span`
+ * (multiple discontiguous buffers). The kernel transmits all segments in a single
+ * `sendmsg(2)` call without gathering them into a temporary buffer.
+ *
+ * @param sockfd   Sending UDS socket fd (SOCK_STREAM or SOCK_DGRAM).
+ * @param fds      Array of FDs to transfer (at most `kMaxFdsPerMsg`).
+ * @param data     Scatter-gather payload (may be empty — a one-byte dummy is used).
+ * @returns Number of data bytes sent on success.
+ *
+ * ### Usage — send FD + [header segment, payload segment] in one syscall
+ * @code
+ * IOVec<2> vec;
+ * vec.push(header.data(), header.size());
+ * vec.push(payload.data(), payload.size());
+ * auto r = uds::send_fds(sock, {shm_fd}, scattered_span{vec});
+ * @endcode
+ *
+ * @note The iovec count is bounded by `IOV_MAX` (POSIX ≥ 16; Linux 1024).
+ *       The segments inside `data` each become one `iov` entry in `msghdr.msg_iov`.
+ */
+[[nodiscard]] inline Result<ssize_t> send_fds(
+    int                       sockfd,
+    std::span<const int>      fds,
+    scattered_span            data) noexcept {
+#if defined(__linux__) || defined(__APPLE__)
+    if (fds.empty() || fds.size() > kMaxFdsPerMsg)
+        return std::unexpected(std::make_error_code(std::errc::invalid_argument));
+
+    const std::size_t cmsg_space = CMSG_SPACE(fds.size() * sizeof(int));
+    alignas(struct cmsghdr) uint8_t cmsg_buf[CMSG_SPACE(kMaxFdsPerMsg * sizeof(int))]{}; // NOLINT
+
+    uint8_t dummy_byte = 0;
+    struct msghdr msg{};
+
+    if (!data.empty()) {
+        // Use the scattered_span iovecs directly — zero copy, zero gather.
+        // The const_cast is required by POSIX (msg_iov is non-const), but sendmsg
+        // does not modify the iov_base buffers for send operations.
+        msg.msg_iov    = const_cast<iovec*>(data.iov_data()); // NOLINT(cppcoreguidelines-pro-type-const-cast)
+        msg.msg_iovlen = static_cast<decltype(msg.msg_iovlen)>(data.iov_count());
+    } else {
+        // SOCK_STREAM requires at least 1 data byte even for FD-only sends.
+        struct iovec iov{ &dummy_byte, 1 };
+        msg.msg_iov    = &iov;
+        msg.msg_iovlen = 1;
+    }
+
+    msg.msg_control    = cmsg_buf;
+    msg.msg_controllen = static_cast<socklen_t>(cmsg_space);
+
     struct cmsghdr* cmsg = CMSG_FIRSTHDR(&msg);
     cmsg->cmsg_level = SOL_SOCKET;
     cmsg->cmsg_type  = SCM_RIGHTS;

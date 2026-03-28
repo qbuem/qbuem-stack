@@ -135,6 +135,18 @@ target_link_libraries(qbuem_util_tests
     GTest::gtest_main
 )
 
+# ── scattered_span + IOVec<N> tests (uses qbuem-stack::io, not umbrella) ──────
+add_executable(qbuem_scattered_span_tests
+    scattered_span_test.cpp
+    ${QBUEM_TLS_FIX}
+)
+target_link_libraries(qbuem_scattered_span_tests
+    PRIVATE
+    qbuem-stack::io
+    GTest::gtest_main
+)
+add_test(NAME qbuem_scattered_span_tests COMMAND qbuem_scattered_span_tests)
+
 # ── Tracing / Timer / Arena / AsyncLogger / SocketAddr tests ──────────────────
 add_executable(qbuem_infra_tests
     tracing_test.cpp

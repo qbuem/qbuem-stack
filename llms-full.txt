@@ -2151,6 +2151,53 @@ struct IOVec {
 };
 ```
 
+### 7.1.1 `scattered_span` — Non-owning scatter-gather view (v3.4.0+)
+
+`scattered_span` is a zero-allocation, zero-copy, non-owning view over a `std::span<const iovec>`.
+It is the canonical way to pass multi-segment buffers to POSIX scatter-gather syscalls
+(`writev`, `sendmsg`, `recvmsg`) and to qbuem-stack APIs that accept vectored I/O.
+
+```cpp
+// Include: <qbuem/io/scattered_span.hpp>
+// IOVec<N> is the standard backing store (stack-allocated, zero allocation)
+IOVec<2> vec;
+vec.push(header.data(), header.size());
+vec.push(body.data(),   body.size());
+
+// Construction — wraps the IOVec<N>'s iovec array
+scattered_span scatter{vec};           // from IOVec<N>
+auto scatter2 = vec.as_scattered();    // equivalent shorthand
+
+// POSIX syscall interface (iov_data/iov_count match writev(2) signature)
+::writev(fd, scatter.iov_data(), scatter.iov_count());
+
+// STL range — yields std::span<const std::byte> per segment
+for (auto segment : scatter) { /* segment is std::span<const std::byte> */ }
+
+// Implicit conversion to std::span<const iovec>
+std::span<const iovec> sv = scatter;  // for APIs accepting span<const iovec>
+
+// make_scattered_span factory
+IOVec<4> storage;
+auto s = make_scattered_span(storage, buf1, buf2, buf3);  // up to N BufferView args
+```
+
+**Key properties**:
+- Zero allocation — wraps `std::span<const iovec>` only (no heap)
+- Lifetime: backing `IOVec<N>` must outlive the `scattered_span`
+- Thread-safe reads (immutable after construction)
+- Random-access range (proxy iterator returning `std::span<const std::byte>`)
+- `total_bytes()`, `size()`, `empty()`, `front()`, `back()`, `subspan()`
+
+**Integration in qbuem-stack**:
+
+| Site | Usage |
+|------|-------|
+| `Http1Handler::on_frame()` | `IOVec<2>{header, body}` → one `writev` syscall, no body copy |
+| `uds::send_fds(fd, fds, scattered_span)` | Multi-segment `sendmsg` payload (no gather) |
+| `TcpStream::writev(span<const iovec>)` | Implicit `scattered_span` → `span<const iovec>` |
+| Raw syscall | `::writev(fd, s.iov_data(), s.iov_count())` |
+
 ### 7.2 `ReadBuf<N>` — 컴파일타임 고정 링버퍼, zero-alloc
 
 ```cpp

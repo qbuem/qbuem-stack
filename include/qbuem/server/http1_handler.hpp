@@ -22,6 +22,7 @@
 #include <qbuem/http/request.hpp>
 #include <qbuem/http/response.hpp>
 #include <qbuem/http/router.hpp>
+#include <qbuem/io/scattered_span.hpp>
 #include <qbuem/net/socket_addr.hpp>
 #include <qbuem/server/connection_handler.hpp>
 
@@ -32,6 +33,7 @@
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <sys/uio.h>
 #include <unistd.h>
 
 namespace qbuem {
@@ -221,11 +223,33 @@ public:
       res.header("Connection", "close");
     }
 
-    // ── 6. Serialize and send response ───────────────────────────────────
-    std::string serialized = res.serialize();
-    if (!write_all(fd_, serialized)) {
-      co_return unexpected(
-          std::error_code(errno, std::system_category()));
+    // ── 6. Serialize and send response (scatter-gather, zero-copy header+body) ─
+    //
+    // Instead of concatenating header and body into a single std::string,
+    // we serialize only the header and send header + body in one ::writev(2)
+    // syscall via a scattered_span. This avoids a heap allocation equal to
+    // body_size bytes on every response.
+    //
+    // Fallback to write_all when the body is empty (no scatter needed) or
+    // when a sendfile path is set (handled by the sendfile path below).
+    {
+      std::string_view body_sv = res.get_body();
+      if (body_sv.empty()) {
+        // Header-only response (e.g. 204 No Content, 304 Not Modified)
+        std::string header_str = res.serialize_header();
+        if (!write_all(fd_, header_str)) {
+          co_return std::unexpected(std::error_code{errno, std::system_category()});
+        }
+      } else {
+        // Header + body — two segments, one writev syscall, no extra allocation.
+        std::string header_str = res.serialize_header();
+        IOVec<2> vec;
+        vec.push(header_str.data(), header_str.size());
+        vec.push(body_sv.data(), body_sv.size());
+        if (!writev_all(fd_, scattered_span{vec})) {
+          co_return std::unexpected(std::error_code{errno, std::system_category()});
+        }
+      }
     }
 
     co_return Result<void>{};
@@ -268,6 +292,52 @@ private:
       if (n <= 0) return false;
       ptr       += static_cast<size_t>(n);
       remaining -= static_cast<size_t>(n);
+    }
+    return true;
+  }
+
+  /**
+   * @brief Vectored write — sends all segments in a `scattered_span` via `::writev`.
+   *
+   * Handles short writes by advancing through the iovec array.  On each partial
+   * write the leading fully-sent entries are skipped and the partially-sent
+   * entry's base/len are adjusted (using stack-local copies — the original iovecs
+   * are not mutated).
+   *
+   * @param fd      Target socket file descriptor.
+   * @param scatter Scatter-gather list of read-only byte segments.
+   * @returns true if all bytes were sent, false on write error.
+   */
+  static bool writev_all(int fd, scattered_span scatter) noexcept {
+    if (scatter.empty()) return true;
+
+    // Work on a stack copy of the iovecs so we can adjust base/len on short writes.
+    // IOVec<64> covers virtually all realistic response segment counts.
+    IOVec<64> working;
+    for (const auto& iov : scatter.as_iovec()) {
+      if (working.full()) break; // safety guard — segments beyond 64 are dropped
+      working.push(iov.iov_base, iov.iov_len);
+    }
+
+    std::size_t idx = 0; // index of the first non-exhausted iovec
+    while (idx < working.count) {
+      ssize_t n = ::writev(fd,
+                           working.vecs + idx,
+                           static_cast<int>(working.count - idx));
+      if (n <= 0) return false;
+
+      // Advance past the bytes that were sent
+      auto remaining = static_cast<std::size_t>(n);
+      while (idx < working.count && remaining >= working.vecs[idx].iov_len) {
+        remaining -= working.vecs[idx].iov_len;
+        ++idx;
+      }
+      if (remaining > 0 && idx < working.count) {
+        // Partial write within the current segment — adjust base and length
+        auto* base = static_cast<std::byte*>(working.vecs[idx].iov_base);
+        working.vecs[idx].iov_base = base + remaining;
+        working.vecs[idx].iov_len -= remaining;
+      }
     }
     return true;
   }

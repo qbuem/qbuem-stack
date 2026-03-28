@@ -12,7 +12,7 @@
 #   05-pipeline/          fanout, hardware_batching, dynamic_hotswap,
 #                         sensor_fusion, observer_health, factory (json),
 #                         subpipeline_migration, stream_ops, windowed_action
-#   06-ipc-messaging/     shm_channel, ipc_pipeline, message_bus,
+#   06-ipc-messaging/     shm_channel, ipc_pipeline, message_bus, scatter_send,
 #                         priority_spsc_channel
 #   07-resilience/        canary, checkpoint, resilience, saga,
 #                         scatter_gather, idempotency_slo
@@ -157,6 +157,11 @@ target_link_libraries(message_bus_example PRIVATE qbuem-stack::qbuem)
 add_executable(priority_spsc_channel_example
     06-ipc-messaging/priority_spsc_channel/priority_spsc_channel_example.cpp)
 target_link_libraries(priority_spsc_channel_example PRIVATE qbuem-stack::qbuem)
+
+# scattered_span: zero-copy scatter-gather I/O + uds::send_fds
+add_executable(scatter_send_example
+    06-ipc-messaging/scatter_send/scatter_send_example.cpp)
+target_link_libraries(scatter_send_example PRIVATE qbuem-stack::io)
 
 # ── 07 Resilience ─────────────────────────────────────────────────────────────
 

@@ -39,6 +39,23 @@
 ## Examples Index
 - [Examples Overview](examples/README.md): 58 categorized examples with learning paths
 
+## Scatter-Gather I/O — `IOVec<N>` and `scattered_span`
+
+- `<qbuem/io/iovec.hpp>` — `qbuem::IOVec<N>`: stack-allocated iovec array (up to N segments, zero heap allocation). Methods: `push(data, len)`, `push(BufferView)`, `push(MutableBufferView)`, `as_span()`, `as_const_span()`, `as_scattered()`, `total_bytes()`, `clear()`, `empty()`, `full()`.
+- `<qbuem/io/scattered_span.hpp>` — `qbuem::scattered_span`: non-owning view over a `std::span<const iovec>`. Zero allocation, zero copy, STL random-access range (yields `std::span<const std::byte>` segments), POSIX syscall-ready. Constructors accept `IOVec<N>`, `std::span<const iovec>`, `std::span<iovec>`. Implicit conversion to `std::span<const iovec>`. `make_scattered_span(IOVec<N>&, Views...)` factory.
+- `<qbuem/net/uds_advanced.hpp>` — `qbuem::uds::send_fds(sockfd, fds, scattered_span)`: multi-segment `sendmsg` payload — passes all iovec segments directly to `sendmsg`, no gather copy.
+- `<qbuem/server/http1_handler.hpp>` — `Http1Handler` uses `IOVec<2>` + `scattered_span` to send HTTP header + body in one `writev` syscall (no heap allocation for body copy).
+- `<qbuem/buf/io_slice.hpp>` — compatibility umbrella; includes all four IO headers above.
+
+**Integration table**:
+```
+TcpStream::writev(span<const iovec>) ← pass scatter.as_iovec() or implicit conversion
+uds::send_fds(fd, fds, scattered_span) ← multi-segment sendmsg
+Http1Handler response ← IOVec<2>{header, body} → writev_all (one syscall)
+::writev(fd, ...) raw ← scatter.iov_data(), scatter.iov_count()
+::sendmsg ← msg.msg_iov = scatter.iov_data(); msg.msg_iovlen = scatter.iov_count()
+```
+
 ## HTTP Client & Middleware
 
 - `<qbuem/http/backoff.hpp>` — `qbuem::backoff` namespace: `BackoffFn`, `fixed()`, `linear()`, `exponential()`, `jitter()` (AWS Full Jitter), `decorrelated()`, `RetryConfig`, `async_sleep()` (non-blocking, `Reactor::register_timer()`; works on Linux and macOS)
