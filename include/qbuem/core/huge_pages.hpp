@@ -10,7 +10,7 @@
  *
  * ## Design Principles
  * - Attempts to map huge pages (2 MiB or 1 GiB) via `MAP_HUGETLB`.
- * - Falls back to ordinary `mmap(MAP_ANONYMOUS)` on `ENOMEM` or `EPERM`.
+ * - Falls back to ordinary `mmap(MAP_ANONYMOUS)` on any `MAP_HUGETLB` failure.
  * - Manages buffers with a free-list for O(1) acquire/release.
  * - Thread safety is provided via `std::mutex`.
  *
@@ -62,7 +62,8 @@ namespace qbuem {
  *
  * ### Huge Page Fallback Strategy
  * 1. Attempt `mmap(MAP_HUGETLB)`.
- * 2. If `errno == ENOMEM` or `errno == EPERM`, retry with `mmap(MAP_ANONYMOUS)`.
+ * 2. On any failure (huge pages unreserved, unprivileged, or hugetlbfs
+ *    unavailable as in many containers), retry with `mmap(MAP_ANONYMOUS)`.
  * 3. On non-Linux platforms, allocate with `new std::byte[]`.
  *
  * ### Thread Safety
@@ -219,19 +220,21 @@ private:
       return static_cast<std::byte *>(ptr);
     }
 
-    // Fall back to ordinary anonymous mmap on ENOMEM or EPERM
-    if (errno == ENOMEM || errno == EPERM) {
-      ptr = ::mmap(
-          nullptr,
-          kTotalBytes,
-          PROT_READ | PROT_WRITE,
-          MAP_PRIVATE | MAP_ANONYMOUS,
-          -1,
-          0);
+    // MAP_HUGETLB is purely a TLB optimization: on ANY failure fall back to
+    // ordinary anonymous pages. Huge-page mmap can fail with ENOMEM/EPERM (no
+    // pages reserved / no privilege) but also EINVAL or EOPNOTSUPP (hugetlbfs
+    // unavailable, e.g. inside containers) — correctness must never depend on
+    // huge-page support, so fall back regardless of errno.
+    ptr = ::mmap(
+        nullptr,
+        kTotalBytes,
+        PROT_READ | PROT_WRITE,
+        MAP_PRIVATE | MAP_ANONYMOUS,
+        -1,
+        0);
 
-      if (ptr != MAP_FAILED) {
-        return static_cast<std::byte *>(ptr);
-      }
+    if (ptr != MAP_FAILED) {
+      return static_cast<std::byte *>(ptr);
     }
 
     throw std::bad_alloc{};

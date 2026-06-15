@@ -18,7 +18,8 @@
  * ```cpp
  * qbuem::inplace_function<void(int)> cb = [handle, this](int fd) { resume(fd); };
  * cb(fd);                       // indirect call, no allocation, ever
- * static_assert(sizeof(cb) == 48 + 3*sizeof(void*));  // inline buffer + vtable ptrs
+ * // layout == inline buffer (Capacity) + 3 fn pointers, padded to alignof:
+ * static_assert(sizeof(cb) <= 48 + 3*sizeof(void*) + alignof(cb));
  * ```
  *
  * Intended replacements: `Reactor::register_event` callbacks, pipeline `Action`

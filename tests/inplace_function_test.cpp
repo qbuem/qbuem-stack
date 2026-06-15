@@ -77,7 +77,14 @@ TEST(InplaceFunction, HoldsLargeCaptureWithoutHeap) {
 }
 
 TEST(InplaceFunction, SizeIsInlineBufferPlusVtable) {
-    // No hidden heap pointer: the object IS the inline buffer + 3 fn pointers.
+    // No hidden heap pointer: the object IS the inline buffer + 3 fn pointers,
+    // rounded up to the type's alignment. The default Align is
+    // alignof(std::max_align_t), which is 16 on x86_64 (16-byte long double) but
+    // 8 on some ABIs (e.g. Apple arm64); the 72-byte payload therefore pads to
+    // 80 where alignment is 16. Compute the expected size from alignof(F) so the
+    // "no hidden state" invariant holds portably instead of hardcoding 72.
     using F = inplace_function<void(), 48>;
-    EXPECT_EQ(sizeof(F), 48u + 3u * sizeof(void*));
+    constexpr std::size_t payload  = 48u + 3u * sizeof(void*);
+    constexpr std::size_t expected = (payload + alignof(F) - 1) / alignof(F) * alignof(F);
+    EXPECT_EQ(sizeof(F), expected);
 }

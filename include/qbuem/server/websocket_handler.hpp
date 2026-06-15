@@ -558,9 +558,12 @@ public:
 
     const size_t plen = static_cast<size_t>(payload_len);
     frame.payload.resize(plen);
-    std::memcpy(frame.payload.data(), data.data() + pos, plen);
-    if (frame.masked) {
-      xor_mask(data.data() + pos, frame.payload.data(), plen, masking_key);
+    if (plen > 0) {  // empty payload (e.g. zero-length close/ping): payload.data() is
+                     // null, so skip memcpy/xor_mask to avoid null-pointer UB
+      std::memcpy(frame.payload.data(), data.data() + pos, plen);
+      if (frame.masked) {
+        xor_mask(data.data() + pos, frame.payload.data(), plen, masking_key);
+      }
     }
     pos += plen;
 
