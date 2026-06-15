@@ -19,18 +19,34 @@ using namespace qbuem;
 using namespace std::chrono_literals;
 using std::println;
 
+// Producer coroutines are FREE FUNCTIONS that take the channel BY VALUE, so the
+// coroutine frame owns it. Spawning an immediately-invoked lambda
+// (`spawn([ch]() -> Task<...> {...}())`) is undefined behaviour: the temporary
+// closure is destroyed at the end of the spawn() statement while the worker
+// thread still references it (use-after-scope / use-after-free).
+static Task<Result<void>> feed_ints(std::shared_ptr<AsyncChannel<int>> ch,
+                                    int from, int to) {
+    for (int i = from; i <= to; ++i)
+        ch->try_send(i);
+    ch->close();
+    co_return {};
+}
+
+static Task<Result<void>> feed_strings(std::shared_ptr<AsyncChannel<std::string>> ch,
+                                       int count) {
+    for (int i = 0; i < count; ++i)
+        ch->try_send("event-" + std::to_string(i));
+    ch->close();
+    co_return {};
+}
+
 // ─── Basic Stream map / filter ───────────────────────────────────────────────
 
 Task<Result<void>> stream_map_filter(Dispatcher& dispatcher) {
     auto ch = std::make_shared<AsyncChannel<int>>(64);
 
     // Source coroutine: publish 1..10
-    dispatcher.spawn([ch]() -> Task<Result<void>> {
-        for (int i = 1; i <= 10; ++i)
-            ch->try_send(i);
-        ch->close();
-        co_return {};
-    }());
+    dispatcher.spawn(feed_ints(ch, 1, 10));
 
     Stream<int> src(ch);
 
@@ -62,12 +78,7 @@ Task<Result<void>> stream_throttle_example(Dispatcher& dispatcher) {
     auto ch = std::make_shared<AsyncChannel<std::string>>(256);
 
     // Publish 20 items rapidly
-    dispatcher.spawn([ch]() -> Task<Result<void>> {
-        for (int i = 0; i < 20; ++i)
-            ch->try_send("event-" + std::to_string(i));
-        ch->close();
-        co_return {};
-    }());
+    dispatcher.spawn(feed_strings(ch, 20));
 
     Stream<std::string> src(ch);
 
@@ -90,12 +101,7 @@ Task<Result<void>> stream_debounce_example(Dispatcher& dispatcher) {
     auto ch = std::make_shared<AsyncChannel<int>>(64);
 
     // Publish 5 items rapidly then silence
-    dispatcher.spawn([ch]() -> Task<Result<void>> {
-        for (int i = 0; i < 5; ++i)
-            ch->try_send(i);
-        ch->close();
-        co_return {};
-    }());
+    dispatcher.spawn(feed_ints(ch, 0, 4));
 
     Stream<int> src(ch);
     // Emit the last item after 30ms of silence
@@ -118,12 +124,7 @@ Task<Result<void>> stream_window_example(Dispatcher& dispatcher) {
     auto ch = std::make_shared<AsyncChannel<int>>(128);
 
     // Publish 30 items
-    dispatcher.spawn([ch]() -> Task<Result<void>> {
-        for (int i = 0; i < 30; ++i)
-            ch->try_send(i);
-        ch->close();
-        co_return {};
-    }());
+    dispatcher.spawn(feed_ints(ch, 0, 29));
 
     Stream<int> src(ch);
     // 50ms tumbling window
@@ -142,6 +143,17 @@ Task<Result<void>> stream_window_example(Dispatcher& dispatcher) {
 
 // ─── main ─────────────────────────────────────────────────────────────────────
 
+// Free-function orchestrator (frame owns its reference args) — see note above on
+// why an immediately-invoked coroutine-lambda would be use-after-scope.
+static Task<Result<void>> run_all(Dispatcher& dispatcher, std::atomic<int>& done) {
+    co_await stream_map_filter(dispatcher);
+    co_await stream_throttle_example(dispatcher);
+    co_await stream_debounce_example(dispatcher);
+    co_await stream_window_example(dispatcher);
+    done.store(1);
+    co_return {};
+}
+
 int main() {
     println("=== Stream Operators ===");
 
@@ -150,14 +162,7 @@ int main() {
 
     std::atomic<int> done{0};
 
-    dispatcher.spawn([&]() -> Task<Result<void>> {
-        co_await stream_map_filter(dispatcher);
-        co_await stream_throttle_example(dispatcher);
-        co_await stream_debounce_example(dispatcher);
-        co_await stream_window_example(dispatcher);
-        done.store(1);
-        co_return {};
-    }());
+    dispatcher.spawn(run_all(dispatcher, done));
 
     auto deadline = std::chrono::steady_clock::now() + 15s;
     while (!done.load() && std::chrono::steady_clock::now() < deadline)

@@ -11,7 +11,7 @@
  * - permissions_policy()       — Permissions-Policy header
  * - secure_headers()           — apply all security headers at once
  *
- * ## Coverage — middleware/token_auth.hpp (jwt.hpp shim included)
+ * ## Coverage — middleware/token_auth.hpp
  * - ITokenVerifier             — token verification interface
  * - bearer_auth()              — Bearer token middleware
  *
@@ -19,7 +19,7 @@
  * - mime_type()                — extension → MIME type mapping
  * - serve_file()               — build file response
  *
- * ## Coverage — middleware/body_encoder.hpp (compress.hpp shim included)
+ * ## Coverage — middleware/body_encoder.hpp
  * - IBodyEncoder               — body encoder interface
  * - compress()                 — apply encoder middleware
  * - compress_response()        — encode response body inside a handler
@@ -29,8 +29,6 @@
 #include <qbuem/http/response.hpp>
 #include <qbuem/http/router.hpp>
 #include <qbuem/middleware/body_encoder.hpp>
-#include <qbuem/middleware/compress.hpp>
-#include <qbuem/middleware/jwt.hpp>
 #include <qbuem/middleware/security.hpp>
 #include <qbuem/middleware/static_files.hpp>
 #include <qbuem/middleware/token_auth.hpp>

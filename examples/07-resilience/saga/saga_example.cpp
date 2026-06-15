@@ -152,6 +152,17 @@ static SagaOrchestrator<OrderContext> build_order_saga() {
 
 // ─── RunGuard ─────────────────────────────────────────────────────────────────
 
+// Free-function coroutine: owns the callable by value in its frame so the
+// coroutine no longer references a temporary closure object. The `done` flag is
+// a local atomic of the enclosing run_and_wait scope, which busy-waits to
+// completion (or timeout) before returning — so the scope provably outlives this
+// coroutine and the pointer stays valid for its whole lifetime.
+template <typename F>
+static Task<void> run_callable_worker(F f, std::atomic<bool>* done) {
+    co_await f();
+    done->store(true);
+}
+
 struct RunGuard {
     Dispatcher  dispatcher;
     std::jthread thread;
@@ -162,9 +173,7 @@ struct RunGuard {
     template <typename F>
     void run_and_wait(F&& f, std::chrono::milliseconds timeout = 5s) {
         std::atomic<bool> done{false};
-        dispatcher.spawn([&, f = std::forward<F>(f)]() mutable -> Task<void> {
-            co_await f(); done.store(true);
-        }());
+        dispatcher.spawn(run_callable_worker(std::forward<F>(f), &done));
         auto dl = std::chrono::steady_clock::now() + timeout;
         while (!done.load() && std::chrono::steady_clock::now() < dl)
             std::this_thread::sleep_for(1ms);

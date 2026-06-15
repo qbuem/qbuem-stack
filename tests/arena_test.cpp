@@ -107,8 +107,8 @@ TEST(FixedPoolResourceTest, UsedAndAvailableTrackCorrectly) {
 
 TEST(FixedPoolResourceTest, OverflowReturnsNullptr) {
     Pool8 pool(2);
-    pool.allocate();
-    pool.allocate();
+    (void)pool.allocate();
+    (void)pool.allocate();
     // Pool exhausted
     void* overflow = pool.allocate();
     EXPECT_EQ(overflow, nullptr);
@@ -117,7 +117,7 @@ TEST(FixedPoolResourceTest, OverflowReturnsNullptr) {
 TEST(FixedPoolResourceTest, DeallocatedSlotIsReused) {
     Pool8 pool(2);
     void* p1 = pool.allocate();
-    pool.allocate();
+    (void)pool.allocate();
     pool.deallocate(p1);
 
     // Next allocate should reuse p1 (LIFO free-list)
@@ -148,4 +148,21 @@ TEST(FixedPoolResourceTest, AllSlotsAllocatable) {
         pool.deallocate(p);
 
     EXPECT_EQ(pool.available(), 32u);
+}
+
+// Regression: reset() must reuse already-allocated blocks, not grow blocks_
+// without bound across reset cycles (audit P2-11).
+TEST(Arena, ReusesBlocksAcrossResets) {
+    Arena arena(64);  // small initial block forces overflow into several blocks
+    for (int i = 0; i < 12; ++i) (void)arena.allocate(48);
+    const size_t peak = arena.block_count();
+    EXPECT_GT(peak, 1u);  // grew past the first block
+
+    // Many reset+refill cycles with the same pattern must NOT keep allocating
+    // new blocks — the trailing blocks are reused.
+    for (int cycle = 0; cycle < 200; ++cycle) {
+        arena.reset();
+        for (int i = 0; i < 12; ++i) (void)arena.allocate(48);
+    }
+    EXPECT_EQ(arena.block_count(), peak);  // bounded: reused, not re-grown
 }

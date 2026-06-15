@@ -30,15 +30,6 @@ option(QBUEM_BUILD_EXAMPLES "Build examples"        ON)
 option(QBUEM_BUILD_BENCH    "Build benchmarks"      ON)
 option(QBUEM_INSTALL        "Generate install rules" ON)
 
-# ── AF_XDP (optional, requires Linux 4.18+) ─────────────────────────────────
-# Usage:
-#   cmake -DQBUEM_XDP=ON [-DQBUEM_XDP_LIBBPF=ON] ..
-#
-# QBUEM_XDP=ON        : expose headers/targets, define QBUEM_HAS_XDP
-# QBUEM_XDP_LIBBPF=ON : link libbpf (enables real implementation such as xsk_umem__create)
-option(QBUEM_XDP        "Enable AF_XDP support (Linux 4.18+)"           OFF)
-option(QBUEM_XDP_LIBBPF "Link libbpf for AF_XDP (requires QBUEM_XDP=ON)" OFF)
-
 # ── PGO (Profile-Guided Optimization) ───────────────────────────────────────
 # Usage:
 #   Pass 1 (instrumented):  cmake -DQBUEM_PGO_GENERATE=ON ..  && make && ./bench/bench_throughput ...
@@ -243,20 +234,6 @@ target_include_directories(qbuem_io INTERFACE ${QBUEM_INCLUDE_DIR} ${QBUEM_INSTA
 target_compile_features(qbuem_io INTERFACE cxx_std_23)
 target_link_libraries(qbuem_io INTERFACE qbuem_reactor qbuem_buf qbuem_net)
 
-# qbuem::pcie — PCIeDevice (VFIO), MSIXReactor, DmaBuffer
-if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-    add_library(qbuem_pcie src/pcie/pcie_device.cpp)
-    add_library(qbuem-stack::pcie ALIAS qbuem_pcie)
-    target_include_directories(qbuem_pcie PUBLIC ${QBUEM_INCLUDE_DIR} ${QBUEM_INSTALL_INCLUDE})
-    target_compile_features(qbuem_pcie PUBLIC cxx_std_23)
-    target_link_libraries(qbuem_pcie PUBLIC qbuem_result qbuem_reactor)
-    qbuem_compile_options(qbuem_pcie)
-else()
-    add_library(qbuem_pcie INTERFACE)
-    add_library(qbuem-stack::pcie ALIAS qbuem_pcie)
-    target_include_directories(qbuem_pcie INTERFACE ${QBUEM_INCLUDE_DIR} ${QBUEM_INSTALL_INCLUDE})
-endif()
-
 # ============================================================================
 # ── Level 4: Transport + Codec + Server (header-only) ───────────────────────
 # ============================================================================
@@ -295,7 +272,10 @@ add_library(qbuem_http
     src/http/router.cpp
 )
 add_library(qbuem-stack::http ALIAS qbuem_http)
-target_link_libraries(qbuem_http PUBLIC qbuem_reactor qbuem_buf qbuem_codec)
+# http/ headers also include net/, io/, pipeline/ and tracing/ — declare them so
+# `qbuem-stack::http` is independently linkable (matches the actual #includes).
+target_link_libraries(qbuem_http PUBLIC
+    qbuem_reactor qbuem_buf qbuem_net qbuem_io qbuem_pipeline qbuem_tracing)
 qbuem_compile_options(qbuem_http)
 
 # qbuem::http-server — Http1Handler + App + middleware chain
@@ -356,7 +336,8 @@ add_library(qbuem_tracing INTERFACE)
 add_library(qbuem-stack::tracing ALIAS qbuem_tracing)
 target_include_directories(qbuem_tracing INTERFACE ${QBUEM_INCLUDE_DIR} ${QBUEM_INSTALL_INCLUDE})
 target_compile_features(qbuem_tracing INTERFACE cxx_std_23)
-target_link_libraries(qbuem_tracing INTERFACE qbuem_context)
+# tracing/trace_context.hpp uses qbuem::random_bytes (crypto) for span/trace IDs.
+target_link_libraries(qbuem_tracing INTERFACE qbuem_context qbuem_crypto)
 
 # qbuem::metrics — ActionMetrics, PipelineMetrics, PipelineObserver
 add_library(qbuem_metrics INTERFACE)
@@ -391,51 +372,6 @@ target_compile_features(qbuem_grpc INTERFACE cxx_std_23)
 target_link_libraries(qbuem_grpc INTERFACE qbuem_http2 qbuem_pipeline qbuem_channel)
 
 # ============================================================================
-# ── Level 8b: AF_XDP (optional, Linux 4.18+) ─────────────────────────────────
-# cmake -DQBUEM_XDP=ON [-DQBUEM_XDP_LIBBPF=ON] ..
-# ============================================================================
-
-add_library(qbuem_xdp INTERFACE)
-add_library(qbuem-stack::xdp ALIAS qbuem_xdp)
-target_include_directories(qbuem_xdp INTERFACE ${QBUEM_INCLUDE_DIR} ${QBUEM_INSTALL_INCLUDE})
-target_compile_features(qbuem_xdp INTERFACE cxx_std_23)
-target_link_libraries(qbuem_xdp INTERFACE qbuem_result qbuem_arena)
-
-if(QBUEM_XDP)
-    if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
-        message(WARNING "[qbuem-stack] QBUEM_XDP=ON is only supported on Linux. Ignoring.")
-    else()
-        message(STATUS "[qbuem-stack] AF_XDP enabled (QBUEM_HAS_XDP)")
-        target_compile_definitions(qbuem_xdp INTERFACE QBUEM_HAS_XDP)
-
-        if(QBUEM_XDP_LIBBPF)
-            find_path(LIBBPF_INCLUDE_DIR  NAMES xdp/xsk.h bpf/libbpf.h
-                      HINTS /usr/include /usr/local/include)
-            find_library(LIBBPF_LIB NAMES bpf
-                         HINTS /usr/lib /usr/local/lib)
-            find_library(LIBXDP_LIB NAMES xdp
-                         HINTS /usr/lib /usr/local/lib)
-
-            if(LIBBPF_INCLUDE_DIR AND LIBBPF_LIB)
-                message(STATUS "[qbuem-stack] libbpf found → QBUEM_XDP_LIBBPF enabled")
-                target_compile_definitions(qbuem_xdp INTERFACE QBUEM_XDP_LIBBPF)
-                target_include_directories(qbuem_xdp INTERFACE ${LIBBPF_INCLUDE_DIR})
-                target_link_libraries(qbuem_xdp INTERFACE ${LIBBPF_LIB})
-                if(LIBXDP_LIB)
-                    message(STATUS "[qbuem-stack] libxdp found → linking")
-                    target_link_libraries(qbuem_xdp INTERFACE ${LIBXDP_LIB})
-                endif()
-            else()
-                message(WARNING
-                    "[qbuem-stack] QBUEM_XDP_LIBBPF=ON but libbpf not found. "
-                    "Install libbpf-dev (Debian/Ubuntu) or libbpf-devel (Fedora). "
-                    "Falling back to stub (no-op) implementation.")
-            endif()
-        endif()
-    endif()
-endif()
-
-# ============================================================================
 # ── Level 9: Umbrella — qbuem-stack::qbuem (everything) ─────────────────────
 # ============================================================================
 
@@ -454,7 +390,6 @@ target_link_libraries(qbuem PUBLIC
     qbuem_ws
     qbuem_http2
     qbuem_grpc
-    qbuem_xdp
     qbuem_io
     qbuem_net
     qbuem_buf
@@ -465,9 +400,8 @@ target_link_libraries(qbuem PUBLIC
     qbuem_result
 )
 # SHMChannel uses shm_open/shm_unlink — link librt on Linux (glibc < 2.17 requires it)
-# qbuem_pcie provides VFIO-based PCIe user-space control on Linux.
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-    target_link_libraries(qbuem PUBLIC rt qbuem_pcie)
+    target_link_libraries(qbuem PUBLIC rt)
 endif()
 qbuem_compile_options(qbuem)
 
@@ -516,8 +450,6 @@ if(QBUEM_INSTALL)
         qbuem_ws
         qbuem_http2
         qbuem_grpc
-        qbuem_xdp
-        qbuem_pcie
         qbuem
         qbuem_core_compat
         qbuem_stack_compat

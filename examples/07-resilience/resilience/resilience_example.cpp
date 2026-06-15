@@ -67,6 +67,16 @@ static Task<Result<PaymentReceipt>> call_pg(Payment p, ActionEnv /*env*/) {
 
 // ─── RunGuard ─────────────────────────────────────────────────────────────────
 
+// Free-function coroutine that owns the work factory `f` BY VALUE inside its
+// frame (so it does not dangle on a destroyed closure). `done` is taken by
+// reference: run_and_wait busy-waits on it to completion, so the enclosing
+// scope provably outlives this coroutine.
+template <typename F>
+static Task<void> run_wait_coro(F f, std::atomic<bool>& done) {
+    co_await f();
+    done.store(true, std::memory_order_release);
+}
+
 struct RunGuard {
     Dispatcher  dispatcher;
     std::jthread thread;
@@ -78,10 +88,7 @@ struct RunGuard {
     template <typename F>
     void run_and_wait(F&& f, std::chrono::milliseconds timeout = 10s) {
         std::atomic<bool> done{false};
-        dispatcher.spawn([&, f = std::forward<F>(f)]() mutable -> Task<void> {
-            co_await f();
-            done.store(true, std::memory_order_release);
-        }());
+        dispatcher.spawn(run_wait_coro(std::forward<F>(f), done));
         auto dl = std::chrono::steady_clock::now() + timeout;
         while (!done.load() && std::chrono::steady_clock::now() < dl)
             std::this_thread::sleep_for(1ms);

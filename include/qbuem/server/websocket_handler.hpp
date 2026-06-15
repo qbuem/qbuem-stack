@@ -531,6 +531,12 @@ public:
       }
     }
 
+    // Reject oversized frames before allocating (unbounded-resize DoS guard).
+    constexpr uint64_t kMaxFramePayload = 16ull * 1024 * 1024;  // 16 MiB
+    if (payload_len > kMaxFramePayload) {
+      return unexpected(std::make_error_code(std::errc::message_size));
+    }
+
     // Read masking key (client → server is always masked)
     std::array<uint8_t, 4> masking_key{};
     if (frame.masked) {

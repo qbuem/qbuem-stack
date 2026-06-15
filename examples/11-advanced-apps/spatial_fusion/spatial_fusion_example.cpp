@@ -34,7 +34,7 @@
  */
 
 #include <qbuem/buf/grid_bitset.hpp>
-#include <qbuem/reactor/micro_ticker.hpp>
+#include <qbuem/core/micro_ticker.hpp>
 
 #include <array>
 #include <atomic>

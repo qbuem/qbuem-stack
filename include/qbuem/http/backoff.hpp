@@ -34,6 +34,7 @@
 #include <functional>
 #include <limits>
 #include <random>
+#include <thread>   // std::this_thread::sleep_for (off-reactor fallback)
 
 namespace qbuem::backoff {
 

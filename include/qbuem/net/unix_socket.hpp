@@ -20,6 +20,7 @@
 #include <qbuem/core/awaiters.hpp>
 #include <qbuem/core/reactor.hpp>
 #include <qbuem/core/task.hpp>
+#include <qbuem/net/socket_compat.hpp>
 
 #include <cerrno>
 #include <coroutine>
@@ -104,7 +105,7 @@ public:
    * @returns UnixSocket (listen socket) on success, or an error code on failure.
    */
   static Result<UnixSocket> bind(const char *path) noexcept {
-    int fd = ::socket(AF_UNIX, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
+    int fd = net::make_socket(AF_UNIX, SOCK_STREAM, 0);
     if (fd < 0)
       return unexpected(std::error_code(errno, std::system_category()));
 
@@ -142,7 +143,7 @@ public:
    * @returns Connected UnixSocket on success, or an error code on failure.
    */
   static Task<Result<UnixSocket>> connect(const char *path) {
-    int fd = ::socket(AF_UNIX, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
+    int fd = net::make_socket(AF_UNIX, SOCK_STREAM, 0);
     if (fd < 0) {
       co_return unexpected(std::error_code(errno, std::system_category()));
     }

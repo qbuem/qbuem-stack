@@ -18,7 +18,7 @@
  * ### SIMD acceleration
  * | Path    | Condition          | Notes                          |
  * |---------|--------------------|--------------------------------|
- * | AVX2    | `__AVX2__`         | 8 blocks (512 bytes) / call    |
+ * | AVX2    | `__AVX2__`         | (not implemented — uses scalar)|
  * | NEON    | `__ARM_NEON`       | 4 blocks (256 bytes) / call    |
  * | Scalar  | fallback           | 1 block (64 bytes) / call      |
  *
@@ -46,6 +46,8 @@
 #include <cstdint>
 #include <cstring>
 #include <span>
+
+#include <qbuem/crypto/secure_zero.hpp>
 
 #if defined(__AVX2__) && __has_include(<immintrin.h>)
 #  include <immintrin.h>
@@ -315,6 +317,18 @@ public:
     void seek(uint32_t block_counter) noexcept {
         counter_       = block_counter;
         keystream_pos_ = 64;  // force re-generation on next call
+    }
+
+    /**
+     * @brief Securely zero the key and any buffered keystream.
+     *
+     * Call when the cipher is no longer needed to minimize how long secret
+     * material lingers in memory (the buffered keystream is key-equivalent).
+     * Uses an optimizer-proof wipe (see crypto/secure_zero.hpp).
+     */
+    void wipe() noexcept {
+        secure_zero(key_.data(), key_.size());
+        secure_zero(keystream_.data(), keystream_.size());
     }
 
     /**

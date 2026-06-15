@@ -200,6 +200,20 @@ static Task<void> demo_dlq_reprocessor() {
 // main
 // ─────────────────────────────────────────────────────────────────────────────
 
+// Free-function coroutine wrappers — the coroutine frame OWNS its state so the
+// frame (not a temporary closure) holds the `done` flag reference. `main` below
+// busy-waits on these flags before destroying them, so the reference parameter
+// provably outlives the coroutine.
+static Task<void> run_migration_demo(std::atomic<bool>& done) {
+    co_await demo_migration_task();
+    done.store(true);
+}
+
+static Task<void> run_dlq_demo(std::atomic<bool>& done) {
+    co_await demo_dlq_reprocessor();
+    done.store(true);
+}
+
 int main() {
     println("=== qbuem SubpipelineAction + Migration Example ===\n");
 
@@ -210,14 +224,8 @@ int main() {
     std::jthread t([&] { disp.run(); });
 
     std::atomic<bool> done1{false}, done2{false};
-    disp.spawn([&]() -> Task<void> {
-        co_await demo_migration_task();
-        done1.store(true);
-    }());
-    disp.spawn([&]() -> Task<void> {
-        co_await demo_dlq_reprocessor();
-        done2.store(true);
-    }());
+    disp.spawn(run_migration_demo(done1));
+    disp.spawn(run_dlq_demo(done2));
 
     auto deadline = std::chrono::steady_clock::now() + 3s;
     while ((!done1.load() || !done2.load()) &&

@@ -46,7 +46,9 @@
  *
  * ## Current limitations
  * - HTTP/1.1 only (HTTP/2 is handled by the separate gRPC channel).
- * - HTTPS requires `fetch_tls()` from `<qbuem/http/fetch_tls.hpp>`.
+ * - HTTP only. HTTPS is intentionally out of scope: TLS would require a
+ *   third-party library, which this zero-dependency core does not bundle.
+ *   Terminate TLS at a reverse proxy, or wrap a TLS library at the app layer.
  * - Chunked *request* bodies are not yet supported.
  *
  * @{
@@ -82,7 +84,7 @@ namespace qbuem {
  *   http://host/path?query
  *   http://host:port/path?query
  *   http://[::1]:port/path   (IPv6 literal)
- *   https://host/path        (HTTPS — handled by fetch_tls())
+ *   https://host/path        (scheme parsed, but HTTPS transport is out of scope)
  */
 struct ParsedUrl {
   std::string scheme;  ///< "http" | "https"

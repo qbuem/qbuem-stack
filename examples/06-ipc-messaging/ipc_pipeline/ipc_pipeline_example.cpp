@@ -126,6 +126,33 @@ static Task<Result<ValidatedOrder>> stage_record(ValidatedOrder v, ActionEnv /*e
     co_return v;
 }
 
+// ─── Yield ────────────────────────────────────────────────────────────────────
+// Cooperative yield: re-posts the coroutine to the reactor instead of blocking
+// the thread. Use `co_await Yield{}` in a poll loop INSTEAD of
+// std::this_thread::sleep_for() inside a coroutine — sleep_for blocks the reactor
+// thread, starving the very worker/source coroutines we are waiting on.
+struct Yield {
+    bool await_ready() const noexcept { return false; }
+    void await_suspend(std::coroutine_handle<> h) const noexcept {
+        if (auto* r = Reactor::current())
+            r->post([h]() mutable { h.resume(); });
+        else
+            h.resume();
+    }
+    void await_resume() const noexcept {}
+};
+
+// Cooperatively wait until `pred` is true OR the deadline elapses (whichever
+// comes first), yielding to the reactor each iteration. Time-bounded so a
+// missed expectation degrades to a bounded wait, never an infinite spin.
+template <typename Pred>
+static Task<void> wait_until(Pred pred, std::chrono::milliseconds max = 2s) {
+    auto deadline = std::chrono::steady_clock::now() + max;
+    while (!pred() && std::chrono::steady_clock::now() < deadline)
+        co_await Yield{};
+    co_return;
+}
+
 // ─── RunGuard ─────────────────────────────────────────────────────────────────
 
 struct RunGuard {
@@ -135,14 +162,23 @@ struct RunGuard {
         thread = std::jthread([this] { dispatcher.run(); });
     }
     ~RunGuard() { dispatcher.stop(); if (thread.joinable()) thread.join(); }
+    // Named coroutine (free function) so the closure/frame is NOT placed on
+    // run_and_wait's stack — a temporary coroutine-lambda would be destroyed at
+    // the end of the spawn() statement while the worker thread still references
+    // it (stack-use-after-scope). `done` is a shared_ptr so it outlives a timeout.
+    template <typename F>
+    static Task<void> run_coro(F f, std::shared_ptr<std::atomic<bool>> done) {
+        co_await f();
+        done->store(true, std::memory_order_release);
+    }
+
     template <typename F>
     void run_and_wait(F&& f, std::chrono::milliseconds timeout = 10s) {
-        std::atomic<bool> done{false};
-        dispatcher.spawn([&, f = std::forward<F>(f)]() mutable -> Task<void> {
-            co_await f(); done.store(true, std::memory_order_release);
-        }());
+        auto done = std::make_shared<std::atomic<bool>>(false);
+        dispatcher.spawn(run_coro(std::forward<F>(f), done));
         auto dl = std::chrono::steady_clock::now() + timeout;
-        while (!done.load() && std::chrono::steady_clock::now() < dl)
+        while (!done->load(std::memory_order_acquire) &&
+               std::chrono::steady_clock::now() < dl)
             std::this_thread::sleep_for(1ms);
     }
 };
@@ -186,11 +222,15 @@ static void scenario_shm_source_to_pipeline() {
         for (auto& ord : orders) {
             (*shm_chan)->try_send(ord);
         }
-        // Wait for pipeline to finish processing
-        std::this_thread::sleep_for(30ms);
+        // Cooperatively wait for the 3 valid orders to drain (don't block the reactor).
+        co_await wait_until([] { return g_validated.load() >= 3; });
+        co_return;
     });
 
     println("[result] parsed={} validated={}", g_parsed.load(), g_validated.load());
+
+    pipeline.stop();  // close channels so worker coroutines exit before teardown
+    guard.run_and_wait([]() -> Task<void> { co_return; });  // flush post-stop wake events
 
     // Cleanup SHM channel
     (*shm_chan)->close();
@@ -233,12 +273,15 @@ static void scenario_pipeline_to_messagebus() {
         co_await pipeline.push(RawOrder{2001, "lg_elec", 105000.0, 20});
         co_await pipeline.push(RawOrder{2002, "posco",   382000.0, 3});
         co_await pipeline.push(RawOrder{2003, "hyundai", 205000.0, 8});
-        // Wait for processing to complete
-        std::this_thread::sleep_for(30ms);
+        // Cooperatively wait until the sink has received all 3 (don't block the reactor).
+        co_await wait_until([&] { return received.load() >= 3; });
     });
 
     println("[result] parsed={} validated={} subscriber_received={}",
             g_parsed.load(), g_validated.load(), received.load());
+
+    pipeline.stop();  // close channels so worker coroutines exit before teardown
+    guard.run_and_wait([]() -> Task<void> { co_return; });  // flush post-stop wake events
 }
 
 // ─── Scenario 3: MessageBusSource → StaticPipeline ───────────────────────────
@@ -262,7 +305,7 @@ static void scenario_messagebus_source_to_pipeline() {
 
     // Supply data via bus.publish()
     guard.run_and_wait([&]() -> Task<void> {
-        std::this_thread::sleep_for(5ms);  // wait for source to initialize
+        co_await wait_until([] { return false; }, 50ms);  // let the source subscribe
 
         co_await bus.publish("raw_validated",
             ValidatedOrder{{3001, "SAMSUNG", 72500.0, 10, true, ""}, 725000.0, true});
@@ -271,11 +314,15 @@ static void scenario_messagebus_source_to_pipeline() {
         co_await bus.publish("raw_validated",
             ValidatedOrder{{3003, "KAKAO", 55000.0, 200, true, ""}, 11000000.0, false}); // risk fail
 
-        std::this_thread::sleep_for(30ms);
+        // Cooperatively wait until all 3 have been risk-checked (don't block the reactor).
+        co_await wait_until([] { return g_risk_checked.load() >= 3; });
     });
 
     println("[result] risk_checked={} recorded={} (qty>200 -> risk rejected)",
             g_risk_checked.load(), g_recorded.load());
+
+    pipeline.stop();  // close channels so worker coroutines exit before teardown
+    guard.run_and_wait([]() -> Task<void> { co_return; });  // flush post-stop wake events
 }
 
 // ─── Scenario 4: Full Integration Pipeline ───────────────────────────────────
@@ -329,14 +376,18 @@ static void scenario_full_integration() {
     guard.run_and_wait([&]() -> Task<void> {
         for (auto& ord : batch)
             co_await stage1.push(ord);
-        // Wait for full pipeline to finish processing
-        std::this_thread::sleep_for(50ms);
+        // Cooperatively wait until 4 risk-passed orders are recorded (don't block the reactor).
+        co_await wait_until([] { return g_recorded.load() >= 4; });
     });
 
     println("[integration result] parsed={} validated={} risk_passed={} recorded={}",
             g_parsed.load(), g_validated.load(),
             g_risk_checked.load(), g_recorded.load());
     println("[expected] 5 parsed, 5 validated, 4 risk-passed (kakao 11M excluded), 4 recorded");
+
+    stage1.stop();  // close channels so worker coroutines exit before teardown
+    stage2.stop();
+    guard.run_and_wait([]() -> Task<void> { co_return; });  // flush post-stop wake events
 }
 
 // ─── Scenario 5: SHMBus (LOCAL_ONLY) + Pipeline Bridge ──────────────────────
@@ -366,14 +417,18 @@ static void scenario_shm_bus_bridge() {
         return;
     }
 
-    // Bridge coroutine: subscription → pipeline
-    guard.dispatcher.spawn([&, s = std::move(sub)]() mutable -> Task<void> {
+    // Bridge coroutine: subscription → pipeline. Bind the closure to a named
+    // local (NOT a temporary in the spawn() expression): the worker thread holds
+    // a pointer to it, and this function blocks below until processing finishes,
+    // so the closure must outlive the coroutine (else stack-use-after-scope).
+    auto bridge = [&, s = std::move(sub)]() mutable -> Task<void> {
         for (int i = 0; i < 3; ++i) {
             auto msg = co_await s->recv();
             if (!msg) break;
             co_await pipeline.push(**msg);
         }
-    }());
+    };
+    guard.dispatcher.spawn(bridge());
 
     // Publish data to SHMBus
     guard.run_and_wait([&]() -> Task<void> {
@@ -383,10 +438,15 @@ static void scenario_shm_bus_bridge() {
                             RawOrder{5002, "krafton", 235000.0, 2});
         shm_bus.try_publish("shm.raw_orders",
                             RawOrder{5003, "celltrion", 178000.0, 7});
-        std::this_thread::sleep_for(30ms);
+        // Cooperatively wait until the bridge has driven all 3 through parse (don't block).
+        co_await wait_until([] { return g_validated.load() >= 3; });
+        co_return;
     });
 
     println("[result] parsed={}", g_parsed.load());
+
+    pipeline.stop();  // close channels so worker coroutines exit before teardown
+    guard.run_and_wait([]() -> Task<void> { co_return; });  // flush post-stop wake events
 }
 
 int main() {

@@ -78,28 +78,6 @@ target_link_libraries(qbuem_crypto_tests
     GTest::gtest_main
 )
 
-# ── v1.6.0: PCIe/VFIO + MSI-X + UDS Advanced tests ──────────────────────────
-add_executable(qbuem_v16_tests
-    pcie_layout_test.cpp
-    ${QBUEM_TLS_FIX}
-)
-target_link_libraries(qbuem_v16_tests
-    PRIVATE
-    qbuem-stack::qbuem
-    GTest::gtest_main
-)
-
-# ── v1.7.0: RDMA + eBPF + NVMe IO tests ──────────────────────────────────────
-add_executable(qbuem_v17_tests
-    spdk_layout_test.cpp
-    ${QBUEM_TLS_FIX}
-)
-target_link_libraries(qbuem_v17_tests
-    PRIVATE
-    qbuem-stack::qbuem
-    GTest::gtest_main
-)
-
 # ── LockFreeConnectionPool + FutexSync + JwtAuthAction tests ──────────────────
 add_executable(qbuem_enhancement_tests
     enhancement_test.cpp
@@ -146,6 +124,33 @@ target_link_libraries(qbuem_scattered_span_tests
     GTest::gtest_main
 )
 add_test(NAME qbuem_scattered_span_tests COMMAND qbuem_scattered_span_tests)
+
+# ── Pipeline topology: Static / Dynamic(hot-swap+remove) / Graph(split+merge) ──
+add_executable(qbuem_pipeline_topology_tests
+    pipeline_topology_test.cpp
+    ${QBUEM_TLS_FIX}
+)
+target_link_libraries(qbuem_pipeline_topology_tests
+    PRIVATE
+    qbuem-stack::qbuem
+    GTest::gtest_main
+)
+add_test(NAME qbuem_pipeline_topology_tests COMMAND qbuem_pipeline_topology_tests)
+
+# ── Per-module coverage suites (2026-06-15): config/tracing, codec, buf, net, io,
+#    crypto-depth, pipeline-actions, middleware, core, db (~475 tests) ───────────
+foreach(cov
+    config_tracing  codec  buf  net  io
+    crypto_depth  pipeline_actions  middleware  core  db)
+    add_executable(qbuem_${cov}_cov_tests ${cov}_coverage_test.cpp ${QBUEM_TLS_FIX})
+    target_link_libraries(qbuem_${cov}_cov_tests PRIVATE qbuem-stack::qbuem GTest::gtest_main)
+    add_test(NAME qbuem_${cov}_cov_tests COMMAND qbuem_${cov}_cov_tests)
+endforeach()
+
+# ── Server + fetch + WebSocket end-to-end (loopback / socketpair / byte-level) ──
+add_executable(qbuem_server_e2e_tests server_e2e_test.cpp ${QBUEM_TLS_FIX})
+target_link_libraries(qbuem_server_e2e_tests PRIVATE qbuem-stack::qbuem GTest::gtest_main)
+add_test(NAME qbuem_server_e2e_tests COMMAND qbuem_server_e2e_tests)
 
 # ── Tracing / Timer / Arena / AsyncLogger / SocketAddr tests ──────────────────
 add_executable(qbuem_infra_tests
@@ -230,6 +235,38 @@ target_link_libraries(qbuem_kqueue_tests
 )
 endif()
 
+# ── Expanded coverage (2026-06-14): net loopback, JWT verify+tamper, router,
+#    buf pools (GenerationPool/LockFreeHashMap/simd_erasure), io buffers,
+#    content-type/body-encoder middleware. Authored + self-verified. ──────────
+add_executable(qbuem_coverage_tests
+    net_loopback_test.cpp
+    jwt_verify_test.cpp
+    router_test.cpp
+    buf_pools_test.cpp
+    io_buffers_test.cpp
+    middleware_extra_test.cpp
+    inplace_function_test.cpp
+    ${QBUEM_TLS_FIX}
+)
+target_link_libraries(qbuem_coverage_tests
+    PRIVATE
+    qbuem-stack::qbuem
+    GTest::gtest_main
+)
+# router_test.cpp inline-#includes src/http/*.cpp for standalone self-verify;
+# define this so it links the library instead (avoids duplicate symbols).
+target_compile_definitions(qbuem_coverage_tests PRIVATE QBUEM_ROUTER_TEST_LINK_LIB)
+add_test(NAME qbuem_coverage_tests COMMAND qbuem_coverage_tests)
+
+# reactor_loop_test inline-#includes src/core/kqueue_reactor.cpp (real macOS
+# kqueue event-loop behavior) → macOS-only; links only gtest (no reactor lib).
+if(APPLE)
+  add_executable(qbuem_reactor_loop_tests reactor_loop_test.cpp ${QBUEM_TLS_FIX})
+  target_include_directories(qbuem_reactor_loop_tests PRIVATE ${PROJECT_SOURCE_DIR}/include)
+  target_link_libraries(qbuem_reactor_loop_tests PRIVATE GTest::gtest_main)
+  add_test(NAME qbuem_reactor_loop_tests COMMAND qbuem_reactor_loop_tests)
+endif()
+
 # Use add_test (not gtest_discover_tests) to avoid running binaries at build
 # time.  On ARM64 Bionic (Termux) some executables have TLS alignment issues
 # that cause the dynamic linker to abort them; deferring to ctest keeps the
@@ -241,8 +278,6 @@ add_test(NAME qbuem_ext_tests              COMMAND qbuem_ext_tests)
 add_test(NAME qbuem_v14_tests              COMMAND qbuem_v14_tests)
 add_test(NAME qbuem_v15_tests              COMMAND qbuem_v15_tests)
 add_test(NAME qbuem_crypto_tests           COMMAND qbuem_crypto_tests)
-add_test(NAME qbuem_v16_tests              COMMAND qbuem_v16_tests)
-add_test(NAME qbuem_v17_tests              COMMAND qbuem_v17_tests)
 add_test(NAME qbuem_enhancement_tests      COMMAND qbuem_enhancement_tests)
 add_test(NAME qbuem_pipeline_guide_tests   COMMAND qbuem_pipeline_guide_tests)
 add_test(NAME qbuem_util_tests             COMMAND qbuem_util_tests)

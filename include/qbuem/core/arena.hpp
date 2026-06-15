@@ -126,8 +126,12 @@ public:
     size_t total_size = size + padding;
 
     if (current_ptr_ + total_size > current_block_end_) {
-      // Need a new block
-      allocate_block(std::max(size * 2, current_block_size_));
+      // Out of space in the current block. Reuse an already-allocated trailing
+      // block if the request fits in one (the common case after reset()); only
+      // allocate a fresh block when none fits. Without this, blocks_ would grow
+      // without bound across reset() cycles.
+      if (!advance_to_existing_block(size + alignment))
+        allocate_block(std::max(size * 2, current_block_size_));
       padding = (alignment -
                  (reinterpret_cast<uintptr_t>(current_ptr_) % alignment)) %
                 alignment;
@@ -164,7 +168,25 @@ public:
     setup_block(0);
   }
 
+  /** @brief Number of memory blocks currently owned (introspection / tests). */
+  [[nodiscard]] size_t block_count() const noexcept { return blocks_.size(); }
+
 private:
+  /**
+   * @brief Activate the next already-allocated block large enough for @p need
+   *        bytes (including worst-case alignment padding), if any exists.
+   * @returns true (and activates it) on success; false if none fits.
+   */
+  bool advance_to_existing_block(size_t need) {
+    for (size_t i = current_block_index_ + 1; i < blocks_.size(); ++i) {
+      if (static_cast<size_t>(block_ends_[i] - blocks_[i].get()) >= need) {
+        setup_block(i);
+        return true;
+      }
+    }
+    return false;
+  }
+
   /**
    * @brief Allocate a new memory block and set it as the current block.
    * @param size Size of the new block (bytes).

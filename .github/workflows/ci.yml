@@ -11,16 +11,39 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
-# ── Compiler baseline ─────────────────────────────────────────────────────────
-# All jobs run on Ubuntu 24.04 which ships GCC 13 + libstdc++-13 by default.
-# GCC 13 is the first release with complete C++23 support including <expected>,
-# std::print/println, std::flat_map, and the full <ranges> additions.
+# ── Verification matrix (all four {arch} × {OS} combinations) ──────────────────
+#   linux-x86_64  : ubuntu-24.04        (GCC 13, io_uring, x86 AES-NI/AVX paths)
+#   linux-aarch64 : ubuntu-24.04-arm    (GCC 13, io_uring, NEON paths)
+#   macos-arm64   : macos-15            (Apple clang, kqueue, ARM AES/PMULL)
+#   macos-x86_64  : macos-13            (Apple clang, kqueue, x86 AES-NI)
 #
-# x86_64 : ubuntu-24.04      (GitHub-hosted)
-# aarch64: ubuntu-24.04-arm  (GitHub-hosted ARM runner)
-# ─────────────────────────────────────────────────────────────────────────────
+# GCC 13 has complete C++23 (<expected>, ranges, etc.); <print> is provided by
+# qbuem/compat/print.hpp where the stdlib lacks it. On macOS, setup-xcode pins
+# the latest stable Xcode so libc++ has <expected> (Apple clang 15+ / LLVM 16+).
+# ──────────────────────────────────────────────────────────────────────────────
 
 jobs:
+  # ── 0. Zero-dependency guard ─────────────────────────────────────────────────
+  # Enforces the Zero Dependency pillar (D1-D3): the core (include/ + src/) may
+  # include ONLY the C++23 standard library and OS/arch headers. No third-party.
+  zero-dep:
+    name: Zero-Dependency Check
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: No third-party #include in include/ or src/
+        run: |
+          # Match real preprocessor includes only. Doxygen example lines such as
+          # ' *   #include <zlib.h>' begin with '*', not '#', so they are ignored.
+          if grep -rnE '^[[:space:]]*#[[:space:]]*include[[:space:]]*<(openssl|zlib|boost|nlohmann|rapidjson|fmt/|spdlog|brotli|zstd|lz4|snappy|curl|abseil|absl/|protobuf|grpc/|catch2|gtest|benchmark/|eigen|tbb/)' include/ src/; then
+            echo "::error::Third-party #include found in core — violates Zero Dependency (D1-D3)."
+            echo "Only the C++23 standard library and OS/arch headers are permitted in include/ and src/."
+            exit 1
+          fi
+          echo "OK: core (include/ + src/) has no third-party includes — stdlib + OS/arch only."
+      - name: No capturing immediately-invoked coroutine-lambda spawns
+        run: bash tool/check_coro_spawn.sh
+
   # ── 1. Static analysis (clang-tidy) ─────────────────────────────────────────
   analyze:
     name: Static Analysis (clang-tidy)
@@ -36,9 +59,6 @@ jobs:
 
       # Generate compile_commands.json with g++ so the standard library
       # include paths are resolved by GCC 13 (which has full C++23 support).
-      # clang-tidy-18 reads these commands and applies its analysis using
-      # the same flags; ExtraArgs in .clang-tidy supplies -D__cpp_concepts
-      # to work around the clang-18 vs libstdc++-13 __cpp_concepts mismatch.
       - name: Configure (generate compile_commands.json)
         run: |
           cmake -B build \
@@ -52,18 +72,16 @@ jobs:
       # Build library targets so FetchContent headers are materialised before
       # clang-tidy tries to resolve all includes.
       - name: Materialise FetchContent headers
-        run: cmake --build build --target qbuem_core --target qbuem_http --target qbuem -j$(nproc) || true
+        run: cmake --build build --target qbuem_core --target qbuem_http --target qbuem -j"$(nproc)" || true
 
-      # clang-tidy auto-discovers .clang-tidy walking up from each source file;
-      # -config-file is not accepted by the run-clang-tidy Python wrapper.
       - name: Run clang-tidy
         run: |
           run-clang-tidy-18 \
             -p build \
-            -j$(nproc) \
+            -j"$(nproc)" \
             $(find src -name '*.cpp' | sort)
 
-  # ── 2. Build & test ──────────────────────────────────────────────────────────
+  # ── 2. Build & test (all 4 platforms) ────────────────────────────────────────
   test:
     name: Test / ${{ matrix.platform }}
     runs-on: ${{ matrix.os }}
@@ -74,32 +92,55 @@ jobs:
         include:
           - os: ubuntu-24.04
             platform: linux-x86_64
+            cxx: g++
           - os: ubuntu-24.04-arm
             platform: linux-aarch64
+            cxx: g++
+          - os: macos-15
+            platform: macos-arm64
+            cxx: clang++
+          - os: macos-13
+            platform: macos-x86_64
+            cxx: clang++
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install liburing
+      # Pin the newest stable Xcode so Apple clang's libc++ has C++23 <expected>.
+      - name: Select latest Xcode (macOS)
+        if: runner.os == 'macOS'
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - name: Install liburing (Linux)
+        if: runner.os == 'Linux'
         run: sudo apt-get update -q && sudo apt-get install -y liburing-dev
 
+      # Every header must compile when included on its own (independent module
+      # composability). Run on macOS where the full header set is applicable.
+      - name: Header self-containment (macOS)
+        if: runner.os == 'macOS'
+        run: CXX=c++ bash tool/check_self_contained.sh
+
+      # Build the library, tests AND examples so a break in any of them surfaces.
       - name: Configure
         run: |
           cmake -B build \
             -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_CXX_COMPILER=g++ \
+            -DCMAKE_CXX_COMPILER=${{ matrix.cxx }} \
             -DBUILD_SHARED_LIBS=OFF \
             -DQBUEM_BUILD_TESTS=ON \
-            -DQBUEM_BUILD_EXAMPLES=OFF
+            -DQBUEM_BUILD_EXAMPLES=ON
 
       - name: Build
-        run: cmake --build build -j$(nproc)
+        run: cmake --build build --parallel
 
       - name: Test
         working-directory: build
         run: ctest --output-on-failure -C Release
 
-  # ── 3. Verify install layout (static + shared) ───────────────────────────────
+  # ── 3. Verify install layout + find_package (all 4 platforms) ────────────────
   install-check:
     name: Install Layout / ${{ matrix.platform }}
     runs-on: ${{ matrix.os }}
@@ -111,82 +152,127 @@ jobs:
         include:
           - os: ubuntu-24.04
             platform: linux-x86_64
+            cxx: g++
+            libext: so
           - os: ubuntu-24.04-arm
             platform: linux-aarch64
+            cxx: g++
+            libext: so
+          - os: macos-15
+            platform: macos-arm64
+            cxx: clang++
+            libext: dylib
+          - os: macos-13
+            platform: macos-x86_64
+            cxx: clang++
+            libext: dylib
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install liburing
+      - name: Select latest Xcode (macOS)
+        if: runner.os == 'macOS'
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - name: Install liburing (Linux)
+        if: runner.os == 'Linux'
         run: sudo apt-get update -q && sudo apt-get install -y liburing-dev
 
       # ── Static pass (.a) ───────────────────────────────────────────────────
-      - name: Configure (static pass)
+      - name: Configure + build + install (static)
         run: |
           cmake -B build_static \
             -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_CXX_COMPILER=g++ \
+            -DCMAKE_CXX_COMPILER=${{ matrix.cxx }} \
             -DBUILD_SHARED_LIBS=OFF \
             -DQBUEM_BUILD_TESTS=OFF \
             -DQBUEM_BUILD_EXAMPLES=OFF
+          cmake --build build_static --parallel
+          cmake --install build_static --prefix dist
 
-      - name: Build (static pass)
-        run: cmake --build build_static -j$(nproc)
-
-      - name: Install static pass → dist/
-        run: cmake --install build_static --prefix dist
-
-      # ── Shared pass (.so) ──────────────────────────────────────────────────
-      - name: Configure (shared pass)
+      # ── Shared pass (.so / .dylib) ─────────────────────────────────────────
+      - name: Configure + build + install (shared)
         run: |
           cmake -B build_shared \
             -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_CXX_COMPILER=g++ \
+            -DCMAKE_CXX_COMPILER=${{ matrix.cxx }} \
             -DBUILD_SHARED_LIBS=ON \
             -DQBUEM_BUILD_TESTS=OFF \
             -DQBUEM_BUILD_EXAMPLES=OFF
-
-      - name: Build (shared pass)
-        run: cmake --build build_shared -j$(nproc)
-
-      - name: Merge shared libs into dist/lib/
-        run: |
+          cmake --build build_shared --parallel
           cmake --install build_shared --prefix dist_shared
-          find dist_shared/lib -name "*.so*" -exec cp -P {} dist/lib/ \;
+          find dist_shared/lib -name "*.${{ matrix.libext }}*" -exec cp -P {} dist/lib/ \;
 
-      # ── Verify ────────────────────────────────────────────────────────────
-      - name: Verify include-lib layout (static + shared)
+      - name: Verify include + lib layout
         run: |
           echo "=== Install tree ==="
           find dist -type f | sort
-
           test -d dist/include/qbuem \
-            || (echo "FAIL: include/qbuem missing"        && exit 1)
+            || { echo "FAIL: include/qbuem missing"; exit 1; }
           test -f dist/include/qbuem/qbuem_stack.hpp \
-            || (echo "FAIL: umbrella header missing"      && exit 1)
-          ls dist/lib/*.a    > /dev/null 2>&1 \
-            || (echo "FAIL: no .a libs in lib/"           && exit 1)
-          ls dist/lib/*.so*  > /dev/null 2>&1 \
-            || (echo "FAIL: no .so libs in lib/"          && exit 1)
+            || { echo "FAIL: umbrella header missing"; exit 1; }
+          ls dist/lib/*.a > /dev/null 2>&1 \
+            || { echo "FAIL: no static (.a) libs"; exit 1; }
+          ls dist/lib/*.${{ matrix.libext }}* > /dev/null 2>&1 \
+            || { echo "FAIL: no shared (.${{ matrix.libext }}) libs"; exit 1; }
           test -f dist/lib/cmake/qbuem-stack/qbuem-stack-config.cmake \
-            || (echo "FAIL: CMake config missing"         && exit 1)
-
+            || { echo "FAIL: CMake package config missing"; exit 1; }
           echo "Install layout OK"
 
       - name: Smoke-test find_package
         run: |
           mkdir smoke && cd smoke
+          cat > main.cpp <<'EOF'
+          #include <qbuem/common.hpp>
+          int main() { qbuem::Result<int> r = 42; return r.value() == 42 ? 0 : 1; }
+          EOF
           cat > CMakeLists.txt <<'EOF'
           cmake_minimum_required(VERSION 3.20)
           project(smoke CXX)
           set(CMAKE_CXX_STANDARD 23)
+          set(CMAKE_CXX_STANDARD_REQUIRED ON)
           list(APPEND CMAKE_PREFIX_PATH "${CMAKE_CURRENT_SOURCE_DIR}/../dist")
           find_package(qbuem-stack REQUIRED)
-          add_executable(smoke_test ../tests/reactor_test.cpp)
+          add_executable(smoke_test main.cpp)
           target_link_libraries(smoke_test PRIVATE qbuem-stack::qbuem)
           EOF
-          cmake -B build_smoke \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_CXX_COMPILER=g++ \
-            2>&1 | tail -20
-          echo "find_package smoke test OK (configure step)"
+          cmake -B b -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=${{ matrix.cxx }}
+          cmake --build b --parallel
+          ./b/smoke_test && echo "find_package + link + run OK"
+
+  # ── 5. Fuzz smoke: build + briefly run every parser fuzz harness (clang+libFuzzer)
+  fuzz:
+    name: Fuzz Smoke (parsers, ASan+UBSan)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install clang + liburing
+        run: sudo apt-get update -q && sudo apt-get install -y clang liburing-dev
+      - name: Build + run fuzz harnesses (15s/target)
+        run: CXX=clang++ TIME=15 bash fuzz/run_fuzz.sh
+
+  # ── 6. ASan + UBSan: build the test suite with sanitizers and run it serially
+  #    (serial avoids CPU/RAM contention timeouts; catches UB the Release build misses)
+  sanitizers:
+    name: ASan + UBSan (tests)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install clang + liburing
+        run: sudo apt-get update -q && sudo apt-get install -y clang liburing-dev
+      - name: Configure (ASan + UBSan)
+        run: |
+          cmake -B build_san \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_CXX_COMPILER=clang++ \
+            -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-sanitize-recover=undefined -fno-omit-frame-pointer -g -O1" \
+            -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined" \
+            -DQBUEM_BUILD_EXAMPLES=OFF \
+            -DQBUEM_BUILD_BENCH=OFF
+      - name: Build
+        run: cmake --build build_san --parallel
+      - name: Test (serial, sanitized)
+        working-directory: build_san
+        run: ASAN_OPTIONS=detect_leaks=0 ctest -j1 --timeout 180 --output-on-failure

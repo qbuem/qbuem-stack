@@ -55,20 +55,22 @@ int main() {
     close(pipe_fds[0]);
     close(pipe_fds[1]);
 
-    // 2. Demonstrate Batching with multiple events
+    // 2. Demonstrate Batching with multiple events.
+    // NOTE: poll() returns the number of *kevent* (fd) events dispatched; timers
+    // fire through the internal TimerWheel and are NOT included in that count, so
+    // count actual fires via the timer callbacks (single-threaded: callbacks run
+    // inside poll() on this thread, so a plain int is safe).
     std::println("\n[Main] Demonstrating batching with timers...");
+    int timers_fired = 0;
     for (int i = 0; i < 10; ++i) {
-        reactor.register_timer(10 * (i + 1), [i](int id) {
+        reactor.register_timer(10 * (i + 1), [i, &timers_fired](int id) {
             std::println("[Timer] Timer {} (id {}) fired", i, id);
+            ++timers_fired;
         });
     }
 
-    int timer_count = 0;
-    while (timer_count < 10) {
-        auto polled = reactor.poll(100);
-        if (polled) {
-            timer_count += polled.value();
-        }
+    while (timers_fired < 10) {
+        reactor.poll(100);
     }
 
     std::println("--- Demo completed ---");

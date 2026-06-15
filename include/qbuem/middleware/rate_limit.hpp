@@ -164,10 +164,14 @@ inline Middleware rate_limit(RateLimitConfig cfg = {}) {
     res.header("X-RateLimit-Remaining", std::to_string(remaining > 0 ? remaining - 1 : 0));
 
     if (b.tokens < 1.0) {
-      double retry_secs = (1.0 - b.tokens) / rate;
+      // Guard rate <= 0 (no refill) → retry_secs would be +inf, and inf→int is
+      // undefined behaviour. Use a bounded fallback and clamp to [1, 86400] s.
+      double retry_secs = (rate > 0.0) ? (1.0 - b.tokens) / rate : 86400.0;
+      long retry_i = static_cast<long>(std::ceil(retry_secs));
+      if (retry_i < 1)      retry_i = 1;
+      else if (retry_i > 86400) retry_i = 86400;  // cap at one day
       res.status(429)
-         .header("Retry-After",
-                 std::to_string(static_cast<int>(std::ceil(retry_secs))))
+         .header("Retry-After", std::to_string(retry_i))
          .body("Too Many Requests");
       return false;
     }

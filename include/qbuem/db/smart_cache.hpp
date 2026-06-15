@@ -2,36 +2,25 @@
 
 /**
  * @file qbuem/db/smart_cache.hpp
- * @brief Smart DB Cache — SHM-shared query result cache with hardware invalidation.
+ * @brief SmartCache — in-process seqlock query-result cache (lock-free reads).
  * @defgroup qbuem_smart_cache Smart DB Cache
  * @ingroup qbuem_db
  *
  * ## Overview
  *
- * `SmartCache` stores query results in shared memory, making cached data
- * accessible to all processes on the same machine without inter-process
- * round trips. Cache invalidation is driven by hardware events (RDMA writes,
- * CAS on cache-line aligned slots) rather than software signals.
+ * `SmartCache` is an in-process, thread-safe seqlock cache: lock-free reads via
+ * a generation counter, writers bump the generation. Fast and correct for
+ * sharing cached data between THREADS in one process. This is the entire,
+ * fully-working scope of the type — no hidden stubs.
  *
- * ## Architecture
- * ```
- *  Process A                  Process B
- *  ┌─────────────────┐        ┌─────────────────┐
- *  │  SmartCache     │        │  SmartCache     │
- *  │  .get(key)      │        │  .get(key)      │
- *  │      ▼          │        │      ▼          │
- *  └──────┼──────────┘        └──────┼──────────┘
- *         │                          │
- *         └─────────┐  ┌─────────────┘
- *                   ▼  ▼
- *           ┌──────────────────┐
- *           │  SHM Region      │  (memfd_create / shm_open)
- *           │  CacheEntry[N]   │  cache-line aligned slots
- *           │  version atomic  │  hardware CAS invalidation
- *           └──────────────────┘
- * ```
+ * @note Scope: in-process only. The `name` constructor argument is accepted for
+ *       API symmetry but is a no-op (no `shm_open`/`mmap`). Cross-process /
+ *       shared-memory / RDMA invalidation are intentionally NOT provided — they
+ *       would require exotic hardware or a third-party stack, out of scope for
+ *       this zero-dependency library. For cross-process sharing, compose this
+ *       with `qbuem/shm/shm_channel.hpp`.
  *
- * ## Hardware invalidation
+ * ## Seqlock invalidation (the actual mechanism)
  *
  * Each `CacheEntry` contains a `generation` counter (64-bit atomic on a
  * separate cache line). On write:
@@ -42,11 +31,6 @@
  * On read: verify `generation` is even (no concurrent write), read data,
  * re-verify `generation` hasn't changed — a seqlock pattern.
  * No mutex required on the hot path.
- *
- * ## RDMA invalidation (distributed)
- * When a remote writer updates the underlying database and needs to invalidate
- * the cache across nodes, it posts an RDMA WRITE to the `generation` field of
- * affected slots, triggering cache misses on all readers.
  *
  * ## Usage
  * @code

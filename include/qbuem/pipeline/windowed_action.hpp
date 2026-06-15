@@ -33,6 +33,7 @@
  */
 
 #include <qbuem/common.hpp>
+#include <qbuem/core/dispatcher.hpp>
 #include <qbuem/core/task.hpp>
 #include <qbuem/pipeline/action_env.hpp>
 #include <qbuem/pipeline/async_channel.hpp>

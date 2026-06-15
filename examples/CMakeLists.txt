@@ -214,11 +214,6 @@ target_link_libraries(task_group_example PRIVATE qbuem-stack::qbuem)
 
 # ── 10 Hardware ───────────────────────────────────────────────────────────────
 
-# Hardware I/O: PCIeDevice, RDMAChannel, EBPFTracer, NVMeIO, kTLS
-add_executable(hardware_io_example
-    10-hardware/hardware_io/hardware_io_example.cpp)
-target_link_libraries(hardware_io_example PRIVATE qbuem-stack::qbuem)
-
 if(APPLE)
     add_executable(kqueue_sophistication
         10-hardware/kqueue_sophistication/kqueue_sophistication.cpp)
@@ -316,3 +311,48 @@ else()
         "  Set -DQBUEM_JSON_TAG=<tag> or ensure network access."
     )
 endif()
+
+# ── Newly registered (2026-06-14): 3 new module samples (config / transport
+#    codec / dev tools) + 3 previously-orphaned examples that build cleanly.
+#    None require qbuem-json. ────────────────────────────────────────────────
+add_executable(config_example
+    01-foundation/config/config_example.cpp)
+target_link_libraries(config_example PRIVATE qbuem-stack::qbuem)
+
+add_executable(transport_codec_example
+    04-codec-security/transport_codec/transport_codec_example.cpp)
+target_link_libraries(transport_codec_example PRIVATE qbuem-stack::qbuem)
+
+add_executable(backpressure_monitor_example
+    05-pipeline/backpressure_monitor/backpressure_monitor_example.cpp)
+target_link_libraries(backpressure_monitor_example PRIVATE qbuem-stack::qbuem)
+
+add_executable(stateful_window_example
+    05-pipeline/stateful_window/stateful_window_example.cpp)
+target_link_libraries(stateful_window_example PRIVATE qbuem-stack::qbuem)
+
+# ── Gap-filling examples (2026-06-14): previously-uncovered features.
+#    smart_cache + grpc are header-only; http2_server is experimental but runs
+#    (demonstrates the parts that work); transport_plain links the lib (its
+#    awaiters need reactor symbols → define the guard to skip inlined sources).
+add_executable(smart_cache_example
+    09-database/smart_cache/smart_cache_example.cpp)
+target_link_libraries(smart_cache_example PRIVATE qbuem-stack::qbuem)
+
+add_executable(grpc_example
+    02-network/grpc/grpc_example.cpp)
+target_link_libraries(grpc_example PRIVATE qbuem-stack::qbuem)
+
+add_executable(http2_server_example
+    02-network/http2_server/http2_server_example.cpp)
+target_link_libraries(http2_server_example PRIVATE qbuem-stack::qbuem)
+
+add_executable(transport_plain_example
+    04-codec-security/transport_plain/transport_plain_example.cpp)
+target_link_libraries(transport_plain_example PRIVATE qbuem-stack::qbuem)
+target_compile_definitions(transport_plain_example PRIVATE QBUEM_TRANSPORT_PLAIN_LINK_LIB)
+
+# NOT registered — these orphaned examples exist on disk but exercise stale or
+# experimental APIs and do NOT compile (deferred, tracked in docs/audit/):
+#   udp_advanced   — uses a removed Dispatcher::current()->spawn API
+#   dynamic_router — DynamicRouter RouteEntry is not move-insertable

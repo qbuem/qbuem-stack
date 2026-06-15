@@ -156,14 +156,13 @@ struct TraceMiddlewareConfig {
     }
 
     // ── 5. Record span start in PipelineTracer ─────────────────────────────────
-    tracing::PipelineTracer::global().start_span(
+    // start_span() returns an RAII Span that ends automatically when it goes out
+    // of scope (after next() + the traceresponse header below).
+    auto span = tracing::PipelineTracer::global().start_span(
         "http", "request", req.path());
 
-    // ── 6. Execute next handler ────────────────────────────────────────────
-    bool result = co_await next();
-
-    // ── 7. End span ────────────────────────────────────────────────────────
-    tracing::PipelineTracer::global().end_span("http", "request", req.path());
+    // ── 6. Execute next handler (NextFn returns Task<void>) ────────────────
+    co_await next();
 
     // ── 8. Add traceresponse header ─────────────────────────────────────────
     if (cfg.add_traceresponse) {
@@ -171,7 +170,7 @@ struct TraceMiddlewareConfig {
       res.header("traceresponse", trace_ctx.to_traceparent());
     }
 
-    co_return result;
+    co_return true;  // chain executed
   };
 }
 

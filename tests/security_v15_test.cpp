@@ -6,12 +6,10 @@
  * - SIMDJwtParser: structural parsing, error cases, claim extraction, expiry check
  * - Hardware Entropy: RDRAND/RDSEED availability query, hw_entropy_fill functionality
  * - crypto.hpp: constant_time_equal (existing), RDRAND extension
- * - kTLS sendfile: function declaration accessibility (including platform fallback)
  */
 
 #include <qbuem/security/simd_jwt.hpp>
 #include <qbuem/crypto.hpp>
-#include <qbuem/io/ktls.hpp>
 #include <gtest/gtest.h>
 
 #include <array>
@@ -188,25 +186,6 @@ TEST(HardwareEntropy, HwSeedFillProducesNonZero) {
     bool all_zero = true;
     for (auto b : buf) if (b != 0) { all_zero = false; break; }
     EXPECT_FALSE(all_zero);
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// kTLS sendfile API accessibility
-// ─────────────────────────────────────────────────────────────────────────────
-
-TEST(KtlsSendfile, FunctionAccessible) {
-    // Only verifies function existence without actual fds (compilation test)
-    // On non-Linux: returns errc::not_supported
-    off_t off = 0;
-    auto r = qbuem::io::ktls_sendfile(-1, -1, off, 0);
-    // Linux: invalid fd → EBADF
-    // non-Linux: not_supported
-    EXPECT_FALSE(r.has_value()); // error in either case
-}
-
-TEST(KtlsSendfile, AllVariantAccessible) {
-    auto r = qbuem::io::ktls_sendfile_all(-1, -1);
-    EXPECT_FALSE(r.has_value());
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -28,6 +28,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <new>  // std::hardware_destructive_interference_size (must be at file scope)
 
 namespace qbuem {
 
@@ -42,7 +43,6 @@ namespace qbuem {
  * otherwise defaults to 64.
  */
 #ifdef __cpp_lib_hardware_interference_size
-#  include <new>
 inline constexpr size_t kCacheLineSize =
     std::hardware_destructive_interference_size;
 #else

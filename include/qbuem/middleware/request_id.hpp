@@ -1,8 +1,11 @@
 #pragma once
 
+#include <qbuem/crypto/random.hpp>
 #include <qbuem/http/router.hpp>
 
+#include <array>
 #include <cstdint>
+#include <cstring>
 #include <format>
 #include <random>
 #include <string>
@@ -15,29 +18,33 @@ namespace detail {
 /**
  * Generate a UUID v4 string (xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx).
  *
- * Uses a thread_local Mersenne Twister seeded from std::random_device —
- * zero lock contention, one allocation per call (the returned std::string).
+ * Uses the in-tree CSPRNG (`crypto::random_fill`, backed by getrandom/arc4random)
+ * so request IDs are unpredictable — Mersenne Twister IDs are forgeable after
+ * observing a few outputs, which is unsafe if IDs ever flow into a trust path
+ * (idempotency keys, correlation tokens). On the (very rare) CSPRNG failure it
+ * falls back to a thread_local PRNG so request handling never throws/blocks.
  */
 inline std::string uuid_v4() {
-  thread_local std::mt19937_64 rng([] {
-    std::random_device rd;
-    return std::mt19937_64(rd());
-  }());
+  std::array<uint8_t, 16> b{};
+  if (!qbuem::crypto::random_fill(b)) {
+    thread_local std::mt19937_64 rng([] {
+      std::random_device rd;
+      return std::mt19937_64(rd());
+    }());
+    const uint64_t hi = rng();
+    const uint64_t lo = rng();
+    std::memcpy(b.data(), &hi, 8);
+    std::memcpy(b.data() + 8, &lo, 8);
+  }
 
-  uint64_t hi = rng();
-  uint64_t lo = rng();
+  b[6] = static_cast<uint8_t>((b[6] & 0x0F) | 0x40);  // version 4
+  b[8] = static_cast<uint8_t>((b[8] & 0x3F) | 0x80);  // variant 10xx
 
-  // Set version 4: bits 12–15 of time_hi = 0100
-  hi = (hi & 0xFFFFFFFFFFFF0FFFULL) | 0x0000000000004000ULL;
-  // Set variant 10xx: bits 62–63 of clock_seq = 10
-  lo = (lo & 0x3FFFFFFFFFFFFFFFULL) | 0x8000000000000000ULL;
-
-  return std::format("{:08x}-{:04x}-{:04x}-{:04x}-{:012x}",
-                     static_cast<uint32_t>(hi >> 32),
-                     static_cast<uint16_t>(hi >> 16),
-                     static_cast<uint16_t>(hi),
-                     static_cast<uint16_t>(lo >> 48),
-                     lo & 0x0000FFFFFFFFFFFFULL);
+  return std::format(
+      "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-"
+      "{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
+      b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7],
+      b[8], b[9], b[10], b[11], b[12], b[13], b[14], b[15]);
 }
 
 } // namespace detail

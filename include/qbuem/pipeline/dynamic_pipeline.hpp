@@ -136,15 +136,18 @@ public:
         stage->stop_src = std::make_unique<std::stop_source>();
         stage->in_channel  = std::make_shared<AsyncChannel<ContextualItem<T>>>(c);
         stage->out_channel = std::make_shared<AsyncChannel<ContextualItem<T>>>(c);
+        // Install the processing function in the live-swappable holder; the worker
+        // reads it from there each iteration (so hot_swap() is honored live).
+        std::atomic_store(&stage->active_fn,
+                          std::make_shared<StageFn>(std::move(full_fn)));
 
-        // Capture the typed fn for the worker factory.
-        // Use weak_ptr to avoid Stage→lambda→Stage circular reference that
+        // Use weak_ptr to avoid a Stage→lambda→Stage circular reference that
         // would prevent the Stage from ever being freed.
         std::weak_ptr<Stage> weak_stage = stage;
-        stage->worker_factory = [this, weak_stage, fn = std::move(full_fn)](size_t worker_idx) mutable
+        stage->worker_factory = [this, weak_stage](size_t worker_idx)
             -> Task<void> {
             auto s = weak_stage.lock();
-            if (s) co_await stage_worker(s, fn, worker_idx);
+            if (s) co_await stage_worker(s, worker_idx);
         };
 
         std::unique_lock lock(stages_mtx_);
@@ -187,26 +190,16 @@ public:
 
         auto full_fn = to_full_action_fn<FnT, T, T>(std::move(new_fn));
 
-        std::unique_lock lock(stages_mtx_);
+        std::shared_lock lock(stages_mtx_);   // only reads the vector; the swap is atomic
         auto it = std::find_if(stages_.begin(), stages_.end(),
             [&](const auto& s) { return s->name == name; });
         if (it == stages_.end())
             return false;
 
-        auto& stage = *it;
-        // Update worker factory with new function.
-        // Use weak_ptr (not shared_ptr) to avoid a Stage→worker_factory→Stage
-        // reference cycle that would prevent Stage from ever being freed.
-        std::weak_ptr<Stage> weak_stage = stage;
-        stage->worker_factory = [this, weak_stage, fn = std::move(full_fn)](size_t worker_idx) mutable
-            -> Task<void> {
-            auto s = weak_stage.lock();
-            if (s) co_await stage_worker(s, fn, worker_idx);
-        };
-        // Signal existing workers to stop; new ones will be spawned on next start
-        if (stage->stop_src)
-            stage->stop_src->request_stop();
-        stage->stop_src = std::make_unique<std::stop_source>();
+        // Atomically install the new function. Running worker(s) re-load it on the
+        // next item — the swap is live, with no respawn, drain, or dispatcher.
+        std::atomic_store(&(*it)->active_fn,
+                          std::make_shared<StageFn>(std::move(full_fn)));
         return true;
     }
 
@@ -360,6 +353,11 @@ private:
         std::shared_ptr<AsyncChannel<ContextualItem<T>>> in_channel;
         std::shared_ptr<AsyncChannel<ContextualItem<T>>> out_channel;
         std::function<Task<void>(size_t worker_idx)>     worker_factory;
+        // Live-swappable processing function. The worker re-loads it every
+        // iteration via atomic_load, so hot_swap() takes effect on the next item
+        // with no respawn and no race (the old function is simply never read
+        // again). Accessed only through std::atomic_load/atomic_store.
+        std::shared_ptr<StageFn>                         active_fn;
         std::atomic<size_t>                              worker_count{0};
         std::atomic<bool>                                enabled{true};
         std::unique_ptr<std::stop_source>                stop_src;
@@ -396,7 +394,6 @@ private:
      */
     Task<void> stage_worker(
         std::shared_ptr<Stage> stage,
-        std::function<Task<Result<T>>(T, ActionEnv)> fn,
         size_t worker_idx)
     {
         auto stop_token = stage->stop_src
@@ -421,7 +418,9 @@ private:
                 .registry   = cfg_.registry ? cfg_.registry : &global_registry(),
             };
 
-            auto result = co_await fn(std::move(citem->value), env);
+            // Re-load the (possibly hot-swapped) function each iteration.
+            auto fn = std::atomic_load(&stage->active_fn);
+            auto result = co_await (*fn)(std::move(citem->value), env);
 
             if (result.has_value() && stage->out_channel) {
                 co_await stage->out_channel->send(

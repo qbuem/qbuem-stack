@@ -170,7 +170,14 @@ template <typename T = void> struct Task {
     handle.promise().continuation = awaiting;
     return handle;
   }
-  T await_resume() { return std::move(*handle.promise().value); }
+  T await_resume() {
+    // If the awaited coroutine completed without producing a value, it took the
+    // exception path (an unhandled-exception handler is installed and returned).
+    // There is no T to hand back — reading the empty optional would be UB, and
+    // the no-exception contract is already broken, so terminate deterministically.
+    if (!handle.promise().value.has_value()) std::terminate();
+    return std::move(*handle.promise().value);
+  }
 };
 
 template <> struct Task<void> {

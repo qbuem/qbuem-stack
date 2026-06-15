@@ -43,6 +43,8 @@
 #include <cstring>
 #include <span>
 
+#include <qbuem/crypto/secure_zero.hpp>
+
 namespace qbuem::crypto {
 
 // ─── Poly1305 key and tag types ───────────────────────────────────────────────
@@ -353,6 +355,12 @@ public:
             buf_len_ = 0;
         }
         return detail::poly::finalize(state_);
+    }
+
+    /** @brief Securely zero the key-derived MAC state and buffer (optimizer-proof). */
+    void wipe() noexcept {
+        secure_zero(&state_, sizeof(state_));
+        secure_zero(buf_.data(), buf_.size());
     }
 
 private:
