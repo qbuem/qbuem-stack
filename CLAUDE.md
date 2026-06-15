@@ -55,7 +55,7 @@ CMake options:
 | Option | Default | Description |
 |---|---|---|
 | `QBUEM_BUILD_TESTS` | ON | Build unit tests under `tests/` |
-| `QBUEM_BUILD_EXAMPLES` | ON | Build all 58 examples under `examples/` |
+| `QBUEM_BUILD_EXAMPLES` | ON | Build all 59 examples under `examples/` |
 | `QBUEM_BUILD_BENCH` | ON | Build benchmarks under `bench/` |
 | `QBUEM_JSON_TAG` | `"main"` | qbuem-json git tag for FetchContent |
 
@@ -83,8 +83,8 @@ include/qbuem/          ← ALL public headers (header-centric library)
 
 src/                    ← Non-inline implementations (reactors, http parser/router)
 tests/                  ← Unit tests (mirrors include/ structure)
-examples/               ← 58 registered examples in 11 category subdirectories
-  01-foundation/        → hello_world, async_timer, micro_ticker, config
+examples/               ← 59 registered examples in 11 category subdirectories
+  01-foundation/        → hello_world, async_timer, micro_ticker, offload_pool, config
   02-network/           → tcp_echo_server, udp_advanced, udp_unix_socket, websocket, http_fetch, http2_server, grpc
   03-memory/            → arena, zero_copy_arena_channel, numa_hugepages, lockfree_bench
   04-codec-security/    → codec, crypto_url, security_middleware, crypto_primitives, transport_codec, transport_plain
@@ -418,6 +418,7 @@ The `IOVec<N>` must remain in scope for as long as the `scattered_span` is used.
 | Resilience patterns | `include/qbuem/pipeline/resilience/`, `examples/07-resilience/resilience/` |
 | Distributed tracing | `include/qbuem/tracing/`, `examples/08-observability/tracing/` |
 | Memory allocation | `include/qbuem/buf/arena.hpp`, `examples/03-memory/arena/` |
+| Thread management / blocking-work offload | `include/qbuem/core/dispatcher.hpp` (`spawn_on`, `drain`), `include/qbuem/core/offload_pool.hpp`, `include/qbuem/core/numa.hpp`, `examples/01-foundation/offload_pool/` |
 
 ---
 

@@ -123,7 +123,7 @@ Each row links to the **detailed guide** (role · when to use · how to use · g
 
 | Module(s) | What it does | Key types / entry points | Guide | Examples |
 |---|---|---|---|---|
-| **`core`** | Async runtime: C++23 coroutines, per-core reactor (epoll/io_uring/kqueue), multi-core dispatcher, zero-alloc memory, timers | `Task<T>` · `Reactor` · `Dispatcher` · `Arena` · `FixedPoolResource` · `TimerWheel` · `MicroTicker` | [02 — Core & Async](./docs/guide/02-core-and-async.md) | [01-foundation](./examples/01-foundation/), [03-memory](./examples/03-memory/) |
+| **`core`** | Async runtime: C++23 coroutines, per-core reactor (epoll/io_uring/kqueue), multi-core dispatcher with graceful `drain()`, blocking/CPU-bound offload pool, zero-alloc memory, timers | `Task<T>` · `Reactor` · `Dispatcher` · `OffloadPool` · `Arena` · `FixedPoolResource` · `TimerWheel` · `MicroTicker` | [02 — Core & Async](./docs/guide/02-core-and-async.md) | [01-foundation](./examples/01-foundation/), [03-memory](./examples/03-memory/) |
 | **`pipeline`** | Build & run processing graphs (ffmpeg-style): static / dynamic (hot-swap) / DAG (split+merge), channels, batching, windows, resilience | `PipelineBuilder` · `StaticPipeline` · `DynamicPipeline` · `PipelineGraph` · `RetryAction` · `CircuitBreaker` · `DeadLetterQueue` | [03 — Pipeline](./docs/guide/03-pipeline.md) | [05-pipeline](./examples/05-pipeline/), [07-resilience](./examples/07-resilience/) |
 | **`http` + `server`** | HTTP/1.1 SIMD parser, router, `App` web server, curl-free fetch client; HTTP/2 + WebSocket + gRPC handlers | `App` · `Request` · `Response` · `Router` · `fetch()` · `Http1Handler` · `WebSocketHandler` | [04 — HTTP & Server](./docs/guide/04-http-and-server.md) | [02-network](./examples/02-network/) |
 | **`crypto` + `security`** | SHA-256/512, HMAC, HKDF, PBKDF2, ChaCha20-Poly1305, AES-GCM, Base64, CSPRNG; SIMD JWT | `sha256` · `hmac` · `aes_gcm` · `chacha20_poly1305` · `base64` · `SIMDJwtParser` · `JwtAuthAction` | [05 — Crypto & Security](./docs/guide/05-crypto-and-security.md) | [04-codec-security](./examples/04-codec-security/) |
@@ -191,7 +191,7 @@ See `examples/11-advanced-apps/open_world/` and `spatial_fusion/`.
 
 ## Examples
 
-The [`examples/`](./examples/) directory contains **58 registered programs** in 11 categories.
+The [`examples/`](./examples/) directory contains **59 registered programs** in 11 categories.
 
 | # | Category | Programs | Highlights |
 | :--- | :--- | :---: | :--- |

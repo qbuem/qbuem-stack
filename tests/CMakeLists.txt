@@ -152,6 +152,11 @@ add_executable(qbuem_server_e2e_tests server_e2e_test.cpp ${QBUEM_TLS_FIX})
 target_link_libraries(qbuem_server_e2e_tests PRIVATE qbuem-stack::qbuem GTest::gtest_main)
 add_test(NAME qbuem_server_e2e_tests COMMAND qbuem_server_e2e_tests)
 
+# ── OffloadPool + Dispatcher graceful drain (thread-management) ────────────────
+add_executable(qbuem_offload_drain_tests offload_drain_test.cpp ${QBUEM_TLS_FIX})
+target_link_libraries(qbuem_offload_drain_tests PRIVATE qbuem-stack::qbuem GTest::gtest_main)
+add_test(NAME qbuem_offload_drain_tests COMMAND qbuem_offload_drain_tests)
+
 # ── Tracing / Timer / Arena / AsyncLogger / SocketAddr tests ──────────────────
 add_executable(qbuem_infra_tests
     tracing_test.cpp

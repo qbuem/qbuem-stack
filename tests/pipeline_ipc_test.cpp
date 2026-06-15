@@ -44,13 +44,24 @@ struct RunGuard {
     Dispatcher dispatcher;
     std::jthread thread;
 
+    bool stopped_ = false;
+
     explicit RunGuard(size_t threads = 2) : dispatcher(threads) {
         thread = std::jthread([this] { dispatcher.run(); });
     }
-    ~RunGuard() {
+    // Stop the reactor(s) and join the loop thread. Idempotent. Call this
+    // explicitly BEFORE any channel / pipeline / bus that the spawned coroutines
+    // reference is destroyed: otherwise a still-scheduled coroutine resumes and
+    // calls try_recv() on a freed channel (heap-use-after-free). RunGuard is
+    // declared first, so its destructor runs LAST — after those locals — which
+    // is exactly the order that triggers the race; shutting down here avoids it.
+    void shutdown() {
+        if (stopped_) return;
+        stopped_ = true;
         dispatcher.stop();
-        thread.join();
+        if (thread.joinable()) thread.join();
     }
+    ~RunGuard() { shutdown(); }
 
     // Named coroutine to prevent GCC HALO placing the lambda frame on
     // run_and_wait's stack (stack-use-after-scope under ASan).
@@ -105,6 +116,7 @@ TEST(MessageBusSinkTest, SinkPublishesToBus) {
         std::this_thread::sleep_for(20ms);
     });
 
+    guard.shutdown(); // stop reactor before bus destructs (prevents try_recv UAF)
     EXPECT_EQ(received->load(), 2);
     EXPECT_EQ(last_val->load(), 99);
 }
@@ -128,6 +140,7 @@ TEST(MessageBusSourceTest, InitSubscribesStream) {
             got->store(*opt.value(), std::memory_order_relaxed);
     });
 
+    guard.shutdown(); // stop reactor before bus destructs (prevents try_recv UAF)
     EXPECT_EQ(got->load(), 7);
 }
 
@@ -147,6 +160,7 @@ TEST(MessageBusSourceTest, CloseStopsStream) {
         if (!opt.has_value()) got_nullopt->store(true);
     });
 
+    guard.shutdown(); // stop reactor before bus destructs (prevents try_recv UAF)
     EXPECT_TRUE(got_nullopt->load());
 }
 
@@ -188,6 +202,7 @@ TEST(PipelineBuilderWithSinkTest, SinkReceivesPipelineOutput) {
     // Flush: ensure the reactor processes the post-stop wake events (worker,
     // sink_pump) before the dispatcher shuts down, preventing frame leaks.
     guard.run_and_wait([]() -> Task<void> { co_return; });
+    guard.shutdown(); // stop reactor before pipeline/bus destruct (prevents try_recv UAF)
     EXPECT_EQ(received->load(), 3);
 }
 
@@ -230,6 +245,7 @@ TEST(PipelineBuilderWithSourceTest, SourceFeedsDataIntoPipeline) {
     // Flush: ensure post-stop pump coroutines (source_pump, pump_channels,
     // worker) are processed by the reactor before the dispatcher shuts down.
     guard.run_and_wait([]() -> Task<void> { co_return; });
+    guard.shutdown(); // stop reactor before pipeline/bus destruct (prevents try_recv UAF)
     EXPECT_EQ(processed->load(), 3);
     EXPECT_EQ(sum->load(), 60);
 }
@@ -274,6 +290,7 @@ TEST(PipelineIpcIntegration, SourceStageSinkEndToEnd) {
     // Flush: ensure post-stop pump coroutines (source_pump, pump_channels,
     // worker, sink_pump) are all processed before the dispatcher shuts down.
     guard.run_and_wait([]() -> Task<void> { co_return; });
+    guard.shutdown(); // stop reactor before pipeline/bus destruct (prevents try_recv UAF)
     EXPECT_EQ(result_count->load(), 5);
     EXPECT_EQ(result_sum->load(), (1 + 2 + 3 + 4 + 5) * 10);
 }

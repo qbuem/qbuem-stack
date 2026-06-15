@@ -39,6 +39,11 @@ add_executable(micro_ticker_example
     01-foundation/micro_ticker/micro_ticker_example.cpp)
 target_link_libraries(micro_ticker_example PRIVATE qbuem-stack::qbuem)
 
+# OffloadPool: run blocking / CPU-bound work off the reactor threads
+add_executable(offload_pool_example
+    01-foundation/offload_pool/offload_pool_example.cpp)
+target_link_libraries(offload_pool_example PRIVATE qbuem-stack::qbuem)
+
 # ── 02 Network ────────────────────────────────────────────────────────────────
 
 add_executable(tcp_echo_server

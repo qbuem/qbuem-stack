@@ -72,6 +72,12 @@ struct Metrics {
 /**
  * @brief Main application class for Draco WAS.
  */
+// App is a cold singleton — constructed once at startup, never on a hot path —
+// so its struct padding has no performance impact. Suppress the opt-in padding
+// analyzer here (it still guards hot, frequently-allocated structs elsewhere);
+// reordering these 13 members across sections would risk constructor init-order
+// bugs for zero real benefit.
+// NOLINTNEXTLINE(clang-analyzer-optin.performance.Padding)
 class App {
 public:
   /**
