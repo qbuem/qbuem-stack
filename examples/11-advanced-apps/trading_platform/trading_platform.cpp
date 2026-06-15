@@ -125,21 +125,30 @@ struct OrderCmd {
     }
 };
 
+/// Compile-time FNV-1a (64-bit) hash of a JSON key, for switch-case dispatch.
+/// Self-contained so this example does not depend on any qbuem-json internal
+/// (its `detail::` helpers are not a stable public API).
+constexpr std::uint64_t json_key_hash(std::string_view s) noexcept {
+    std::uint64_t h = 1469598103934665603ULL;            // FNV-1a 64-bit offset basis
+    for (char c : s) { h ^= static_cast<std::uint8_t>(c); h *= 1099511628211ULL; } // FNV prime
+    return h;
+}
+
 /// Nexus Fusion ADL hook — maps JSON "type"/"side" keys to is_market/is_buy.
 /// Used when calling qbuem::fuse<OrderCmd>() (zero-tape direct parsing).
 inline void nexus_pulse(std::string_view key, const char*& p, const char* end, OrderCmd& o) {
-    using namespace qbuem::json::detail;
-    switch (fnv1a_hash(key)) {
-        case fnv1a_hash_ce("account_id"): from_json_direct(p, end, o.account_id); break;
-        case fnv1a_hash_ce("symbol"):     from_json_direct(p, end, o.symbol);     break;
-        case fnv1a_hash_ce("price"):      from_json_direct(p, end, o.price);      break;
-        case fnv1a_hash_ce("quantity"):   from_json_direct(p, end, o.quantity);   break;
-        case fnv1a_hash_ce("type"): {
+    using namespace qbuem::json::detail;  // from_json_direct / skip_direct
+    switch (json_key_hash(key)) {
+        case json_key_hash("account_id"): from_json_direct(p, end, o.account_id); break;
+        case json_key_hash("symbol"):     from_json_direct(p, end, o.symbol);     break;
+        case json_key_hash("price"):      from_json_direct(p, end, o.price);      break;
+        case json_key_hash("quantity"):   from_json_direct(p, end, o.quantity);   break;
+        case json_key_hash("type"): {
             std::string s; from_json_direct(p, end, s);
             o.is_market = (s == "market");
             break;
         }
-        case fnv1a_hash_ce("side"): {
+        case json_key_hash("side"): {
             std::string s; from_json_direct(p, end, s);
             o.is_buy = (s == "buy");
             break;
