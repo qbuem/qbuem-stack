@@ -8,8 +8,10 @@
 > **Supported platforms:** Linux x86_64 · ARM64 boards (Jetson-class) · macOS aarch64.
 > No exotic-hardware or third-party dependencies — stdlib + OS/arch intrinsics only.
 
-> 📚 **Full feature guide:** [`docs/guide/`](./docs/guide/) — detailed per-module docs
-> (role · when to use · how to use · gotchas), grounded in the real API.
+> 📚 **Start here:** [Getting Started](./docs/guide/01-getting-started.md) ·
+> **Full feature guide:** [`docs/guide/`](./docs/guide/) (per-module: role · when to use ·
+> how to use · gotchas, grounded in the real API) ·
+> **Runnable examples:** [`examples/`](./examples/) (58 programs).
 
 ---
 
@@ -114,21 +116,20 @@ there is no hard dependency. macOS uses kqueue.
 
 ---
 
-## Feature Support Matrix
+## Module Catalog — what's here, how to use it, where to look
 
-| Category | Features |
-| :--- | :--- |
-| **Network** | TCP / UDP / Unix sockets, `SO_REUSEPORT`, UDP multicast, `recvmmsg` batching, UDS FD passing, DNS |
-| **Async** | `Task<T>` coroutines, multi-core `Dispatcher`, epoll / io_uring / kqueue reactors, `TimerWheel` |
-| **HTTP** | SIMD HTTP/1.1 parser, router, static files, curl-free fetch client (HTTP), HTTP/2 + WebSocket + gRPC server handlers |
-| **Pipeline** | Static / Dynamic / Graph pipelines, hot-swap, MessageBus, SHM bridge, batching, windows, backpressure |
-| **IPC** | `SHMChannel<T>`, `SHMBus`, `SHMSource`/`SHMSink`, `MessageBusSource`/`Sink`, futex sync |
-| **Resilience** | Retry, CircuitBreaker, DeadLetterQueue, Saga, Canary, Checkpoint, SLO tracking |
-| **Crypto** | SHA-256/512, HMAC, HKDF, PBKDF2, ChaCha20-Poly1305, AES-GCM, Base64, CSPRNG (zero-dep, SIMD-accelerated) |
-| **Security** | SIMD JWT parser, `JwtAuthAction`, bearer/token auth middleware, security headers |
-| **Memory** | `Arena`, `FixedPoolResource`, `GenerationPool`, `inplace_function`, spatial bitsets, SIMD erasure coding |
-| **Observability** | W3C TraceContext, Span exporters (OTLP), samplers, in-process lifecycle tracer, trace-correlated logger |
-| **Config** | Zero-allocation `ConfigManager` + `Secret<T>` |
+Each row links to the **detailed guide** (role · when to use · how to use · gotchas) and a
+**runnable example**. Headers live under [`include/qbuem/`](./include/qbuem/).
+
+| Module(s) | What it does | Key types / entry points | Guide | Examples |
+|---|---|---|---|---|
+| **`core`** | Async runtime: C++23 coroutines, per-core reactor (epoll/io_uring/kqueue), multi-core dispatcher, zero-alloc memory, timers | `Task<T>` · `Reactor` · `Dispatcher` · `Arena` · `FixedPoolResource` · `TimerWheel` · `MicroTicker` | [02 — Core & Async](./docs/guide/02-core-and-async.md) | [01-foundation](./examples/01-foundation/), [03-memory](./examples/03-memory/) |
+| **`pipeline`** | Build & run processing graphs (ffmpeg-style): static / dynamic (hot-swap) / DAG (split+merge), channels, batching, windows, resilience | `PipelineBuilder` · `StaticPipeline` · `DynamicPipeline` · `PipelineGraph` · `RetryAction` · `CircuitBreaker` · `DeadLetterQueue` | [03 — Pipeline](./docs/guide/03-pipeline.md) | [05-pipeline](./examples/05-pipeline/), [07-resilience](./examples/07-resilience/) |
+| **`http` + `server`** | HTTP/1.1 SIMD parser, router, `App` web server, curl-free fetch client; HTTP/2 + WebSocket + gRPC handlers | `App` · `Request` · `Response` · `Router` · `fetch()` · `Http1Handler` · `WebSocketHandler` | [04 — HTTP & Server](./docs/guide/04-http-and-server.md) | [02-network](./examples/02-network/) |
+| **`crypto` + `security`** | SHA-256/512, HMAC, HKDF, PBKDF2, ChaCha20-Poly1305, AES-GCM, Base64, CSPRNG; SIMD JWT | `sha256` · `hmac` · `aes_gcm` · `chacha20_poly1305` · `base64` · `SIMDJwtParser` · `JwtAuthAction` | [05 — Crypto & Security](./docs/guide/05-crypto-and-security.md) | [04-codec-security](./examples/04-codec-security/) |
+| **`net` + `io` + `shm`** | TCP/UDP/Unix sockets, UDS FD passing, DNS; zero-copy scatter-gather + buffers + files; shared-memory IPC | `TcpStream` · `TcpListener` · `UdpSocket` · `IOVec<N>` · `scattered_span` · `SHMChannel<T>` · `SHMBus` | [06 — Net, I/O & SHM](./docs/guide/06-net-io-shm.md) | [02-network](./examples/02-network/), [06-ipc-messaging](./examples/06-ipc-messaging/) |
+| **`buf` + `codec` + `middleware`** | Zero-alloc pools & `inplace_function`, spatial bitsets, erasure coding; frame/line/length codecs; HTTP middleware | `GenerationPool` · `inplace_function` · `GridBitset` · `LineCodec` · `LengthPrefixedCodec` · `cors`/`rate_limit`/`token_auth` | [07 — Buffers, Codecs & Middleware](./docs/guide/07-buffers-codecs-middleware.md) | [03-memory](./examples/03-memory/), [04-codec-security](./examples/04-codec-security/), [11-advanced-apps](./examples/11-advanced-apps/) |
+| **`db` + `tracing` + `config`** | DB connection/cache interfaces; W3C distributed tracing; zero-alloc config + `Secret<T>` | `IConnectionPool` · `SmartCache` · `TraceContext` · `SpanExporter` · `ConfigManager` · `Secret<T>` | [08 — DB, Tracing & Config](./docs/guide/08-db-tracing-config.md) | [09-database](./examples/09-database/), [08-observability](./examples/08-observability/) |
 
 > **Not in scope (by design):** TLS/HTTPS (needs a third-party crypto lib), RDMA / AF_XDP / NVMe-passthrough /
 > eBPF / PCIe-VFIO (need exotic hardware or third-party libraries). Terminate TLS at a reverse proxy, or wrap a
