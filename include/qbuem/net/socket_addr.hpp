@@ -26,6 +26,7 @@
 #include <cstdint>
 #include <cstring>
 #include <format>
+#include <string_view>
 
 namespace qbuem {
 
@@ -220,22 +221,30 @@ struct SocketAddr {
   int to_chars(char *buf, size_t n) const noexcept {
     if (n == 0) return -1;
     switch (family_) {
+    // NOTE: format the address/path as std::string_view, NOT as the raw char[N]
+    // array. std::format renders a bounded char array inconsistently across
+    // standard libraries (libstdc++ decays to a C-string; libc++ formats the
+    // whole fixed-width array, trailing bytes included), which produced wrong
+    // output on macOS. A string_view always stops at the NUL terminator.
     case Family::IPv4: {
-      char ip[INET_ADDRSTRLEN]; // NOLINT(modernize-avoid-c-arrays)
+      char ip[INET_ADDRSTRLEN] = {}; // NOLINT(modernize-avoid-c-arrays)
       inet_ntop(AF_INET, &addr_.ipv4_, ip, sizeof(ip));
-      auto r = std::format_to_n(buf, n - 1, "{}:{}", ip, static_cast<unsigned>(port_));
+      auto r = std::format_to_n(buf, n - 1, "{}:{}",
+                                std::string_view{ip}, static_cast<unsigned>(port_));
       *r.out = '\0';
       return static_cast<int>(r.out - buf);
     }
     case Family::IPv6: {
-      char ip[INET6_ADDRSTRLEN]; // NOLINT(modernize-avoid-c-arrays)
+      char ip[INET6_ADDRSTRLEN] = {}; // NOLINT(modernize-avoid-c-arrays)
       inet_ntop(AF_INET6, &addr_.ipv6_, ip, sizeof(ip));
-      auto r = std::format_to_n(buf, n - 1, "[{}]:{}", ip, static_cast<unsigned>(port_));
+      auto r = std::format_to_n(buf, n - 1, "[{}]:{}",
+                                std::string_view{ip}, static_cast<unsigned>(port_));
       *r.out = '\0';
       return static_cast<int>(r.out - buf);
     }
     case Family::Unix: {
-      auto r = std::format_to_n(buf, n - 1, "unix:{}", addr_.unix_);
+      auto r = std::format_to_n(buf, n - 1, "unix:{}",
+                                std::string_view{addr_.unix_});
       *r.out = '\0';
       return static_cast<int>(r.out - buf);
     }
