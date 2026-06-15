@@ -11,11 +11,12 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
-# ── Verification matrix (all four {arch} × {OS} combinations) ──────────────────
+# ── Verification matrix (the three supported {arch} × {OS} targets) ────────────
 #   linux-x86_64  : ubuntu-24.04        (GCC 13, io_uring, x86 AES-NI/AVX paths)
 #   linux-aarch64 : ubuntu-24.04-arm    (GCC 13, io_uring, NEON paths)
 #   macos-arm64   : macos-15            (Apple clang, kqueue, ARM AES/PMULL)
-#   macos-x86_64  : macos-13            (Apple clang, kqueue, x86 AES-NI)
+# macOS x86_64 (Intel) is intentionally out of scope — supported targets are
+# Linux x86_64, Linux arm64 (Jetson-class boards), and macOS arm64 only.
 #
 # GCC 13 has complete C++23 (<expected>, ranges, etc.); <print> is provided by
 # qbuem/compat/print.hpp where the stdlib lacks it. On macOS, setup-xcode pins
@@ -99,9 +100,6 @@ jobs:
           - os: macos-15
             platform: macos-arm64
             cxx: clang++
-          - os: macos-13
-            platform: macos-x86_64
-            cxx: clang++
 
     steps:
       - uses: actions/checkout@v4
@@ -165,10 +163,6 @@ jobs:
             libext: so
           - os: macos-15
             platform: macos-arm64
-            cxx: clang++
-            libext: dylib
-          - os: macos-13
-            platform: macos-x86_64
             cxx: clang++
             libext: dylib
 
