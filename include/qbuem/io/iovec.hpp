@@ -46,8 +46,15 @@ namespace qbuem {
  */
 template <size_t N>
 struct IOVec {
-  /** @brief Array of iovec entries. */
-  iovec vecs[N];
+  /**
+   * @brief Array of iovec entries.
+   *
+   * Deliberately a C array: it maps directly onto the `struct iovec[]` layout
+   * that `writev(2)` / `readv(2)` / `sendmsg(2)` consume, so `vecs` can be
+   * passed to the kernel with zero copy and zero adaptation. `std::array`
+   * would force `.data()` at every syscall and span boundary for no benefit.
+   */
+  iovec vecs[N];  // NOLINT(modernize-avoid-c-arrays) — POSIX iovec syscall ABI
 
   /** @brief Number of currently valid entries. */
   size_t count = 0;

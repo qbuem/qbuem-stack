@@ -114,15 +114,45 @@ include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
 
 # ============================================================================
+# Optional Link-Time Optimization (opt-in, OFF by default)
+# ----------------------------------------------------------------------------
+# LTO is left OFF by default for build portability and correctness:
+#   * clang emits LTO objects as LLVM bitcode; archived into a .a they are
+#     unreadable by a GNU ld whose LTO plugin is a different LLVM version
+#     ("file format not recognized"), which breaks clang+GNU-ld toolchains.
+#   * LTO links are memory-hungry and can OOM CI runners on large test suites.
+# When enabled, it is applied via CMake's INTERPROCEDURAL_OPTIMIZATION property
+# so the correct -flto flags, archiver (llvm-ar/gcc-ar) and linker plugin are
+# selected for the active compiler — the portable way to do LTO.
+# ============================================================================
+option(QBUEM_ENABLE_LTO "Enable interprocedural optimization (LTO) for library targets" OFF)
+set(QBUEM_IPO_SUPPORTED OFF)
+if(QBUEM_ENABLE_LTO)
+    include(CheckIPOSupported)
+    check_ipo_supported(RESULT QBUEM_IPO_SUPPORTED OUTPUT _qbuem_ipo_msg)
+    if(QBUEM_IPO_SUPPORTED)
+        message(STATUS "[qbuem-stack] LTO: enabled (interprocedural optimization)")
+    else()
+        message(WARNING "[qbuem-stack] LTO requested but unsupported: ${_qbuem_ipo_msg}")
+    endif()
+endif()
+
+# ============================================================================
 # Helper: compile options (PRIVATE — never leak to consumers)
+# ----------------------------------------------------------------------------
+# Optimization level follows CMAKE_BUILD_TYPE (Release => -O3 -DNDEBUG via the
+# toolchain default); do NOT hardcode -O3 here, as that would also optimize
+# Debug / sanitizer builds and degrade their diagnostics.
 # ============================================================================
 function(qbuem_compile_options target)
     if(NOT MSVC)
         target_compile_options(${target} PRIVATE
             -Wall -Wextra -Wpedantic -Werror
-            -O3 -flto
             $<$<CONFIG:Release>:-march=native>
         )
+    endif()
+    if(QBUEM_ENABLE_LTO AND QBUEM_IPO_SUPPORTED)
+        set_property(TARGET ${target} PROPERTY INTERPROCEDURAL_OPTIMIZATION TRUE)
     endif()
 endfunction()
 
