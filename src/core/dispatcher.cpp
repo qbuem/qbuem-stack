@@ -8,7 +8,20 @@
 #include <qbuem/core/epoll_reactor.hpp>
 #endif
 
+#include <chrono>
+
 namespace qbuem {
+
+namespace {
+// Wrap a spawned task so the in-flight counter drops when it completes. NO
+// captures: the task is owned by the coroutine frame as a parameter, so this is
+// not the use-after-scope-prone capturing-IIFE pattern (and passes
+// tool/check_coro_spawn.sh, which only flags `[capture]` spawn lambdas).
+Task<void> tracked_spawn(Task<void> task, std::atomic<size_t> *counter) {
+  co_await std::move(task);
+  counter->fetch_sub(1, std::memory_order_acq_rel);
+}
+} // namespace
 
 Dispatcher::Dispatcher(size_t thread_count) {
   for (size_t i = 0; i < thread_count; ++i) {
@@ -82,8 +95,10 @@ void Dispatcher::post_to(size_t reactor_idx, std::function<void()> fn) {
 void Dispatcher::spawn(Task<void> task) {
   if (reactors_.empty())
     return;
-  auto h = task.handle;
-  task.detach();
+  in_flight_.fetch_add(1, std::memory_order_relaxed);
+  Task<void> wrapped = tracked_spawn(std::move(task), &in_flight_);
+  auto h = wrapped.handle;
+  wrapped.detach();
   size_t idx = next_post_idx_.fetch_add(1, std::memory_order_relaxed) %
                reactors_.size();
   reactors_[idx]->post([h]() mutable { h.resume(); });
@@ -92,9 +107,22 @@ void Dispatcher::spawn(Task<void> task) {
 void Dispatcher::spawn_on(size_t reactor_idx, Task<void> task) {
   if (reactor_idx >= reactors_.size())
     return;
-  auto h = task.handle;
-  task.detach();
+  in_flight_.fetch_add(1, std::memory_order_relaxed);
+  Task<void> wrapped = tracked_spawn(std::move(task), &in_flight_);
+  auto h = wrapped.handle;
+  wrapped.detach();
   reactors_[reactor_idx]->post([h]() mutable { h.resume(); });
+}
+
+size_t Dispatcher::drain(std::chrono::milliseconds timeout) {
+  const auto deadline = std::chrono::steady_clock::now() + timeout;
+  while (in_flight_.load(std::memory_order_acquire) > 0 &&
+         std::chrono::steady_clock::now() < deadline) {
+    std::this_thread::sleep_for(std::chrono::milliseconds{1});
+  }
+  const size_t remaining = in_flight_.load(std::memory_order_acquire);
+  stop();
+  return remaining;
 }
 
 } // namespace qbuem

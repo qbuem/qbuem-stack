@@ -17,6 +17,7 @@
 #include <qbuem/core/task.hpp>
 
 #include <atomic>
+#include <chrono>
 #include <coroutine>
 #include <functional>
 #include <memory>
@@ -195,12 +196,46 @@ public:
    */
   void spawn_on(size_t reactor_idx, Task<void> task);
 
+  /**
+   * @brief Number of spawned coroutines that have not yet completed.
+   *
+   * Every `spawn()` / `spawn_on()` increments this; the count drops back as
+   * each coroutine runs to completion. Useful for observability and for
+   * implementing graceful shutdown (see `drain()`).
+   */
+  [[nodiscard]] size_t in_flight() const noexcept {
+    return in_flight_.load(std::memory_order_acquire);
+  }
+
+  /**
+   * @brief Wait for in-flight coroutines to finish, then stop the reactors.
+   *
+   * Graceful shutdown: blocks until `in_flight()` reaches 0 or @p timeout
+   * elapses, then calls `stop()`. Unlike `stop()` alone, this lets already
+   * accepted work run to completion instead of abandoning suspended coroutine
+   * frames. Stop the listeners / source of new work BEFORE calling drain() so
+   * the count can actually reach zero.
+   *
+   * @warning Must be called from a thread that does NOT run a reactor loop
+   *          (e.g. the thread that owns the Dispatcher), otherwise the wait
+   *          would block the very reactor that must make progress. This mirrors
+   *          the constraint on `stop()`.
+   *
+   * @param timeout Maximum time to wait for outstanding coroutines.
+   * @returns Coroutines still in flight when drain returned (0 == clean drain;
+   *          >0 == timed out and `stop()` forced shutdown with work outstanding).
+   */
+  size_t drain(std::chrono::milliseconds timeout = std::chrono::seconds{5});
+
 private:
   /** @brief Running state flag. Used for synchronization between `run()` and `stop()`. */
   std::atomic<bool> running_{false};
 
   /** @brief Round-robin counter for `post()`. */
   std::atomic<size_t> next_post_idx_{0};
+
+  /** @brief Count of spawned coroutines that have not yet completed. */
+  std::atomic<size_t> in_flight_{0};
 
   /**
    * @brief List of worker Reactor instances.

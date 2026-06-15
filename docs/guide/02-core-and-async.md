@@ -442,6 +442,54 @@ int main() {
 - A given fd is always handled by the same reactor for its whole lifetime
   (sticky), which keeps per-connection state thread-confined.
 
+### Graceful shutdown: `in_flight()` + `drain()`
+`stop()` halts the reactors immediately and abandons any suspended coroutine
+frames. For an orderly shutdown, stop accepting new work (close your listeners),
+then call `drain(timeout)`: it waits for `in_flight()` (the count of spawned
+coroutines that have not yet completed) to reach 0, then calls `stop()`. It
+returns the number still outstanding — `0` means a clean drain, `>0` means the
+timeout forced shutdown with work in flight. Call it from a non-reactor thread
+(same constraint as `stop()`).
+
+---
+
+## `OffloadPool` — blocking / CPU-bound work off the reactor
+
+### What it is / role
+A fixed-size worker-thread pool (`<qbuem/core/offload_pool.hpp>`) for the work
+that must NOT run on a reactor thread: synchronous third-party libraries,
+CPU-bound transforms (compression, large-buffer hashing, media encoding), or
+file I/O on platforms without io_uring. It is the sanctioned escape hatch from
+the "no blocking on a reactor thread" rule (L1).
+
+### How to use it
+```cpp
+#include <qbuem/core/offload_pool.hpp>
+
+OffloadPool pool;   // create once; share across the app (default: hw concurrency)
+
+Task<Result<void>> handle(Request req, std::stop_token) {
+    // Runs on a pool thread; the coroutine resumes on its ORIGIN reactor.
+    auto digest = co_await pool.run([body = std::move(req).body()] {
+        return expensive_blocking_hash(body);   // safe: off the reactor
+    });
+    co_return Response{}.body(digest);
+}
+```
+`co_await pool.run(fn)` captures the current reactor, runs `fn` on a pool worker,
+then posts the resume back to that reactor (no cross-reactor resume), and yields
+`fn()`'s return value. Use `submit(fn)` for fire-and-forget work with no result.
+
+### Gotchas / constraints
+- Await it from a reactor coroutine so resume affinity is preserved; off a
+  reactor (e.g. a bare unit test) it resumes inline on the pool thread.
+- The pool must outlive every in-flight `run()`. Shut it down only after the
+  reactors that own those coroutines have drained; `shutdown()` runs all
+  already-queued jobs before joining, so pending resumes are still posted.
+- The queue uses a mutex/condvar — fine here, because the whole point is to keep
+  this (non-latency-critical) work OFF the latency-critical reactor threads.
+- Runnable reference: `examples/01-foundation/offload_pool/`.
+
 ---
 
 ## I/O awaiters: `AsyncRead`, `AsyncWrite`, `AsyncSleep`, `AsyncAccept`
