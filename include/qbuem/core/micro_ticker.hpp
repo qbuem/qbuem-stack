@@ -24,12 +24,10 @@
  * `MicroTicker` does not replace the `Reactor`; it **drives** it via `poll(0)`.
  *
  * @code
- * // Instantiate the platform reactor directly (no factory function):
- * #if defined(__linux__)
- *   auto reactor = std::make_unique<qbuem::EpollReactor>();   // or IOUringReactor
- * #elif defined(__APPLE__)
- *   auto reactor = std::make_unique<qbuem::KqueueReactor>();
- * #endif
+ * // PlatformReactor resolves to the reactor this build was compiled with
+ * // (Kqueue on macOS, io_uring or epoll on Linux):
+ * #include <qbuem/core/platform_reactor.hpp>
+ *   auto reactor = std::make_unique<qbuem::PlatformReactor>();
  * qbuem::MicroTicker ticker(std::chrono::microseconds{100});
  *
  * ticker.run([&](uint64_t tick_idx) {

@@ -51,7 +51,7 @@ The simplest possible qbuem-stack programs — start here.
 |---------|------|-------------|
 | [hello_world](01-foundation/hello_world/) | `hello_world.cpp` | Minimal HTTP server with middleware and routing |
 | [async_timer](01-foundation/async_timer/) | `async_timer.cpp` | Sync vs. async coroutine handlers, `co_await sleep()` |
-| [micro_ticker](01-foundation/micro_ticker/) | `micro_ticker_example.cpp` | Sub-millisecond precision loop: nanosleep + busy-spin hybrid, MicroTicker driving EpollReactor |
+| [micro_ticker](01-foundation/micro_ticker/) | `micro_ticker_example.cpp` | Sub-millisecond precision loop: nanosleep + busy-spin hybrid, MicroTicker driving the build-selected PlatformReactor |
 
 ---
 

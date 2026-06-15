@@ -30,13 +30,11 @@
  */
 
 #include <qbuem/core/micro_ticker.hpp>
-#if defined(__linux__)
-#include <qbuem/core/epoll_reactor.hpp>
-using PlatformReactor = qbuem::EpollReactor;
-#else
-#include <qbuem/core/kqueue_reactor.hpp>
-using PlatformReactor = qbuem::KqueueReactor;
-#endif
+// PlatformReactor resolves to the reactor this build actually compiled (Kqueue
+// on macOS, io_uring or epoll on Linux per QBUEM_HAS_IOURING). Naming a concrete
+// reactor directly would fail to link in the other configuration.
+#include <qbuem/core/platform_reactor.hpp>
+using PlatformReactor = qbuem::PlatformReactor;
 #include <qbuem/qbuem_stack.hpp>
 
 #include <algorithm>
