@@ -133,8 +133,13 @@ jobs:
             -DQBUEM_BUILD_TESTS=ON \
             -DQBUEM_BUILD_EXAMPLES=ON
 
+      # -j2, not full parallelism: the Release -O3 build spans the whole test +
+      # example + bench set, and several translation units (the per-module
+      # coverage suites, grpc/http2 examples) each need ~3-4 GB at -O3. Four
+      # concurrent cc1plus processes peak the 16 GB hosted runners and get
+      # OOM-killed; two keeps peak memory well under the limit.
       - name: Build
-        run: cmake --build build --parallel
+        run: cmake --build build --parallel 2
 
       - name: Test
         working-directory: build
