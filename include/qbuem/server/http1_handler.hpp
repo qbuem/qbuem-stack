@@ -322,7 +322,7 @@ private:
     std::size_t idx = 0; // index of the first non-exhausted iovec
     while (idx < working.count) {
       ssize_t n = ::writev(fd,
-                           working.vecs + idx,
+                           working.vecs.data() + idx,
                            static_cast<int>(working.count - idx));
       if (n <= 0) return false;
 

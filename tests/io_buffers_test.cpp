@@ -376,13 +376,13 @@ TEST(IOVecTest, AsSpanReflectsValidEntries) {
 
     auto sp = vec.as_span();
     ASSERT_EQ(sp.size(), 2u);
-    EXPECT_EQ(sp.data(), vec.vecs);
+    EXPECT_EQ(sp.data(), vec.vecs.data());
     EXPECT_EQ(sp[0].iov_len, sizeof(kHdr));
     EXPECT_EQ(sp[1].iov_len, sizeof(kBody));
 
     auto csp = vec.as_const_span();
     EXPECT_EQ(csp.size(), 2u);
-    EXPECT_EQ(csp.data(), vec.vecs);
+    EXPECT_EQ(csp.data(), vec.vecs.data());
 }
 
 // as_scattered() must round-trip exactly through iov_data() / iov_count():
@@ -396,7 +396,7 @@ TEST(IOVecTest, AsScatteredRoundTripsThroughIovDataAndCount) {
     scattered_span s = vec.as_scattered();
 
     // iov_data() points at the backing IOVec array; iov_count() matches count.
-    EXPECT_EQ(s.iov_data(), vec.vecs);
+    EXPECT_EQ(s.iov_data(), vec.vecs.data());
     EXPECT_EQ(s.iov_count(), static_cast<int>(vec.count));
     EXPECT_EQ(s.size(), vec.count);
     EXPECT_EQ(s.total_bytes(), vec.total_bytes());

@@ -17,6 +17,7 @@
 
 #include <qbuem/common.hpp>
 
+#include <array>
 #include <cassert>
 #include <cstddef>
 #include <span>
@@ -46,15 +47,9 @@ namespace qbuem {
  */
 template <size_t N>
 struct IOVec {
-  /**
-   * @brief Array of iovec entries.
-   *
-   * Deliberately a C array: it maps directly onto the `struct iovec[]` layout
-   * that `writev(2)` / `readv(2)` / `sendmsg(2)` consume, so `vecs` can be
-   * passed to the kernel with zero copy and zero adaptation. `std::array`
-   * would force `.data()` at every syscall and span boundary for no benefit.
-   */
-  iovec vecs[N];  // NOLINT(modernize-avoid-c-arrays) — POSIX iovec syscall ABI
+  /** @brief Array of iovec entries (std::array — passes the modernize lint
+   *  and yields a contiguous `iovec[]` for syscalls via `vecs.data()`). */
+  std::array<iovec, N> vecs{};
 
   /** @brief Number of currently valid entries. */
   size_t count = 0;
@@ -103,7 +98,7 @@ struct IOVec {
    * @returns Mutable span over `iovec[0..count)`.
    */
   [[nodiscard]] std::span<iovec> as_span() noexcept {
-    return {vecs, count};
+    return {vecs.data(), count};
   }
 
   /**
@@ -112,7 +107,7 @@ struct IOVec {
    * @returns Const span over `iovec[0..count)`.
    */
   [[nodiscard]] std::span<const iovec> as_const_span() const noexcept {
-    return {vecs, count};
+    return {vecs.data(), count};
   }
 
   /**
