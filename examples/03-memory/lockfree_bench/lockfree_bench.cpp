@@ -117,7 +117,7 @@ static void bench_hash_map() {
     std::mutex                                  std_mtx;
 
     for (size_t i = 0; i < keys.size() / 2; ++i) {
-        lf_map.put(keys[i], static_cast<uint32_t>(i));
+        (void)lf_map.put(keys[i], static_cast<uint32_t>(i));
         std_map.emplace(keys[i], static_cast<uint32_t>(i));
     }
 
@@ -128,7 +128,7 @@ static void bench_hash_map() {
         const uint32_t i   = key_idx.fetch_add(1, std::memory_order_relaxed) % kKeys;
         const uint64_t key = keys[i];
         if ((i & 3u) == 0u) {
-            lf_map.put(key, i);
+            (void)lf_map.put(key, i);
         } else {
             auto v = lf_map.get(key);
             (void)v;
@@ -194,7 +194,7 @@ static void bench_intrusive_list() {
     });
 
     // Drain before next benchmark
-    while (!il.empty()) il.pop_front();
+    while (!il.empty()) (void)il.pop_front();
 
     // std::list benchmark
     std::list<int> sl;
@@ -289,7 +289,7 @@ static void bench_concurrent_hash_map() {
     // LockFreeHashMap — no mutex needed
     qbuem::LockFreeHashMap<uint64_t, uint32_t> lf_map(kCapacity);
     for (size_t i = 0; i < keys.size() / 2; ++i)
-        lf_map.put(keys[i], static_cast<uint32_t>(i));
+        (void)lf_map.put(keys[i], static_cast<uint32_t>(i));
 
     std::atomic<int64_t> lf_ops{0};
     {
@@ -302,7 +302,7 @@ static void bench_concurrent_hash_map() {
                 while (Clock::now() < end) {
                     const size_t i   = local_rng() % kKeys;
                     const uint64_t k = keys[i];
-                    if ((local_rng() & 3u) == 0u) lf_map.put(k, static_cast<uint32_t>(i));
+                    if ((local_rng() & 3u) == 0u) (void)lf_map.put(k, static_cast<uint32_t>(i));
                     else                           { auto v = lf_map.get(k); (void)v; }
                     ++local_ops;
                 }
