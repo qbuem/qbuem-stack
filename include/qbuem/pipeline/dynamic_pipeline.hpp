@@ -136,15 +136,18 @@ public:
         stage->stop_src = std::make_unique<std::stop_source>();
         stage->in_channel  = std::make_shared<AsyncChannel<ContextualItem<T>>>(c);
         stage->out_channel = std::make_shared<AsyncChannel<ContextualItem<T>>>(c);
+        // Install the processing function in the live-swappable holder; the worker
+        // reads it from there each iteration (so hot_swap() is honored live).
+        std::atomic_store(&stage->active_fn,
+                          std::make_shared<StageFn>(std::move(full_fn)));
 
-        // Capture the typed fn for the worker factory.
-        // Use weak_ptr to avoid Stage→lambda→Stage circular reference that
+        // Use weak_ptr to avoid a Stage→lambda→Stage circular reference that
         // would prevent the Stage from ever being freed.
         std::weak_ptr<Stage> weak_stage = stage;
-        stage->worker_factory = [this, weak_stage, fn = std::move(full_fn)](size_t worker_idx) mutable
+        stage->worker_factory = [this, weak_stage](size_t worker_idx)
             -> Task<void> {
             auto s = weak_stage.lock();
-            if (s) co_await stage_worker(s, fn, worker_idx);
+            if (s) co_await stage_worker(s, worker_idx);
         };
 
         std::unique_lock lock(stages_mtx_);
@@ -164,7 +167,39 @@ public:
             [&](const auto& s) { return s->name == name; });
         if (it == stages_.end())
             return false;
-        stages_.erase(it);
+
+        auto         removed = *it;
+        const size_t idx     = static_cast<size_t>(it - stages_.begin());
+        const size_t n       = stages_.size();
+
+        // A removed stage's worker is (typically) blocked in recv() on a channel
+        // it SHARES with its predecessor (removed.in == predecessor.out). Simply
+        // erasing the stage leaves that worker running — it keeps consuming and
+        // would steal items from the new output / successor. Detach it cleanly:
+        //
+        //   bridge = the channel the predecessor's output should feed after the
+        //            bypass. If a successor exists, that is the successor's input
+        //            (so the successor is not stranded on a now-dead channel); if
+        //            we are removing the tail, it is a fresh output channel.
+        //   1. Re-point the removed stage's OWN output to a throwaway channel so
+        //      the EOS-close it performs on exit cannot close a live channel.
+        //   2. Point the predecessor's output at `bridge`.
+        //   3. Close the removed stage's input to wake its worker -> EOS -> exit.
+        std::shared_ptr<AsyncChannel<ContextualItem<T>>> bridge =
+            (idx + 1 < n)
+              ? std::atomic_load(&stages_[idx + 1]->in_channel)
+              : std::make_shared<AsyncChannel<ContextualItem<T>>>(removed->chan_cap);
+
+        std::atomic_store(&removed->out_channel,
+            std::make_shared<AsyncChannel<ContextualItem<T>>>(1));
+        if (idx > 0)
+            std::atomic_store(&stages_[idx - 1]->out_channel, bridge);
+        if (auto in = std::atomic_load(&removed->in_channel))
+            in->close();
+        if (removed->stop_src)
+            removed->stop_src->request_stop();
+
+        stages_.erase(stages_.begin() + static_cast<std::ptrdiff_t>(idx));
         rewire_channels_locked();
         return true;
     }
@@ -187,26 +222,16 @@ public:
 
         auto full_fn = to_full_action_fn<FnT, T, T>(std::move(new_fn));
 
-        std::unique_lock lock(stages_mtx_);
+        std::shared_lock lock(stages_mtx_);   // only reads the vector; the swap is atomic
         auto it = std::find_if(stages_.begin(), stages_.end(),
             [&](const auto& s) { return s->name == name; });
         if (it == stages_.end())
             return false;
 
-        auto& stage = *it;
-        // Update worker factory with new function.
-        // Use weak_ptr (not shared_ptr) to avoid a Stage→worker_factory→Stage
-        // reference cycle that would prevent Stage from ever being freed.
-        std::weak_ptr<Stage> weak_stage = stage;
-        stage->worker_factory = [this, weak_stage, fn = std::move(full_fn)](size_t worker_idx) mutable
-            -> Task<void> {
-            auto s = weak_stage.lock();
-            if (s) co_await stage_worker(s, fn, worker_idx);
-        };
-        // Signal existing workers to stop; new ones will be spawned on next start
-        if (stage->stop_src)
-            stage->stop_src->request_stop();
-        stage->stop_src = std::make_unique<std::stop_source>();
+        // Atomically install the new function. Running worker(s) re-load it on the
+        // next item — the swap is live, with no respawn, drain, or dispatcher.
+        std::atomic_store(&(*it)->active_fn,
+                          std::make_shared<StageFn>(std::move(full_fn)));
         return true;
     }
 
@@ -360,6 +385,11 @@ private:
         std::shared_ptr<AsyncChannel<ContextualItem<T>>> in_channel;
         std::shared_ptr<AsyncChannel<ContextualItem<T>>> out_channel;
         std::function<Task<void>(size_t worker_idx)>     worker_factory;
+        // Live-swappable processing function. The worker re-loads it every
+        // iteration via atomic_load, so hot_swap() takes effect on the next item
+        // with no respawn and no race (the old function is simply never read
+        // again). Accessed only through std::atomic_load/atomic_store.
+        std::shared_ptr<StageFn>                         active_fn;
         std::atomic<size_t>                              worker_count{0};
         std::atomic<bool>                                enabled{true};
         std::unique_ptr<std::stop_source>                stop_src;
@@ -379,8 +409,11 @@ private:
      */
     void rewire_channels_locked() {
         for (size_t i = 0; i + 1 < stages_.size(); ++i) {
-            // Share the out_channel of stage[i] as in_channel of stage[i+1]
-            stages_[i+1]->in_channel = stages_[i]->out_channel;
+            // Share the out_channel of stage[i] as in_channel of stage[i+1].
+            // atomic_store: stage[i+1]'s worker may read in_channel concurrently
+            // (see stage_worker, which atomic_loads it each iteration).
+            std::atomic_store(&stages_[i+1]->in_channel,
+                              std::atomic_load(&stages_[i]->out_channel));
         }
     }
 
@@ -396,7 +429,6 @@ private:
      */
     Task<void> stage_worker(
         std::shared_ptr<Stage> stage,
-        std::function<Task<Result<T>>(T, ActionEnv)> fn,
         size_t worker_idx)
     {
         auto stop_token = stage->stop_src
@@ -404,13 +436,17 @@ private:
             : std::stop_token{};
 
         for (;;) {
-            auto citem = co_await stage->in_channel->recv();
+            // Channels can be re-pointed live by add_stage / remove_stage, so load
+            // them atomically each iteration (the writers use std::atomic_store).
+            auto in = std::atomic_load(&stage->in_channel);
+            auto citem = co_await in->recv();
             if (!citem) break; // EOS
 
+            auto out = std::atomic_load(&stage->out_channel);
             if (!stage->enabled.load(std::memory_order_acquire)) {
                 // Pass-through: disabled stage forwards item unchanged
-                if (stage->out_channel)
-                    co_await stage->out_channel->send(std::move(*citem));
+                if (out)
+                    co_await out->send(std::move(*citem));
                 continue;
             }
 
@@ -421,17 +457,21 @@ private:
                 .registry   = cfg_.registry ? cfg_.registry : &global_registry(),
             };
 
-            auto result = co_await fn(std::move(citem->value), env);
+            // Re-load the (possibly hot-swapped) function each iteration.
+            auto fn = std::atomic_load(&stage->active_fn);
+            auto result = co_await (*fn)(std::move(citem->value), env);
 
-            if (result.has_value() && stage->out_channel) {
-                co_await stage->out_channel->send(
+            if (result.has_value() && out) {
+                co_await out->send(
                     ContextualItem<T>{std::move(*result), env.ctx});
             }
         }
 
         size_t remaining = stage->worker_count.fetch_sub(1, std::memory_order_acq_rel) - 1;
-        if (remaining == 0 && stage->out_channel)
-            stage->out_channel->close();
+        if (remaining == 0) {
+            if (auto out = std::atomic_load(&stage->out_channel))
+                out->close();
+        }
         co_return;
     }
 

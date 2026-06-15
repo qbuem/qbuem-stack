@@ -9,7 +9,10 @@
  * Three-state (Closed → Open → HalfOpen → Closed) circuit breaker implementation.
  *
  * ## State transitions
- * - Closed:   Normal operation. Transitions to Open when failures reach failure_threshold.
+ * - Closed:   Normal operation. Transitions to Open after `failure_threshold`
+ *             **consecutive** failures. Any success resets the failure streak,
+ *             so this is a consecutive-failure breaker (not a failure-rate one);
+ *             alternating success/failure traffic will not trip it.
  * - Open:     Fast fail. Transitions to HalfOpen after timeout.
  * - HalfOpen: Limited requests allowed. Transitions to Closed when success_threshold is reached.
  *
@@ -39,7 +42,7 @@ enum class CircuitBreakerState { Closed, Open, HalfOpen };
  * Also accessible as the `CircuitBreaker::Config` alias.
  */
 struct CircuitBreakerConfig {
-    size_t failure_threshold                                         = 5;       ///< Number of failures allowed before transitioning to Open
+    size_t failure_threshold                                         = 5;       ///< Consecutive failures before Open (any success resets the streak)
     size_t success_threshold                                         = 2;       ///< Successes required for HalfOpen→Closed transition
     std::chrono::milliseconds timeout{30000};                                  ///< Wait time for Open→HalfOpen transition
     std::function<void(CircuitBreakerState, CircuitBreakerState)> on_state_change = nullptr; ///< State transition callback
@@ -93,7 +96,7 @@ public:
         std::lock_guard lock(mtx_);
         switch (state_) {
             case State::Closed:
-                failures_ = 0;
+                failures_ = 0;  // consecutive-failure semantics: success clears the streak
                 break;
             case State::HalfOpen:
                 ++successes_;

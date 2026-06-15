@@ -761,6 +761,59 @@ TEST(AesGcm128, SealOpenRoundTrip) {
     EXPECT_EQ(std::memcmp(recovered.data(), pt.data(), pt.size()), 0);
 }
 
+// NIST/GCM spec known-answer test (McGrew & Viega "Test Case 4"): AES-128,
+// 96-bit IV, 60-byte plaintext, 20-byte AAD. Validates the EXACT ciphertext and
+// tag — a round-trip test alone cannot detect a self-consistent but non-spec
+// GHASH, so this is what proves the x86 and ARM paths are interoperable/correct.
+TEST(AesGcm128, NistKnownAnswerVector) {
+    if (!has_aes_ni()) GTEST_SKIP() << "hardware AES not available";
+
+    auto unhex = [](std::string_view s) {
+        std::vector<uint8_t> v;
+        v.reserve(s.size() / 2);
+        auto nib = [](char c) -> int {
+            if (c >= '0' && c <= '9') return c - '0';
+            return (c | 0x20) - 'a' + 10;
+        };
+        for (size_t i = 0; i + 1 < s.size(); i += 2)
+            v.push_back(static_cast<uint8_t>((nib(s[i]) << 4) | nib(s[i + 1])));
+        return v;
+    };
+
+    const auto key_v   = unhex("feffe9928665731c6d6a8f9467308308");
+    const auto iv      = unhex("cafebabefacedbaddecaf888");
+    const auto pt      = unhex("d9313225f88406e5a55909c5aff5269a86a7a9531534f7da2e4c30"
+                               "3d8a318a721c3c0c95956809532fcf0e2449a6b525b16aedf5aa0d"
+                               "e657ba637b39");
+    const auto aad     = unhex("feedfacedeadbeeffeedfacedeadbeefabaddad2");
+    const auto exp_ct  = unhex("42831ec2217774244b7221b784d0d49ce3aa212f2c02a4e035c17e"
+                               "2329aca12e21d514b25466931c7d8f6a5aac84aa051ba30b396a0a"
+                               "ac973d58e091");
+    const auto exp_tag = unhex("5bc94fbc3221a5db94fae95ae7121a47");
+
+    std::array<uint8_t, 16> key{};
+    std::memcpy(key.data(), key_v.data(), 16);
+    AesGcmNonce nonce{};
+    std::memcpy(nonce.data(), iv.data(), 12);
+
+    auto ctx = AesGcm128::create(key);
+    ASSERT_TRUE(ctx.has_value());
+
+    std::vector<uint8_t> ct(pt.size());
+    AesGcmTag tag{};
+    ctx->seal(nonce, {aad.data(), aad.size()}, {pt.data(), pt.size()},
+              {ct.data(), ct.size()}, tag);
+
+    EXPECT_EQ(ct, exp_ct);
+    EXPECT_EQ(std::vector<uint8_t>(tag.begin(), tag.end()), exp_tag);
+
+    std::vector<uint8_t> dec(pt.size());
+    auto r = ctx->open(nonce, {aad.data(), aad.size()}, {ct.data(), ct.size()},
+                       tag, {dec.data(), dec.size()});
+    ASSERT_TRUE(r.has_value());
+    EXPECT_EQ(dec, pt);
+}
+
 TEST(AesGcm256, SealOpenRoundTrip) {
     if (!has_aes_ni()) GTEST_SKIP() << "AES-NI not available on this CPU";
 

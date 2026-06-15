@@ -60,6 +60,11 @@ struct ReviewSummary {
     int      review_count;
 };
 
+struct WarehouseStock {
+    std::string warehouse_id;
+    int         stock;
+};
+
 // ─── Service state simulation ─────────────────────────────────────────────────
 
 static std::atomic<int> g_service_fail_mode{0};  // 0=normal 1=inventory service failure
@@ -97,6 +102,15 @@ static Task<Result<ReviewSummary>> fetch_reviews(uint64_t product_id) {
 
 // ─── RunGuard ─────────────────────────────────────────────────────────────────
 
+// Free-function coroutine that OWNS the body task (moved-in by value), so the
+// coroutine frame — not a temporary closure — holds the running state. `done` is
+// a stable local of the enclosing run_and_wait scope, which busy-waits on it to
+// completion before returning, so the pointer provably outlives this coroutine.
+static Task<void> run_wrapper(Task<void> body, std::atomic<bool>* done) {
+    co_await body;
+    done->store(true, std::memory_order_release);
+}
+
 struct RunGuard {
     Dispatcher  dispatcher;
     std::jthread thread;
@@ -107,9 +121,9 @@ struct RunGuard {
     template <typename F>
     void run_and_wait(F&& f, std::chrono::milliseconds timeout = 10s) {
         std::atomic<bool> done{false};
-        dispatcher.spawn([&, f = std::forward<F>(f)]() mutable -> Task<void> {
-            co_await f(); done.store(true, std::memory_order_release);
-        }());
+        // Build the body Task here, then transfer ownership into the wrapper
+        // coroutine. No capturing coroutine-lambda IIFE is spawned.
+        dispatcher.spawn(run_wrapper(f(), &done));
         auto dl = std::chrono::steady_clock::now() + timeout;
         while (!done.load() && std::chrono::steady_clock::now() < dl)
             std::this_thread::sleep_for(1ms);
@@ -207,6 +221,20 @@ static void scenario_one_failure_propagates() {
 
 // ─── Scenario 4: cancel() — early termination ────────────────────────────────
 
+// Free-function coroutine that OWNS its inputs (id + token by value) and refers
+// to the caller's counter via a stable pointer. The enclosing scenario busy-waits
+// to completion (run_and_wait) before `completed` is destroyed, so the pointer is
+// valid for the coroutine's whole lifetime.
+static Task<Result<int>> cancel_long_task(int id, std::stop_token stoken,
+                                          std::atomic<int>* completed) {
+    if (stoken.stop_requested()) {
+        std::println("  [cancelled] task-{} cancelled before start", id);
+        co_return unexpected(std::make_error_code(std::errc::operation_canceled));
+    }
+    completed->fetch_add(1, std::memory_order_relaxed);
+    co_return id * 10;
+}
+
 static void scenario_cancel() {
     std::println("\n=== Scenario 4: TaskGroup cancel() — bulk cancellation ===");
 
@@ -216,25 +244,15 @@ static void scenario_cancel() {
     guard.run_and_wait([&]() -> Task<void> {
         TaskGroup tg;
 
-        // Long-running task that checks cancellation signal
-        auto long_task = [&](int id, std::stop_token stoken) -> Task<Result<int>> {
-            if (stoken.stop_requested()) {
-                std::println("  [cancelled] task-{} cancelled before start", id);
-                co_return unexpected(std::make_error_code(std::errc::operation_canceled));
-            }
-            completed.fetch_add(1, std::memory_order_relaxed);
-            co_return id * 10;
-        };
-
         auto token = tg.stop_token();
 
         // Request cancellation first
         tg.cancel();
 
         // Tasks spawned after cancellation can check state
-        tg.spawn<int>(long_task(1, token));
-        tg.spawn<int>(long_task(2, token));
-        tg.spawn<int>(long_task(3, token));
+        tg.spawn<int>(cancel_long_task(1, token, &completed));
+        tg.spawn<int>(cancel_long_task(2, token, &completed));
+        tg.spawn<int>(cancel_long_task(3, token, &completed));
 
         auto res = co_await tg.join();
         std::println("  [result] join completed (has_error={})",
@@ -246,14 +264,16 @@ static void scenario_cancel() {
 
 // ─── Scenario 5: Parallel data pipeline — distributed aggregation ─────────────
 
+// Free-function coroutine that OWNS its state (name by value, index by value),
+// so the frame holds the data instead of a destroyed capturing closure.
+static Task<Result<WarehouseStock>> fetch_warehouse(int i, std::string name) {
+    int stock = 100 + i * 50;
+    std::println("  [warehouse] {}: {} units", name, stock);
+    co_return WarehouseStock{name, stock};
+}
+
 static void scenario_parallel_aggregation() {
     std::println("\n=== Scenario 5: Distributed aggregation — inventory sum across warehouses ===");
-
-    // Simultaneous inventory query from 5 warehouses
-    struct WarehouseStock {
-        std::string warehouse_id;
-        int         stock;
-    };
 
     RunGuard guard;
     guard.run_and_wait([&]() -> Task<void> {
@@ -261,13 +281,7 @@ static void scenario_parallel_aggregation() {
 
         const char* warehouses[] = {"seoul", "busan", "incheon", "daegu", "gwangju"};
         for (int i = 0; i < 5; ++i) {
-            tg.spawn<WarehouseStock>(
-                [i, name = std::string(warehouses[i])]() -> Task<Result<WarehouseStock>> {
-                    int stock = 100 + i * 50;
-                    std::println("  [warehouse] {}: {} units", name, stock);
-                    co_return WarehouseStock{name, stock};
-                }()
-            );
+            tg.spawn<WarehouseStock>(fetch_warehouse(i, std::string(warehouses[i])));
         }
 
         auto results = co_await tg.join_all<WarehouseStock>();
@@ -282,6 +296,15 @@ static void scenario_parallel_aggregation() {
 
 // ─── Scenario 6: Fan-out notifications — void join() ─────────────────────────
 
+// Free-function coroutine that OWNS the channel name (by value) and refers to the
+// caller's counter via a stable pointer; the enclosing scenario busy-waits to
+// completion before `sent_count` is destroyed.
+static Task<Result<void>> notify_channel(std::string channel, std::atomic<int>* sent_count) {
+    std::println("  [notify] {} sent", channel);
+    sent_count->fetch_add(1, std::memory_order_relaxed);
+    co_return Result<void>{};
+}
+
 static void scenario_fanout_notifications() {
     std::println("\n=== Scenario 6: Fan-out notifications (email + SMS + push) — join() ===");
 
@@ -291,16 +314,10 @@ static void scenario_fanout_notifications() {
     guard.run_and_wait([&]() -> Task<void> {
         TaskGroup tg;
 
-        auto notify = [&](const char* channel) -> Task<Result<void>> {
-            std::println("  [notify] {} sent", channel);
-            sent_count.fetch_add(1, std::memory_order_relaxed);
-            co_return Result<void>{};
-        };
-
-        tg.spawn(notify("email"));
-        tg.spawn(notify("SMS"));
-        tg.spawn(notify("push_notification"));
-        tg.spawn(notify("messenger"));
+        tg.spawn(notify_channel("email", &sent_count));
+        tg.spawn(notify_channel("SMS", &sent_count));
+        tg.spawn(notify_channel("push_notification", &sent_count));
+        tg.spawn(notify_channel("messenger", &sent_count));
 
         auto res = co_await tg.join();
         std::println("  [result] notifications: {} ({} channels)",

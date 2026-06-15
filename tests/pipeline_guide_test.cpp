@@ -740,20 +740,26 @@ TEST(DeadLetterQueue, DlqMaxSizeDropsOldest) {
 TEST(PeriodicPollingSource, PollsAtRegularIntervals) {
     // Guide §7: sensor/hardware register polling source pattern
     // co_await sleep() + channel push loop
-    auto poll_ch = std::make_shared<AsyncChannel<ContextualItem<int>>>(64);
-    std::atomic<size_t> poll_count{0};
-    std::atomic<bool>   stop_flag{false};
+    auto poll_ch    = std::make_shared<AsyncChannel<ContextualItem<int>>>(64);
+    // Hold the shared state by shared_ptr and capture it BY VALUE below: the
+    // coroutine may resume during dispatcher shutdown, so it must never refer to
+    // this test's stack frame (else stack-use-after-scope). The shared_ptrs keep
+    // the atomics alive for as long as the coroutine frame holds them.
+    auto poll_count = std::make_shared<std::atomic<size_t>>(0);
+    auto stop_flag  = std::make_shared<std::atomic<bool>>(false);
+    auto done       = std::make_shared<std::atomic<bool>>(false);
 
     RunGuard g;
 
     // Periodic Source coroutine (guide §7 pattern)
-    auto polling_source = [&]() -> Task<void> {
-        while (!stop_flag.load(std::memory_order_acquire)) {
-            int sensor_value = static_cast<int>(poll_count.fetch_add(1, std::memory_order_relaxed));
+    auto polling_source = [poll_ch, poll_count, stop_flag, done]() -> Task<void> {
+        while (!stop_flag->load(std::memory_order_acquire)) {
+            int sensor_value = static_cast<int>(poll_count->fetch_add(1, std::memory_order_relaxed));
             poll_ch->try_send(ContextualItem<int>{sensor_value, {}});
             // co_await qbuem::sleep(10ms) — replaced with short manual wait in test environment
             co_await std::suspend_never{};
         }
+        done->store(true, std::memory_order_release);
     };
 
     g.dispatcher.spawn(polling_source());
@@ -767,10 +773,16 @@ TEST(PeriodicPollingSource, PollsAtRegularIntervals) {
         else std::this_thread::sleep_for(1ms);
     }
 
-    stop_flag.store(true, std::memory_order_release);
+    stop_flag->store(true, std::memory_order_release);
+    // Wait for the coroutine to observe the stop and run to completion before the
+    // test returns, so its frame is freed cleanly during dispatcher shutdown.
+    auto stop_deadline = std::chrono::steady_clock::now() + 2s;
+    while (!done->load(std::memory_order_acquire) &&
+           std::chrono::steady_clock::now() < stop_deadline)
+        std::this_thread::sleep_for(1ms);
 
     EXPECT_GE(received, 5u)    << "polling source must generate at least 5 events";
-    EXPECT_GE(poll_count.load(), received) << "poll counter must be at least the received count";
+    EXPECT_GE(poll_count->load(), received) << "poll counter must be at least the received count";
 }
 
 // =============================================================================

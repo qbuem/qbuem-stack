@@ -253,6 +253,7 @@ public:
     void update(std::span<const uint8_t> data) noexcept {
         const uint8_t* src = data.data();
         size_t         len = data.size();
+        if (len == 0) return;  // empty update is a no-op; also avoids memcpy(dst, nullptr, 0) UB
 
         if (buf_len_ > 0) {
             const size_t space = 128u - buf_len_;

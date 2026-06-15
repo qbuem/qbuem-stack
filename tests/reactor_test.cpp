@@ -20,7 +20,7 @@ TEST(InfraTest, CoroutineTask) {
   {
     auto task = sample_coro(v);
     EXPECT_EQ(v, 0); // Not resumed yet
-    task.resume();
+    (void)task.resume();
     EXPECT_EQ(v, 100);
   }
 }

@@ -2,7 +2,7 @@
 
 /**
  * @file qbuem/server/http1_handler.hpp
- * @brief HTTP/1.1 connection handler — IConnectionHandler<http::Request> implementation
+ * @brief HTTP/1.1 connection handler — IConnectionHandler<Request> implementation
  * @defgroup qbuem_http1_handler HTTP/1.1 Handler
  * @ingroup qbuem_server
  *
@@ -11,7 +11,7 @@
  * ### Key features
  * - **keep-alive**: Checks the `Connection` header to reuse connections.
  * - **100-continue**: Sends `100 Continue` before receiving the body when `Expect: 100-continue` is detected.
- * - **Router injection**: Accepts an `http::Router` in the constructor to route requests.
+ * - **Router injection**: Accepts an `Router` in the constructor to route requests.
  * - **WebSocket upgrade detection**: Returns a special result when the `Upgrade: websocket` header is received.
  *
  * @{
@@ -48,7 +48,7 @@ namespace qbuem {
  */
 struct UpgradeRequest {
   /** @brief Original HTTP request that initiated the upgrade. */
-  http::Request original_request;
+  Request original_request;
   /** @brief Connected socket file descriptor. */
   int fd{-1};
 };
@@ -58,7 +58,7 @@ struct UpgradeRequest {
 /**
  * @brief HTTP/1.1 protocol connection handler.
  *
- * Implements the `IConnectionHandler<http::Request>` interface and handles
+ * Implements the `IConnectionHandler<Request>` interface and handles
  * HTTP/1.1 keep-alive, 100-continue, and WebSocket upgrades.
  *
  * ### Connection lifecycle
@@ -71,21 +71,21 @@ struct UpgradeRequest {
  *
  * ### Usage example
  * @code
- * auto router = std::make_shared<http::Router>();
+ * auto router = std::make_shared<Router>();
  * router->add_route(Method::Get, "/hello",
  *     [](const Request& req, Response& res) {
  *         res.status(200).body("Hello, World!");
  *     });
  *
  * auto factory = [router]{ return std::make_unique<Http1Handler>(router); };
- * AcceptLoop<http::Request, decltype(factory)> loop({
+ * AcceptLoop<Request, decltype(factory)> loop({
  *     .addr    = *SocketAddr::from_ipv4("0.0.0.0", 8080),
  *     .factory = factory,
  * });
  * co_await loop.run();
  * @endcode
  */
-class Http1Handler : public IConnectionHandler<http::Request> {
+class Http1Handler : public IConnectionHandler<Request> {
 public:
   /**
    * @brief Callback type for handling WebSocket upgrade requests.
@@ -102,7 +102,7 @@ public:
    * @param upgrade_callback  Callback invoked on WebSocket upgrade request.
    *                          If nullptr, the upgrade is rejected and `400 Upgrade Required` is returned.
    */
-  explicit Http1Handler(std::shared_ptr<http::Router> router,
+  explicit Http1Handler(std::shared_ptr<Router> router,
                         UpgradeCallback upgrade_callback = nullptr)
       : router_(std::move(router))
       , upgrade_callback_(std::move(upgrade_callback)) {}
@@ -135,7 +135,7 @@ public:
    * @param frame Parsed HTTP request.
    * @returns Processing result. Returning an error closes the connection.
    */
-  Task<Result<void>> on_frame(http::Request frame) override {
+  Task<Result<void>> on_frame(Request frame) override {
     // ── 1. Detect WebSocket upgrade ───────────────────────────────────────
     {
       std::string_view upgrade_hdr = frame.header("Upgrade");
@@ -322,7 +322,7 @@ private:
     std::size_t idx = 0; // index of the first non-exhausted iovec
     while (idx < working.count) {
       ssize_t n = ::writev(fd,
-                           working.vecs + idx,
+                           working.vecs.data() + idx,
                            static_cast<int>(working.count - idx));
       if (n <= 0) return false;
 
@@ -343,7 +343,7 @@ private:
   }
 
   /** @brief Router used to route requests. */
-  std::shared_ptr<http::Router> router_;
+  std::shared_ptr<Router> router_;
 
   /** @brief WebSocket upgrade request callback. Upgrade is rejected if nullptr. */
   UpgradeCallback upgrade_callback_;

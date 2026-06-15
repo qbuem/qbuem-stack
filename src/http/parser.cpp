@@ -1,6 +1,7 @@
 #include <qbuem/http/parser.hpp>
 
 #include <cctype>
+#include <charconv>
 #include <cstring>
 #include <string>
 
@@ -224,7 +225,17 @@ std::optional<size_t> HttpParser::parse(std::string_view data, Request &req) {
           state_   = State::ChunkSize;
           start    = pos + 1;
         } else if (!cl.empty()) {
-          body_length_ = std::stoul(std::string(cl));
+          // Parse Content-Length without exceptions (std::stoul throws on
+          // malformed input → std::terminate; the value is attacker-controlled).
+          unsigned long parsed = 0;
+          const auto [last_ptr, ec] =
+              std::from_chars(cl.data(), cl.data() + cl.size(), parsed);
+          if (ec != std::errc{} || last_ptr != cl.data() + cl.size()) {
+            error_status_ = 400;  // malformed Content-Length
+            state_        = State::Error;
+            return std::nullopt;
+          }
+          body_length_ = parsed;
           if (body_length_ > MAX_BODY_SIZE) {
             error_status_ = 413;
             state_        = State::Error;

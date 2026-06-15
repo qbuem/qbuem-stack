@@ -147,16 +147,25 @@ public:
      */
     [[nodiscard]] static Result<DirectFile> open(std::string_view path,
                                                   bool write = false) noexcept {
-        // O_DIRECT: bypass page cache.
+        // O_DIRECT: bypass page cache (Linux). macOS has no O_DIRECT — request the
+        // equivalent page-cache bypass via fcntl(F_NOCACHE) after open().
         // O_DSYNC:  data and required metadata written to storage on each write.
+#if defined(O_DIRECT)
+        const int direct_flag = O_DIRECT;
+#else
+        const int direct_flag = 0;
+#endif
         const int flags = write
-            ? (O_RDWR | O_CREAT | O_DIRECT | O_DSYNC)
-            : (O_RDONLY | O_DIRECT);
+            ? (O_RDWR | O_CREAT | direct_flag | O_DSYNC)
+            : (O_RDONLY | direct_flag);
 
         // NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg)
         const int fd = ::open(path.data(), flags, 0644);
         if (fd < 0)
             return unexpected(std::error_code{errno, std::system_category()});
+#if !defined(O_DIRECT) && defined(F_NOCACHE)
+        ::fcntl(fd, F_NOCACHE, 1);  // macOS page-cache-bypass analogue of O_DIRECT
+#endif
 
         DirectFile f;
         f.fd_ = fd;

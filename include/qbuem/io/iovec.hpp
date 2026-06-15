@@ -47,7 +47,8 @@ namespace qbuem {
  */
 template <size_t N>
 struct IOVec {
-  /** @brief Array of iovec entries. */
+  /** @brief Array of iovec entries (std::array — passes the modernize lint
+   *  and yields a contiguous `iovec[]` for syscalls via `vecs.data()`). */
   std::array<iovec, N> vecs{};
 
   /** @brief Number of currently valid entries. */

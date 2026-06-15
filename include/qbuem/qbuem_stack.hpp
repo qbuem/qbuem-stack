@@ -5,83 +5,46 @@
 #include <qbuem/http/router.hpp>
 #include <qbuem/version.hpp>
 
-// v1.4.0: Unified DB Abstraction
+// Unified DB abstraction — zero-dep interfaces (concrete drivers are app-level)
 #include <qbuem/db/value.hpp>
 #include <qbuem/db/driver.hpp>
-#include <qbuem/db/simd_parser.hpp>
+#include <qbuem/db/connection_pool.hpp>
+#include <qbuem/db/smart_cache.hpp>
 
-// v1.4.0: SHM Messaging Infrastructure
+// SHM messaging + inter-process sync (POSIX shm / futex)
 #include <qbuem/shm/shm_channel.hpp>
 #include <qbuem/shm/shm_bus.hpp>
-
-// v1.5.0: Zero-dep Security & TLS
-#include <qbuem/security/simd_jwt.hpp>
-#include <qbuem/io/ktls.hpp>
-
-// v1.6.0: Embedded & PCIe Integration
-#include <qbuem/pcie/pcie_device.hpp>
-#include <qbuem/pcie/msix_reactor.hpp>
-#include <qbuem/net/uds_advanced.hpp>
-
-// v1.7.0: High-End Connectivity
-#include <qbuem/rdma/rdma_channel.hpp>
-#include <qbuem/ebpf/ebpf_tracer.hpp>
-#include <qbuem/spdk/nvme_io.hpp>
-
-// Enhancement: Lock-free Pool, Futex-uring Sync, JWT Pipeline Action
-#include <qbuem/db/connection_pool.hpp>
 #include <qbuem/shm/futex_sync.hpp>
+
+// Security — zero-dep JWT (parse + pipeline action)
+#include <qbuem/security/simd_jwt.hpp>
 #include <qbuem/security/jwt_action.hpp>
 
-// v2.2.0: Monadic HTTP Fetch Client (curl-free) + v2.3.0 extensions
+// Networking — UDS FD passing, DNS, UDP infrastructure
+#include <qbuem/net/uds_advanced.hpp>
 #include <qbuem/net/dns.hpp>
-#include <qbuem/http/fetch.hpp>
-#include <qbuem/http/fetch_client.hpp>
-#include <qbuem/http/fetch_tls.hpp>
-
-// v2.5.0: High-Performance Stream Processing (Pipeline+)
-#include <qbuem/pipeline/backpressure_monitor.hpp>
-#include <qbuem/pipeline/stateful_window.hpp>
-#include <qbuem/pipeline/dynamic_router.hpp>
-
-// v2.6.0: Advanced WAS & Middleware
-#include <qbuem/http/template_engine.hpp>
-#include <qbuem/shm/reliable_cast.hpp>
-#include <qbuem/security/simd_validator.hpp>
-
-// v2.7.0: Next-Gen Networking (Fetch+)
-#include <qbuem/http/fetch_stream.hpp>
-#include <qbuem/http/http2_client.hpp>
-#include <qbuem/http/http3_client.hpp>
-
-// v2.8.0: Low-Latency UDP Infrastructure (UDP+)
 #include <qbuem/net/udp_mmsg.hpp>
 #include <qbuem/net/rudp_socket.hpp>
 #include <qbuem/net/udp_multicast.hpp>
 
-// v3.0.0: Zero-Copy Hardware I/O (AF_XDP, NVMe-oF, SIMD Erasure, PQC)
-#include <qbuem/xdp/xdp_pipeline.hpp>
-#include <qbuem/net/nvme_of.hpp>
-#include <qbuem/buf/simd_erasure.hpp>
-#include <qbuem/pipeline/distributed_pipeline.hpp>
-#include <qbuem/security/pqc.hpp>
+// HTTP — curl-free fetch client + template engine
+#include <qbuem/http/fetch.hpp>
+#include <qbuem/http/fetch_client.hpp>
+#include <qbuem/http/template_engine.hpp>
 
-// v3.1.0: Production Observability (SmartCache, LifecycleTracer, TraceLogger, CLI, Inspector)
-#include <qbuem/db/smart_cache.hpp>
+// Pipeline extras (core pipeline lives under qbuem/pipeline/*)
+#include <qbuem/pipeline/backpressure_monitor.hpp>
+#include <qbuem/pipeline/stateful_window.hpp>
+#include <qbuem/pipeline/dynamic_router.hpp>
+
+// Erasure coding (SIMD) — for spatial/storage applications
+#include <qbuem/buf/simd_erasure.hpp>
+
+// Observability — in-process lifecycle tracing + trace-correlated logging
 #include <qbuem/tracing/lifecycle_tracer.hpp>
 #include <qbuem/tracing/trace_logger.hpp>
-#include <qbuem/tools/qbuem_cli.hpp>
-#include <qbuem/tools/qbuem_inspector.hpp>
-#include <qbuem/ebpf/memleak_bridge.hpp>
-#include <qbuem/tools/coro_explorer.hpp>
 
-// v3.2.0: Hardware Telemetry & Chaos Engineering
-#include <qbuem/tools/affinity_inspector.hpp>
-#include <qbuem/tools/buffer_heatmap.hpp>
-#include <qbuem/tools/chaos_hardware.hpp>
-#include <qbuem/tools/traffic_twin.hpp>
-
-// v3.3.0: Zero-Allocation Config + Secret<T> management
+// Zero-allocation config + Secret<T> management
 #include <qbuem/config/config_manager.hpp>
 
 #include <atomic>

@@ -110,6 +110,12 @@ public:
       std::memcpy(&net_len, header_buf_, kHeaderSize);
       pending_length_ = ntohl(net_len);
 
+      // Reject oversized frames before reserving (a 4-byte attacker-controlled
+      // prefix could otherwise request a multi-GiB allocation — DoS).
+      if (pending_length_ > kMaxFrameSize) {
+        return DecodeStatus::Error;
+      }
+
       state_ = ParseState::Body;
       body_buf_.clear();
       body_buf_.reserve(pending_length_);
@@ -202,6 +208,7 @@ private:
   size_t   header_received_ = 0;
 
   /** @brief Expected payload length (host byte order). */
+  static constexpr uint32_t kMaxFrameSize = 64u * 1024 * 1024;  // 64 MiB DoS cap
   uint32_t pending_length_ = 0;
 
   /** @brief Payload receive buffer. */

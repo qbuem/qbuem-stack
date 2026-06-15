@@ -46,6 +46,7 @@
 
 #include <qbuem/crypto/sha256.hpp>
 #include <qbuem/crypto/sha512.hpp>
+#include <qbuem/crypto/secure_zero.hpp>
 
 namespace qbuem::crypto {
 
@@ -160,6 +161,13 @@ public:
     void reset() noexcept {
         inner_.reset();
         inner_.update({ipad_.data(), ipad_.size()});
+    }
+
+    /** @brief Securely zero the key-derived pad state (optimizer-proof — see
+     *         crypto/secure_zero.hpp). Call when the context is no longer used. */
+    void wipe() noexcept {
+        secure_zero(ipad_.data(), ipad_.size());
+        secure_zero(opad_.data(), opad_.size());
     }
 
     /** @brief Feed data into the inner hash. */

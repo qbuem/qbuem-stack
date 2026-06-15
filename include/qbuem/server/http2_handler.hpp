@@ -106,6 +106,8 @@ static constexpr uint8_t HTTP2_FLAG_PRIORITY    = 0x20;
 
 // ─── HpackDecoder ─────────────────────────────────────────────────────────────
 
+class HpackEncoder; ///< Forward declaration — granted friend access to STATIC_TABLE.
+
 /**
  * @brief HPACK header block decoder (RFC 7541).
  *
@@ -269,6 +271,9 @@ private:
      * Defines pseudo-headers and commonly used general headers including the first 15 entries.
      */
     static const std::pair<std::string_view, std::string_view> STATIC_TABLE[62];
+
+    // HpackEncoder reuses the same static table for indexed-field lookup.
+    friend class HpackEncoder;
 };
 
 // HPACK static table definition (all 61 entries from RFC 7541 Appendix A)

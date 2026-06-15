@@ -20,6 +20,7 @@
 #include <qbuem/core/reactor.hpp>
 #include <qbuem/core/task.hpp>
 #include <qbuem/net/socket_addr.hpp>
+#include <qbuem/net/socket_compat.hpp>
 #include <qbuem/net/tcp_stream.hpp>
 
 #include <cerrno>
@@ -105,7 +106,7 @@ public:
    */
   static Result<TcpListener> bind(SocketAddr addr) noexcept {
     int domain = (addr.family() == SocketAddr::Family::IPv6) ? AF_INET6 : AF_INET;
-    int fd = ::socket(domain, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
+    int fd = net::make_socket(domain, SOCK_STREAM, 0);
     if (fd < 0)
       return unexpected(std::error_code(errno, std::system_category()));
 

@@ -71,7 +71,7 @@ int main() {
 
     // ── Immediate execution (delay_ms=0) ──────────────────────────────────────
     int immediate_count = 0;
-    wheel2.schedule(0, [&] { ++immediate_count; });
+    (void)wheel2.schedule(0, [&] { ++immediate_count; });
     wheel2.tick(0);
     std::println("[timer] Immediate (delay=0) fired: {}", immediate_count);
 
@@ -79,7 +79,7 @@ int main() {
     TimerWheel stress_wheel;
     std::atomic<size_t> stress_count{0};
     for (size_t i = 1; i <= 100; ++i) {
-        stress_wheel.schedule(i, [&stress_count] {
+        (void)stress_wheel.schedule(i, [&stress_count] {
             stress_count.fetch_add(1, std::memory_order_relaxed);
         });
     }

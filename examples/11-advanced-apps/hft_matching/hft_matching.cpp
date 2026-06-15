@@ -47,7 +47,7 @@
 #include <qbuem/buf/generation_pool.hpp>
 #include <qbuem/buf/intrusive_list.hpp>
 #include <qbuem/buf/lock_free_hash_map.hpp>
-#include <qbuem/reactor/micro_ticker.hpp>
+#include <qbuem/core/micro_ticker.hpp>
 
 #include <algorithm>
 #include <array>
@@ -193,6 +193,11 @@ struct OrderBook {
             PriceLevel* ask_level = asks.best();
             if (!bid_level || !ask_level) break;
             if (bid_level->price_cents < ask_level->price_cents) break;
+            // best() can return a level whose last order was just filled and
+            // removed (levels are only compacted after this loop). Guard front()
+            // against an empty level — compact() below removes it, and the next
+            // per-tick match() resumes on the cleaned book.
+            if (bid_level->orders.empty() || ask_level->orders.empty()) break;
 
             // Match at ask price (passive side determines trade price).
             Order* bid = bid_level->orders.front();
@@ -347,7 +352,7 @@ int main() {
     // Symbol hash map: symbol_hash → symbol index (wait-free O(1) lookup).
     qbuem::LockFreeHashMap<uint64_t, uint32_t> symbol_map(64);
     for (size_t i = 0; i < kNumSymbols; ++i)
-        symbol_map.put(symbol_hash(kSymbols[i]), static_cast<uint32_t>(i));
+        (void)symbol_map.put(symbol_hash(kSymbols[i]), static_cast<uint32_t>(i));
 
     // Simulated feeds — one per symbol.
     std::array<SimFeed, kNumSymbols> feeds{

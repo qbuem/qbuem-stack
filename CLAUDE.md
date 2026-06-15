@@ -55,7 +55,7 @@ CMake options:
 | Option | Default | Description |
 |---|---|---|
 | `QBUEM_BUILD_TESTS` | ON | Build unit tests under `tests/` |
-| `QBUEM_BUILD_EXAMPLES` | ON | Build all 44 examples under `examples/` |
+| `QBUEM_BUILD_EXAMPLES` | ON | Build all 58 examples under `examples/` |
 | `QBUEM_BUILD_BENCH` | ON | Build benchmarks under `bench/` |
 | `QBUEM_JSON_TAG` | `"main"` | qbuem-json git tag for FetchContent |
 
@@ -65,31 +65,36 @@ CMake options:
 
 ```
 include/qbuem/          ← ALL public headers (header-centric library)
-  qbuem_stack.hpp       ← Umbrella include — pulls everything
-  pipeline/             ← StaticPipeline, DynamicPipeline, PipelineGraph, actions
-  shm/                  ← SHMChannel<T>, SHMBus, SHMSource<T>, SHMSink<T>
-  reactor/              ← Dispatcher, Task<T>, coroutine infrastructure
-  net/                  ← TCP/UDP/Unix socket async primitives
-  http/                 ← HTTP/1.1 SIMD parser, Request, Response
-  tracing/              ← W3C TraceContext, SpanExporter, OTLP
-  security/             ← JwtAuthAction, kTLS
-  buf/                  ← Arena, FixedPoolResource, AsyncLogger
-  ...
+  qbuem_stack.hpp       ← Umbrella include — pulls the App/server surface
+  core/                 ← Dispatcher, Task<T>, Reactor (epoll/io_uring/kqueue), Arena, TimerWheel
+  pipeline/             ← StaticPipeline, DynamicPipeline, PipelineGraph, actions, resilience
+  shm/                  ← SHMChannel<T>, SHMBus, futex_sync
+  net/                  ← TCP/UDP/Unix socket async primitives, UDS FD passing, DNS
+  io/                   ← IOVec<N>, scattered_span, buffers, async/direct file, sendfile
+  http/                 ← HTTP/1.1 SIMD parser, Request, Response, Router, fetch client
+  server/               ← HTTP1/HTTP2/WebSocket/gRPC connection handlers
+  crypto/               ← SHA/HMAC/HKDF/PBKDF2/ChaCha20-Poly1305/AES-GCM/Base64/CSPRNG
+  security/             ← SIMDJwtParser, JwtAuthAction
+  tracing/              ← W3C TraceContext, SpanExporter, sampler, lifecycle tracer
+  buf/                  ← FixedPoolResource, pools, inplace_function, spatial bitsets, erasure
+  middleware/           ← cors, rate_limit, security headers, body_encoder, token_auth, sse
+  db/                   ← Value, IConnection/IConnectionPool interfaces, connection_pool, SmartCache
+  codec/ config/ compat/ transport/
 
-src/                    ← Non-inline implementations
+src/                    ← Non-inline implementations (reactors, http parser/router)
 tests/                  ← Unit tests (mirrors include/ structure)
-examples/               ← 58 examples in 11 category subdirectories
-  01-foundation/        → hello_world, async_timer, micro_ticker
-  02-network/           → tcp_echo_server, udp_advanced, unix_socket, websocket, http_fetch, http2, fetch_stream
-  03-memory/            → arena, zero_copy, numa_hugepages, lockfree_bench
-  04-codec-security/    → codec, crypto_url, security_middleware, crypto_primitives
-  05-pipeline/          → fanout, hardware_batching, dynamic_hotswap, sensor_fusion, observer_health, factory, subpipeline_migration, stream_ops, windowed_action, backpressure, stateful_window, dynamic_router
-  06-ipc-messaging/     → shm_channel, ipc_pipeline (flagship), message_bus, priority_spsc_channel
+examples/               ← 58 registered examples in 11 category subdirectories
+  01-foundation/        → hello_world, async_timer, micro_ticker, config
+  02-network/           → tcp_echo_server, udp_advanced, udp_unix_socket, websocket, http_fetch, http2_server, grpc
+  03-memory/            → arena, zero_copy_arena_channel, numa_hugepages, lockfree_bench
+  04-codec-security/    → codec, crypto_url, security_middleware, crypto_primitives, transport_codec, transport_plain
+  05-pipeline/          → fanout, hardware_batching, dynamic_hotswap, sensor_fusion, observer_health, factory, subpipeline_migration, stream_ops, windowed_action, backpressure_monitor, stateful_window, dynamic_router
+  06-ipc-messaging/     → shm_channel, ipc_pipeline (flagship), message_bus, priority_spsc_channel, scatter_send
   07-resilience/        → canary, checkpoint, resilience, saga, scatter_gather, idempotency_slo
-  08-observability/     → tracing, lifecycle_tracer, inspector_dashboard, timer_wheel, task_group
-  09-database/          → db_session, coro_json
-  10-hardware/          → hardware_io, kqueue_sophistication (macOS only)
-  11-advanced-apps/     → autonomous_driving, hft_matching, open_world_spatial, trading_platform, game_server, hardware_chaos, sensor_fusion, io_metrics_dashboard, middleware, micro_ticker_example
+  08-observability/     → tracing, timer_wheel, task_group
+  09-database/          → db_session, coro_json, smart_cache
+  10-hardware/          → kqueue_sophistication (macOS only)
+  11-advanced-apps/     → autonomous_driving, hft_matching, open_world, spatial_fusion, trading_platform, game_server, sensor_fusion, io_metrics_dashboard, middleware
 docs/                   ← Design documents (all English Markdown)
 bench/                  ← Benchmarks
 ```
@@ -237,8 +242,8 @@ Every code contribution — human or AI — is evaluated against the pillars bel
 | E1 | **Reference Design Alignment** | Every implementation MUST follow the specific design guide in `docs/` (e.g., `docs/kqueue-optimization-guide.md`). |
 | E2 | **Platform Reactor Selection** | Linux: `io_uring` Multishot. macOS: `kqueue` udata-dispatch. Windows: `RIO` (Registered IO). |
 | E3 | **Zero-Copy File I/O** | Must use `O_DIRECT` + `io_uring` fixed buffers or Windows RIO registered buffers. |
-| E4 | **Hardware Locality** | MSI-X interrupts must be affine to the reactor CPU core. |
-| E5 | **Distributed Zero-Copy** | Use `NVMe-oF` via RDMA or `copy_file_range` for data migration. |
+| E4 | **Hardware Locality** | Pin reactor threads to CPU cores (`numa.hpp` affinity helpers); keep per-thread data NUMA-local. |
+| E5 | **Zero-Copy File Transfer** | Use `sendfile()` / `copy_file_range()` (`io/zero_copy.hpp`) for file-to-socket and file-to-file transfer. |
 
 ---
 
@@ -466,8 +471,8 @@ To avoid confusion between same-concept files in different repos:
 
 | File | Repo | Purpose |
 |------|------|---------|
-| `<qbuem/http/fetch.hpp>` | stack | Core HTTP/1.1 fetch client |
-| `<qbuem/http/fetch_pipeline.hpp>` | stack | Simple retry/CB wrappers for a single `fetch()` call |
+| `<qbuem/http/fetch.hpp>` | stack | Core HTTP/1.1 fetch client (HTTP only — TLS is out of zero-dep scope) |
+| `<qbuem/http/fetch_client.hpp>` | stack | Higher-level fetch client wrapper |
 | `<qbuem/http/backoff.hpp>` | stack | Backoff strategy library (`BackoffFn`, `RetryConfig`, `async_sleep`) |
 | `<qbuem/middleware/content_type.hpp>` | stack | `require_json()` / `require_content_type()` inbound middleware |
 

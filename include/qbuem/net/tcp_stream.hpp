@@ -20,6 +20,7 @@
 #include <qbuem/core/reactor.hpp>
 #include <qbuem/core/task.hpp>
 #include <qbuem/net/socket_addr.hpp>
+#include <qbuem/net/socket_compat.hpp>
 
 #include <cerrno>
 #include <coroutine>
@@ -100,19 +101,9 @@ public:
    * @returns TcpStream on success, or an error code on failure.
    */
   static Task<Result<TcpStream>> connect(SocketAddr addr) {
-#ifdef __linux__
-    int fd = ::socket(
-        addr.family() == SocketAddr::Family::IPv6 ? AF_INET6 : AF_INET,
-        SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
-#else
-    int fd = ::socket(
+    int fd = net::make_socket(
         addr.family() == SocketAddr::Family::IPv6 ? AF_INET6 : AF_INET,
         SOCK_STREAM, 0);
-    if (fd >= 0) {
-      ::fcntl(fd, F_SETFL, ::fcntl(fd, F_GETFL) | O_NONBLOCK);
-      ::fcntl(fd, F_SETFD, FD_CLOEXEC);
-    }
-#endif
     if (fd < 0) {
       co_return std::unexpected(
           std::error_code(errno, std::system_category()));

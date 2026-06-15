@@ -95,13 +95,13 @@ public:
     auto out_channel = pipeline_.output();
     if (!out_channel) {
       co_return unexpected(
-          std::make_error_code(std::errc::no_message_available));
+          std::make_error_code(std::errc::no_message));
     }
 
     auto citem = co_await out_channel->recv();
     if (!citem) {
       co_return unexpected(
-          std::make_error_code(std::errc::no_message_available));
+          std::make_error_code(std::errc::no_message));
     }
 
     co_return std::move(citem->value);

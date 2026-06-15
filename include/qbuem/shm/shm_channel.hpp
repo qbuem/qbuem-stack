@@ -71,17 +71,20 @@ inline constexpr size_t kCacheLineSize = 64;
  * Fits all critical state into a single cache line to minimize MESI protocol
  * conflicts.
  */
+// Three separate cache lines: the producer-written `tail` and consumer-written
+// `head` must NOT share a line, or every commit/consume ping-pongs the line
+// between cores (false sharing). Read-mostly metadata gets its own line so the
+// rare `state` write doesn't invalidate either hot index. (H4 / hardware pillar.)
 struct alignas(kCacheLineSize) SHMHeader {
-    std::atomic<uint64_t> tail{0};      ///< Producer commit index (Producers++)
-    std::atomic<uint64_t> head{0};      ///< Consumer consume index (Consumers++)
-    uint32_t              capacity{0};  ///< Ring buffer slot count (power of two)
-    uint32_t              magic{kSHMMagic}; ///< Integrity check
-    std::atomic<uint32_t> state{1};     ///< bit0: Active, bit1: Draining, bit2: Error
-    uint8_t               _pad[64 - sizeof(std::atomic<uint64_t>) * 2  // NOLINT(modernize-avoid-c-arrays)
-                                   - sizeof(uint32_t) * 2
-                                   - sizeof(std::atomic<uint32_t>)]{};
+    alignas(kCacheLineSize) std::atomic<uint64_t> tail{0};   ///< Producer commit index (own line)
+    alignas(kCacheLineSize) std::atomic<uint64_t> head{0};   ///< Consumer consume index (own line)
+    alignas(kCacheLineSize) uint32_t              capacity{0};  ///< Ring slot count (power of two)
+    uint32_t              magic{kSHMMagic};  ///< Integrity check
+    std::atomic<uint32_t> state{1};          ///< bit0: Active, bit1: Draining, bit2: Error
 };
-static_assert(sizeof(SHMHeader) == kCacheLineSize, "SHMHeader must be exactly 64 bytes");
+static_assert(sizeof(SHMHeader) == 3 * kCacheLineSize,
+              "SHMHeader must span 3 cache lines: producer tail | consumer head | metadata");
+static_assert(alignof(SHMHeader) == kCacheLineSize);
 
 // ─── MetadataSlot ─────────────────────────────────────────────────────────────
 
@@ -348,7 +351,14 @@ inline Result<SHMSegment> SHMSegment::create(std::string_view name,
     if (name.empty() || name[0] != '/') shm_name += '/';
     shm_name.append(name.data(), name.size());
 
-    int fd = shm_open(shm_name.c_str(), O_CREAT | O_RDWR | O_TRUNC, 0600);
+    // create() owns the segment lifecycle, so remove any stale segment first: a
+    // segment leaked by a previous crash would otherwise make this fail. On
+    // macOS, ftruncate() only succeeds on a freshly-created object, so reusing a
+    // pre-existing segment returns EIO/EINVAL below. Best-effort unlink (ENOENT
+    // is fine) + O_EXCL guarantees we start from a clean, correctly-sized object.
+    shm_unlink(shm_name.c_str());
+
+    int fd = shm_open(shm_name.c_str(), O_CREAT | O_EXCL | O_RDWR, 0600);
     if (fd < 0)
         return std::unexpected(std::make_error_code(std::errc::io_error));
 

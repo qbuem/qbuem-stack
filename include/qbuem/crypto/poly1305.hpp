@@ -43,6 +43,8 @@
 #include <cstring>
 #include <span>
 
+#include <qbuem/crypto/secure_zero.hpp>
+
 namespace qbuem::crypto {
 
 // ─── Poly1305 key and tag types ───────────────────────────────────────────────
@@ -312,6 +314,7 @@ public:
     void update(std::span<const uint8_t> data) noexcept {
         const uint8_t* src = data.data();
         size_t         len = data.size();
+        if (len == 0) return;  // empty update is a no-op; also avoids memcpy(dst, nullptr, 0) UB
 
         // Fill partial buffer
         if (buf_len_ > 0) {
@@ -353,6 +356,12 @@ public:
             buf_len_ = 0;
         }
         return detail::poly::finalize(state_);
+    }
+
+    /** @brief Securely zero the key-derived MAC state and buffer (optimizer-proof). */
+    void wipe() noexcept {
+        secure_zero(&state_, sizeof(state_));
+        secure_zero(buf_.data(), buf_.size());
     }
 
 private:

@@ -33,6 +33,7 @@
  */
 
 #include <qbuem/common.hpp>
+#include <qbuem/core/dispatcher.hpp>
 #include <qbuem/core/task.hpp>
 #include <qbuem/pipeline/action_env.hpp>
 #include <qbuem/pipeline/async_channel.hpp>
@@ -298,6 +299,15 @@ public:
   void start(Dispatcher& dispatcher,
              std::shared_ptr<AsyncChannel<ContextualItem<Out>>> out = nullptr) {
     out_ = out;
+    // Mark both workers running and create the stop source synchronously, BEFORE
+    // spawning. The flags start false, so a drain()/stop() that runs before a
+    // spawned coroutine first executes would otherwise observe them still false
+    // and return immediately; the coroutine would then run after the owning
+    // object is gone — a heap-use-after-free on `this`. The coroutines clear
+    // these flags when they exit, so drain() now reliably waits for them.
+    stop_src_ = std::make_unique<std::stop_source>();
+    input_worker_running_.store(true, std::memory_order_release);
+    ticker_running_.store(true, std::memory_order_release);
     dispatcher.spawn(input_worker());
     dispatcher.spawn(ticker(tick_interval()));
   }
@@ -609,8 +619,10 @@ private:
    * @param interval Tick interval.
    */
   Task<void> ticker(milliseconds interval) {
+    // running flag and stop_src_ are initialized in start() (see the race note
+    // there); creating a fresh stop_source here would discard a stop() that
+    // arrived before this coroutine first ran.
     ticker_running_.store(true, std::memory_order_release);
-    stop_src_ = std::make_unique<std::stop_source>();
     auto stop_token = stop_src_->get_token();
 
     while (!stop_token.stop_requested()) {

@@ -109,6 +109,19 @@ Task<Result<void>> try_publish_example(Dispatcher& dispatcher) {
 
 // ─── main ─────────────────────────────────────────────────────────────────────
 
+// Free-function runner (the coroutine frame owns the fn pointer and holds
+// references to main's locals, which outlive it). Spawning an immediately-invoked
+// coroutine-lambda (`spawn([&]() -> Task<...> {...}())`) is undefined behaviour:
+// the temporary closure is destroyed at the end of spawn() while the worker
+// thread still references it (stack-use-after-scope).
+static Task<Result<void>> run_scenario(Task<Result<void>> (*fn)(Dispatcher&),
+                                       Dispatcher& dispatcher,
+                                       std::atomic<bool>& done) {
+    co_await fn(dispatcher);
+    done.store(true);
+    co_return {};
+}
+
 int main() {
     println("=== MessageBus Pub/Sub ===");
 
@@ -117,17 +130,8 @@ int main() {
 
     std::atomic<bool> done1{false}, done2{false};
 
-    dispatcher.spawn([&]() -> Task<Result<void>> {
-        co_await pubsub_example(dispatcher);
-        done1.store(true);
-        co_return {};
-    }());
-
-    dispatcher.spawn([&]() -> Task<Result<void>> {
-        co_await try_publish_example(dispatcher);
-        done2.store(true);
-        co_return {};
-    }());
+    dispatcher.spawn(run_scenario(&pubsub_example, dispatcher, done1));
+    dispatcher.spawn(run_scenario(&try_publish_example, dispatcher, done2));
 
     auto deadline = std::chrono::steady_clock::now() + 10s;
     while ((!done1.load() || !done2.load()) &&

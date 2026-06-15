@@ -11,9 +11,9 @@
  * ### SIMD acceleration
  * | Path      | Macro                | Throughput |
  * |-----------|----------------------|------------|
- * | AVX2      | `__AVX2__`           | ~4 GB/s    |
- * | NEON      | `__ARM_NEON`         | ~3 GB/s    |
- * | Scalar    | fallback             | ~600 MB/s  |
+ * | AVX2      | `__AVX2__`           | (not yet vectorised — uses scalar)   |
+ * | NEON      | `__ARM_NEON`         | ~3 GB/s (vtbl encode)                |
+ * | Scalar    | fallback             | ~600 MB/s                            |
  *
  * ### API overview
  * ```cpp

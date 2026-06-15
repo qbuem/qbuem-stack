@@ -29,8 +29,12 @@
  *   ./build/examples/micro_ticker_example
  */
 
-#include <qbuem/reactor/micro_ticker.hpp>
-#include <qbuem/core/epoll_reactor.hpp>
+#include <qbuem/core/micro_ticker.hpp>
+// PlatformReactor resolves to the reactor this build actually compiled (Kqueue
+// on macOS, io_uring or epoll on Linux per QBUEM_HAS_IOURING). Naming a concrete
+// reactor directly would fail to link in the other configuration.
+#include <qbuem/core/platform_reactor.hpp>
+using PlatformReactor = qbuem::PlatformReactor;
 #include <qbuem/qbuem_stack.hpp>
 
 #include <algorithm>
@@ -83,7 +87,7 @@ static void run_passive_baseline(TickStats& stats) {
     constexpr int    kIterations = 100;
     constexpr int    kTargetMs   = 1;
 
-    auto reactor = std::make_unique<qbuem::EpollReactor>();
+    auto reactor = std::make_unique<PlatformReactor>();
     auto prev    = Clock::now();
 
     for (int i = 0; i < kIterations; ++i) {
@@ -123,7 +127,7 @@ static void run_reactor_driven(TickStats& stats) {
     constexpr uint64_t kIterations = 200;
     constexpr auto     kInterval   = 100us;
 
-    auto reactor = std::make_unique<qbuem::EpollReactor>();
+    auto reactor = std::make_unique<PlatformReactor>();
     qbuem::MicroTicker ticker(kInterval);
 
     // Register a simple timer callback inside the reactor.

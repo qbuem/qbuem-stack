@@ -64,16 +64,22 @@ namespace qbuem {
 // ─── unexpected<E> ────────────────────────────────────────────────────────────
 
 /**
- * @brief Alias for C++23 `std::unexpected<E>`.
+ * @brief Brings C++23 `std::unexpected` into the `qbuem` namespace.
  *
  * Used to unambiguously construct the error path of a `Result<T>`:
  * @code
  * return unexpected(std::make_error_code(std::errc::invalid_argument));
  * @endcode
- * @tparam E Error value type. Usually `std::error_code`.
+ *
+ * This is a using-declaration, not an alias template, on purpose: it imports
+ * the actual `std::unexpected` class template together with its deduction
+ * guides, so class-template argument deduction — `unexpected(err)` — works on
+ * every conforming compiler. An `using unexpected = std::unexpected<E>;` alias
+ * template would break CTAD on clang 18 (which does not implement P1814,
+ * deduction for alias templates), while still allowing the explicit
+ * `unexpected<std::error_code>{err}` spelling.
  */
-template <typename E>
-using unexpected = std::unexpected<E>;
+using std::unexpected;
 
 // ─── Result<T> ────────────────────────────────────────────────────────────────
 

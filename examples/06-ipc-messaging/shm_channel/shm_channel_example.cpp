@@ -102,12 +102,17 @@ static void demo_shm_bus() {
     assert(sub->topic() == "trading.orders");
     assert(sub->scope() == TopicScope::LOCAL_ONLY);
 
-    // Publish
+    // Publish. NOTE: the publish call must NOT be inside assert() — assert is
+    // compiled out under NDEBUG (Release), which would silently drop the publish
+    // and leave the try_recv() below returning empty (then a deref → crash).
     OrderEvent ev1{1001, 250.5, 100};
-    assert(bus.try_publish("trading.orders", ev1));
+    bool pub1 = bus.try_publish("trading.orders", ev1);
+    assert(pub1);
 
     OrderEvent ev2{1002, 251.0, 200};
-    assert(bus.try_publish("trading.orders", ev2));
+    bool pub2 = bus.try_publish("trading.orders", ev2);
+    assert(pub2);
+    (void)pub1; (void)pub2;
 
     // Subscriber receive
     auto r1 = sub->try_recv();
@@ -141,10 +146,12 @@ static void demo_calc_segment_size() {
     size_t s2 = calc_segment_size(128, 64, false);
     assert(s2 > s1);
 
-    // Adding envelope increases size by at least capacity*128B
+    // Enabling the envelope never shrinks the segment. (It cannot be asserted to
+    // grow by a fixed amount: the total is rounded up to a 4 KB page, so for small
+    // capacities the with/without-envelope sizes can land on the same page.)
     size_t sw  = calc_segment_size(16, 64, false);
     size_t swe = calc_segment_size(16, 64, true);
-    assert(swe >= sw + 16 * 128u);
+    assert(swe >= sw);
 
     println("[calc_segment_size] s={} s1={} s2={} with_env={}",
                 s, s1, s2, swe);

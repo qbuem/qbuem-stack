@@ -2,27 +2,24 @@
 
 /**
  * @file qbuem/db/connection_pool.hpp
- * @brief LockFreeConnectionPool — O(1) lock-free connection pool implementation.
+ * @brief Connection pool — mutex-guarded free list implementing IConnectionPool.
  * @defgroup qbuem_db_pool LockFreeConnectionPool
  * @ingroup qbuem_db
  *
  * ## Overview
- * A concrete implementation of `IConnectionPool`.
- * Uses **lock-free** connection slot indexing based on Dmitry Vyukov's MPMC ring buffer
- * to guarantee O(1) `acquire()` / `release()`.
+ * A concrete implementation of `IConnectionPool`. Acquire/release is a cold path
+ * (it happens around a DB round-trip, not per-packet), so the pool is guarded by
+ * a `std::mutex` + `std::vector` free list — correct, simple, and adequate.
  *
- * ## Design
- * ```
- * [free_ring_] ─── ring buffer of available slot indices
- *     │
- *     ▼
- * [slots_[N]] ─── each slot: IConnection* + state atomic
- * ```
+ * @note The class is named `LockFreeConnectionPool` for historical/API-stability
+ *       reasons, but the current acquire/release path uses a mutex. A lock-free
+ *       Vyukov MPMC ring would only matter if the pool itself were on a hot path,
+ *       which it is not. The name is kept to avoid breaking callers.
  *
- * ## acquire() Algorithm
- * 1. `free_ring_.try_pop()` → acquire slot index (O(1) lock-free).
- * 2. If connection is alive, return it; otherwise call `reconnect()`.
- * 3. If no slot available, register in AsyncChannel waiter → wake on return.
+ * ## Connection Lifetime Management
+ * - `min_size` connections are always kept alive (exempt from idle timeout).
+ * - No connections are created beyond `max_size` — backpressure.
+ * - Idle connections are automatically released after `idle_timeout_ms`.
  *
  * ## Connection Lifetime Management
  * - `min_size` connections are always kept alive (exempt from idle timeout).

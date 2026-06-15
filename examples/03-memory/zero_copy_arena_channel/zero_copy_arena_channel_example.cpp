@@ -231,7 +231,9 @@ int main() {
     Dispatcher disp(1);
     std::jthread t([&] { disp.run(); });
 
-    disp.spawn([&]() -> Task<void> { co_await demo_zero_copy_task(); }());
+    // Captureless lambda (no captured state) is safe to spawn as a temporary;
+    // a CAPTURING coroutine-lambda here would be a use-after-scope (see CI guard).
+    disp.spawn([]() -> Task<void> { co_await demo_zero_copy_task(); }());
 
     auto deadline = std::chrono::steady_clock::now() + 5s;
     while (!g_zero_copy_done.load() && std::chrono::steady_clock::now() < deadline)

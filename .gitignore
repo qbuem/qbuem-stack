@@ -1,10 +1,55 @@
+# ── Build directories ─────────────────────────────────────────────────────────
 build/
 build_*/
 build-*/
-.agent/
+out/
+dist/
+dist_*/
+
+# ── CMake artifacts ───────────────────────────────────────────────────────────
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+CTestTestfile.cmake
+compile_commands.json
+_deps/
+Testing/
+
+# ── Compiled objects / libraries / binaries ───────────────────────────────────
+*.o
+*.obj
+*.a
+*.lib
+*.so
+*.so.*
+*.dylib
+*.dll
+*.exe
+bin/
+
+# ── Code coverage (llvm-cov / gcov) ───────────────────────────────────────────
+*.profraw
+*.profdata
+*.gcda
+*.gcno
+coverage/
+*.lcov
+
+# ── Fuzzing artifacts (libFuzzer reproducers / corpora) ───────────────────────
+crash-*
+timeout-*
+oom-*
+leak-*
+fuzz/corpus/
+fuzz/*-corpus/
+
+# ── Editor / IDE / OS ─────────────────────────────────────────────────────────
 .DS_Store
 *.swp
-*.o
-*.a
-bin/
-Testing/
+*.swo
+*~
+.vscode/
+.idea/
+*.user
+.cache/
+.agent/

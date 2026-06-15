@@ -22,7 +22,9 @@ using namespace qbuem::shm;
 // ─── Struct size/alignment constraints ───────────────────────────────────────
 
 TEST(SHMLayout, HeaderSize) {
-    EXPECT_EQ(sizeof(SHMHeader), 64u);
+    // 3 cache lines: producer `tail` | consumer `head` | read-mostly metadata,
+    // each on its own 64B line to eliminate producer/consumer false sharing.
+    EXPECT_EQ(sizeof(SHMHeader), 192u);
 }
 
 TEST(SHMLayout, HeaderAlignment) {

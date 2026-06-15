@@ -105,7 +105,7 @@ inline bool accepts_encoding(std::string_view ae, std::string_view token) noexce
  * The middleware compresses the response body when:
  *   (a) the client sends Accept-Encoding: <encoder.accept_token()>
  *   (b) the body size is >= @p min_size bytes
- *   (c) the Content-Type is compressible (text/*, application/json, …)
+ *   (c) the Content-Type is compressible (text types, application/json, …)
  *   (d) the response has no existing Content-Encoding header
  *
  * On compression failure the original body is sent unchanged.

@@ -50,6 +50,8 @@
 #include <cstring>
 #include <string_view>
 
+#include <sys/socket.h>  // setsockopt/getsockopt (self-contained include)
+
 #if defined(__linux__)
 #  include <sys/socket.h>
 #  include <netinet/tcp.h>

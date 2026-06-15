@@ -17,7 +17,7 @@ using namespace qbuem;
 TEST(TimerWheelTest, ScheduledCallbackFiresAfterDelay) {
     TimerWheel wheel;
     int count = 0;
-    wheel.schedule(100, [&] { ++count; });
+    (void)wheel.schedule(100, [&] { ++count; });
 
     // Not yet — 50ms elapsed
     size_t fired = wheel.tick(50);
@@ -34,9 +34,9 @@ TEST(TimerWheelTest, MultipleTimersFire) {
     TimerWheel wheel;
     std::vector<int> fired_ids;
 
-    wheel.schedule(50,  [&] { fired_ids.push_back(1); });
-    wheel.schedule(100, [&] { fired_ids.push_back(2); });
-    wheel.schedule(200, [&] { fired_ids.push_back(3); });
+    (void)wheel.schedule(50,  [&] { fired_ids.push_back(1); });
+    (void)wheel.schedule(100, [&] { fired_ids.push_back(2); });
+    (void)wheel.schedule(200, [&] { fired_ids.push_back(3); });
 
     wheel.tick(50);   // T1 fires
     wheel.tick(50);   // T2 fires (total 100ms)
@@ -52,8 +52,8 @@ TEST(TimerWheelTest, TimersFireInOrder) {
     TimerWheel wheel;
     std::vector<std::string> order;
 
-    wheel.schedule(50,  [&] { order.push_back("early"); });
-    wheel.schedule(100, [&] { order.push_back("late"); });
+    (void)wheel.schedule(50,  [&] { order.push_back("early"); });
+    (void)wheel.schedule(100, [&] { order.push_back("late"); });
 
     wheel.tick(100);  // Both should fire, early first
 
@@ -95,7 +95,7 @@ TEST(TimerWheelTest, OnlyTargetTimerCancelled) {
     TimerWheel wheel;
     int a = 0, b = 0;
     auto id_a = wheel.schedule(50, [&] { ++a; });
-    wheel.schedule(50, [&] { ++b; });
+    (void)wheel.schedule(50, [&] { ++b; });
 
     wheel.cancel(id_a);
     wheel.tick(100);
@@ -108,7 +108,7 @@ TEST(TimerWheelTest, OnlyTargetTimerCancelled) {
 
 TEST(TimerWheelTest, NextExpiryMsReturnsApproximateDelay) {
     TimerWheel wheel;
-    wheel.schedule(300, [] {});
+    (void)wheel.schedule(300, [] {});
     uint64_t next = wheel.next_expiry_ms();
     // Should be roughly 300 (the wheel has 1ms resolution at level 0)
     EXPECT_GE(next, 298u);
@@ -129,7 +129,7 @@ TEST(TimerWheelTest, ImmediateTimerFiresOnZeroTick) {
     // advance time so nothing executes; it fires after tick(1).
     TimerWheel wheel;
     int count = 0;
-    wheel.schedule(0, [&] { ++count; });
+    (void)wheel.schedule(0, [&] { ++count; });
     wheel.tick(0);
     // tick(0) advances no time so nothing must fire
     // (delay=0 timer is placed in slot 0, which is visited after a 256ms tick)
@@ -164,7 +164,7 @@ TEST(TimerWheelTest, StressScheduleAndFireAllTimers) {
     std::atomic<size_t> fired{0};
 
     for (size_t i = 1; i <= 100; ++i)
-        wheel.schedule(i, [&] { fired.fetch_add(1, std::memory_order_relaxed); });
+        (void)wheel.schedule(i, [&] { fired.fetch_add(1, std::memory_order_relaxed); });
 
     for (uint64_t ms = 1; ms <= 100; ++ms)
         wheel.tick(1);

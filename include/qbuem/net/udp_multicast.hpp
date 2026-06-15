@@ -72,6 +72,7 @@
 #include <qbuem/core/reactor.hpp>
 #include <qbuem/core/task.hpp>
 #include <qbuem/net/socket_addr.hpp>
+#include <qbuem/net/socket_compat.hpp>
 
 #include <cerrno>
 #include <cstring>
@@ -133,7 +134,7 @@ public:
     create_sender(SocketAddr group, std::string_view iface = "") noexcept {
         bool ipv6 = (group.family() == SocketAddr::Family::IPv6);
         int domain = ipv6 ? AF_INET6 : AF_INET;
-        int fd = ::socket(domain, SOCK_DGRAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
+        int fd = net::make_socket(domain, SOCK_DGRAM, 0);
         if (fd < 0) return std::unexpected(std::error_code(errno, std::system_category()));
 
         MulticastSocket sock(fd);
@@ -191,7 +192,7 @@ public:
     create_receiver(SocketAddr group, std::string_view iface = "") noexcept {
         bool ipv6 = (group.family() == SocketAddr::Family::IPv6);
         int domain = ipv6 ? AF_INET6 : AF_INET;
-        int fd = ::socket(domain, SOCK_DGRAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
+        int fd = net::make_socket(domain, SOCK_DGRAM, 0);
         if (fd < 0) return std::unexpected(std::error_code(errno, std::system_category()));
 
         // Allow multiple receivers on the same port

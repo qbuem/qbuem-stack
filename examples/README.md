@@ -10,17 +10,17 @@ scenario, architecture, key APIs, and expected output.
 
 | # | Category | Count | Examples |
 |---|----------|:-----:|----------|
-| [01](#01-foundation) | Foundation | 3 | hello_world, async_timer, micro_ticker |
-| [02](#02-network) | Network | 7 | tcp_echo_server, udp_unix_socket, udp_advanced, websocket, http_fetch, http2_client, fetch_stream |
+| [01](#01-foundation) | Foundation | 4 | hello_world, async_timer, micro_ticker, config |
+| [02](#02-network) | Network | 7 | tcp_echo_server, udp_unix_socket, udp_advanced, websocket, http_fetch, http2_server, grpc |
 | [03](#03-memory) | Memory | 4 | arena, zero_copy_arena_channel, numa_hugepages, lockfree_bench |
-| [04](#04-codec--security) | Codec & Security | 3 | codec, crypto_url, security_middleware |
+| [04](#04-codec--security) | Codec & Security | 6 | codec, crypto_url, crypto_primitives, security_middleware, transport_codec, transport_plain |
 | [05](#05-pipeline) | Pipeline | 12 | fanout, dynamic_hotswap, hardware_batching, sensor_fusion, observer_health, factory, subpipeline_migration, stream_ops, windowed_action, dynamic_router, stateful_window, backpressure_monitor |
-| [06](#06-ipc--messaging) | IPC & Messaging | 4 | shm_channel, ipc_pipeline, message_bus, priority_spsc_channel |
+| [06](#06-ipc--messaging) | IPC & Messaging | 5 | shm_channel, ipc_pipeline, message_bus, priority_spsc_channel, scatter_send |
 | [07](#07-resilience) | Resilience | 6 | canary, checkpoint, resilience, saga, scatter_gather, idempotency_slo |
-| [08](#08-observability) | Observability | 5 | tracing, lifecycle_tracing, inspector_dashboard, timer_wheel, task_group |
-| [09](#09-database) | Database | 2 | db_session, coro_json |
-| [10](#10-hardware) | Hardware | 2 | hardware_io, kqueue_sophistication |
-| [11](#11-advanced-apps) | Advanced Apps | 10 | autonomous_driving, sensor_fusion, io_metrics_dashboard, trading_platform, game_server, middleware, hft_matching, open_world, spatial_fusion, hardware_chaos |
+| [08](#08-observability) | Observability | 3 | tracing, timer_wheel, task_group |
+| [09](#09-database) | Database | 3 | db_session, coro_json, smart_cache |
+| [10](#10-hardware) | Hardware | 1 | kqueue_sophistication (macOS) |
+| [11](#11-advanced-apps) | Advanced Apps | 9 | autonomous_driving, sensor_fusion, io_metrics_dashboard, trading_platform, game_server, middleware, hft_matching, open_world, spatial_fusion |
 
 ---
 
@@ -51,7 +51,7 @@ The simplest possible qbuem-stack programs — start here.
 |---------|------|-------------|
 | [hello_world](01-foundation/hello_world/) | `hello_world.cpp` | Minimal HTTP server with middleware and routing |
 | [async_timer](01-foundation/async_timer/) | `async_timer.cpp` | Sync vs. async coroutine handlers, `co_await sleep()` |
-| [micro_ticker](01-foundation/micro_ticker/) | `micro_ticker_example.cpp` | Sub-millisecond precision loop: nanosleep + busy-spin hybrid, MicroTicker driving EpollReactor |
+| [micro_ticker](01-foundation/micro_ticker/) | `micro_ticker_example.cpp` | Sub-millisecond precision loop: nanosleep + busy-spin hybrid, MicroTicker driving the build-selected PlatformReactor |
 
 ---
 
@@ -66,8 +66,6 @@ Raw TCP, UDP, Unix-domain socket, WebSocket, and HTTP client protocols.
 | [udp_advanced](02-network/udp_advanced/) | `udp_advanced_example.cpp` | `UdpMmsgSocket` batch recv/send (64 datagrams/syscall), `RudpSocket` reliable UDP, `MulticastSocket` |
 | [websocket](02-network/websocket/) | `websocket_example.cpp` | RFC 6455 handshake, frame encode/decode, NEON/AVX2 masking |
 | [http_fetch](02-network/http_fetch/) | `http_fetch_example.cpp` | Monadic fetch: GET/POST, timeout, redirect, `FetchClient` keep-alive pool, kTLS HTTPS |
-| [http2_client](02-network/http2_client/) | `http2_client_example.cpp` | HTTP/2 multiplexed client: binary framing, HPACK, SETTINGS, WINDOW_UPDATE, RST_STREAM |
-| [fetch_stream](02-network/fetch_stream/) | `fetch_stream_example.cpp` | Zero-copy streaming response via `FetchStream` + fixed 64 KiB chunk pool |
 
 ---
 
@@ -155,8 +153,6 @@ structured concurrency.
 | Example | File | Description |
 |---------|------|-------------|
 | [tracing](08-observability/tracing/) | `tracing_example.cpp` | W3C `TraceContext`, `PipelineTracer`, `SpanExporter`, `Sampler` types |
-| [lifecycle_tracing](08-observability/lifecycle_tracing/) | `lifecycle_tracing_example.cpp` | `LifecycleTracer<N>` zero-alloc OTLP/SHM tracer, `ShmSpanRing`, `TraceLogger` |
-| [inspector_dashboard](08-observability/inspector_dashboard/) | `inspector_dashboard_example.cpp` | `JourneyCollector` Gantt timeline, `inspector_html()` SSE UI, `CoroExplorer`, `AffinityInspector` |
 | [timer_wheel](08-observability/timer_wheel/) | `timer_wheel_example.cpp` | `TimerWheel` — O(1) schedule/cancel/tick, 4-level hierarchical wheel |
 | [task_group](08-observability/task_group/) | `task_group_example.cpp` | `TaskGroup` — structured concurrency, `join_all<T>()`, `cancel()` |
 
@@ -179,7 +175,6 @@ Low-level hardware integration: PCIe VFIO, RDMA, eBPF, NVMe SPDK, kTLS, kqueue.
 
 | Example | File | Platform | Description |
 |---------|------|----------|-------------|
-| [hardware_io](10-hardware/hardware_io/) | `hardware_io_example.cpp` | Linux | VFIO PCIe + RDMA + eBPF CO-RE + NVMe SPDK + kTLS kernel offload |
 | [kqueue_sophistication](10-hardware/kqueue_sophistication/) | `kqueue_sophistication.cpp` | **macOS only** | Advanced kqueue: `EVFILT_TIMER`, `EVFILT_USER`, batched `kevent64()`, udata dispatch |
 
 ---
@@ -199,7 +194,6 @@ Full-stack applications combining multiple qbuem-stack layers.
 | [hft_matching](11-advanced-apps/hft_matching/) | `hft_matching.cpp` | Lock-free HFT order book: `LockFreeHashMap` symbol registry, `IntrusiveList` price levels, `GenerationPool<Order>`, `MicroTicker`-driven feed at 100 µs |
 | [open_world](11-advanced-apps/open_world/) | `open_world_example.cpp` | 5-tick open-world simulation using `TiledBitset<256,256,16>`: aggro radius, AoE count, cross-tile line-of-sight raycast, minimap scan, tile eviction |
 | [spatial_fusion](11-advanced-apps/spatial_fusion/) | `spatial_fusion_example.cpp` | Sensor + spatial index fusion: LiDAR occupancy mapped into `GridBitset` for real-time collision queries |
-| [hardware_chaos](11-advanced-apps/hardware_chaos/) | `hardware_chaos_example.cpp` | `ChaosHardware` probabilistic fault injection: `ErrorInjection`, `LatencySpike`, `BitFlip`, `PartialWrite`, `DropCompletion` |
 
 ---
 
@@ -251,10 +245,10 @@ Full-stack applications combining multiple qbuem-stack layers.
 
 **Infrastructure / SRE?**
 ```
-07/resilience → 07/canary → 07/idempotency_slo → 08/tracing → 08/inspector_dashboard
+07/resilience → 07/canary → 07/idempotency_slo → 08/tracing → 08/task_group
 ```
 
 **Hardware Engineers?**
 ```
-01/micro_ticker → 10/hardware_io → 11/hft_matching → 11/hardware_chaos
+01/micro_ticker → 10/kqueue_sophistication → 11/hft_matching → 11/spatial_fusion
 ```

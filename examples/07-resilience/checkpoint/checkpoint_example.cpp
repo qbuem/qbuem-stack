@@ -36,6 +36,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <memory>
 #include <string>
 #include <thread>
 #include <vector>
@@ -86,6 +87,17 @@ static Task<Result<LogEvent>> stage_persist(LogEvent ev, ActionEnv /*env*/) {
 
 // ─── RunGuard ─────────────────────────────────────────────────────────────────
 
+// Free-function coroutine that OWNS its work: the callable `f` is moved into the
+// coroutine frame (by value), and the completion flag is held via shared_ptr so
+// the frame keeps it alive even if the busy-wait below exits early on timeout.
+// This avoids the immediately-invoked coroutine-lambda anti-pattern, where the
+// temporary closure would be destroyed while the worker thread still runs it.
+template <typename F>
+static Task<void> run_worker(F f, std::shared_ptr<std::atomic<bool>> done) {
+    co_await f();
+    done->store(true, std::memory_order_release);
+}
+
 struct RunGuard {
     Dispatcher  dispatcher;
     std::jthread thread;
@@ -95,12 +107,10 @@ struct RunGuard {
     ~RunGuard() { dispatcher.stop(); if (thread.joinable()) thread.join(); }
     template <typename F>
     void run_and_wait(F&& f, std::chrono::milliseconds timeout = 10s) {
-        std::atomic<bool> done{false};
-        dispatcher.spawn([&, f = std::forward<F>(f)]() mutable -> Task<void> {
-            co_await f(); done.store(true, std::memory_order_release);
-        }());
+        auto done = std::make_shared<std::atomic<bool>>(false);
+        dispatcher.spawn(run_worker(std::forward<F>(f), done));
         auto dl = std::chrono::steady_clock::now() + timeout;
-        while (!done.load() && std::chrono::steady_clock::now() < dl)
+        while (!done->load() && std::chrono::steady_clock::now() < dl)
             std::this_thread::sleep_for(1ms);
     }
 };

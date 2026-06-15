@@ -64,11 +64,11 @@
 #include <string_view>
 #include <unordered_map>
 
-// Optional: use nlohmann/json or qbuem_json if available; otherwise stub.
-#if __has_include(<nlohmann/json.hpp>)
-#  include <nlohmann/json.hpp>
-   namespace qbuem::detail { using Json = nlohmann::json; }
-#elif __has_include(<qbuem_json/qbuem_json.hpp>)
+// Optional JSON-config support via the qbuem-json sibling library when present;
+// otherwise a stub. No third-party JSON dependency in core — JSON config is an
+// opt-in integration (Zero Dependency pillar D1/D4), and a core build with no
+// qbuem-json compiles the stub (zero external dependencies).
+#if __has_include(<qbuem_json/qbuem_json.hpp>)
 #  include <qbuem_json/qbuem_json.hpp>
 #  include <cstddef>
 #  include <memory>

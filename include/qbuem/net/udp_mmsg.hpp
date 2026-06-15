@@ -62,6 +62,7 @@
 #include <qbuem/core/reactor.hpp>
 #include <qbuem/core/task.hpp>
 #include <qbuem/net/socket_addr.hpp>
+#include <qbuem/net/socket_compat.hpp>
 
 #include <array>
 #include <cerrno>
@@ -221,7 +222,7 @@ public:
      */
     [[nodiscard]] static Result<UdpMmsgSocket> bind(SocketAddr addr) noexcept {
         int domain = (addr.family() == SocketAddr::Family::IPv6) ? AF_INET6 : AF_INET;
-        int fd = ::socket(domain, SOCK_DGRAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
+        int fd = net::make_socket(domain, SOCK_DGRAM, 0);
         if (fd < 0) return std::unexpected(std::error_code(errno, std::system_category()));
 
         {
@@ -287,18 +288,23 @@ public:
         if (st.stop_requested())
             co_return std::unexpected(std::make_error_code(std::errc::operation_canceled));
 
-        // Prepare mmsghdr array on the stack
+        // Prepare per-datagram buffers on the stack
         using Batch = RecvBatch<kDefaultBatch, kDefaultBufSize>;
         Batch batch;
 
-        std::array<mmsghdr,        Batch::kMaxBatch> msgs{};
-        std::array<iovec,          Batch::kMaxBatch> iovs{};
+        std::array<iovec,            Batch::kMaxBatch> iovs{};
         std::array<sockaddr_storage, Batch::kMaxBatch> sas{};
-        std::array<socklen_t,      Batch::kMaxBatch> salens{};
 
         for (size_t i = 0; i < Batch::kMaxBatch; ++i) {
             iovs[i].iov_base = batch.bufs_[i].data();
             iovs[i].iov_len  = Batch::kBufSize;
+        }
+
+        int n = 0;
+#if defined(__linux__)
+        // Linux fast path: one recvmmsg(MSG_WAITFORONE) drains the queue.
+        std::array<mmsghdr, Batch::kMaxBatch> msgs{};
+        for (size_t i = 0; i < Batch::kMaxBatch; ++i) {
             msgs[i].msg_hdr.msg_iov        = &iovs[i];
             msgs[i].msg_hdr.msg_iovlen     = 1;
             msgs[i].msg_hdr.msg_name       = &sas[i];
@@ -307,13 +313,10 @@ public:
             msgs[i].msg_hdr.msg_controllen = 0;
             msgs[i].msg_hdr.msg_flags      = 0;
             msgs[i].msg_len                = 0;
-            salens[i] = sizeof(sockaddr_storage);
         }
-
-        // recvmmsg with MSG_WAITFORONE — returns immediately after first datagram
-        int n = ::recvmmsg(fd_, msgs.data(),
-                           static_cast<unsigned>(Batch::kMaxBatch),
-                           MSG_WAITFORONE, nullptr);
+        n = ::recvmmsg(fd_, msgs.data(),
+                       static_cast<unsigned>(Batch::kMaxBatch),
+                       MSG_WAITFORONE, nullptr);
         if (n < 0) {
             if (errno == EAGAIN || errno == EWOULDBLOCK) {
                 batch.count = 0;
@@ -321,10 +324,37 @@ public:
             }
             co_return std::unexpected(std::error_code(errno, std::system_category()));
         }
+        for (int i = 0; i < n; ++i)
+            batch.lengths_[static_cast<size_t>(i)] = msgs[i].msg_len;
+#else
+        // macOS/BSD: no recvmmsg — emulate by draining with recvmsg. The reactor
+        // has already signalled readability, so the first recv returns promptly;
+        // subsequent recvs are non-blocking to collect the rest of the burst.
+        for (size_t i = 0; i < Batch::kMaxBatch; ++i) {
+            msghdr mh{};
+            mh.msg_iov     = &iovs[i];
+            mh.msg_iovlen  = 1;
+            mh.msg_name    = &sas[i];
+            mh.msg_namelen = sizeof(sockaddr_storage);
+            ssize_t r = ::recvmsg(fd_, &mh, (n == 0) ? 0 : MSG_DONTWAIT);
+            if (r < 0) {
+                if (n == 0) {
+                    if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                        batch.count = 0;
+                        co_return batch;
+                    }
+                    co_return std::unexpected(
+                        std::error_code(errno, std::system_category()));
+                }
+                break;  // burst drained
+            }
+            batch.lengths_[static_cast<size_t>(n)] = static_cast<uint32_t>(r);
+            ++n;
+        }
+#endif
 
         batch.count = static_cast<size_t>(n);
         for (size_t i = 0; i < batch.count; ++i) {
-            batch.lengths_[i] = msgs[i].msg_len;
             // Decode sender address
             if (sas[i].ss_family == AF_INET) {
                 const auto* sa = reinterpret_cast<const sockaddr_in*>(&sas[i]);
@@ -359,7 +389,6 @@ public:
             co_return std::unexpected(std::make_error_code(std::errc::operation_canceled));
 
         size_t n = batch.size();
-        std::array<mmsghdr,          MaxBatch> msgs{};
         std::array<iovec,            MaxBatch> iovs{};
         std::array<sockaddr_storage, MaxBatch> sas{};
         std::array<socklen_t,        MaxBatch> salens{};
@@ -370,7 +399,13 @@ public:
 
             iovs[i].iov_base = const_cast<std::byte*>(batch.bufs_[i].data());
             iovs[i].iov_len  = batch.bufs_[i].size();
+        }
 
+        int sent = 0;
+#if defined(__linux__)
+        // Linux fast path: one sendmmsg drains the batch.
+        std::array<mmsghdr, MaxBatch> msgs{};
+        for (size_t i = 0; i < n; ++i) {
             msgs[i].msg_hdr.msg_iov        = &iovs[i];
             msgs[i].msg_hdr.msg_iovlen     = 1;
             msgs[i].msg_hdr.msg_name       = &sas[i];
@@ -380,10 +415,27 @@ public:
             msgs[i].msg_hdr.msg_flags      = 0;
             msgs[i].msg_len                = 0;
         }
-
-        int sent = ::sendmmsg(fd_, msgs.data(), static_cast<unsigned>(n), 0);
+        sent = ::sendmmsg(fd_, msgs.data(), static_cast<unsigned>(n), 0);
         if (sent < 0)
             co_return std::unexpected(std::error_code(errno, std::system_category()));
+#else
+        // macOS/BSD: no sendmmsg — emulate with a sendmsg loop.
+        for (size_t i = 0; i < n; ++i) {
+            msghdr mh{};
+            mh.msg_iov     = &iovs[i];
+            mh.msg_iovlen  = 1;
+            mh.msg_name    = &sas[i];
+            mh.msg_namelen = salens[i];
+            ssize_t r = ::sendmsg(fd_, &mh, 0);
+            if (r < 0) {
+                if (sent == 0)
+                    co_return std::unexpected(
+                        std::error_code(errno, std::system_category()));
+                break;  // partial batch sent
+            }
+            ++sent;
+        }
+#endif
 
         co_return static_cast<size_t>(sent);
     }
