@@ -16,7 +16,9 @@ cd "$(dirname "$0")/.."
 CXX="${CXX:-clang++}"
 TIME="${TIME:-20}"
 SAN="-fsanitize=fuzzer,address,undefined -fno-sanitize-recover=undefined"
-COMMON="-std=c++23 -g -O1 -Iinclude"
+# -D__cpp_concepts=202002L: clang + libstdc++ reports 201907L, but libstdc++'s
+# <expected> requires >= 202002L (the C++20 final value). Harmless on libc++.
+COMMON="-std=c++23 -g -O1 -Iinclude -D__cpp_concepts=202002L -Wno-builtin-macro-redefined"
 OUT="$(mktemp -d)"; trap 'rm -rf "$OUT"' EXIT
 
 # Verify libFuzzer is available before doing anything.
