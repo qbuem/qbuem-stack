@@ -108,6 +108,11 @@ public:
              std::shared_ptr<AsyncChannel<ContextualItem<T>>> out = nullptr) {
     out_channel_ = out;
     stop_src_    = std::make_unique<std::stop_source>();
+    // Mark running BEFORE spawn: the flag starts false, so a drain()/stop() that
+    // runs before the worker coroutine first executes would otherwise see it
+    // false and return early, letting the worker run after the object is freed
+    // (heap-use-after-free). The worker clears it on exit.
+    running_.store(true, std::memory_order_release);
     dispatcher.spawn(worker_loop());
   }
 
@@ -306,6 +311,8 @@ public:
     out_channel_ = out;
     stop_src_    = std::make_unique<std::stop_source>();
     last_refill_ = std::chrono::steady_clock::now();
+    // Mark running BEFORE spawn (see race note in the other start() overloads).
+    running_.store(true, std::memory_order_release);
     dispatcher.spawn(worker_loop());
   }
 
@@ -517,6 +524,8 @@ public:
              std::shared_ptr<AsyncChannel<ContextualItem<Out>>> out = nullptr) {
     out_channel_ = out;
     stop_src_    = std::make_unique<std::stop_source>();
+    // Mark running BEFORE spawn (see race note in the other start() overloads).
+    running_.store(true, std::memory_order_release);
     dispatcher.spawn(worker_loop());
   }
 
