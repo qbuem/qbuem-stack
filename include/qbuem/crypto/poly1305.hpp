@@ -75,6 +75,13 @@ inline void store_le64(uint8_t* p, uint64_t v) noexcept {
     std::memcpy(p, &v, 8);
 }
 
+inline void store_le32(uint8_t* p, uint32_t v) noexcept {
+#if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+    v = __builtin_bswap32(v);
+#endif
+    std::memcpy(p, &v, 4);
+}
+
 [[nodiscard]] inline uint32_t load_le32(const uint8_t* p) noexcept {
     uint32_t v;
     std::memcpy(&v, p, 4);
@@ -158,18 +165,17 @@ inline void init_state(State& st, const uint8_t* key) noexcept {
  *                When true, adds a high bit to represent the message boundary.
  */
 inline void process_block(State& st, const uint8_t* block,
-                            size_t len, bool is_last) noexcept {
-    // Load block into a 130-bit value:
-    //   m = block_bytes || (is_last ? 0x01 : 0x00) at byte `len`
+                            size_t len, [[maybe_unused]] bool is_last) noexcept {
+    // Load the block and append the Poly1305 message bit (RFC 8439 §2.5):
+    //   - full 16-byte block: the bit is 2^128, added to limb 4 below;
+    //   - final partial block: the 0x01 byte at position `len`, which the limb
+    //     loads pick up directly.
+    // (The bit depends only on the block length, not on `is_last`.)
     uint64_t m[5] = {};
     {
-        uint8_t buf[17] = {};
+        uint8_t buf[16] = {};
         std::memcpy(buf, block, len);
-        buf[len] = 0x01u;  // append 1 bit (RFC 8439 §2.5.1 — always set for full blocks too)
-        if (!is_last) {
-            // For full 16-byte blocks the 1-bit is at position 128 (byte 16)
-            // The buffer is already correct.
-        }
+        if (len < 16) buf[len] = 0x01u;
 
         const uint64_t t0 = load_le32(buf +  0);
         const uint64_t t1 = load_le32(buf +  3) >> 2;
@@ -181,7 +187,10 @@ inline void process_block(State& st, const uint8_t* block,
         m[1] = t1 & 0x3FFFFFFu;
         m[2] = t2 & 0x3FFFFFFu;
         m[3] = t3 & 0x3FFFFFFu;
-        m[4] = t4;  // may be > 26 bits (includes the appended 1)
+        // limb 4 holds bits 104-127; a full block additionally sets bit 128
+        // (= 2^24 within this limb) — the message-boundary high bit that the
+        // previous code dropped.
+        m[4] = (t4 & 0x3FFFFFFu) + (len == 16 ? (1u << 24) : 0u);
     }
 
     // h += m
@@ -264,30 +273,37 @@ inline Poly1305Tag finalize(const State& st) noexcept {
     c = g3 >> 26; g3 &= 0x3FFFFFFu;
     uint64_t g4 = h4 + c - (1u << 26u);
 
-    // If h >= p (g4 < 0 → high bit set), select g; else keep h
-    const uint64_t mask = (~(g4 >> 63u)) & 0x3FFFFFFu;
-    const uint64_t nmask = ~mask & 0x3FFFFFFu;
+    // Select g (= h - p) if h >= p, else keep h. g4 borrows (high bit set) iff
+    // h < p, so (g4>>63)-1 is a full-width all-ones mask when h >= p and 0 when
+    // h < p. The previous `(~(g4>>63)) & 0x3FFFFFF` was wrong: for h < p it
+    // produced 0x3FFFFFE (bit 0 set), leaking a bit between h and g in the low
+    // limb and corrupting the tag.
+    const uint64_t mask  = (g4 >> 63u) - 1u;
+    const uint64_t nmask = ~mask;
     h0 = (h0 & nmask) | (g0 & mask);
     h1 = (h1 & nmask) | (g1 & mask);
     h2 = (h2 & nmask) | (g2 & mask);
     h3 = (h3 & nmask) | (g3 & mask);
     h4 = (h4 & nmask) | (g4 & mask);
 
-    // Pack 5 limbs into 128 bits
-    uint64_t f0 = (h0      ) | (h1 << 26u);
-    uint64_t f1 = (h1 >> 6u) | (h2 << 20u);
-    uint64_t f2 = (h2 >> 12u)| (h3 << 14u);
-    uint64_t f3 = (h3 >> 18u)| (h4 <<  8u);
+    // Pack the 5 × 26-bit limbs into four 32-bit little-endian words (128 bits).
+    uint32_t w0 = static_cast<uint32_t>((h0       ) | (h1 << 26u));
+    uint32_t w1 = static_cast<uint32_t>((h1 >>  6u) | (h2 << 20u));
+    uint32_t w2 = static_cast<uint32_t>((h2 >> 12u) | (h3 << 14u));
+    uint32_t w3 = static_cast<uint32_t>((h3 >> 18u) | (h4 <<  8u));
 
-    // Add s (128-bit little-endian)
-    f0 += static_cast<uint64_t>(st.s[0]) | (static_cast<uint64_t>(st.s[1]) << 32u);
-    const uint64_t carry0 = f0 >> 32u;
-    f1 += (static_cast<uint64_t>(st.s[2]) | (static_cast<uint64_t>(st.s[3]) << 32u)) + carry0;
+    // tag = (h + s) mod 2^128, carry propagated across the four words.
+    uint64_t f;
+    f = static_cast<uint64_t>(w0) + st.s[0];                w0 = static_cast<uint32_t>(f);
+    f = static_cast<uint64_t>(w1) + st.s[1] + (f >> 32u);   w1 = static_cast<uint32_t>(f);
+    f = static_cast<uint64_t>(w2) + st.s[2] + (f >> 32u);   w2 = static_cast<uint32_t>(f);
+    f = static_cast<uint64_t>(w3) + st.s[3] + (f >> 32u);   w3 = static_cast<uint32_t>(f);
 
     Poly1305Tag tag{};
-    store_le64(tag.data() + 0, f0);
-    store_le64(tag.data() + 8, f1);
-    (void)f2; (void)f3;
+    store_le32(tag.data() +  0, w0);
+    store_le32(tag.data() +  4, w1);
+    store_le32(tag.data() +  8, w2);
+    store_le32(tag.data() + 12, w3);
     return tag;
 }
 
