@@ -61,6 +61,8 @@ cd build && ctest --output-on-failure
 | `QBUEM_BUILD_TESTS` | ON | Unit tests under `tests/` |
 | `QBUEM_BUILD_EXAMPLES` | ON | All examples under `examples/` |
 | `QBUEM_BUILD_BENCH` | ON | Benchmarks under `bench/` |
+| `QBUEM_ENABLE_LTO` | OFF | Interprocedural optimization (LTO) for library targets |
+| `QBUEM_ENABLE_NATIVE_CRYPTO` | OFF | Host hardware SHA-2/AES for the crypto module (~11× SHA-256; host-targeting) |
 | `QBUEM_JSON_TAG` | `"main"` | optional `qbuem-json` tag |
 
 Consume from your own CMake project:

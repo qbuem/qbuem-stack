@@ -57,6 +57,8 @@ CMake options:
 | `QBUEM_BUILD_TESTS` | ON | Build unit tests under `tests/` |
 | `QBUEM_BUILD_EXAMPLES` | ON | Build all 59 examples under `examples/` |
 | `QBUEM_BUILD_BENCH` | ON | Build benchmarks under `bench/` |
+| `QBUEM_ENABLE_LTO` | OFF | Interprocedural optimization (LTO) for library targets |
+| `QBUEM_ENABLE_NATIVE_CRYPTO` | OFF | Compile crypto with the host CPU's hardware SHA-2/AES (host-targeting; ~11× SHA-256/HMAC). Requires that CPU to support them. |
 | `QBUEM_JSON_TAG` | `"main"` | qbuem-json git tag for FetchContent |
 
 ---
