@@ -76,14 +76,33 @@ public:
       { f(std::move(v), e) } -> std::same_as<Task<Result<std::vector<Out>>>>;
     }
   BatchAction(FnT fn, Config cfg = {})
-      : fn_(std::move(fn)),
-        cfg_(std::move(cfg)),
-        in_channel_(std::make_shared<AsyncChannel<ContextualItem<In>>>(cfg_.channel_cap)) {}
+      : state_(std::make_shared<State>()) {
+    state_->fn         = std::move(fn);
+    state_->cfg        = std::move(cfg);
+    state_->in_channel = std::make_shared<AsyncChannel<ContextualItem<In>>>(
+        state_->cfg.channel_cap);
+  }
 
   BatchAction(const BatchAction&) = delete;
   BatchAction& operator=(const BatchAction&) = delete;
   BatchAction(BatchAction&&) = default;
   BatchAction& operator=(BatchAction&&) = default;
+
+  /**
+   * @brief Close the input channel so in-flight workers drain instead of leaking.
+   *
+   * Workers are coroutines on a Dispatcher and cannot be block-joined here; each
+   * holds a shared_ptr to the State, so destroying this handle never frees the
+   * State out from under a running worker. Closing the input makes recv() return
+   * EOS so workers run to completion on their own. For deterministic shutdown,
+   * `co_await drain()` before destruction.
+   */
+  ~BatchAction() {
+    if (state_ && state_->stop_src) {  // started
+      state_->stop_src->request_stop();
+      if (state_->in_channel) state_->in_channel->close();
+    }
+  }
 
   // -------------------------------------------------------------------------
   // Item submission
@@ -96,7 +115,7 @@ public:
    * @param ctx  Item context.
    */
   Task<Result<void>> push(In item, Context ctx = {}) {
-    co_return co_await in_channel_->send(
+    co_return co_await state_->in_channel->send(
         ContextualItem<In>{std::move(item), std::move(ctx)});
   }
 
@@ -106,7 +125,7 @@ public:
    * @returns true on success, false if the channel is full.
    */
   bool try_push(In item, Context ctx = {}) {
-    return in_channel_->try_send(
+    return state_->in_channel->try_send(
         ContextualItem<In>{std::move(item), std::move(ctx)});
   }
 
@@ -122,12 +141,16 @@ public:
    */
   void start(Dispatcher& dispatcher,
              std::shared_ptr<AsyncChannel<ContextualItem<Out>>> out = nullptr) {
-    out_channel_ = out ? out : std::make_shared<AsyncChannel<ContextualItem<Out>>>(cfg_.channel_cap);
-    stop_src_    = std::make_unique<std::stop_source>();
+    state_->out_channel = out ? out
+        : std::make_shared<AsyncChannel<ContextualItem<Out>>>(state_->cfg.channel_cap);
+    state_->stop_src    = std::make_unique<std::stop_source>();
 
-    for (size_t i = 0; i < cfg_.workers; ++i) {
-      worker_count_.fetch_add(1, std::memory_order_relaxed);
-      dispatcher.spawn(worker_loop(i));
+    for (size_t i = 0; i < state_->cfg.workers; ++i) {
+      state_->worker_count.fetch_add(1, std::memory_order_relaxed);
+      // Pass the State shared_ptr by value into the static worker: it is copied
+      // into the coroutine frame, keeping the State alive for the worker's whole
+      // life regardless of when this handle is destroyed.
+      dispatcher.spawn(worker_loop(state_, i));
     }
   }
 
@@ -137,8 +160,8 @@ public:
    * The output channel is automatically closed after drain() returns.
    */
   Task<void> drain() {
-    in_channel_->close();
-    while (worker_count_.load(std::memory_order_acquire) > 0) {
+    state_->in_channel->close();
+    while (state_->worker_count.load(std::memory_order_acquire) > 0) {
       struct Yield {
         bool await_ready() noexcept { return false; }
         void await_suspend(std::coroutine_handle<> h) noexcept {
@@ -151,8 +174,8 @@ public:
       };
       co_await Yield{};
     }
-    if (out_channel_)
-      out_channel_->close();
+    if (state_->out_channel)
+      state_->out_channel->close();
     co_return;
   }
 
@@ -160,25 +183,37 @@ public:
    * @brief Stops the BatchAction immediately (sends a cancellation signal).
    */
   void stop() {
-    if (stop_src_) stop_src_->request_stop();
-    in_channel_->close();
+    if (state_->stop_src) state_->stop_src->request_stop();
+    state_->in_channel->close();
   }
 
   /**
    * @brief Returns the output channel.
    */
   [[nodiscard]] std::shared_ptr<AsyncChannel<ContextualItem<Out>>> output() const {
-    return out_channel_;
+    return state_->out_channel;
   }
 
   /**
    * @brief Returns the input channel.
    */
   [[nodiscard]] std::shared_ptr<AsyncChannel<ContextualItem<In>>> input() const {
-    return in_channel_;
+    return state_->in_channel;
   }
 
 private:
+  // -------------------------------------------------------------------------
+  // Shared state — outlives the handle so detached workers never dangle.
+  // -------------------------------------------------------------------------
+  struct State {
+    Fn                                                 fn;
+    Config                                             cfg;
+    std::shared_ptr<AsyncChannel<ContextualItem<In>>>  in_channel;
+    std::shared_ptr<AsyncChannel<ContextualItem<Out>>> out_channel;
+    std::unique_ptr<std::stop_source>                  stop_src;
+    std::atomic<size_t>                                worker_count{0};
+  };
+
   // -------------------------------------------------------------------------
   // Worker loop
   // -------------------------------------------------------------------------
@@ -191,34 +226,37 @@ private:
    * 2. Collect additional items via try_recv() within deadline(max_wait_ms).
    * 3. Process immediately when max_batch_size is reached or deadline expires.
    */
-  Task<void> worker_loop(size_t worker_idx) {
-    auto stop_token = stop_src_ ? stop_src_->get_token() : std::stop_token{};
+  // static + self-contained: depends only on the State it is handed (kept alive
+  // by the shared_ptr in the coroutine frame), never the BatchAction handle — so
+  // a worker can safely outlive the handle that spawned it.
+  static Task<void> worker_loop(std::shared_ptr<State> st, size_t worker_idx) {
+    auto stop_token = st->stop_src ? st->stop_src->get_token() : std::stop_token{};
 
     for (;;) {
       if (stop_token.stop_requested()) break;
 
       // --- Collect batch ---
       std::vector<ContextualItem<In>> batch_items;
-      batch_items.reserve(cfg_.max_batch_size);
+      batch_items.reserve(st->cfg.max_batch_size);
 
       // First item: wait via blocking recv (detects EOS)
-      auto first = co_await in_channel_->recv();
+      auto first = co_await st->in_channel->recv();
       if (!first) break; // EOS
       batch_items.push_back(std::move(*first));
 
       // Remaining items: collect non-blocking within max_wait_ms
       auto deadline = std::chrono::steady_clock::now() +
-                      std::chrono::milliseconds(cfg_.max_wait_ms);
+                      std::chrono::milliseconds(st->cfg.max_wait_ms);
 
-      while (batch_items.size() < cfg_.max_batch_size) {
-        auto item = in_channel_->try_recv();
+      while (batch_items.size() < st->cfg.max_batch_size) {
+        auto item = st->in_channel->try_recv();
         if (item) {
           batch_items.push_back(std::move(*item));
           continue;
         }
 
         // Channel closed — process what has been collected so far
-        if (in_channel_->is_closed()) break;
+        if (st->in_channel->is_closed()) break;
 
         // Timeout — process immediately
         if (std::chrono::steady_clock::now() >= deadline) break;
@@ -251,17 +289,17 @@ private:
           .ctx        = first_ctx,
           .stop       = stop_token,
           .worker_idx = worker_idx,
-          .registry   = cfg_.registry ? cfg_.registry : &global_registry(),
+          .registry   = st->cfg.registry ? st->cfg.registry : &global_registry(),
       };
 
       // --- Invoke processing function ---
-      auto result = co_await fn_(std::move(values), env);
+      auto result = co_await st->fn(std::move(values), env);
 
       // --- Forward results to the output channel ---
       // Assign the context of the first input item to all output items
-      if (result.has_value() && out_channel_) {
+      if (result.has_value() && st->out_channel) {
         for (auto& out_item : *result) {
-          auto send_r = co_await out_channel_->send(
+          auto send_r = co_await st->out_channel->send(
               ContextualItem<Out>{std::move(out_item), first_ctx});
           if (!send_r.has_value())
             break; // Channel closed — stop sending
@@ -270,21 +308,13 @@ private:
       // On error the batch is dropped (DLQ support planned for a future version)
     }
 
-    size_t remaining = worker_count_.fetch_sub(1, std::memory_order_acq_rel) - 1;
-    if (remaining == 0 && out_channel_)
-      out_channel_->close();
+    size_t remaining = st->worker_count.fetch_sub(1, std::memory_order_acq_rel) - 1;
+    if (remaining == 0 && st->out_channel)
+      st->out_channel->close();
     co_return;
   }
 
-  // -------------------------------------------------------------------------
-  // Data members
-  // -------------------------------------------------------------------------
-  Fn                                                    fn_;
-  Config                                                cfg_;
-  std::shared_ptr<AsyncChannel<ContextualItem<In>>>     in_channel_;
-  std::shared_ptr<AsyncChannel<ContextualItem<Out>>>    out_channel_;
-  std::unique_ptr<std::stop_source>                     stop_src_;
-  std::atomic<size_t>                                   worker_count_{0};
+  std::shared_ptr<State> state_;
 };
 
 } // namespace qbuem

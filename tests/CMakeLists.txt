@@ -157,6 +157,11 @@ add_executable(qbuem_offload_drain_tests offload_drain_test.cpp ${QBUEM_TLS_FIX}
 target_link_libraries(qbuem_offload_drain_tests PRIVATE qbuem-stack::qbuem GTest::gtest_main)
 add_test(NAME qbuem_offload_drain_tests COMMAND qbuem_offload_drain_tests)
 
+# ── Action-wrapper teardown safety (destroy while workers in flight) ───────────
+add_executable(qbuem_action_lifetime_tests action_lifetime_test.cpp ${QBUEM_TLS_FIX})
+target_link_libraries(qbuem_action_lifetime_tests PRIVATE qbuem-stack::qbuem GTest::gtest_main)
+add_test(NAME qbuem_action_lifetime_tests COMMAND qbuem_action_lifetime_tests)
+
 # ── Tracing / Timer / Arena / AsyncLogger / SocketAddr tests ──────────────────
 add_executable(qbuem_infra_tests
     tracing_test.cpp
