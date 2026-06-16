@@ -83,15 +83,31 @@ public:
      */
     explicit PipelineGraph(size_t default_chan_cap = 256,
                            ServiceRegistry* registry = nullptr)
-        : default_chan_cap_(default_chan_cap)
+        // Init order matches member declaration order (output_channel_ is declared
+        // before default_chan_cap_/registry_) to satisfy -Wreorder-ctor.
+        : output_channel_(std::make_shared<AsyncChannel<ContextualItem<T>>>(default_chan_cap))
+        , default_chan_cap_(default_chan_cap)
         , registry_(registry)
-        , output_channel_(std::make_shared<AsyncChannel<ContextualItem<T>>>(default_chan_cap))
     {}
 
     PipelineGraph(const PipelineGraph&) = delete;
     PipelineGraph& operator=(const PipelineGraph&) = delete;
     PipelineGraph(PipelineGraph&&) = default;
     PipelineGraph& operator=(PipelineGraph&&) = default;
+
+    /**
+     * @brief Close all channels so in-flight workers drain instead of leaking.
+     *
+     * Workers are coroutines on a Dispatcher and cannot be block-joined here.
+     * Closing the channels makes each worker's recv() return EOS so it completes
+     * on its own — touching only the NodeImpl it keeps alive, never this graph
+     * (see node_worker / fanout_worker). For a deterministic shutdown that waits
+     * for every item, `co_await drain()` before destruction. Safe on a moved-from
+     * graph (stop() null-guards the channels).
+     */
+    ~PipelineGraph() {
+        if (started_) stop();
+    }
 
     // -------------------------------------------------------------------------
     // Graph construction
@@ -222,6 +238,22 @@ public:
         if (!order)
             return false; // cycle detected
 
+        // Resolve per-node snapshots BEFORE spawning, so a worker never reaches
+        // back into the graph (registry_ or the nodes_ map). The topology is fixed
+        // once start() runs, so this snapshot stays valid for the run's lifetime.
+        auto* reg = registry_ ? registry_ : &global_registry();
+        for (auto& [name, n] : nodes_) {
+            n->registry = reg;
+            n->successor_channels.clear();
+            n->successor_channels.reserve(n->successors.size());
+            for (const auto& succ_name : n->successors) {
+                auto it = nodes_.find(succ_name);
+                n->successor_channels.push_back(
+                    it != nodes_.end() ? it->second->in_channel : nullptr);
+            }
+        }
+        started_ = true;
+
         for (const auto& name : *order) {
             auto it = nodes_.find(name);
             if (it == nodes_.end())
@@ -320,9 +352,12 @@ public:
         for (auto& [name, n] : nodes_) {
             if (n->stop_src)
                 n->stop_src->request_stop();
-            n->in_channel->close();
+            if (n->in_channel)
+                n->in_channel->close();
         }
-        output_channel_->close();
+        // Null-guard: a moved-from graph has an empty output_channel_.
+        if (output_channel_)
+            output_channel_->close();
     }
 
     /**
@@ -429,6 +464,12 @@ private:
         std::atomic<size_t>                              worker_count{0};
         bool is_source = false;
         bool is_sink   = false;
+        // Snapshots resolved once in start(), so workers never reach back into the
+        // parent graph (registry_ / nodes_). A worker keeps its NodeImpl alive and
+        // touches only these — letting it safely outlive the PipelineGraph.
+        ServiceRegistry*                                 registry = nullptr;
+        /// Successor in_channels, parallel to `successors`/`predicates` (null = missing).
+        std::vector<std::shared_ptr<AsyncChannel<ContextualItem<T>>>> successor_channels;
     };
 
     // -------------------------------------------------------------------------
@@ -490,7 +531,9 @@ private:
      *
      * Reads items from the input channel, applies fn, and forwards to the output channel.
      */
-    Task<void> node_worker(std::shared_ptr<NodeImpl> n, size_t worker_idx) {
+    // static + self-contained: depends only on the NodeImpl it keeps alive, never
+    // the parent graph — so a worker can safely outlive the PipelineGraph.
+    static Task<void> node_worker(std::shared_ptr<NodeImpl> n, size_t worker_idx) {
         auto stop_token = n->stop_src ? n->stop_src->get_token() : std::stop_token{};
 
         for (;;) {
@@ -501,7 +544,7 @@ private:
                 .ctx        = citem->ctx,
                 .stop       = stop_token,
                 .worker_idx = worker_idx,
-                .registry   = registry_ ? registry_ : &global_registry(),
+                .registry   = n->registry,
             };
 
             auto result = co_await n->fn(std::move(citem->value), env);
@@ -524,30 +567,30 @@ private:
      * Reads from the node's out_channel and distributes to all successor in_channels.
      * Evaluates conditional predicates before routing when present.
      */
-    Task<void> fanout_worker(std::shared_ptr<NodeImpl> n) {
+    // static + self-contained: routes via the successor-channel snapshot taken in
+    // start(), so it never touches the parent graph's nodes_ map. It keeps its own
+    // NodeImpl alive (which owns the snapshot), so it can outlive the PipelineGraph.
+    static Task<void> fanout_worker(std::shared_ptr<NodeImpl> n) {
         for (;;) {
             auto citem = co_await n->out_channel->recv();
             if (!citem) {
-                // Close all successor in_channels
-                for (const auto& succ_name : n->successors) {
-                    auto it = nodes_.find(succ_name);
-                    if (it != nodes_.end())
-                        it->second->in_channel->close();
-                }
+                // Close all successor in_channels via the snapshot.
+                for (const auto& succ : n->successor_channels)
+                    if (succ) succ->close();
                 co_return;
             }
 
             std::any item_any = citem->value; // wrap for predicate evaluation
-            for (size_t i = 0; i < n->successors.size(); ++i) {
+            for (size_t i = 0; i < n->successor_channels.size(); ++i) {
                 // Check predicate
                 if (n->predicates[i] != nullptr && !n->predicates[i](item_any))
                     continue;
 
-                auto it = nodes_.find(n->successors[i]);
-                if (it == nodes_.end())
+                auto& succ = n->successor_channels[i];
+                if (!succ)
                     continue;
                 // Fan-out: copy item for each successor
-                co_await it->second->in_channel->send(
+                co_await succ->send(
                     ContextualItem<T>{citem->value, citem->ctx});
             }
         }
@@ -556,7 +599,7 @@ private:
     /**
      * @brief Merge a sink node's output channel into the unified output channel.
      */
-    Task<void> merge_to_output(
+    static Task<void> merge_to_output(
         std::shared_ptr<AsyncChannel<ContextualItem<T>>> src,
         std::shared_ptr<AsyncChannel<ContextualItem<T>>> dst)
     {
@@ -595,6 +638,7 @@ private:
     std::shared_ptr<AsyncChannel<ContextualItem<T>>>           output_channel_;
     size_t                                                     default_chan_cap_;
     ServiceRegistry*                                           registry_;
+    bool                                                       started_ = false;
 };
 
 } // namespace qbuem
