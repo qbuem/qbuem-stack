@@ -53,6 +53,18 @@ add_executable(bench_callback
 target_link_libraries(bench_callback PRIVATE qbuem-stack::qbuem)
 target_compile_options(bench_callback PRIVATE -O3 -march=native)
 
+add_executable(bench_crypto
+    bench_crypto.cpp
+)
+target_link_libraries(bench_crypto PRIVATE qbuem-stack::qbuem)
+target_compile_options(bench_crypto PRIVATE -O3 -march=native)
+
+add_executable(bench_shm
+    bench_shm.cpp
+)
+target_link_libraries(bench_shm PRIVATE qbuem-stack::qbuem)
+target_compile_options(bench_shm PRIVATE -O3 -march=native)
+
 # Umbrella target: run all benchmarks in sequence
 add_custom_target(run_bench
     COMMAND bench_http
@@ -62,7 +74,9 @@ add_custom_target(run_bench
     COMMAND bench_pipeline
     COMMAND bench_grid
     COMMAND bench_callback
-    DEPENDS bench_http bench_router bench_arena bench_channel bench_pipeline bench_grid bench_callback
+    COMMAND bench_crypto
+    COMMAND bench_shm
+    DEPENDS bench_http bench_router bench_arena bench_channel bench_pipeline bench_grid bench_callback bench_crypto bench_shm
     WORKING_DIRECTORY ${CMAKE_BINARY_DIR}/bench
     COMMENT "[qbuem-stack] Running all benchmarks..."
 )
