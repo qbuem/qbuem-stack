@@ -321,8 +321,12 @@ public:
     /** @brief Construct and key the MAC with a 32-byte one-time key. */
     explicit Poly1305(const Poly1305Key& key) noexcept { init(key); }
     explicit Poly1305(std::span<const uint8_t> key) noexcept {
+        // A Poly1305 one-time key is exactly 32 bytes; a shorter span is
+        // zero-padded (weak — pass the full key). Guard the empty case so we
+        // never memcpy from a null pointer (UBSan: nonnull argument).
         Poly1305Key k{};
-        std::memcpy(k.data(), key.data(), std::min(key.size(), k.size()));
+        if (!key.empty())
+            std::memcpy(k.data(), key.data(), std::min(key.size(), k.size()));
         init(k);
     }
 

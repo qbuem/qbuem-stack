@@ -252,6 +252,11 @@ struct RecvFdsResult {
     if (n < 0)
         return std::unexpected(std::error_code{errno, std::system_category()});
 
+    // A truncated control message means the kernel dropped passed fd(s); the
+    // ancillary data is unreliable, so reject it rather than parse a partial set.
+    if (msg.msg_flags & MSG_CTRUNC)
+        return std::unexpected(std::make_error_code(std::errc::message_size));
+
     RecvFdsResult result;
     result.data_bytes = data_buf.empty() ? 0 : n;
 
@@ -260,6 +265,10 @@ struct RecvFdsResult {
          cmsg != nullptr;
          cmsg = CMSG_NXTHDR(&msg, cmsg)) {
         if (cmsg->cmsg_level == SOL_SOCKET && cmsg->cmsg_type == SCM_RIGHTS) {
+            // Guard a malformed/short cmsg_len: the unsigned subtraction would
+            // otherwise wrap to a huge count and ::close() arbitrary integers as
+            // fds (peer-controllable fd corruption / DoS).
+            if (cmsg->cmsg_len < CMSG_LEN(0)) break;
             size_t fd_bytes = cmsg->cmsg_len - CMSG_LEN(0);
             size_t count = fd_bytes / sizeof(int);
             size_t to_copy = (count < fds_out.size()) ? count : fds_out.size();

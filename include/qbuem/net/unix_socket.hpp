@@ -115,8 +115,12 @@ public:
     sockaddr_un sa{};
     sa.sun_family = AF_UNIX;
     ::strncpy(sa.sun_path, path, sizeof(sa.sun_path) - 1);
+    // Length from the (possibly truncated) sun_path, NOT strlen(path): a path
+    // >= sizeof(sun_path) would otherwise make len exceed sizeof(sockaddr_un)
+    // and the kernel read out of bounds of the on-stack address.
     socklen_t len = static_cast<socklen_t>(
-        offsetof(sockaddr_un, sun_path) + ::strlen(path) + 1);
+        offsetof(sockaddr_un, sun_path) +
+        ::strnlen(sa.sun_path, sizeof(sa.sun_path)) + 1);
 
     if (::bind(fd, reinterpret_cast<const sockaddr *>(&sa), len) != 0) {
       auto ec = std::error_code(errno, std::system_category());
@@ -151,8 +155,12 @@ public:
     sockaddr_un sa{};
     sa.sun_family = AF_UNIX;
     ::strncpy(sa.sun_path, path, sizeof(sa.sun_path) - 1);
+    // Length from the (possibly truncated) sun_path, NOT strlen(path): a path
+    // >= sizeof(sun_path) would otherwise make len exceed sizeof(sockaddr_un)
+    // and the kernel read out of bounds of the on-stack address.
     socklen_t len = static_cast<socklen_t>(
-        offsetof(sockaddr_un, sun_path) + ::strlen(path) + 1);
+        offsetof(sockaddr_un, sun_path) +
+        ::strnlen(sa.sun_path, sizeof(sa.sun_path)) + 1);
 
     int rc = ::connect(fd, reinterpret_cast<const sockaddr *>(&sa), len);
     if (rc == 0) {

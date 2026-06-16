@@ -69,9 +69,12 @@ using Result = std::expected<T, std::error_code>;
     return ((input_bytes + 2) / 3) * 4;
 }
 
-/** @brief Maximum decoded byte count from @p base64_len encoded characters. */
+/** @brief Upper bound on the decoded byte count from @p base64_len encoded
+ *  characters. Uses the ceil of base64_len/4 quads: unpadded input whose length
+ *  is not a multiple of 4 (e.g. 6 chars -> 4 bytes) decodes to MORE than the old
+ *  floor formula `(len/4)*3` reported, which under-sized caller buffers. */
 [[nodiscard]] constexpr size_t base64_decoded_max(size_t base64_len) noexcept {
-    return (base64_len / 4) * 3;
+    return ((base64_len + 3) / 4) * 3;
 }
 
 // ─── Encoding tables ──────────────────────────────────────────────────────────
@@ -267,10 +270,25 @@ inline size_t encode_impl(const uint8_t* src, size_t len,
 // ─── Scalar decode ────────────────────────────────────────────────────────────
 
 inline Result<size_t> decode_impl(const char* src, size_t src_len,
-                                   uint8_t* dst, const uint8_t* table) noexcept {
+                                   uint8_t* dst, size_t dst_size,
+                                   const uint8_t* table) noexcept {
     // Strip trailing padding
     size_t len = src_len;
     while (len > 0 && src[len - 1] == '=') --len;
+
+    const size_t tail_chars = len % 4;
+    if (tail_chars == 1)  // a single trailing char cannot form a byte
+        return std::unexpected(
+            std::make_error_code(std::errc::illegal_byte_sequence));
+
+    // Reject up front if the caller's buffer is too small. The decoded length is
+    // exact: 3 bytes per full quad, +1 for a 2-char tail, +2 for a 3-char tail.
+    // (Previously the tail bytes were written past a buffer sized by the old
+    // floor base64_decoded_max() — a heap/stack overflow on unpadded input.)
+    const size_t out_len =
+        (len / 4) * 3 + (tail_chars == 2 ? 1 : tail_chars == 3 ? 2 : 0);
+    if (out_len > dst_size)
+        return std::unexpected(std::make_error_code(std::errc::value_too_large));
 
     size_t o = 0;
     size_t i = 0;
@@ -387,7 +405,7 @@ inline size_t base64_encode(std::span<const uint8_t> data,
     std::string out(base64_decoded_max(encoded.size()) + 3, '\0');
     auto r = detail::b64::decode_impl(
         encoded.data(), encoded.size(),
-        reinterpret_cast<uint8_t*>(out.data()),
+        reinterpret_cast<uint8_t*>(out.data()), out.size(),
         detail::b64::kStdDecodeTable.data());
     if (!r) return std::unexpected(r.error());
     out.resize(*r);
@@ -403,7 +421,7 @@ inline size_t base64_encode(std::span<const uint8_t> data,
     std::string out(base64_decoded_max(encoded.size()) + 3, '\0');
     auto r = detail::b64::decode_impl(
         encoded.data(), encoded.size(),
-        reinterpret_cast<uint8_t*>(out.data()),
+        reinterpret_cast<uint8_t*>(out.data()), out.size(),
         detail::b64::kUrlDecodeTable.data());
     if (!r) return std::unexpected(r.error());
     out.resize(*r);
@@ -421,14 +439,14 @@ inline size_t base64_encode(std::span<const uint8_t> data,
 base64_decode(std::string_view encoded, std::span<uint8_t> out) noexcept {
     return detail::b64::decode_impl(
         encoded.data(), encoded.size(),
-        out.data(), detail::b64::kStdDecodeTable.data());
+        out.data(), out.size(), detail::b64::kStdDecodeTable.data());
 }
 
 [[nodiscard]] inline Result<size_t>
 base64url_decode(std::string_view encoded, std::span<uint8_t> out) noexcept {
     return detail::b64::decode_impl(
         encoded.data(), encoded.size(),
-        out.data(), detail::b64::kUrlDecodeTable.data());
+        out.data(), out.size(), detail::b64::kUrlDecodeTable.data());
 }
 
 }  // namespace qbuem::crypto
