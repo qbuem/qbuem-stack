@@ -8,7 +8,7 @@ performance as it would appear in a production release build.
 ```sh
 # From the repository root
 cmake -B build -DCMAKE_BUILD_TYPE=Release
-cmake --build build --target bench_http bench_router bench_arena bench_channel bench_pipeline bench_grid -j$(nproc)
+cmake --build build --target bench_http bench_router bench_arena bench_channel bench_pipeline bench_grid bench_callback bench_crypto bench_shm -j$(nproc)
 ```
 
 Or build everything at once:
@@ -37,6 +37,16 @@ cmake --build build -j$(nproc)
 
 # GridBitset spatial queries + TiledBitset dynamic world (ns/op)
 ./build/bench/bench_grid
+
+# inplace_function vs std::function call cost + heap allocs
+./build/bench/bench_callback
+
+# Crypto throughput: SHA-256, HMAC, ChaCha20-Poly1305, AES-GCM (MB/s)
+# Build with -DQBUEM_ENABLE_NATIVE_CRYPTO=ON for the hardware SHA-2/AES paths.
+./build/bench/bench_crypto
+
+# SHMChannel round-trip / fill-drain / 2-thread cross-core throughput
+./build/bench/bench_shm
 ```
 
 ## Performance Targets (v3.4.0)

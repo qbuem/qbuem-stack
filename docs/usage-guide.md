@@ -97,6 +97,8 @@ You can also link finer-grained targets (`qbuem-stack::result`,
 | `QBUEM_BUILD_TESTS` | ON | Unit tests under `tests/` |
 | `QBUEM_BUILD_EXAMPLES` | ON | All examples under `examples/` |
 | `QBUEM_BUILD_BENCH` | ON | Benchmarks under `bench/` |
+| `QBUEM_ENABLE_LTO` | OFF | Interprocedural optimization (LTO) for library targets |
+| `QBUEM_ENABLE_NATIVE_CRYPTO` | OFF | Host hardware SHA-2/AES for the crypto module (~11× SHA-256; host-targeting) |
 | `QBUEM_SANITIZE` | "" | `asan` \| `tsan` \| `msan` |
 | `QBUEM_XDP` | OFF | AF_XDP support (Linux 4.18+) |
 

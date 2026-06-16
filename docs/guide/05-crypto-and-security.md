@@ -29,6 +29,16 @@ Performance characteristics differ sharply between architectures. The table belo
 | **Base64 encode** | Scalar (AVX2 path is a stub that returns 0) | **NEON real** (`vqtbl1q_u8`) | Decode is scalar on all platforms. |
 | **CSPRNG** | RDRAND (when present) → `getrandom(2)` | `getrandom(2)` (Linux) / `arc4random_buf` (Mac) | RDRAND/RDSEED are x86-only. |
 
+**Enabling the hardware paths.** The default Release flags do not set the SHA-2/
+AES feature macros on every toolchain (notably Apple clang's `-march=native` does
+*not* define `__ARM_FEATURE_SHA2`), so SHA-256/HMAC fall back to scalar (~192 MB/s
+measured). Configure with `-DQBUEM_ENABLE_NATIVE_CRYPTO=ON` to turn the host
+hardware paths on: SHA-256/HMAC then run ~2.1 GB/s (~11×), KAT-verified. It is
+OFF by default because it makes the binary require those CPU features
+(host-targeting build). AES-GCM's GHASH stays scalar regardless (see below), so
+AES-256-GCM remains ~14 MB/s; prefer ChaCha20-Poly1305 (NEON, ~640 MB/s) as the
+fast AEAD on ARM.
+
 Honest caveats baked into the headers themselves:
 
 * The **AVX2 ChaCha20** and **AVX2 Base64 encode** paths are present but deliberately fall through to scalar (`encode_avx2` returns 0 bytes processed). On x86 you get correct, scalar-speed output. NEON is the genuinely vectorized path.

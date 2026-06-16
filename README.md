@@ -11,7 +11,7 @@
 > 📚 **Start here:** [Getting Started](./docs/guide/01-getting-started.md) ·
 > **Full feature guide:** [`docs/guide/`](./docs/guide/) (per-module: role · when to use ·
 > how to use · gotchas, grounded in the real API) ·
-> **Runnable examples:** [`examples/`](./examples/) (58 programs).
+> **Runnable examples:** [`examples/`](./examples/) (59 programs).
 
 ---
 
