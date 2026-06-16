@@ -41,10 +41,22 @@ struct Yield {
 struct RunGuard {
     Dispatcher   dispatcher;
     std::jthread thread;
+    bool         stopped_ = false;
     explicit RunGuard(size_t n = 2) : dispatcher(n) {
         thread = std::jthread([this] { dispatcher.run(); });
     }
-    ~RunGuard() { dispatcher.stop(); if (thread.joinable()) thread.join(); }
+    // Stop the reactor(s) and join the loop thread. Idempotent. Call this BEFORE
+    // a pipeline / graph the worker coroutines reference is destroyed: RunGuard
+    // is declared first so its destructor runs LAST — after those locals — and a
+    // still-running worker would otherwise race the destructor freeing channels
+    // (TSan data race / heap-use-after-free).
+    void shutdown() {
+        if (stopped_) return;
+        stopped_ = true;
+        dispatcher.stop();
+        if (thread.joinable()) thread.join();
+    }
+    ~RunGuard() { shutdown(); }
 
     // Free-function coroutine (frame owns f) — never spawn a temporary lambda.
     template <typename F>
@@ -97,6 +109,7 @@ TEST(PipelineTopology, StaticLinearChain) {
     });
     pipeline.stop();
     guard.run_and_wait([]() -> Task<void> { co_return; });
+    guard.shutdown(); // stop reactor before pipeline destructs (TSan: worker lifetime race)
 
     ASSERT_EQ(got.size(), 2u);
     std::sort(got.begin(), got.end());
@@ -152,6 +165,7 @@ TEST(PipelineTopology, DynamicHotSwapAndRemove) {
 
     dp.stop();
     guard.run_and_wait([]() -> Task<void> { co_return; });
+    guard.shutdown(); // stop reactor before dp destructs (TSan: worker lifetime race)
 }
 
 // ─── 3. PipelineGraph — split (fan-out) + merge (fan-in) ─────────────────────
@@ -180,6 +194,7 @@ TEST(PipelineTopology, GraphSplitAndMerge) {
     });
     graph.stop();
     guard.run_and_wait([]() -> Task<void> { co_return; });
+    guard.shutdown(); // stop reactor before graph destructs (TSan: fanout_worker lifetime race)
 
     ASSERT_EQ(got.size(), 2u);
     std::sort(got.begin(), got.end());
@@ -215,6 +230,7 @@ TEST(PipelineTopology, MergeTwoPipelinesIntoOneConsumer) {
     });
     p1.stop(); p2.stop();
     guard.run_and_wait([]() -> Task<void> { co_return; });
+    guard.shutdown(); // stop reactor before p1/p2 destruct (TSan: worker lifetime race)
 
     ASSERT_EQ(got.size(), 2u);
     std::sort(got.begin(), got.end());

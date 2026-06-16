@@ -275,3 +275,30 @@ jobs:
       - name: Test (serial, sanitized)
         working-directory: build_san
         run: ASAN_OPTIONS=detect_leaks=0 ctest -j1 --timeout 180 --output-on-failure
+
+  # ── 7. ThreadSanitizer: build the test suite with TSan and run it serially
+  #    (catches data races — lifetime/teardown races, lock-free ordering — that
+  #     ASan/UBSan cannot see). liburing is intentionally NOT installed so the
+  #     EpollReactor is used: TSan does not model io_uring's kernel-side
+  #     completion, which would otherwise produce false races.
+  thread-sanitizer:
+    name: ThreadSanitizer (tests)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install clang
+        run: sudo apt-get update -q && sudo apt-get install -y clang
+      - name: Configure (TSan, epoll reactor)
+        run: |
+          cmake -B build_tsan \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_CXX_COMPILER=clang++ \
+            -DCMAKE_CXX_FLAGS="-fsanitize=thread -g -O1 -D__cpp_concepts=202002L -Wno-builtin-macro-redefined" \
+            -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=thread" \
+            -DQBUEM_BUILD_EXAMPLES=OFF \
+            -DQBUEM_BUILD_BENCH=OFF
+      - name: Build
+        run: cmake --build build_tsan --parallel 2
+      - name: Test (serial, TSan; fail on any data race)
+        working-directory: build_tsan
+        run: TSAN_OPTIONS="halt_on_error=1 history_size=4" ctest -j1 --timeout 180 --output-on-failure
