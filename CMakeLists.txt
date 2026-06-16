@@ -138,6 +138,47 @@ if(QBUEM_ENABLE_LTO)
 endif()
 
 # ============================================================================
+# Hardware crypto (opt-in, like LTO above)
+# ----------------------------------------------------------------------------
+# The crypto module (header-only) has hardware paths for SHA-2 (ARM SHA2 /
+# x86 SHA-NI) and AES (ARM AES / x86 AES-NI) that are gated on the compiler's
+# __ARM_FEATURE_SHA2 / __SHA__ / etc. feature macros. Those macros are NOT set
+# by the default Release flags on every toolchain (notably Apple clang's
+# -march=native does not enable them on Apple Silicon), so the scalar fallback
+# is used unless this option turns the instruction sets on — measured ~11x
+# faster SHA-256/HMAC. OFF by default because it makes the produced binary
+# require those CPU features (host-targeting build).
+# ============================================================================
+option(QBUEM_ENABLE_NATIVE_CRYPTO
+    "Compile the crypto module with the host CPU's hardware SHA-2/AES instructions (host-targeting; ~11x SHA-256)"
+    OFF)
+set(QBUEM_NATIVE_CRYPTO_FLAGS "")
+if(QBUEM_ENABLE_NATIVE_CRYPTO AND NOT MSVC)
+    include(CheckCXXCompilerFlag)
+    if(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64|ARM64")
+        # Candidates ordered to enable +crypto WITHOUT downgrading the native
+        # baseline. The first that the compiler accepts wins.
+        set(_qbuem_crypto_candidates "-march=native+crypto" "-mcpu=native" "-march=armv8.2-a+crypto")
+    else()
+        # x86: -march=native enables SHA-NI/AES-NI when the host has them.
+        set(_qbuem_crypto_candidates "-march=native")
+    endif()
+    foreach(_f IN LISTS _qbuem_crypto_candidates)
+        string(MAKE_C_IDENTIFIER "QBUEM_CRYPTO_FLAG${_f}" _id)
+        check_cxx_compiler_flag("${_f}" ${_id})
+        if(${_id})
+            set(QBUEM_NATIVE_CRYPTO_FLAGS "${_f}")
+            break()
+        endif()
+    endforeach()
+    if(QBUEM_NATIVE_CRYPTO_FLAGS)
+        message(STATUS "[qbuem-stack] native crypto: enabled via ${QBUEM_NATIVE_CRYPTO_FLAGS}")
+    else()
+        message(WARNING "[qbuem-stack] QBUEM_ENABLE_NATIVE_CRYPTO is ON but no supported crypto flag was found for this compiler/arch")
+    endif()
+endif()
+
+# ============================================================================
 # Helper: compile options (PRIVATE — never leak to consumers)
 # ----------------------------------------------------------------------------
 # Optimization level follows CMAKE_BUILD_TYPE (Release => -O3 -DNDEBUG via the
@@ -183,6 +224,12 @@ add_library(qbuem-stack::crypto ALIAS qbuem_crypto)
 target_include_directories(qbuem_crypto INTERFACE ${QBUEM_INCLUDE_DIR} ${QBUEM_INSTALL_INCLUDE})
 target_compile_features(qbuem_crypto INTERFACE cxx_std_23)
 target_link_libraries(qbuem_crypto INTERFACE qbuem_result)
+# Hardware crypto instruction sets (opt-in via QBUEM_ENABLE_NATIVE_CRYPTO).
+# INTERFACE so the header-only crypto compiles with the feature macros set in
+# every consuming TU (it propagates transitively through reactor → umbrella).
+if(QBUEM_NATIVE_CRYPTO_FLAGS)
+    target_compile_options(qbuem_crypto INTERFACE ${QBUEM_NATIVE_CRYPTO_FLAGS})
+endif()
 
 # ============================================================================
 # ── Level 1: Async Core ─────────────────────────────────────────────────────
