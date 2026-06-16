@@ -205,7 +205,10 @@ inline std::vector<uint8_t> make_generator_matrix(int k, int m) {
 inline void gf_mul_add(uint8_t coeff, std::span<const std::byte> in,
                        std::span<std::byte> out) noexcept {
     assert(in.size() == out.size());
-    size_t n = in.size();
+    // Operate on the shorter span: the documented contract is equal sizes (the
+    // assert guards debug), but a release build must never read/write past a
+    // mismatched shard (heap-buffer-overflow).
+    size_t n = in.size() < out.size() ? in.size() : out.size();
 
 #ifdef QBUEM_ERASURE_AVX2
     // AVX2 path: VPSHUFB split-table GF multiply
@@ -322,11 +325,14 @@ public:
      */
     void encode(std::span<std::span<std::byte>> shards) const noexcept {
         assert(static_cast<int>(shards.size()) == k_ + m_);
-        size_t sz = shards[0].size();
 
-        // Zero-fill parity shards
-        for (int p = 0; p < m_; ++p)
-            std::memset(shards[static_cast<size_t>(k_ + p)].data(), 0, sz);
+        // Zero-fill parity shards — use each shard's own size so a release build
+        // never writes past a shard that is shorter than shards[0] (the equal-
+        // size contract is asserted above; this is the release-safe fallback).
+        for (int p = 0; p < m_; ++p) {
+            auto parity = shards[static_cast<size_t>(k_ + p)];
+            std::memset(parity.data(), 0, parity.size());
+        }
 
         // Parity row i = XOR of data[j] * gmat[(k_+i)*k_ + j] for all j
         for (int p = 0; p < m_; ++p) {
@@ -381,8 +387,12 @@ public:
         std::vector<std::byte> tmp(sz);
         for (int d = 0; d < k_; ++d) {
             if (present[static_cast<size_t>(d)]) continue;
-            // Shard d = sum(inv[d][r] * available_shard[r]) for r in 0..k-1
-            std::memset(shards[static_cast<size_t>(d)].data(), 0, sz);
+            // Shard d = sum(inv[d][r] * available_shard[r]) for r in 0..k-1.
+            // Zero only within the recovered shard's own bounds (release-safe if
+            // it is shorter than sz; gf_mul_add below also clamps to min length).
+            std::memset(shards[static_cast<size_t>(d)].data(), 0,
+                        shards[static_cast<size_t>(d)].size() < sz
+                            ? shards[static_cast<size_t>(d)].size() : sz);
             for (int r = 0; r < k_; ++r) {
                 uint8_t coeff = (*inv_mat)[static_cast<size_t>(d * k_ + r)];
                 if (coeff == 0) continue;

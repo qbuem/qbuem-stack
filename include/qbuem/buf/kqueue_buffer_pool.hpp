@@ -32,6 +32,13 @@ public:
    */
   KqueueBufferPool(size_t buffer_size, size_t count)
       : buffer_size_((buffer_size + 63) & ~63), count_(count) {
+    // Buffer ids are uint16_t. Without this guard, count > 65535 truncates ids
+    // (e.g. index 0 and 65536 alias to bid 0) → acquire() hands out the same
+    // memory twice and release() corrupts the free list.
+    if (count > UINT16_MAX) {
+        throw std::length_error(
+            "KqueueBufferPool: count exceeds uint16_t buffer-id capacity (65535)");
+    }
     if (posix_memalign(&storage_, 64, buffer_size_ * count) != 0) {
         throw std::bad_alloc();
     }
@@ -81,10 +88,16 @@ public:
     available_count_.store(free_indices_.size(), std::memory_order_relaxed);
   }
 
-  /** @returns Current number of available buffers. */
-  size_t available() const noexcept {
+  /** @returns Current number of available (un-acquired) buffers. */
+  [[nodiscard]] size_t available() const noexcept {
     return available_count_.load(std::memory_order_relaxed);
   }
+
+  /** @returns Total number of buffers in the pool (fixed at construction). */
+  [[nodiscard]] size_t capacity() const noexcept { return count_; }
+
+  /** @returns Size in bytes of each buffer (rounded up to a 64-byte multiple). */
+  [[nodiscard]] size_t buffer_size() const noexcept { return buffer_size_; }
 
 private:
   const size_t buffer_size_;
