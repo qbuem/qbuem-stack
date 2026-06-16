@@ -20,6 +20,7 @@
 #include <qbuem/pipeline/spsc_channel.hpp>
 
 #include <cstdint>
+#include <thread>
 #include <qbuem/compat/print.hpp>
 
 using namespace qbuem;
@@ -123,6 +124,56 @@ static void bench_spsc_channel() {
     }
 }
 
+// ─── SpscChannel — true 2-thread producer→consumer throughput ─────────────────
+// The single-threaded round-trip above understates SpscChannel: its cache-line
+// separation of head/tail only pays off when the producer and consumer run on
+// different cores. This measures that real cross-thread case end-to-end.
+static void bench_spsc_2thread() {
+    bench::section("SpscChannel<uint64_t> — 2-thread cross-core throughput");
+
+    constexpr size_t kCapacity = 4096;
+    constexpr size_t kItems    = 10'000'000;
+
+    SpscChannel<uint64_t> chan(kCapacity);
+
+    const uint64_t t0 = bench::now_ns();
+
+    std::jthread producer([&] {
+        for (size_t i = 0; i < kItems; ++i) {
+            while (!chan.try_send(static_cast<uint64_t>(i))) {
+                // spin until a slot frees up (consumer is draining concurrently)
+            }
+        }
+    });
+
+    uint64_t sum = 0;
+    size_t   received = 0;
+    while (received < kItems) {
+        auto v = chan.try_recv();
+        if (v) {
+            sum += *v;
+            ++received;
+        }
+        // else: spin until the producer publishes the next item
+    }
+    producer.join();
+
+    const uint64_t t1 = bench::now_ns();
+    bench::do_not_optimize(sum);
+
+    const double total_ns = static_cast<double>(t1 - t0);
+    const double ops_s    = static_cast<double>(kItems) / (total_ns * 1e-9);
+    const double ns_op    = total_ns / static_cast<double>(kItems);
+    const double mb_s     = static_cast<double>(kItems) * sizeof(uint64_t)
+                            / (total_ns * 1e-9) / (1024.0 * 1024.0);
+    std::print("  {:<40}  {:8.2f} ns/op  {:10.0f} ops/s  {:7.1f} MB/s\n",
+               "SpscChannel: 2-thread P->C", ns_op, ops_s, mb_s);
+    if (ops_s >= 50e6)
+        bench::pass("2-thread SPSC goal met: >= 50M items/s cross-core");
+    else
+        bench::fail("2-thread SPSC goal missed: < 50M items/s");
+}
+
 static void bench_arena_channel() {
     bench::section("ArenaChannel<int> — Arena-backed High-Speed Channel");
 
@@ -212,6 +263,7 @@ int main() {
 
     bench_async_channel_trysend();
     bench_spsc_channel();
+    bench_spsc_2thread();
     bench_arena_channel();
     bench_channel_batch_throughput();
 
