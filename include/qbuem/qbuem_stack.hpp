@@ -339,7 +339,7 @@ public:
    * @param ipv6   If true, listen on IPv6 (dual-stack when IPV6_V6ONLY=0).
    *               Default: false (IPv4 only).
    */
-  Result<void> listen(int port, bool ipv6 = false);
+  [[nodiscard]] Result<void> listen(int port, bool ipv6 = false);
 
   /**
    * @brief Listen on a Unix Domain Socket path (AF_UNIX SOCK_STREAM).
@@ -352,7 +352,7 @@ public:
    *
    * @param path  Filesystem path for the Unix socket (max ~104 chars, OS limit).
    */
-  Result<void> listen_unix(std::string_view path);
+  [[nodiscard]] Result<void> listen_unix(std::string_view path);
 
   /**
    * @brief Request graceful shutdown (drain mode).

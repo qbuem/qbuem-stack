@@ -138,15 +138,24 @@ namespace detail::aead {
  * @param nonce         12-byte unique nonce.
  * @param aad           Additional authenticated data (not encrypted; may be empty).
  * @param plaintext     Data to encrypt.
- * @param ciphertext    Output: must be exactly `plaintext.size()` bytes.
+ * @param ciphertext    Output: must be at least `plaintext.size()` bytes.
  * @param tag           Output: 16-byte authentication tag.
+ * @returns `{}` on success, or `errc::invalid_argument` if @p ciphertext is too
+ *          small to hold the encrypted output. Returning an error (rather than
+ *          writing past the buffer) makes the call safe to misuse.
  */
-inline void chacha20_poly1305_seal(const AeadKey&           key,
-                                    const AeadNonce&         nonce,
-                                    std::span<const uint8_t> aad,
-                                    std::span<const uint8_t> plaintext,
-                                    std::span<uint8_t>       ciphertext,
-                                    AeadTag&                 tag) noexcept {
+[[nodiscard]] inline Result<void>
+chacha20_poly1305_seal(const AeadKey&           key,
+                       const AeadNonce&         nonce,
+                       std::span<const uint8_t> aad,
+                       std::span<const uint8_t> plaintext,
+                       std::span<uint8_t>       ciphertext,
+                       AeadTag&                 tag) noexcept {
+    // Guard the output span: xor_stream below writes exactly plaintext.size()
+    // bytes into ciphertext.data(). A short span would overflow the buffer.
+    if (ciphertext.size() < plaintext.size())
+        return std::unexpected(std::make_error_code(std::errc::invalid_argument));
+
     // Step 1: derive one-time Poly1305 key from block 0
     const Poly1305Key otk = detail::aead::poly_otk(key, nonce);
 
@@ -155,8 +164,9 @@ inline void chacha20_poly1305_seal(const AeadKey&           key,
         key.data(), nonce.data(), 1,
         plaintext.data(), ciphertext.data(), plaintext.size());
 
-    // Step 3: compute authentication tag over (AAD, ciphertext)
-    tag = detail::aead::build_tag(otk, aad, ciphertext);
+    // Step 3: compute authentication tag over (AAD, exactly the bytes written)
+    tag = detail::aead::build_tag(otk, aad, ciphertext.subspan(0, plaintext.size()));
+    return {};
 }
 
 /**
@@ -189,8 +199,9 @@ chacha20_poly1305_seal(const AeadKey&           key,
  * @param aad           Additional authenticated data.
  * @param ciphertext    Encrypted data (does NOT include the tag).
  * @param tag           16-byte authentication tag from seal.
- * @param plaintext     Output: must be exactly `ciphertext.size()` bytes.
- * @returns `{}` on success, or `errc::bad_message` if authentication fails.
+ * @param plaintext     Output: must be at least `ciphertext.size()` bytes.
+ * @returns `{}` on success, `errc::invalid_argument` if @p plaintext is too
+ *          small, or `errc::bad_message` if authentication fails.
  */
 [[nodiscard]] inline Result<void>
 chacha20_poly1305_open(const AeadKey&           key,
@@ -199,6 +210,11 @@ chacha20_poly1305_open(const AeadKey&           key,
                         std::span<const uint8_t> ciphertext,
                         const AeadTag&           tag,
                         std::span<uint8_t>       plaintext) noexcept {
+    // Guard the output span: xor_stream below writes exactly ciphertext.size()
+    // bytes into plaintext.data(). A short span would overflow the buffer.
+    if (plaintext.size() < ciphertext.size())
+        return std::unexpected(std::make_error_code(std::errc::invalid_argument));
+
     // Step 1: derive one-time key
     const Poly1305Key otk = detail::aead::poly_otk(key, nonce);
 

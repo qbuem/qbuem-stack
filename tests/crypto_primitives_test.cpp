@@ -589,8 +589,8 @@ TEST(ChaCha20Poly1305, SealOpenRoundTrip) {
     // Seal: allocate output buffers.
     std::vector<uint8_t> ciphertext(plaintext.size());
     AeadTag tag{};
-    chacha20_poly1305_seal(key, nonce, aad_span, pt_span,
-                           {ciphertext.data(), ciphertext.size()}, tag);
+    ASSERT_TRUE(chacha20_poly1305_seal(key, nonce, aad_span, pt_span,
+                           {ciphertext.data(), ciphertext.size()}, tag).has_value());
 
     // Ciphertext must differ from plaintext.
     bool ct_differs = (std::memcmp(ciphertext.data(), plaintext.data(),
@@ -642,10 +642,10 @@ TEST(ChaCha20Poly1305, Rfc8439Section282KAT) {
 
     std::vector<uint8_t> ct(pt.size());
     AeadTag tag{};
-    chacha20_poly1305_seal(
+    ASSERT_TRUE(chacha20_poly1305_seal(
         key, nonce, std::span<const uint8_t>(aad),
         {reinterpret_cast<const uint8_t*>(pt.data()), pt.size()},
-        {ct.data(), ct.size()}, tag);
+        {ct.data(), ct.size()}, tag).has_value());
     EXPECT_EQ(std::memcmp(ct.data(), expected_ct_head, 8), 0);
     EXPECT_EQ(std::memcmp(tag.data(), expected_tag.data(), expected_tag.size()), 0);
 }
@@ -659,10 +659,10 @@ TEST(ChaCha20Poly1305, TamperedCiphertextFails) {
     std::vector<uint8_t> ct(pt.size());
     AeadTag tag{};
 
-    chacha20_poly1305_seal(
+    ASSERT_TRUE(chacha20_poly1305_seal(
         key, nonce, {},
         {reinterpret_cast<const uint8_t*>(pt.data()), pt.size()},
-        {ct.data(), ct.size()}, tag);
+        {ct.data(), ct.size()}, tag).has_value());
 
     // Flip a bit in the ciphertext.
     ct[4] ^= 0x01u;
@@ -685,10 +685,10 @@ TEST(ChaCha20Poly1305, TamperedTagFails) {
     std::vector<uint8_t> ct(pt.size());
     AeadTag tag{};
 
-    chacha20_poly1305_seal(
+    ASSERT_TRUE(chacha20_poly1305_seal(
         key, nonce, {},
         {reinterpret_cast<const uint8_t*>(pt.data()), pt.size()},
-        {ct.data(), ct.size()}, tag);
+        {ct.data(), ct.size()}, tag).has_value());
 
     // Flip a bit in the authentication tag.
     tag[0] ^= 0x01u;
@@ -712,11 +712,11 @@ TEST(ChaCha20Poly1305, TamperedAadFails) {
     std::vector<uint8_t> ct(pt.size());
     AeadTag tag{};
 
-    chacha20_poly1305_seal(
+    ASSERT_TRUE(chacha20_poly1305_seal(
         key, nonce,
         {reinterpret_cast<const uint8_t*>(aad.data()), aad.size()},
         {reinterpret_cast<const uint8_t*>(pt.data()),  pt.size()},
-        {ct.data(), ct.size()}, tag);
+        {ct.data(), ct.size()}, tag).has_value());
 
     // Open with different AAD must fail.
     const std::string_view wrong_aad = "wrong aad!!";
@@ -761,10 +761,10 @@ TEST(ChaCha20Poly1305, EmptyPlaintextRoundTrip) {
 
     std::vector<uint8_t> ct;  // zero bytes
     AeadTag tag{};
-    chacha20_poly1305_seal(
+    ASSERT_TRUE(chacha20_poly1305_seal(
         key, nonce,
         {reinterpret_cast<const uint8_t*>(aad.data()), aad.size()},
-        {}, ct, tag);  // empty plaintext span
+        {}, ct, tag).has_value());  // empty plaintext span
 
     std::vector<uint8_t> pt;
     auto result = chacha20_poly1305_open(
@@ -772,6 +772,69 @@ TEST(ChaCha20Poly1305, EmptyPlaintextRoundTrip) {
         {reinterpret_cast<const uint8_t*>(aad.data()), aad.size()},
         {}, tag, pt);
     EXPECT_TRUE(result.has_value());
+}
+
+// seal() must reject an output buffer too small to hold the ciphertext rather
+// than overflowing it (the misuse-resistant size guard, not a crash).
+TEST(ChaCha20Poly1305, SealRejectsUndersizedCiphertext) {
+    AeadKey key{};
+    AeadNonce nonce{};
+    key[6] = 0x66;
+
+    const std::string_view pt = "this plaintext is longer than the output";
+    std::vector<uint8_t> ct(pt.size() - 1);  // one byte too small
+    AeadTag tag{};
+    auto r = chacha20_poly1305_seal(
+        key, nonce, {},
+        {reinterpret_cast<const uint8_t*>(pt.data()), pt.size()},
+        {ct.data(), ct.size()}, tag);
+    EXPECT_FALSE(r.has_value());
+}
+
+// open() must reject an output buffer too small to hold the recovered plaintext.
+TEST(ChaCha20Poly1305, OpenRejectsUndersizedPlaintext) {
+    AeadKey key{};
+    AeadNonce nonce{};
+    key[7] = 0x77;
+
+    const std::string_view pt = "round-trip plaintext payload";
+    std::vector<uint8_t> ct(pt.size());
+    AeadTag tag{};
+    ASSERT_TRUE(chacha20_poly1305_seal(
+        key, nonce, {},
+        {reinterpret_cast<const uint8_t*>(pt.data()), pt.size()},
+        {ct.data(), ct.size()}, tag).has_value());
+
+    std::vector<uint8_t> out(ct.size() - 1);  // one byte too small
+    auto r = chacha20_poly1305_open(
+        key, nonce, {},
+        {ct.data(), ct.size()}, tag,
+        {out.data(), out.size()});
+    EXPECT_FALSE(r.has_value());
+}
+
+// seal() must tolerate an over-sized output buffer: it authenticates exactly the
+// bytes written, so the round-trip still verifies.
+TEST(ChaCha20Poly1305, SealAcceptsOversizedCiphertext) {
+    AeadKey key{};
+    AeadNonce nonce{};
+    key[8] = 0x88;
+
+    const std::string_view pt = "exact bytes authenticated";
+    std::vector<uint8_t> ct(pt.size() + 32);  // larger than needed
+    AeadTag tag{};
+    ASSERT_TRUE(chacha20_poly1305_seal(
+        key, nonce, {},
+        {reinterpret_cast<const uint8_t*>(pt.data()), pt.size()},
+        {ct.data(), ct.size()}, tag).has_value());
+
+    std::vector<uint8_t> out(pt.size());
+    auto r = chacha20_poly1305_open(
+        key, nonce, {},
+        {ct.data(), pt.size()}, tag,  // open the exact ciphertext length
+        {out.data(), out.size()});
+    ASSERT_TRUE(r.has_value());
+    EXPECT_EQ(std::memcmp(out.data(), pt.data(), pt.size()), 0);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
