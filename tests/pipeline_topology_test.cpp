@@ -202,6 +202,37 @@ TEST(PipelineTopology, GraphSplitAndMerge) {
     EXPECT_EQ(got[1], 1005);   // plus branch
 }
 
+// ─── 3c. PipelineGraph — destroy while workers are in flight (lifetime) ──────
+// Mirror of DynamicDestroyWhileRunningIsSafe for the graph: workers (node +
+// fan-out) route via per-node snapshots, never the parent graph's nodes_ map or
+// registry_, so the graph can be destroyed before the reactor stops. ASan/TSan
+// would flag a use-after-free otherwise.
+TEST(PipelineTopology, GraphDestroyWhileRunningIsSafe) {
+    RunGuard guard;
+    {
+        PipelineGraph<int> graph;
+        graph
+            .node("src",   [](int v, ActionEnv) -> Task<Result<int>> { co_return v; }, 1, 64)
+            .node("plus",  [](int v, ActionEnv) -> Task<Result<int>> { co_return v + 1; }, 2, 64)
+            .node("minus", [](int v, ActionEnv) -> Task<Result<int>> { co_return v - 1; }, 2, 64)
+            .edge("src", "plus")
+            .edge("src", "minus")
+            .source("src")
+            .sink("plus")
+            .sink("minus");
+        graph.start(guard.dispatcher);
+        // Fire items but do NOT drain/stop — leave node + fan-out workers mid-flight.
+        guard.run_and_wait([&]() -> Task<void> {
+            for (int i = 0; i < 16; ++i) co_await graph.push(i);
+        });
+        // graph goes out of scope here → ~PipelineGraph() closes channels while the
+        // reactor thread may still be executing its workers.
+    }
+    guard.run_and_wait([]() -> Task<void> { co_return; });  // let workers drain
+    guard.shutdown();
+    SUCCEED();  // reaching here clean under ASan/TSan means no teardown UAF
+}
+
 // ─── 4. Composition — two StaticPipelines merged into one consumer ───────────
 TEST(PipelineTopology, MergeTwoPipelinesIntoOneConsumer) {
     RunGuard guard;
