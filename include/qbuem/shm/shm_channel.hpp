@@ -491,11 +491,36 @@ SHMChannel<T>::open(std::string_view name) noexcept {
     auto seg_res = SHMSegment::open(name);
     if (!seg_res) return std::unexpected(seg_res.error());
 
-    auto* hdr = static_cast<const SHMHeader*>(seg_res->base());
+    // The segment is shared memory written by another process — possibly one
+    // that crashed mid-write or is hostile. Every field read below is untrusted,
+    // so it must be validated before any pointer arithmetic derives ring()/
+    // arena() offsets from `capacity`. A forged capacity would otherwise make
+    // every slot/arena access index far past the end of the mapping.
+    const size_t seg_size = seg_res->size();
+    if (seg_size < sizeof(SHMHeader))
+        return std::unexpected(std::make_error_code(std::errc::invalid_argument));
+
+    const auto* hdr = static_cast<const SHMHeader*>(seg_res->base());
     if (hdr->magic != kSHMMagic)
         return std::unexpected(std::make_error_code(std::errc::invalid_argument));
 
-    size_t cap = hdr->capacity;
+    const size_t cap = hdr->capacity;
+    // capacity must be a non-zero power of two: the lock-free index math is
+    // `pos & (capacity - 1)`, which only wraps correctly for powers of two.
+    if (cap == 0 || (cap & (cap - 1)) != 0)
+        return std::unexpected(std::make_error_code(std::errc::invalid_argument));
+
+    // The mapping must be large enough to hold the header + full metadata ring +
+    // data arena for `cap` slots of T. Computed with overflow-checked arithmetic
+    // so a forged capacity cannot wrap `required` around to a small value.
+    size_t ring_bytes = 0, arena_bytes = 0, required = sizeof(SHMHeader);
+    if (__builtin_mul_overflow(cap, sizeof(MetadataSlot), &ring_bytes) ||
+        __builtin_mul_overflow(cap, sizeof(T), &arena_bytes) ||
+        __builtin_add_overflow(required, ring_bytes, &required) ||
+        __builtin_add_overflow(required, arena_bytes, &required) ||
+        required > seg_size)
+        return std::unexpected(std::make_error_code(std::errc::invalid_argument));
+
     return Ptr(new SHMChannel<T>(std::move(*seg_res), cap));
 }
 
@@ -557,7 +582,20 @@ std::optional<const T*> SHMChannel<T>::try_recv() noexcept {
         if (diff == 0) {
             if (hdr->head.compare_exchange_weak(pos, pos + 1,
                                                 std::memory_order_relaxed)) {
-                std::memcpy(&recv_buf_, arena() + slot.off, sizeof(T));
+                // slot.off is written by the producer process through shared
+                // memory; a corrupt or hostile producer could point it outside
+                // the arena. Validate before dereferencing — one branch on the
+                // hot path is cheap insurance against an out-of-bounds read.
+                // (The acquire-load of slot.seq above makes this write visible.)
+                const uint32_t off = slot.off;
+                const size_t arena_bytes = capacity_ * sizeof(T);
+                if (off > arena_bytes - sizeof(T)) [[unlikely]] {
+                    // Corrupt slot: release it for reuse and report empty rather
+                    // than copy from an invalid offset.
+                    slot.seq.store(pos + mask + 1, std::memory_order_release);
+                    return std::nullopt;
+                }
+                std::memcpy(&recv_buf_, arena() + off, sizeof(T));
                 // Release slot for reuse: next writable turn = pos + capacity
                 slot.seq.store(pos + mask + 1, std::memory_order_release);
                 return &recv_buf_;

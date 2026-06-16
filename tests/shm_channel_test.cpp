@@ -286,6 +286,150 @@ TEST(SHMBus, PerSubscriberBufferIsolation) {
     }
 }
 
+// ─── Security: open()/try_recv() validate an untrusted segment ───────────────
+//
+// SHMChannel::open() maps memory written by another process. A crashed or
+// hostile peer can forge the header (capacity) and slot metadata (off). These
+// tests forge such segments directly and assert the channel rejects them
+// instead of dereferencing out-of-bounds pointers (ASan would otherwise fire).
+
+namespace {
+
+// A raw, caller-controlled shm segment. Destructor unmaps + unlinks.
+struct ForgedSegment {
+    void*       base{nullptr};
+    size_t      size{0};
+    int         fd{-1};
+    std::string path;  // includes leading '/'
+
+    ForgedSegment() = default;
+    ForgedSegment(const ForgedSegment&) = delete;
+    ForgedSegment& operator=(const ForgedSegment&) = delete;
+    ~ForgedSegment() {
+        if (base != nullptr && base != MAP_FAILED) ::munmap(base, size);
+        if (fd >= 0) ::close(fd);
+        if (!path.empty()) ::shm_unlink(path.c_str());
+    }
+};
+
+// Create a zero-filled shm segment of exactly `bytes` and map it read-write.
+// Returns nullptr on failure (skips the test cleanly).
+std::unique_ptr<ForgedSegment> forge(const std::string& name, size_t bytes) {
+    auto seg = std::make_unique<ForgedSegment>();
+    seg->path = "/" + name;
+    ::shm_unlink(seg->path.c_str());
+    seg->fd = ::shm_open(seg->path.c_str(), O_CREAT | O_EXCL | O_RDWR, 0600);
+    if (seg->fd < 0) return nullptr;
+    if (::ftruncate(seg->fd, static_cast<off_t>(bytes)) < 0) return nullptr;
+    seg->size = bytes;
+    seg->base = ::mmap(nullptr, bytes, PROT_READ | PROT_WRITE,
+                       MAP_SHARED, seg->fd, 0);
+    if (seg->base == MAP_FAILED) { seg->base = nullptr; return nullptr; }
+    std::memset(seg->base, 0, bytes);
+    return seg;
+}
+
+} // namespace
+
+TEST(SHMSecurity, OpenRejectsBadMagic) {
+    auto name = next_shm_name();
+    auto seg = forge(name, calc_segment_size(8, sizeof(Msg32)));
+    if (!seg) GTEST_SKIP() << "shm_open unavailable in this environment";
+    auto* hdr = new (seg->base) SHMHeader();
+    hdr->magic    = 0xDEADBEEF;  // wrong magic
+    hdr->capacity = 8;
+
+    auto res = SHMChannel<Msg32>::open(name);
+    EXPECT_FALSE(res.has_value());
+}
+
+TEST(SHMSecurity, OpenRejectsNonPowerOfTwoCapacity) {
+    auto name = next_shm_name();
+    auto seg = forge(name, calc_segment_size(8, sizeof(Msg32)));
+    if (!seg) GTEST_SKIP() << "shm_open unavailable in this environment";
+    auto* hdr = new (seg->base) SHMHeader();  // magic = kSHMMagic
+    hdr->capacity = 7;                         // not a power of two
+
+    auto res = SHMChannel<Msg32>::open(name);
+    EXPECT_FALSE(res.has_value());
+}
+
+TEST(SHMSecurity, OpenRejectsZeroCapacity) {
+    auto name = next_shm_name();
+    auto seg = forge(name, calc_segment_size(8, sizeof(Msg32)));
+    if (!seg) GTEST_SKIP() << "shm_open unavailable in this environment";
+    auto* hdr = new (seg->base) SHMHeader();
+    hdr->capacity = 0;
+
+    auto res = SHMChannel<Msg32>::open(name);
+    EXPECT_FALSE(res.has_value());
+}
+
+TEST(SHMSecurity, OpenRejectsUndersizedSegment) {
+    auto name = next_shm_name();
+    // A small request fits the header but is far too small for cap=1024
+    // (required = header + 1024*32 + 1024*16 ≈ 49 KB). POSIX shm objects round
+    // up (Linux: to a page; macOS: to a 16 KB minimum), so the capacity must be
+    // large enough that its footprint clearly exceeds any such rounding.
+    auto seg = forge(name, 4096);
+    if (!seg) GTEST_SKIP() << "shm_open unavailable in this environment";
+    ASSERT_GE(seg->size, sizeof(SHMHeader));
+    auto* hdr = new (seg->base) SHMHeader();
+    hdr->capacity = 1024;  // power of two, but ring+arena won't fit (~49 KB)
+
+    auto res = SHMChannel<Msg32>::open(name);
+    EXPECT_FALSE(res.has_value());
+}
+
+TEST(SHMSecurity, OpenAcceptsValidForgedSegment) {
+    auto name = next_shm_name();
+    constexpr uint32_t kCap = 8;
+    auto seg = forge(name, calc_segment_size(kCap, sizeof(Msg32)));
+    if (!seg) GTEST_SKIP() << "shm_open unavailable in this environment";
+    auto* hdr = new (seg->base) SHMHeader();
+    hdr->capacity = kCap;
+    auto* slots = reinterpret_cast<MetadataSlot*>(
+        static_cast<uint8_t*>(seg->base) + sizeof(SHMHeader));
+    for (uint32_t i = 0; i < kCap; ++i) {
+        new (&slots[i]) MetadataSlot();
+        slots[i].seq.store(i, std::memory_order_relaxed);
+    }
+
+    auto res = SHMChannel<Msg32>::open(name);
+    ASSERT_TRUE(res.has_value());
+    EXPECT_EQ((*res)->capacity(), kCap);
+}
+
+TEST(SHMSecurity, TryRecvRejectsCorruptSlotOffset) {
+    auto name = next_shm_name();
+    constexpr uint32_t kCap = 8;
+    auto seg = forge(name, calc_segment_size(kCap, sizeof(Msg32)));
+    if (!seg) GTEST_SKIP() << "shm_open unavailable in this environment";
+
+    auto* hdr = new (seg->base) SHMHeader();
+    hdr->capacity = kCap;
+    hdr->head.store(0, std::memory_order_relaxed);
+    hdr->tail.store(1, std::memory_order_relaxed);
+
+    auto* slots = reinterpret_cast<MetadataSlot*>(
+        static_cast<uint8_t*>(seg->base) + sizeof(SHMHeader));
+    for (uint32_t i = 0; i < kCap; ++i) {
+        new (&slots[i]) MetadataSlot();
+        slots[i].seq.store(i, std::memory_order_relaxed);
+    }
+    // Simulate a committed message in slot 0 whose offset points past the arena
+    // (arena is kCap * sizeof(Msg32) = 128 bytes; 0xFFFFFFFF is far outside).
+    slots[0].off = 0xFFFFFFFFu;
+    slots[0].len = sizeof(Msg32);
+    slots[0].seq.store(1, std::memory_order_release);  // consumer pos 0 → diff 0
+
+    auto res = SHMChannel<Msg32>::open(name);
+    ASSERT_TRUE(res.has_value());
+    // Must reject the corrupt slot (no OOB read) and report empty.
+    auto r = (*res)->try_recv();
+    EXPECT_FALSE(r.has_value());
+}
+
 // ─── calc_segment_size ───────────────────────────────────────────────────────
 
 TEST(SHMCalc, PageAligned) {
