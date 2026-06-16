@@ -79,7 +79,7 @@ struct SocketAddr {
    * @param port Port number in host byte order.
    * @returns SocketAddr on successful parsing, or an error code on failure.
    */
-  static Result<SocketAddr> from_ipv4(const char *ip, uint16_t port) noexcept {
+  [[nodiscard]] static Result<SocketAddr> from_ipv4(const char *ip, uint16_t port) noexcept {
     SocketAddr a;
     a.family_ = Family::IPv4;
     a.port_   = port;
@@ -96,7 +96,7 @@ struct SocketAddr {
    * @param port Port number in host byte order.
    * @returns SocketAddr on successful parsing, or an error code on failure.
    */
-  static Result<SocketAddr> from_ipv6(const char *ip, uint16_t port) noexcept {
+  [[nodiscard]] static Result<SocketAddr> from_ipv6(const char *ip, uint16_t port) noexcept {
     SocketAddr a;
     a.family_ = Family::IPv6;
     a.port_   = port;
@@ -112,7 +112,7 @@ struct SocketAddr {
    * @param path Socket file path. Must be 107 bytes or fewer.
    * @returns SocketAddr on success, or an error code if the path is too long.
    */
-  static Result<SocketAddr> from_unix(const char *path) noexcept {
+  [[nodiscard]] static Result<SocketAddr> from_unix(const char *path) noexcept {
     SocketAddr a;
     a.family_ = Family::Unix;
     a.port_   = 0;

@@ -104,7 +104,7 @@ public:
    * @param addr Local address to bind to.
    * @returns TcpListener on success, or an error code on failure.
    */
-  static Result<TcpListener> bind(SocketAddr addr) noexcept {
+  [[nodiscard]] static Result<TcpListener> bind(SocketAddr addr) noexcept {
     int domain = (addr.family() == SocketAddr::Family::IPv6) ? AF_INET6 : AF_INET;
     int fd = net::make_socket(domain, SOCK_STREAM, 0);
     if (fd < 0)

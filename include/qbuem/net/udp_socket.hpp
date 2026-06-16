@@ -94,7 +94,7 @@ public:
    * @param addr Local address to bind to. Both IPv4 and IPv6 are supported.
    * @returns UdpSocket on success, or an error code on failure.
    */
-  static Result<UdpSocket> bind(SocketAddr addr) noexcept {
+  [[nodiscard]] static Result<UdpSocket> bind(SocketAddr addr) noexcept {
     int domain = (addr.family() == SocketAddr::Family::IPv6) ? AF_INET6 : AF_INET;
     int fd = net::make_socket(domain, SOCK_DGRAM, 0);
     if (fd < 0)

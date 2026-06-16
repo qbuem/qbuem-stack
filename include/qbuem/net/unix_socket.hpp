@@ -104,7 +104,7 @@ public:
    * @param path Unix domain socket file path. Must be 107 bytes or fewer.
    * @returns UnixSocket (listen socket) on success, or an error code on failure.
    */
-  static Result<UnixSocket> bind(const char *path) noexcept {
+  [[nodiscard]] static Result<UnixSocket> bind(const char *path) noexcept {
     int fd = net::make_socket(AF_UNIX, SOCK_STREAM, 0);
     if (fd < 0)
       return unexpected(std::error_code(errno, std::system_category()));
