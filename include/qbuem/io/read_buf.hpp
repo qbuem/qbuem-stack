@@ -96,7 +96,9 @@ struct ReadBuf {
    */
   void commit(size_t n) noexcept {
     assert(n <= writable_size() && "ReadBuf::commit out of range");
-    write_pos += n;
+    // Clamp in release too: an out-of-range commit must not push write_pos past
+    // the end of storage (subsequent reads/writes would go out of bounds).
+    write_pos += std::min(n, writable_size());
   }
 
   // ─── Read Interface ───────────────────────────────────────────────────────
@@ -119,7 +121,10 @@ struct ReadBuf {
    */
   void consume(size_t n) noexcept {
     assert(n <= size() && "ReadBuf::consume out of range");
-    read_pos += n;
+    // Clamp in release too: an out-of-range consume must not push read_pos past
+    // write_pos, which would make readable()'s (write_pos - read_pos) underflow
+    // to a huge length and read out of bounds.
+    read_pos += std::min(n, write_pos - read_pos);
   }
 
   // ─── State and Utilities ──────────────────────────────────────────────────

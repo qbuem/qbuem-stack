@@ -367,6 +367,23 @@ TEST(Base64Decode, InvalidCharacterFails) {
     EXPECT_FALSE(r.has_value());
 }
 
+// Regression: an unpadded 6-char input decodes to 4 bytes. The old
+// base64_decoded_max() floor formula reported 3, so a caller-sized buffer
+// overflowed by one byte. decode_impl now rejects an undersized buffer instead
+// of writing out of bounds (would be an ASan heap-buffer-overflow before).
+TEST(Base64Decode, CallerBufferUnpaddedNoOverflow) {
+    const std::string_view enc = "Zm9vYg";  // unpadded base64 of "foob" (4 bytes)
+    std::array<uint8_t, 3> too_small{};      // old floor size — too small now
+    auto r1 = base64_decode(enc, std::span<uint8_t>(too_small));
+    EXPECT_FALSE(r1.has_value());
+
+    std::array<uint8_t, base64_decoded_max(6)> ok{};  // ceil size holds 4 bytes
+    auto r2 = base64_decode(enc, std::span<uint8_t>(ok));
+    ASSERT_TRUE(r2.has_value());
+    EXPECT_EQ(*r2, 4u);
+    EXPECT_EQ(std::memcmp(ok.data(), "foob", 4), 0);
+}
+
 TEST(Base64, RoundTrip) {
     const std::string_view original = "The quick brown fox jumps over the lazy dog";
     const std::string encoded = base64_encode(original);

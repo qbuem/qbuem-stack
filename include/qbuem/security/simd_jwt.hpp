@@ -122,7 +122,12 @@ struct JwtView {
     [[nodiscard]] bool is_expired(int64_t now_unix, int64_t leeway_sec = 0) const noexcept {
         auto exp = claim_int("exp");
         if (!exp) return false; // No exp claim — expiry not checked
-        return now_unix > (*exp + leeway_sec);
+        // Checked add: *exp may be INT64_MAX (saturated above); a plain
+        // *exp + leeway_sec would be signed-overflow UB.
+        int64_t deadline;
+        if (__builtin_add_overflow(*exp, leeway_sec, &deadline))
+            deadline = leeway_sec > 0 ? INT64_MAX : INT64_MIN;
+        return now_unix > deadline;
     }
 };
 
@@ -453,9 +458,21 @@ json_find_int(std::string_view json, std::string_view key) noexcept {
             if (colon >= json.size()) break;
             char c = json[colon];
             if (c >= '0' && c <= '9') {
+                // Parse with overflow saturation: numeric claims (exp/iat/nbf)
+                // are attacker-controlled, so `val = val*10 + d` must not trigger
+                // signed-overflow UB on e.g. "exp":99999999999999999999. Saturate
+                // at INT64_MAX (an absurdly-far-future expiry is harmless; the
+                // comparison in is_expired() uses a checked add).
                 int64_t val = 0;
                 while (colon < json.size() && json[colon] >= '0' && json[colon] <= '9') {
-                    val = val * 10 + (json[colon++] - '0');
+                    const int digit = json[colon++] - '0';
+                    if (val > (INT64_MAX - digit) / 10) {
+                        val = INT64_MAX;
+                        while (colon < json.size() && json[colon] >= '0' && json[colon] <= '9')
+                            ++colon; // consume the rest without accumulating
+                        break;
+                    }
+                    val = val * 10 + digit;
                 }
                 return val;
             }
