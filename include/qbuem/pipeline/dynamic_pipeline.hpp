@@ -105,6 +105,19 @@ public:
     DynamicPipeline(DynamicPipeline&&) = default;
     DynamicPipeline& operator=(DynamicPipeline&&) = default;
 
+    /**
+     * @brief Close all channels so in-flight workers drain instead of leaking.
+     *
+     * Workers are coroutines on a Dispatcher; this object cannot block-join them
+     * here. Closing the channels makes each worker's recv() return EOS so it runs
+     * to completion on its own — touching only the Stage it keeps alive, never
+     * this pipeline (see stage_worker). For a deterministic shutdown that waits
+     * for every item to finish, `co_await drain()` before destruction.
+     */
+    ~DynamicPipeline() {
+        if (started_) stop();
+    }
+
     // -------------------------------------------------------------------------
     // Stage management
     // -------------------------------------------------------------------------
@@ -134,21 +147,15 @@ public:
         stage->chan_cap = c;
         stage->enabled.store(true, std::memory_order_relaxed);
         stage->stop_src = std::make_unique<std::stop_source>();
+        // Snapshot the registry into the Stage so the worker never reaches back
+        // into this pipeline (cfg_) — decouples worker lifetime from the parent.
+        stage->registry = cfg_.registry ? cfg_.registry : &global_registry();
         stage->in_channel  = std::make_shared<AsyncChannel<ContextualItem<T>>>(c);
         stage->out_channel = std::make_shared<AsyncChannel<ContextualItem<T>>>(c);
         // Install the processing function in the live-swappable holder; the worker
         // reads it from there each iteration (so hot_swap() is honored live).
         std::atomic_store(&stage->active_fn,
                           std::make_shared<StageFn>(std::move(full_fn)));
-
-        // Use weak_ptr to avoid a Stage→lambda→Stage circular reference that
-        // would prevent the Stage from ever being freed.
-        std::weak_ptr<Stage> weak_stage = stage;
-        stage->worker_factory = [this, weak_stage](size_t worker_idx)
-            -> Task<void> {
-            auto s = weak_stage.lock();
-            if (s) co_await stage_worker(s, worker_idx);
-        };
 
         std::unique_lock lock(stages_mtx_);
         stages_.push_back(std::move(stage));
@@ -303,7 +310,11 @@ public:
         for (auto& stage : stages_) {
             for (size_t i = 0; i < stage->workers; ++i) {
                 stage->worker_count.fetch_add(1, std::memory_order_relaxed);
-                dispatcher.spawn(stage->worker_factory(i));
+                // Spawn the static worker directly with the Stage shared_ptr. It is
+                // copied into the coroutine frame (keeping the Stage alive for the
+                // worker's whole life) — no capturing lambda, so there is no
+                // coroutine-lambda capture that could dangle if the Stage is freed.
+                dispatcher.spawn(stage_worker(stage, i));
             }
         }
     }
@@ -384,7 +395,6 @@ private:
         std::string name;
         std::shared_ptr<AsyncChannel<ContextualItem<T>>> in_channel;
         std::shared_ptr<AsyncChannel<ContextualItem<T>>> out_channel;
-        std::function<Task<void>(size_t worker_idx)>     worker_factory;
         // Live-swappable processing function. The worker re-loads it every
         // iteration via atomic_load, so hot_swap() takes effect on the next item
         // with no respawn and no race (the old function is simply never read
@@ -393,6 +403,11 @@ private:
         std::atomic<size_t>                              worker_count{0};
         std::atomic<bool>                                enabled{true};
         std::unique_ptr<std::stop_source>                stop_src;
+        // Resolved once at add_stage(); the worker reads it from here instead of
+        // the parent pipeline's cfg_, so the worker has NO dependency on the
+        // DynamicPipeline outliving it (it keeps its own Stage alive). See the
+        // lifetime note on stage_worker().
+        ServiceRegistry*                                 registry = nullptr;
         size_t workers;
         size_t chan_cap;
     };
@@ -426,8 +441,14 @@ private:
      *
      * Reads items from the input channel, applies fn, and forwards to the output channel.
      * If the stage is disabled, items are forwarded unchanged (pass-through).
+     *
+     * @note **Lifetime:** this is `static` and depends only on the `stage` it is
+     *       handed (kept alive by the shared_ptr captured in the coroutine frame).
+     *       It must never touch the parent DynamicPipeline — that is what lets a
+     *       worker safely run after the pipeline is moved or destroyed. Everything
+     *       it needs (channels, fn, stop_source, registry) lives in the Stage.
      */
-    Task<void> stage_worker(
+    static Task<void> stage_worker(
         std::shared_ptr<Stage> stage,
         size_t worker_idx)
     {
@@ -454,7 +475,7 @@ private:
                 .ctx        = citem->ctx,
                 .stop       = stop_token,
                 .worker_idx = worker_idx,
-                .registry   = cfg_.registry ? cfg_.registry : &global_registry(),
+                .registry   = stage->registry,
             };
 
             // Re-load the (possibly hot-swapped) function each iteration.
