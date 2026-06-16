@@ -157,17 +157,6 @@ public:
         std::atomic_store(&stage->active_fn,
                           std::make_shared<StageFn>(std::move(full_fn)));
 
-        // Use weak_ptr to avoid a Stage→lambda→Stage circular reference that
-        // would prevent the Stage from ever being freed.
-        std::weak_ptr<Stage> weak_stage = stage;
-        // Capture only the weak Stage handle — NOT `this`. stage_worker is static
-        // and self-contained, so a worker never dereferences the pipeline; it can
-        // safely outlive (or be moved away from) the DynamicPipeline that spawned it.
-        stage->worker_factory = [weak_stage](size_t worker_idx) -> Task<void> {
-            auto s = weak_stage.lock();
-            if (s) co_await stage_worker(s, worker_idx);
-        };
-
         std::unique_lock lock(stages_mtx_);
         stages_.push_back(std::move(stage));
         rewire_channels_locked();
@@ -321,7 +310,11 @@ public:
         for (auto& stage : stages_) {
             for (size_t i = 0; i < stage->workers; ++i) {
                 stage->worker_count.fetch_add(1, std::memory_order_relaxed);
-                dispatcher.spawn(stage->worker_factory(i));
+                // Spawn the static worker directly with the Stage shared_ptr. It is
+                // copied into the coroutine frame (keeping the Stage alive for the
+                // worker's whole life) — no capturing lambda, so there is no
+                // coroutine-lambda capture that could dangle if the Stage is freed.
+                dispatcher.spawn(stage_worker(stage, i));
             }
         }
     }
@@ -402,7 +395,6 @@ private:
         std::string name;
         std::shared_ptr<AsyncChannel<ContextualItem<T>>> in_channel;
         std::shared_ptr<AsyncChannel<ContextualItem<T>>> out_channel;
-        std::function<Task<void>(size_t worker_idx)>     worker_factory;
         // Live-swappable processing function. The worker re-loads it every
         // iteration via atomic_load, so hot_swap() takes effect on the next item
         // with no respawn and no race (the old function is simply never read
