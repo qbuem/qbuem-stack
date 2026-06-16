@@ -202,6 +202,32 @@ TEST(PipelineTopology, GraphSplitAndMerge) {
     EXPECT_EQ(got[1], 1005);   // plus branch
 }
 
+// ─── 3b. DynamicPipeline — destroy while workers are in flight (lifetime) ────
+// Regression test for the worker→pipeline lifetime decoupling. Unlike the cases
+// above, the pipeline is destroyed BEFORE the reactor is stopped, so its workers
+// may still be running when ~DynamicPipeline() executes. A correct worker reaches
+// into nothing but its own Stage; ASan/TSan would flag a use-after-free otherwise.
+TEST(PipelineTopology, DynamicDestroyWhileRunningIsSafe) {
+    RunGuard guard;
+    {
+        DynamicPipeline<int> dp;
+        dp.add_stage("scale",
+            [](int v, ActionEnv) -> Task<Result<int>> { co_return v * 2; },
+            /*workers=*/2);
+        dp.start(guard.dispatcher);
+        // Fire items but do NOT drain/stop — leave workers mid-flight.
+        guard.run_and_wait([&]() -> Task<void> {
+            for (int i = 0; i < 16; ++i) co_await dp.push(i);
+        });
+        // dp goes out of scope here → ~DynamicPipeline() closes the channels while
+        // the reactor thread may still be executing its workers. They drain to EOS
+        // touching only the Stage they each keep alive.
+    }
+    guard.run_and_wait([]() -> Task<void> { co_return; });  // let workers drain
+    guard.shutdown();
+    SUCCEED();  // reaching here clean under ASan/TSan means no teardown UAF
+}
+
 // ─── 4. Composition — two StaticPipelines merged into one consumer ───────────
 TEST(PipelineTopology, MergeTwoPipelinesIntoOneConsumer) {
     RunGuard guard;
