@@ -83,6 +83,13 @@
  *            base64url encoding, constant-time comparison;
  *            ConfigManager: zero-heap fixed-capacity ConfigTable<Cap>,
  *            Secret<T> move-only volatile-wipe with [REDACTED] std::formatter).
+ * - 1.0.0: First public stable release. The 0.x–3.x entries above were
+ *           pre-release internal iteration; 1.0.0 consolidates them as the
+ *           first tagged/published version (SemVer 1.x baseline). Hardened in
+ *           the 2026-06 audit: full TSan/ASan/UBSan CI; pipeline/action worker
+ *           lifetime UAF fixes; SHM attacker-trust validation; misuse-resistant
+ *           AEAD; opt-in QBUEM_ENABLE_NATIVE_CRYPTO (hardware SHA-2/AES);
+ *           crypto/SHM/2-thread-SPSC benchmarks.
  */
 
 /**
@@ -111,36 +118,36 @@ namespace qbuem {
  *   - `patch`: incremented for backwards-compatible bug fixes only.
  *
  * @code
- * static_assert(qbuem::Version::major >= 3, "qbuem-stack 3.x required");
- * std::print("{}\n", qbuem::Version::string); // "3.3.0"
+ * static_assert(qbuem::Version::major >= 1, "qbuem-stack 1.x required");
+ * std::print("{}\n", qbuem::Version::string); // "1.0.0"
  * @endcode
  */
 struct Version {
   /** @brief Major version number. Incremented on backwards-incompatible API changes. */
-  static constexpr int major = 3;
+  static constexpr int major = 1;
 
   /** @brief Minor version number. Incremented when new backwards-compatible features are added. */
-  static constexpr int minor = 3;
+  static constexpr int minor = 0;
 
   /** @brief Patch version number. Incremented for backwards-compatible bug fixes only. */
   static constexpr int patch = 0;
 
   /** @brief Version string in "major.minor.patch" format (null-terminated). */
-  static constexpr std::string_view string = "3.3.0";
+  static constexpr std::string_view string = "1.0.0";
 };
 
 } // namespace qbuem
 
 /** @brief Major version number (for use in preprocessor `#if` conditions). */
-#define QBUEM_VERSION_MAJOR 3
+#define QBUEM_VERSION_MAJOR 1
 
 /** @brief Minor version number (for use in preprocessor `#if` conditions). */
-#define QBUEM_VERSION_MINOR 3
+#define QBUEM_VERSION_MINOR 0
 
 /** @brief Patch version number (for use in preprocessor `#if` conditions). */
 #define QBUEM_VERSION_PATCH 0
 
 /** @brief Version string literal "major.minor.patch" (for use in preprocessor conditions). */
-#define QBUEM_VERSION_STRING "3.3.0"
+#define QBUEM_VERSION_STRING "1.0.0"
 
 /** @} */ // end of qbuem_version
