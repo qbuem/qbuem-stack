@@ -2,7 +2,7 @@
 
 **Zero Latency · Zero Copy · Zero Allocation · Zero Dependency**
 
-> **v3.4.0** — A focused, zero-dependency C++23 infrastructure core for
+> **v1.0.0** — A focused, zero-dependency C++23 infrastructure core for
 > Web Application Servers (WAS), Inter-Process Communication (IPC), and data pipelines.
 >
 > **Supported platforms:** Linux x86_64 · ARM64 boards (Jetson-class) · macOS aarch64.

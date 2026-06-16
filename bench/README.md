@@ -49,7 +49,7 @@ cmake --build build -j$(nproc)
 ./build/bench/bench_shm
 ```
 
-## Performance Targets (v3.4.0)
+## Performance Targets (v1.0.0)
 
 ### Core Components
 
