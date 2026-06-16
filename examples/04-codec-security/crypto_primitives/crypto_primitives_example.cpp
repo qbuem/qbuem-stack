@@ -264,11 +264,15 @@ static void demo_chacha20_poly1305() {
     // Encrypt + authenticate
     std::vector<uint8_t> ciphertext(plaintext.size());
     AeadTag tag{};
-    chacha20_poly1305_seal(
+    const auto seal_result = chacha20_poly1305_seal(
         key, nonce,
         {reinterpret_cast<const uint8_t*>(aad.data()),       aad.size()},
         {reinterpret_cast<const uint8_t*>(plaintext.data()), plaintext.size()},
         {ciphertext.data(), ciphertext.size()}, tag);
+    if (!seal_result) {
+        std::println("  ERROR: seal failed (output buffer too small)");
+        return;
+    }
 
     std::println("  ciphertext = {}...", to_hex(ciphertext.data(), 16));
     std::println("  poly1305   = {}", to_hex(tag));
