@@ -73,9 +73,11 @@ public:
    * @param cfg Configuration.
    */
   explicit DebounceAction(Config cfg = {})
-      : cfg_(std::move(cfg)),
-        in_channel_(std::make_shared<AsyncChannel<ContextualItem<T>>>(
-            cfg_.channel_cap)) {}
+      : state_(std::make_shared<State>()) {
+    state_->cfg        = std::move(cfg);
+    state_->in_channel = std::make_shared<AsyncChannel<ContextualItem<T>>>(
+        state_->cfg.channel_cap);
+  }
 
   DebounceAction(const DebounceAction&) = delete;
   DebounceAction& operator=(const DebounceAction&) = delete;
@@ -83,10 +85,26 @@ public:
   DebounceAction& operator=(DebounceAction&&)      = default;
 
   /**
+   * @brief Close the input channel so an in-flight worker drains instead of leaking.
+   *
+   * The worker is a coroutine on a Dispatcher and cannot be block-joined here; it
+   * holds a shared_ptr to the State, so destroying this handle never frees the
+   * State out from under a running worker. Closing the input makes recv() return
+   * EOS so the worker runs to completion on its own. For deterministic shutdown,
+   * `co_await drain()` before destruction.
+   */
+  ~DebounceAction() {
+    if (state_ && state_->stop_src) {  // started
+      state_->stop_src->request_stop();
+      if (state_->in_channel) state_->in_channel->close();
+    }
+  }
+
+  /**
    * @brief Push an item into the input channel (with backpressure).
    */
   Task<Result<void>> push(T item, Context ctx = {}) {
-    co_return co_await in_channel_->send(
+    co_return co_await state_->in_channel->send(
         ContextualItem<T>{std::move(item), std::move(ctx)});
   }
 
@@ -94,7 +112,7 @@ public:
    * @brief Attempt to push an item in a non-blocking manner.
    */
   bool try_push(T item, Context ctx = {}) {
-    return in_channel_->try_send(
+    return state_->in_channel->try_send(
         ContextualItem<T>{std::move(item), std::move(ctx)});
   }
 
@@ -106,22 +124,25 @@ public:
    */
   void start(Dispatcher& dispatcher,
              std::shared_ptr<AsyncChannel<ContextualItem<T>>> out = nullptr) {
-    out_channel_ = out;
-    stop_src_    = std::make_unique<std::stop_source>();
+    state_->out_channel = out;
+    state_->stop_src    = std::make_unique<std::stop_source>();
     // Mark running BEFORE spawn: the flag starts false, so a drain()/stop() that
     // runs before the worker coroutine first executes would otherwise see it
     // false and return early, letting the worker run after the object is freed
     // (heap-use-after-free). The worker clears it on exit.
-    running_.store(true, std::memory_order_release);
-    dispatcher.spawn(worker_loop());
+    state_->running.store(true, std::memory_order_release);
+    // Pass the State shared_ptr by value into the static worker: it is copied
+    // into the coroutine frame, keeping the State alive for the worker's whole
+    // life regardless of when this handle is destroyed.
+    dispatcher.spawn(worker_loop(state_));
   }
 
   /**
    * @brief Close the input channel and wait for the worker to finish.
    */
   Task<void> drain() {
-    in_channel_->close();
-    while (running_.load(std::memory_order_acquire)) {
+    state_->in_channel->close();
+    while (state_->running.load(std::memory_order_acquire)) {
       struct Yield {
         bool await_ready() noexcept { return false; }
         void await_suspend(std::coroutine_handle<> h) noexcept {
@@ -134,8 +155,8 @@ public:
       };
       co_await Yield{};
     }
-    if (out_channel_)
-      out_channel_->close();
+    if (state_->out_channel)
+      state_->out_channel->close();
     co_return;
   }
 
@@ -143,25 +164,36 @@ public:
    * @brief Stop immediately.
    */
   void stop() {
-    if (stop_src_) stop_src_->request_stop();
-    in_channel_->close();
+    if (state_->stop_src) state_->stop_src->request_stop();
+    state_->in_channel->close();
   }
 
   /**
    * @brief Return the output channel.
    */
   [[nodiscard]] std::shared_ptr<AsyncChannel<ContextualItem<T>>> output() const {
-    return out_channel_;
+    return state_->out_channel;
   }
 
   /**
    * @brief Return the input channel.
    */
   [[nodiscard]] std::shared_ptr<AsyncChannel<ContextualItem<T>>> input() const {
-    return in_channel_;
+    return state_->in_channel;
   }
 
 private:
+  // -------------------------------------------------------------------------
+  // Shared state — outlives the handle so the detached worker never dangles.
+  // -------------------------------------------------------------------------
+  struct State {
+    Config                                           cfg;
+    std::shared_ptr<AsyncChannel<ContextualItem<T>>> in_channel;
+    std::shared_ptr<AsyncChannel<ContextualItem<T>>> out_channel;
+    std::unique_ptr<std::stop_source>                stop_src;
+    std::atomic<bool>                                running{false};
+  };
+
   /**
    * @brief Debounce worker loop.
    *
@@ -170,8 +202,11 @@ private:
    * 2. Update the deadline whenever a new item arrives.
    * 3. Forward the last item when no new item arrives before the deadline.
    */
-  Task<void> worker_loop() {
-    running_.store(true, std::memory_order_release);
+  // static + self-contained: depends only on the State it is handed (kept alive
+  // by the shared_ptr in the coroutine frame), never the DebounceAction handle —
+  // so the worker can safely outlive the handle that spawned it.
+  static Task<void> worker_loop(std::shared_ptr<State> st) {
+    st->running.store(true, std::memory_order_release);
 
     std::optional<ContextualItem<T>> pending;
     auto deadline = std::chrono::steady_clock::time_point::max();
@@ -182,8 +217,8 @@ private:
         auto now = std::chrono::steady_clock::now();
         if (now >= deadline) {
           // Gap elapsed — forward the last item
-          if (out_channel_) {
-            co_await out_channel_->send(
+          if (st->out_channel) {
+            co_await st->out_channel->send(
                 ContextualItem<T>{std::move(pending->value), pending->ctx});
           }
           pending.reset();
@@ -192,16 +227,16 @@ private:
         }
 
         // Check for a new item in a non-blocking manner
-        auto item = in_channel_->try_recv();
+        auto item = st->in_channel->try_recv();
         if (item) {
           // New item arrived — refresh deadline
           pending  = std::move(*item);
           deadline = std::chrono::steady_clock::now() +
-                     std::chrono::duration_cast<std::chrono::nanoseconds>(cfg_.gap);
+                     std::chrono::duration_cast<std::chrono::nanoseconds>(st->cfg.gap);
           continue;
         }
 
-        if (in_channel_->is_closed()) break;
+        if (st->in_channel->is_closed()) break;
 
         // Yield — give the Reactor a chance to run other coroutines
         struct Yield {
@@ -217,29 +252,25 @@ private:
         co_await Yield{};
       } else {
         // No pending item — blocking recv
-        auto item = co_await in_channel_->recv();
+        auto item = co_await st->in_channel->recv();
         if (!item) break; // EOS
         pending  = std::move(*item);
         deadline = std::chrono::steady_clock::now() +
-                   std::chrono::duration_cast<std::chrono::nanoseconds>(cfg_.gap);
+                   std::chrono::duration_cast<std::chrono::nanoseconds>(st->cfg.gap);
       }
     }
 
     // On EOS, flush any remaining pending item
-    if (pending && out_channel_) {
-      co_await out_channel_->send(
+    if (pending && st->out_channel) {
+      co_await st->out_channel->send(
           ContextualItem<T>{std::move(pending->value), pending->ctx});
     }
 
-    running_.store(false, std::memory_order_release);
+    st->running.store(false, std::memory_order_release);
     co_return;
   }
 
-  Config                                                  cfg_;
-  std::shared_ptr<AsyncChannel<ContextualItem<T>>>        in_channel_;
-  std::shared_ptr<AsyncChannel<ContextualItem<T>>>        out_channel_;
-  std::unique_ptr<std::stop_source>                       stop_src_;
-  std::atomic<bool>                                       running_{false};
+  std::shared_ptr<State> state_;
 };
 
 // ============================================================================
@@ -274,10 +305,12 @@ public:
    * @param cfg Configuration.
    */
   explicit ThrottleAction(Config cfg = {})
-      : cfg_(std::move(cfg)),
-        in_channel_(std::make_shared<AsyncChannel<ContextualItem<T>>>(
-            cfg_.channel_cap)),
-        tokens_(static_cast<double>(cfg_.burst)) {}
+      : state_(std::make_shared<State>()) {
+    state_->cfg        = std::move(cfg);
+    state_->in_channel = std::make_shared<AsyncChannel<ContextualItem<T>>>(
+        state_->cfg.channel_cap);
+    state_->tokens     = static_cast<double>(state_->cfg.burst);
+  }
 
   ThrottleAction(const ThrottleAction&) = delete;
   ThrottleAction& operator=(const ThrottleAction&) = delete;
@@ -285,10 +318,26 @@ public:
   ThrottleAction& operator=(ThrottleAction&&)      = default;
 
   /**
+   * @brief Close the input channel so an in-flight worker drains instead of leaking.
+   *
+   * The worker is a coroutine on a Dispatcher and cannot be block-joined here; it
+   * holds a shared_ptr to the State, so destroying this handle never frees the
+   * State out from under a running worker. Closing the input makes recv() return
+   * EOS so the worker runs to completion on its own. For deterministic shutdown,
+   * `co_await drain()` before destruction.
+   */
+  ~ThrottleAction() {
+    if (state_ && state_->stop_src) {  // started
+      state_->stop_src->request_stop();
+      if (state_->in_channel) state_->in_channel->close();
+    }
+  }
+
+  /**
    * @brief Push an item into the input channel (with backpressure).
    */
   Task<Result<void>> push(T item, Context ctx = {}) {
-    co_return co_await in_channel_->send(
+    co_return co_await state_->in_channel->send(
         ContextualItem<T>{std::move(item), std::move(ctx)});
   }
 
@@ -296,7 +345,7 @@ public:
    * @brief Attempt to push an item in a non-blocking manner.
    */
   bool try_push(T item, Context ctx = {}) {
-    return in_channel_->try_send(
+    return state_->in_channel->try_send(
         ContextualItem<T>{std::move(item), std::move(ctx)});
   }
 
@@ -308,20 +357,23 @@ public:
    */
   void start(Dispatcher& dispatcher,
              std::shared_ptr<AsyncChannel<ContextualItem<T>>> out = nullptr) {
-    out_channel_ = out;
-    stop_src_    = std::make_unique<std::stop_source>();
-    last_refill_ = std::chrono::steady_clock::now();
+    state_->out_channel = out;
+    state_->stop_src    = std::make_unique<std::stop_source>();
+    state_->last_refill = std::chrono::steady_clock::now();
     // Mark running BEFORE spawn (see race note in the other start() overloads).
-    running_.store(true, std::memory_order_release);
-    dispatcher.spawn(worker_loop());
+    state_->running.store(true, std::memory_order_release);
+    // Pass the State shared_ptr by value into the static worker: it is copied
+    // into the coroutine frame, keeping the State alive for the worker's whole
+    // life regardless of when this handle is destroyed.
+    dispatcher.spawn(worker_loop(state_));
   }
 
   /**
    * @brief Close the input channel and wait for the worker to finish.
    */
   Task<void> drain() {
-    in_channel_->close();
-    while (running_.load(std::memory_order_acquire)) {
+    state_->in_channel->close();
+    while (state_->running.load(std::memory_order_acquire)) {
       struct Yield {
         bool await_ready() noexcept { return false; }
         void await_suspend(std::coroutine_handle<> h) noexcept {
@@ -334,8 +386,8 @@ public:
       };
       co_await Yield{};
     }
-    if (out_channel_)
-      out_channel_->close();
+    if (state_->out_channel)
+      state_->out_channel->close();
     co_return;
   }
 
@@ -343,40 +395,54 @@ public:
    * @brief Stop immediately.
    */
   void stop() {
-    if (stop_src_) stop_src_->request_stop();
-    in_channel_->close();
+    if (state_->stop_src) state_->stop_src->request_stop();
+    state_->in_channel->close();
   }
 
   /**
    * @brief Return the output channel.
    */
   [[nodiscard]] std::shared_ptr<AsyncChannel<ContextualItem<T>>> output() const {
-    return out_channel_;
+    return state_->out_channel;
   }
 
   /**
    * @brief Return the input channel.
    */
   [[nodiscard]] std::shared_ptr<AsyncChannel<ContextualItem<T>>> input() const {
-    return in_channel_;
+    return state_->in_channel;
   }
 
 private:
+  // -------------------------------------------------------------------------
+  // Shared state — outlives the handle so the detached worker never dangles.
+  // -------------------------------------------------------------------------
+  struct State {
+    Config                                           cfg;
+    std::shared_ptr<AsyncChannel<ContextualItem<T>>> in_channel;
+    std::shared_ptr<AsyncChannel<ContextualItem<T>>> out_channel;
+    std::unique_ptr<std::stop_source>                stop_src;
+    std::atomic<bool>                                running{false};
+    // Token bucket state (accessed only by the worker coroutine — single worker, no sync needed)
+    double                                           tokens{0.0};
+    std::chrono::steady_clock::time_point            last_refill;
+  };
+
   /**
    * @brief Refill tokens proportional to elapsed time.
    *
    * Caps the token count at burst capacity.
    */
-  void refill_tokens() {
+  static void refill_tokens(const std::shared_ptr<State>& st) {
     auto now = std::chrono::steady_clock::now();
     double elapsed_sec =
-        std::chrono::duration<double>(now - last_refill_).count();
-    last_refill_ = now;
+        std::chrono::duration<double>(now - st->last_refill).count();
+    st->last_refill = now;
 
-    tokens_ += elapsed_sec * static_cast<double>(cfg_.rate_per_sec);
-    double max_tokens = static_cast<double>(cfg_.burst);
-    if (tokens_ > max_tokens)
-      tokens_ = max_tokens;
+    st->tokens += elapsed_sec * static_cast<double>(st->cfg.rate_per_sec);
+    double max_tokens = static_cast<double>(st->cfg.burst);
+    if (st->tokens > max_tokens)
+      st->tokens = max_tokens;
   }
 
   /**
@@ -388,21 +454,24 @@ private:
    * 3. If tokens >= 1, consume a token and forward immediately.
    * 4. If insufficient tokens, yield and retry.
    */
-  Task<void> worker_loop() {
-    running_.store(true, std::memory_order_release);
-    auto stop_token = stop_src_ ? stop_src_->get_token() : std::stop_token{};
+  // static + self-contained: depends only on the State it is handed (kept alive
+  // by the shared_ptr in the coroutine frame), never the ThrottleAction handle —
+  // so the worker can safely outlive the handle that spawned it.
+  static Task<void> worker_loop(std::shared_ptr<State> st) {
+    st->running.store(true, std::memory_order_release);
+    auto stop_token = st->stop_src ? st->stop_src->get_token() : std::stop_token{};
 
     for (;;) {
       if (stop_token.stop_requested()) break;
 
-      auto citem = co_await in_channel_->recv();
+      auto citem = co_await st->in_channel->recv();
       if (!citem) break; // EOS
 
       // Wait until a token is available
       for (;;) {
-        refill_tokens();
-        if (tokens_ >= 1.0) {
-          tokens_ -= 1.0;
+        refill_tokens(st);
+        if (st->tokens >= 1.0) {
+          st->tokens -= 1.0;
           break; // Token acquired
         }
 
@@ -421,23 +490,16 @@ private:
         co_await Yield{};
       }
 
-      if (out_channel_) {
-        co_await out_channel_->send(std::move(*citem));
+      if (st->out_channel) {
+        co_await st->out_channel->send(std::move(*citem));
       }
     }
 
-    running_.store(false, std::memory_order_release);
+    st->running.store(false, std::memory_order_release);
     co_return;
   }
 
-  Config                                                  cfg_;
-  std::shared_ptr<AsyncChannel<ContextualItem<T>>>        in_channel_;
-  std::shared_ptr<AsyncChannel<ContextualItem<T>>>        out_channel_;
-  std::unique_ptr<std::stop_source>                       stop_src_;
-  std::atomic<bool>                                       running_{false};
-  // Token bucket state (accessed only by the worker coroutine — single worker, no sync needed)
-  double                                                  tokens_{0.0};
-  std::chrono::steady_clock::time_point                   last_refill_;
+  std::shared_ptr<State> state_;
 };
 
 // ============================================================================
@@ -486,12 +548,14 @@ public:
    */
   ScatterGatherAction(ScatterFn scatter, ProcessFn process, GatherFn gather,
                       Config cfg = {})
-      : scatter_(std::move(scatter)),
-        process_(std::move(process)),
-        gather_(std::move(gather)),
-        cfg_(std::move(cfg)),
-        in_channel_(std::make_shared<AsyncChannel<ContextualItem<In>>>(
-            cfg_.channel_cap)) {}
+      : state_(std::make_shared<State>()) {
+    state_->scatter    = std::move(scatter);
+    state_->process    = std::move(process);
+    state_->gather     = std::move(gather);
+    state_->cfg        = std::move(cfg);
+    state_->in_channel = std::make_shared<AsyncChannel<ContextualItem<In>>>(
+        state_->cfg.channel_cap);
+  }
 
   ScatterGatherAction(const ScatterGatherAction&) = delete;
   ScatterGatherAction& operator=(const ScatterGatherAction&) = delete;
@@ -499,10 +563,26 @@ public:
   ScatterGatherAction& operator=(ScatterGatherAction&&)      = default;
 
   /**
+   * @brief Close the input channel so an in-flight worker drains instead of leaking.
+   *
+   * The worker is a coroutine on a Dispatcher and cannot be block-joined here; it
+   * holds a shared_ptr to the State, so destroying this handle never frees the
+   * State out from under a running worker. Closing the input makes recv() return
+   * EOS so the worker runs to completion on its own. For deterministic shutdown,
+   * `co_await drain()` before destruction.
+   */
+  ~ScatterGatherAction() {
+    if (state_ && state_->stop_src) {  // started
+      state_->stop_src->request_stop();
+      if (state_->in_channel) state_->in_channel->close();
+    }
+  }
+
+  /**
    * @brief Push an item into the input channel (with backpressure).
    */
   Task<Result<void>> push(In item, Context ctx = {}) {
-    co_return co_await in_channel_->send(
+    co_return co_await state_->in_channel->send(
         ContextualItem<In>{std::move(item), std::move(ctx)});
   }
 
@@ -510,7 +590,7 @@ public:
    * @brief Attempt to push an item in a non-blocking manner.
    */
   bool try_push(In item, Context ctx = {}) {
-    return in_channel_->try_send(
+    return state_->in_channel->try_send(
         ContextualItem<In>{std::move(item), std::move(ctx)});
   }
 
@@ -522,19 +602,22 @@ public:
    */
   void start(Dispatcher& dispatcher,
              std::shared_ptr<AsyncChannel<ContextualItem<Out>>> out = nullptr) {
-    out_channel_ = out;
-    stop_src_    = std::make_unique<std::stop_source>();
+    state_->out_channel = out;
+    state_->stop_src    = std::make_unique<std::stop_source>();
     // Mark running BEFORE spawn (see race note in the other start() overloads).
-    running_.store(true, std::memory_order_release);
-    dispatcher.spawn(worker_loop());
+    state_->running.store(true, std::memory_order_release);
+    // Pass the State shared_ptr by value into the static worker: it is copied
+    // into the coroutine frame, keeping the State alive for the worker's whole
+    // life regardless of when this handle is destroyed.
+    dispatcher.spawn(worker_loop(state_));
   }
 
   /**
    * @brief Close the input channel and wait for the worker to finish.
    */
   Task<void> drain() {
-    in_channel_->close();
-    while (running_.load(std::memory_order_acquire)) {
+    state_->in_channel->close();
+    while (state_->running.load(std::memory_order_acquire)) {
       struct Yield {
         bool await_ready() noexcept { return false; }
         void await_suspend(std::coroutine_handle<> h) noexcept {
@@ -547,8 +630,8 @@ public:
       };
       co_await Yield{};
     }
-    if (out_channel_)
-      out_channel_->close();
+    if (state_->out_channel)
+      state_->out_channel->close();
     co_return;
   }
 
@@ -556,25 +639,39 @@ public:
    * @brief Stop immediately.
    */
   void stop() {
-    if (stop_src_) stop_src_->request_stop();
-    in_channel_->close();
+    if (state_->stop_src) state_->stop_src->request_stop();
+    state_->in_channel->close();
   }
 
   /**
    * @brief Return the output channel.
    */
   [[nodiscard]] std::shared_ptr<AsyncChannel<ContextualItem<Out>>> output() const {
-    return out_channel_;
+    return state_->out_channel;
   }
 
   /**
    * @brief Return the input channel.
    */
   [[nodiscard]] std::shared_ptr<AsyncChannel<ContextualItem<In>>> input() const {
-    return in_channel_;
+    return state_->in_channel;
   }
 
 private:
+  // -------------------------------------------------------------------------
+  // Shared state — outlives the handle so the detached worker never dangles.
+  // -------------------------------------------------------------------------
+  struct State {
+    ScatterFn                                         scatter;
+    ProcessFn                                         process;
+    GatherFn                                          gather;
+    Config                                            cfg;
+    std::shared_ptr<AsyncChannel<ContextualItem<In>>>  in_channel;
+    std::shared_ptr<AsyncChannel<ContextualItem<Out>>> out_channel;
+    std::unique_ptr<std::stop_source>                  stop_src;
+    std::atomic<bool>                                  running{false};
+  };
+
   /**
    * @brief Coroutine to process a single SubIn item.
    *
@@ -610,15 +707,18 @@ private:
    * 3. Wait for all SubIn items to finish processing.
    * 4. Call gather() to aggregate the results and emit the output.
    */
-  Task<void> worker_loop() {
-    running_.store(true, std::memory_order_release);
-    auto stop_token = stop_src_ ? stop_src_->get_token() : std::stop_token{};
+  // static + self-contained: depends only on the State it is handed (kept alive
+  // by the shared_ptr in the coroutine frame), never the ScatterGatherAction
+  // handle — so the worker can safely outlive the handle that spawned it.
+  static Task<void> worker_loop(std::shared_ptr<State> st) {
+    st->running.store(true, std::memory_order_release);
+    auto stop_token = st->stop_src ? st->stop_src->get_token() : std::stop_token{};
     size_t worker_idx = 0;
 
     for (;;) {
       if (stop_token.stop_requested()) break;
 
-      auto citem = co_await in_channel_->recv();
+      auto citem = co_await st->in_channel->recv();
       if (!citem) break; // EOS
 
       // Save original value (needed by gather)
@@ -626,12 +726,12 @@ private:
       Context orig_ctx = citem->ctx;
 
       // 1. Scatter
-      std::vector<SubIn> sub_items = scatter_(orig_value);
+      std::vector<SubIn> sub_items = st->scatter(orig_value);
       if (sub_items.empty()) {
         // No sub-tasks — pass empty results to gather
-        Out out_val = gather_(std::move(orig_value), {});
-        if (out_channel_) {
-          co_await out_channel_->send(
+        Out out_val = st->gather(std::move(orig_value), {});
+        if (st->out_channel) {
+          co_await st->out_channel->send(
               ContextualItem<Out>{std::move(out_val), orig_ctx});
         }
         continue;
@@ -644,10 +744,10 @@ private:
       auto done_chan = std::make_shared<AsyncChannel<int>>(2);
 
       // 2. Parallel processing — spawn in batches of max_parallel
-      size_t dispatch_count = std::min(total, cfg_.max_parallel);
+      size_t dispatch_count = std::min(total, st->cfg.max_parallel);
 
       ServiceRegistry* reg =
-          cfg_.registry ? cfg_.registry : &global_registry();
+          st->cfg.registry ? st->cfg.registry : &global_registry();
 
       for (size_t batch_start = 0; batch_start < total;
            batch_start += dispatch_count) {
@@ -667,7 +767,7 @@ private:
 
           auto task = SubTask::run(
               std::move(sub_items[i]), i, env, results, batch_pending,
-              batch_done, process_);
+              batch_done, st->process);
           auto h = task.handle;
           task.detach();
           if (auto* r = Reactor::current())
@@ -689,25 +789,18 @@ private:
           sub_results.push_back(std::move(*opt));
       }
 
-      Out out_val = gather_(std::move(orig_value), std::move(sub_results));
-      if (out_channel_) {
-        co_await out_channel_->send(
+      Out out_val = st->gather(std::move(orig_value), std::move(sub_results));
+      if (st->out_channel) {
+        co_await st->out_channel->send(
             ContextualItem<Out>{std::move(out_val), orig_ctx});
       }
     }
 
-    running_.store(false, std::memory_order_release);
+    st->running.store(false, std::memory_order_release);
     co_return;
   }
 
-  ScatterFn                                               scatter_;
-  ProcessFn                                               process_;
-  GatherFn                                                gather_;
-  Config                                                  cfg_;
-  std::shared_ptr<AsyncChannel<ContextualItem<In>>>       in_channel_;
-  std::shared_ptr<AsyncChannel<ContextualItem<Out>>>      out_channel_;
-  std::unique_ptr<std::stop_source>                       stop_src_;
-  std::atomic<bool>                                       running_{false};
+  std::shared_ptr<State> state_;
 };
 
 } // namespace qbuem

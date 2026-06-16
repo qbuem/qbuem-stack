@@ -255,13 +255,32 @@ public:
    * @param cfg Configuration.
    */
   explicit WindowedAction(Config cfg)
-      : cfg_(std::move(cfg)),
-        input_(std::make_shared<AsyncChannel<ContextualItem<T>>>(cfg_.channel_cap)) {}
+      : state_(std::make_shared<State>()) {
+    state_->cfg   = std::move(cfg);
+    state_->input = std::make_shared<AsyncChannel<ContextualItem<T>>>(
+        state_->cfg.channel_cap);
+  }
 
   WindowedAction(const WindowedAction&) = delete;
   WindowedAction& operator=(const WindowedAction&) = delete;
   WindowedAction(WindowedAction&&)                 = default;
   WindowedAction& operator=(WindowedAction&&)      = default;
+
+  /**
+   * @brief Close the input channel so in-flight workers drain instead of leaking.
+   *
+   * Both workers are coroutines on a Dispatcher and cannot be block-joined here;
+   * each holds a shared_ptr to the State, so destroying this handle never frees
+   * the State out from under a running worker. Requesting stop and closing the
+   * input makes recv()/is_closed() observe EOS so workers run to completion on
+   * their own. For deterministic shutdown, `co_await drain()` before destruction.
+   */
+  ~WindowedAction() {
+    if (state_ && state_->stop_src) {  // started (null-guarded for moved-from)
+      state_->stop_src->request_stop();
+      if (state_->input) state_->input->close();
+    }
+  }
 
   /**
    * @brief Attempt to push an item into the input channel without blocking.
@@ -273,7 +292,8 @@ public:
    * @returns true on success, false if the channel is full or closed.
    */
   bool try_push(T value, Context ctx = {}) {
-    return input_->try_send(ContextualItem<T>{std::move(value), std::move(ctx)});
+    return state_->input->try_send(
+        ContextualItem<T>{std::move(value), std::move(ctx)});
   }
 
   /**
@@ -284,7 +304,7 @@ public:
    * @returns `Result<void>{}` or an error.
    */
   Task<Result<void>> push(T value, Context ctx = {}) {
-    co_return co_await input_->send(
+    co_return co_await state_->input->send(
         ContextualItem<T>{std::move(value), std::move(ctx)});
   }
 
@@ -298,18 +318,21 @@ public:
    */
   void start(Dispatcher& dispatcher,
              std::shared_ptr<AsyncChannel<ContextualItem<Out>>> out = nullptr) {
-    out_ = out;
+    state_->out = out;
     // Mark both workers running and create the stop source synchronously, BEFORE
     // spawning. The flags start false, so a drain()/stop() that runs before a
     // spawned coroutine first executes would otherwise observe them still false
     // and return immediately; the coroutine would then run after the owning
-    // object is gone — a heap-use-after-free on `this`. The coroutines clear
-    // these flags when they exit, so drain() now reliably waits for them.
-    stop_src_ = std::make_unique<std::stop_source>();
-    input_worker_running_.store(true, std::memory_order_release);
-    ticker_running_.store(true, std::memory_order_release);
-    dispatcher.spawn(input_worker());
-    dispatcher.spawn(ticker(tick_interval()));
+    // object is gone. The coroutines clear these flags when they exit, so
+    // drain() now reliably waits for them.
+    state_->stop_src = std::make_unique<std::stop_source>();
+    state_->input_worker_running.store(true, std::memory_order_release);
+    state_->ticker_running.store(true, std::memory_order_release);
+    // Pass the State shared_ptr by value into the static workers: it is copied
+    // into each coroutine frame, keeping the State alive for the worker's whole
+    // life regardless of when this handle is destroyed.
+    dispatcher.spawn(input_worker(state_));
+    dispatcher.spawn(ticker(state_, state_->tick_interval()));
   }
 
   /**
@@ -321,9 +344,9 @@ public:
    * @param wm New watermark.
    */
   void advance_watermark(Watermark wm) {
-    std::lock_guard lock(state_mutex_);
-    if (wm.ts > watermark_) {
-      watermark_ = wm.ts;
+    std::lock_guard lock(state_->state_mutex);
+    if (wm.ts > state_->watermark) {
+      state_->watermark = wm.ts;
     }
   }
 
@@ -331,9 +354,9 @@ public:
    * @brief Close the input channel and wait for all workers to finish.
    */
   Task<void> drain() {
-    input_->close();
-    while (input_worker_running_.load(std::memory_order_acquire) ||
-           ticker_running_.load(std::memory_order_acquire)) {
+    state_->input->close();
+    while (state_->input_worker_running.load(std::memory_order_acquire) ||
+           state_->ticker_running.load(std::memory_order_acquire)) {
       struct Yield {
         bool await_ready() noexcept { return false; }
         void await_suspend(std::coroutine_handle<> h) noexcept {
@@ -346,8 +369,8 @@ public:
       };
       co_await Yield{};
     }
-    if (out_)
-      out_->close();
+    if (state_->out)
+      state_->out->close();
     co_return;
   }
 
@@ -355,216 +378,222 @@ public:
    * @brief Stop immediately.
    */
   void stop() {
-    if (stop_src_) stop_src_->request_stop();
-    input_->close();
+    if (state_->stop_src) state_->stop_src->request_stop();
+    state_->input->close();
   }
 
   /**
    * @brief Return the output channel.
    */
   [[nodiscard]] std::shared_ptr<AsyncChannel<ContextualItem<Out>>> output() const {
-    return out_;
+    return state_->out;
   }
 
   /**
    * @brief Return the input channel.
    */
   [[nodiscard]] std::shared_ptr<AsyncChannel<ContextualItem<T>>> input() const {
-    return input_;
+    return state_->input;
   }
 
 private:
   // --------------------------------------------------------------------------
-  // Internal window state
+  // Shared state — outlives the handle so detached workers never dangle.
+  //
+  // Every member the worker coroutines (input_worker / ticker) touch lives here,
+  // along with the window-policy / emission helpers they call. The workers are
+  // static and take a shared_ptr<State> by value, so the State is kept alive by
+  // each coroutine frame for the worker's whole life — destroying the handle can
+  // never free the State out from under a running worker.
   // --------------------------------------------------------------------------
+  struct State {
+    /**
+     * @brief State of a single window instance.
+     *
+     * Manages per-key accumulation state within the window [start, end).
+     */
+    struct WindowState {
+      WindowDesc                       desc;       ///< Window time interval
+      std::unordered_map<Key, Acc>     accs;       ///< Per-key accumulators
+      system_clock::time_point         last_event; ///< Last event time for session renewal
+    };
 
-  /**
-   * @brief State of a single window instance.
-   *
-   * Manages per-key accumulation state within the window [start, end).
-   */
-  struct WindowState {
-    WindowDesc                       desc;       ///< Window time interval
-    std::unordered_map<Key, Acc>     accs;       ///< Per-key accumulators
-    system_clock::time_point         last_event; ///< Last event time for session renewal
-  };
+    Config                                                cfg;
+    std::shared_ptr<AsyncChannel<ContextualItem<T>>>      input;
+    std::shared_ptr<AsyncChannel<ContextualItem<Out>>>    out;
+    std::unique_ptr<std::stop_source>                     stop_src;
 
-  // --------------------------------------------------------------------------
-  // Tick interval computation
-  // --------------------------------------------------------------------------
+    std::atomic<bool> input_worker_running{false}; ///< Whether the input worker is running
+    std::atomic<bool> ticker_running{false};       ///< Whether the ticker is running
 
-  /**
-   * @brief Return the tick interval based on configuration.
-   */
-  [[nodiscard]] milliseconds tick_interval() const {
-    switch (cfg_.type) {
-      case WindowType::Tumbling:
-        return cfg_.size;
-      case WindowType::Sliding:
-        return cfg_.step;
-      case WindowType::Session: {
-        auto half = cfg_.gap / 2;
-        return half.count() > 0 ? half : milliseconds{1};
-      }
-    }
-    return cfg_.size;
-  }
+    /// @brief Mutex protecting window state and watermark
+    std::mutex state_mutex;
+    /// @brief List of active windows
+    std::vector<WindowState> windows;
+    /// @brief Current watermark timestamp
+    system_clock::time_point watermark{system_clock::time_point::min()};
 
-  // --------------------------------------------------------------------------
-  // Event time extraction
-  // --------------------------------------------------------------------------
-
-  /**
-   * @brief Extract the event time from the context.
-   *
-   * If no EventTime slot is present, returns the current system_clock time.
-   *
-   * @param ctx Item context.
-   * @returns Event occurrence time.
-   */
-  [[nodiscard]] static system_clock::time_point extract_event_time(const Context& ctx) {
-    if (const auto* et = ctx.get_ptr<EventTime>())
-      return et->at;
-    return system_clock::now();
-  }
-
-  // --------------------------------------------------------------------------
-  // Window state update
-  // --------------------------------------------------------------------------
-
-  /**
-   * @brief Accumulate an item into the corresponding window state.
-   *
-   * @param item       Input item.
-   * @param event_time Event occurrence time.
-   */
-  void accumulate(const T& item, system_clock::time_point event_time) {
-    std::lock_guard lock(state_mutex_);
-    Key key = cfg_.key_fn(item);
-
-    switch (cfg_.type) {
-      case WindowType::Tumbling: {
-        TumblingWindow tw{cfg_.size};
-        auto desc = tw.window_for(event_time);
-        auto& ws  = get_or_create_window(desc);
-        auto  it  = ws.accs.find(key);
-        if (it == ws.accs.end())
-          it = ws.accs.emplace(key, cfg_.init_acc).first;
-        cfg_.acc_fn(it->second, item);
-        break;
-      }
-      case WindowType::Sliding: {
-        SlidingWindow sw{cfg_.size, cfg_.step};
-        auto descs = sw.windows_for(event_time);
-        for (auto& desc : descs) {
-          auto& ws = get_or_create_window(desc);
-          auto  it = ws.accs.find(key);
-          if (it == ws.accs.end())
-            it = ws.accs.emplace(key, cfg_.init_acc).first;
-          cfg_.acc_fn(it->second, item);
+    /**
+     * @brief Return the tick interval based on configuration.
+     */
+    [[nodiscard]] milliseconds tick_interval() const {
+      switch (cfg.type) {
+        case WindowType::Tumbling:
+          return cfg.size;
+        case WindowType::Sliding:
+          return cfg.step;
+        case WindowType::Session: {
+          auto half = cfg.gap / 2;
+          return half.count() > 0 ? half : milliseconds{1};
         }
-        break;
       }
-      case WindowType::Session: {
-        // Session window: if within gap of the last event for this key, extend the session.
-        // Find the session window for this key and update it, or create a new one.
-        bool found = false;
-        for (auto& ws : windows_) {
-          auto it = ws.accs.find(key);
-          if (it != ws.accs.end()) {
-            // A session already exists for this key
-            if (event_time <= ws.last_event + cfg_.gap) {
-              // Extend the session
-              cfg_.acc_fn(it->second, item);
-              // Extend session end to event + gap
-              if (event_time + cfg_.gap > ws.desc.end)
-                ws.desc.end = event_time + cfg_.gap;
-              if (event_time > ws.last_event)
-                ws.last_event = event_time;
-              found = true;
-              break;
+      return cfg.size;
+    }
+
+    /**
+     * @brief Extract the event time from the context.
+     *
+     * If no EventTime slot is present, returns the current system_clock time.
+     *
+     * @param ctx Item context.
+     * @returns Event occurrence time.
+     */
+    [[nodiscard]] static system_clock::time_point extract_event_time(const Context& ctx) {
+      if (const auto* et = ctx.get_ptr<EventTime>())
+        return et->at;
+      return system_clock::now();
+    }
+
+    /**
+     * @brief Find or create the WindowState for the given WindowDesc.
+     *
+     * @note Must be called while holding state_mutex.
+     *
+     * @param desc Window descriptor to look up.
+     * @returns Reference to the corresponding WindowState.
+     */
+    WindowState& get_or_create_window(const WindowDesc& desc) {
+      for (auto& ws : windows) {
+        if (ws.desc.start == desc.start && ws.desc.end == desc.end)
+          return ws;
+      }
+      WindowState ws;
+      ws.desc       = desc;
+      ws.last_event = desc.start;
+      windows.push_back(std::move(ws));
+      return windows.back();
+    }
+
+    /**
+     * @brief Accumulate an item into the corresponding window state.
+     *
+     * @param item       Input item.
+     * @param event_time Event occurrence time.
+     */
+    void accumulate(const T& item, system_clock::time_point event_time) {
+      std::lock_guard lock(state_mutex);
+      Key key = cfg.key_fn(item);
+
+      switch (cfg.type) {
+        case WindowType::Tumbling: {
+          TumblingWindow tw{cfg.size};
+          auto desc = tw.window_for(event_time);
+          auto& ws  = get_or_create_window(desc);
+          auto  it  = ws.accs.find(key);
+          if (it == ws.accs.end())
+            it = ws.accs.emplace(key, cfg.init_acc).first;
+          cfg.acc_fn(it->second, item);
+          break;
+        }
+        case WindowType::Sliding: {
+          SlidingWindow sw{cfg.size, cfg.step};
+          auto descs = sw.windows_for(event_time);
+          for (auto& desc : descs) {
+            auto& ws = get_or_create_window(desc);
+            auto  it = ws.accs.find(key);
+            if (it == ws.accs.end())
+              it = ws.accs.emplace(key, cfg.init_acc).first;
+            cfg.acc_fn(it->second, item);
+          }
+          break;
+        }
+        case WindowType::Session: {
+          // Session window: if within gap of the last event for this key, extend the session.
+          // Find the session window for this key and update it, or create a new one.
+          bool found = false;
+          for (auto& ws : windows) {
+            auto it = ws.accs.find(key);
+            if (it != ws.accs.end()) {
+              // A session already exists for this key
+              if (event_time <= ws.last_event + cfg.gap) {
+                // Extend the session
+                cfg.acc_fn(it->second, item);
+                // Extend session end to event + gap
+                if (event_time + cfg.gap > ws.desc.end)
+                  ws.desc.end = event_time + cfg.gap;
+                if (event_time > ws.last_event)
+                  ws.last_event = event_time;
+                found = true;
+                break;
+              }
             }
           }
+          if (!found) {
+            // Start a new session
+            WindowDesc desc{event_time, event_time + cfg.gap};
+            WindowState ws;
+            ws.desc       = desc;
+            ws.last_event = event_time;
+            ws.accs.emplace(key, cfg.init_acc);
+            cfg.acc_fn(ws.accs[key], item);
+            windows.push_back(std::move(ws));
+          }
+          break;
         }
-        if (!found) {
-          // Start a new session
-          WindowDesc desc{event_time, event_time + cfg_.gap};
-          WindowState ws;
-          ws.desc       = desc;
-          ws.last_event = event_time;
-          ws.accs.emplace(key, cfg_.init_acc);
-          cfg_.acc_fn(ws.accs[key], item);
-          windows_.push_back(std::move(ws));
-        }
-        break;
       }
+
+      // Advance the watermark to the event time (simple mode: based on the latest event)
+      if (event_time > watermark)
+        watermark = event_time;
     }
 
-    // Advance the watermark to the event time (simple mode: based on the latest event)
-    if (event_time > watermark_)
-      watermark_ = event_time;
-  }
+    /**
+     * @brief Collect windows whose end time has been passed by the watermark.
+     *
+     * @returns List of (Key, Acc, window_start) tuples to emit.
+     */
+    std::vector<std::tuple<Key, Acc, system_clock::time_point>> collect_completed() {
+      std::vector<std::tuple<Key, Acc, system_clock::time_point>> results;
+      std::lock_guard lock(state_mutex);
 
-  /**
-   * @brief Find or create the WindowState for the given WindowDesc.
-   *
-   * @note Must be called while holding state_mutex_.
-   *
-   * @param desc Window descriptor to look up.
-   * @returns Reference to the corresponding WindowState.
-   */
-  WindowState& get_or_create_window(const WindowDesc& desc) {
-    for (auto& ws : windows_) {
-      if (ws.desc.start == desc.start && ws.desc.end == desc.end)
-        return ws;
-    }
-    WindowState ws;
-    ws.desc       = desc;
-    ws.last_event = desc.start;
-    windows_.push_back(std::move(ws));
-    return windows_.back();
-  }
+      auto wm = watermark;
+      std::vector<WindowState> remaining;
 
-  // --------------------------------------------------------------------------
-  // Completed window emission
-  // --------------------------------------------------------------------------
-
-  /**
-   * @brief Collect windows whose end time has been passed by the watermark.
-   *
-   * @returns List of (Key, Acc, window_start) tuples to emit.
-   */
-  std::vector<std::tuple<Key, Acc, system_clock::time_point>> collect_completed() {
-    std::vector<std::tuple<Key, Acc, system_clock::time_point>> results;
-    std::lock_guard lock(state_mutex_);
-
-    auto wm = watermark_;
-    std::vector<WindowState> remaining;
-
-    for (auto& ws : windows_) {
-      if (ws.desc.end <= wm) {
-        // Window complete — emit all keys
-        for (auto& [k, acc] : ws.accs) {
-          results.emplace_back(k, std::move(acc), ws.desc.start);
-        }
-        // Do not add to remaining (discard)
-      } else if (cfg_.type == WindowType::Session) {
-        // Session: close if last_event + gap <= wm
-        if (ws.last_event + cfg_.gap <= wm) {
+      for (auto& ws : windows) {
+        if (ws.desc.end <= wm) {
+          // Window complete — emit all keys
           for (auto& [k, acc] : ws.accs) {
             results.emplace_back(k, std::move(acc), ws.desc.start);
+          }
+          // Do not add to remaining (discard)
+        } else if (cfg.type == WindowType::Session) {
+          // Session: close if last_event + gap <= wm
+          if (ws.last_event + cfg.gap <= wm) {
+            for (auto& [k, acc] : ws.accs) {
+              results.emplace_back(k, std::move(acc), ws.desc.start);
+            }
+          } else {
+            remaining.push_back(std::move(ws));
           }
         } else {
           remaining.push_back(std::move(ws));
         }
-      } else {
-        remaining.push_back(std::move(ws));
       }
-    }
 
-    windows_ = std::move(remaining);
-    return results;
-  }
+      windows = std::move(remaining);
+      return results;
+    }
+  };
 
   // --------------------------------------------------------------------------
   // Input worker coroutine
@@ -574,33 +603,37 @@ private:
    * @brief Receive items from the input channel and accumulate them into window state.
    *
    * Loops until the channel is closed. On EOS, forcibly emits all remaining windows.
+   *
+   * static + self-contained: depends only on the State it is handed (kept alive
+   * by the shared_ptr in the coroutine frame), never the WindowedAction handle —
+   * so a worker can safely outlive the handle that spawned it.
    */
-  Task<void> input_worker() {
-    input_worker_running_.store(true, std::memory_order_release);
+  static Task<void> input_worker(std::shared_ptr<State> st) {
+    st->input_worker_running.store(true, std::memory_order_release);
 
     for (;;) {
-      auto citem = co_await input_->recv();
+      auto citem = co_await st->input->recv();
       if (!citem) break; // EOS
 
-      auto event_time = extract_event_time(citem->ctx);
-      accumulate(citem->value, event_time);
+      auto event_time = State::extract_event_time(citem->ctx);
+      st->accumulate(citem->value, event_time);
     }
 
     // EOS: forcibly emit all remaining windows
     {
-      std::lock_guard lock(state_mutex_);
-      watermark_ = system_clock::time_point::max();
+      std::lock_guard lock(st->state_mutex);
+      st->watermark = system_clock::time_point::max();
     }
 
-    if (out_) {
-      auto completed = collect_completed();
+    if (st->out) {
+      auto completed = st->collect_completed();
       for (auto& [k, acc, ws] : completed) {
-        Out result = cfg_.emit_fn(std::move(k), std::move(acc), ws);
-        co_await out_->send(ContextualItem<Out>{std::move(result), Context{}});
+        Out result = st->cfg.emit_fn(std::move(k), std::move(acc), ws);
+        co_await st->out->send(ContextualItem<Out>{std::move(result), Context{}});
       }
     }
 
-    input_worker_running_.store(false, std::memory_order_release);
+    st->input_worker_running.store(false, std::memory_order_release);
     co_return;
   }
 
@@ -616,14 +649,17 @@ private:
    *
    * The ticker exits after the input worker has terminated.
    *
+   * static + self-contained: see input_worker().
+   *
+   * @param st       Shared state handed by start().
    * @param interval Tick interval.
    */
-  Task<void> ticker(milliseconds interval) {
-    // running flag and stop_src_ are initialized in start() (see the race note
+  static Task<void> ticker(std::shared_ptr<State> st, milliseconds interval) {
+    // running flag and stop_src are initialized in start() (see the race note
     // there); creating a fresh stop_source here would discard a stop() that
     // arrived before this coroutine first ran.
-    ticker_running_.store(true, std::memory_order_release);
-    auto stop_token = stop_src_->get_token();
+    st->ticker_running.store(true, std::memory_order_release);
+    auto stop_token = st->stop_src->get_token();
 
     while (!stop_token.stop_requested()) {
       // Yield for the duration of interval (sleep-based tick)
@@ -632,7 +668,8 @@ private:
 
       while (std::chrono::steady_clock::now() < deadline) {
         if (stop_token.stop_requested()) goto done;
-        if (input_->is_closed() && !input_worker_running_.load(std::memory_order_acquire))
+        if (st->input->is_closed() &&
+            !st->input_worker_running.load(std::memory_order_acquire))
           goto done;
 
         struct Yield {
@@ -648,38 +685,21 @@ private:
         co_await Yield{};
       }
 
-      if (out_) {
-        auto completed = collect_completed();
+      if (st->out) {
+        auto completed = st->collect_completed();
         for (auto& [k, acc, ws] : completed) {
-          Out result = cfg_.emit_fn(std::move(k), std::move(acc), ws);
-          co_await out_->send(ContextualItem<Out>{std::move(result), Context{}});
+          Out result = st->cfg.emit_fn(std::move(k), std::move(acc), ws);
+          co_await st->out->send(ContextualItem<Out>{std::move(result), Context{}});
         }
       }
     }
 
 done:
-    ticker_running_.store(false, std::memory_order_release);
+    st->ticker_running.store(false, std::memory_order_release);
     co_return;
   }
 
-  // --------------------------------------------------------------------------
-  // Data members
-  // --------------------------------------------------------------------------
-
-  Config                                                cfg_;
-  std::shared_ptr<AsyncChannel<ContextualItem<T>>>      input_;
-  std::shared_ptr<AsyncChannel<ContextualItem<Out>>>    out_;
-  std::unique_ptr<std::stop_source>                     stop_src_;
-
-  std::atomic<bool> input_worker_running_{false}; ///< Whether the input worker is running
-  std::atomic<bool> ticker_running_{false};        ///< Whether the ticker is running
-
-  /// @brief Mutex protecting window state and watermark
-  std::mutex state_mutex_;
-  /// @brief List of active windows
-  std::vector<WindowState> windows_;
-  /// @brief Current watermark timestamp
-  system_clock::time_point watermark_{system_clock::time_point::min()};
+  std::shared_ptr<State> state_;
 };
 
 } // namespace qbuem
