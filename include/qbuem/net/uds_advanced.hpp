@@ -254,7 +254,7 @@ struct RecvFdsResult {
 
     // A truncated control message means the kernel dropped passed fd(s); the
     // ancillary data is unreliable, so reject it rather than parse a partial set.
-    if (msg.msg_flags & MSG_CTRUNC)
+    if ((msg.msg_flags & MSG_CTRUNC) != 0)
         return std::unexpected(std::make_error_code(std::errc::message_size));
 
     RecvFdsResult result;
