@@ -591,6 +591,48 @@ TEST(ChaCha20Poly1305, SealOpenRoundTrip) {
     EXPECT_EQ(std::memcmp(recovered.data(), plaintext.data(), plaintext.size()), 0);
 }
 
+// RFC 8439 §2.5.2 — Poly1305 known-answer test. Round-trip tests pass even with
+// a non-RFC tag (encrypt and decrypt share the bug); a KAT against the published
+// vector is what actually pins interoperability. (This caught three real bugs:
+// the full-block 2^128 hi-bit, the finalize limb packing, and the freeze mask.)
+TEST(Poly1305, Rfc8439Section252KAT) {
+    const std::array<uint8_t, 32> key = {
+        0x85,0xd6,0xbe,0x78,0x57,0x55,0x6d,0x33,0x7f,0x44,0x52,0xfe,0x42,0xd5,0x06,0xa8,
+        0x01,0x03,0x80,0x8a,0xfb,0x0d,0xb2,0xfd,0x4a,0xbf,0xf6,0xaf,0x41,0x49,0xf5,0x1b};
+    const std::string msg = "Cryptographic Forum Research Group";
+    const std::array<uint8_t, 16> expected = {
+        0xa8,0x06,0x1d,0xc1,0x30,0x51,0x36,0xc6,0xc2,0x2b,0x8b,0xaf,0x0c,0x01,0x27,0xa9};
+
+    Poly1305 mac{std::span<const uint8_t>(key)};
+    mac.update({reinterpret_cast<const uint8_t*>(msg.data()), msg.size()});
+    const Poly1305Tag tag = mac.finalize();
+    EXPECT_EQ(std::memcmp(tag.data(), expected.data(), expected.size()), 0);
+}
+
+// RFC 8439 §2.8.2 — ChaCha20-Poly1305 AEAD known-answer test (ciphertext + tag).
+TEST(ChaCha20Poly1305, Rfc8439Section282KAT) {
+    AeadKey key{};
+    for (int i = 0; i < 32; ++i) key[i] = static_cast<uint8_t>(0x80 + i);
+    const AeadNonce nonce = {0x07,0,0,0,0x40,0x41,0x42,0x43,0x44,0x45,0x46,0x47};
+    const std::array<uint8_t, 12> aad = {
+        0x50,0x51,0x52,0x53,0xc0,0xc1,0xc2,0xc3,0xc4,0xc5,0xc6,0xc7};
+    const std::string pt =
+        "Ladies and Gentlemen of the class of '99: If I could offer you only one "
+        "tip for the future, sunscreen would be it.";
+    const uint8_t expected_ct_head[8] = {0xd3,0x1a,0x8d,0x34,0x64,0x8e,0x60,0xdb};
+    const std::array<uint8_t, 16> expected_tag = {
+        0x1a,0xe1,0x0b,0x59,0x4f,0x09,0xe2,0x6a,0x7e,0x90,0x2e,0xcb,0xd0,0x60,0x06,0x91};
+
+    std::vector<uint8_t> ct(pt.size());
+    AeadTag tag{};
+    chacha20_poly1305_seal(
+        key, nonce, std::span<const uint8_t>(aad),
+        {reinterpret_cast<const uint8_t*>(pt.data()), pt.size()},
+        {ct.data(), ct.size()}, tag);
+    EXPECT_EQ(std::memcmp(ct.data(), expected_ct_head, 8), 0);
+    EXPECT_EQ(std::memcmp(tag.data(), expected_tag.data(), expected_tag.size()), 0);
+}
+
 TEST(ChaCha20Poly1305, TamperedCiphertextFails) {
     AeadKey key{};
     AeadNonce nonce{};
