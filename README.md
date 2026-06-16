@@ -96,6 +96,8 @@ there is no hard dependency. macOS uses kqueue.
 | `QBUEM_BUILD_TESTS` | ON | Build unit tests under `tests/` |
 | `QBUEM_BUILD_EXAMPLES` | ON | Build all examples under `examples/` |
 | `QBUEM_BUILD_BENCH` | ON | Build benchmarks under `bench/` |
+| `QBUEM_ENABLE_LTO` | OFF | Interprocedural optimization (LTO) for library targets |
+| `QBUEM_ENABLE_NATIVE_CRYPTO` | OFF | Compile the crypto module with the host CPU's hardware SHA-2/AES instructions (host-targeting build; ~11× faster SHA-256/HMAC). Requires that CPU to support them. |
 | `QBUEM_JSON_TAG` | `"main"` | optional `qbuem-json` tag (only enables JSON examples) |
 
 ---
