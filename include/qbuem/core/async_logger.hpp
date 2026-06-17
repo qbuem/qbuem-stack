@@ -33,6 +33,7 @@
 #include <string>
 #include <string_view>
 #include <thread>
+#include <qbuem/compat/jthread.hpp>
 #include <vector>
 
 namespace qbuem {
@@ -101,7 +102,7 @@ public:
 
   /** @brief Spawn the background flush thread. */
   void start() {
-    thread_ = std::jthread([this](const std::stop_token& st) { flush_loop(st); });
+    thread_ = qbuem::jthread([this](const std::stop_token& st) { flush_loop(st); });
   }
 
   /** @brief Flush remaining entries and join the background thread. */
@@ -206,7 +207,7 @@ private:
   alignas(64) std::atomic_flag   producer_lock_ = ATOMIC_FLAG_INIT; // MPSC guard
   alignas(64) std::atomic<size_t> tail_{0};        // consumer reads
 
-  std::jthread      thread_;
+  qbuem::jthread      thread_;
 };
 
 } // namespace qbuem

@@ -45,6 +45,11 @@
  *           for Clang/AppleClang consumers (std::jthread/stop_token/expected are
  *           gated behind it on libc++); dns.hpp uses std::thread (detached) over
  *           std::jthread. Fixes Clang+libc++ builds (Apple clang, clang<=18).
+ * - 1.2.2: Apple-libc++ portability — `qbuem::jthread` (compat/jthread.hpp)
+ *           replaces every `std::jthread` use. Apple's libc++ (Xcode <= 15.x)
+ *           ships <stop_token> but not std::jthread; the drop-in is built on
+ *           std::thread + std::stop_source. Verified: identical test results to
+ *           native std::jthread (gcc), builds under clang+libc++.
  * - 1.3.0: kqueue reactor sophistication (user-space buffer ring,
  *           multi-event batching, pointer-direct dispatch).
  * - 1.4.0: Unified DB abstraction (IDBDriver, ConnectionPool, Statement,
@@ -177,9 +182,9 @@ struct Version {
 #define QBUEM_VERSION_MINOR 2
 
 /** @brief Patch version number (for use in preprocessor `#if` conditions). */
-#define QBUEM_VERSION_PATCH 1
+#define QBUEM_VERSION_PATCH 2
 
 /** @brief Version string literal "major.minor.patch" (for use in preprocessor conditions). */
-#define QBUEM_VERSION_STRING "1.2.1"
+#define QBUEM_VERSION_STRING "1.2.2"
 
 /** @} */ // end of qbuem_version
