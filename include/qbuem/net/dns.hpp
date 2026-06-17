@@ -148,7 +148,10 @@ private:
 
       // Move host into the lambda to avoid an extra string copy.
       // port is a struct member — capture by value via explicit init-capture.
-      std::jthread([host = host,
+      // NOTE: std::thread (not jthread) — the thread is immediately detach()ed,
+      // so jthread's auto-join/stop_token add nothing, and jthread still requires
+      // -fexperimental-library on some libc++ versions (Apple clang / clang<=18).
+      std::thread([host = host,
                    port = port,
                    st,
                    handle,

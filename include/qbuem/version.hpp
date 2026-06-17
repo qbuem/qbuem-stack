@@ -41,6 +41,10 @@
  *           reactor forwarding headers, QUIC guide.
  * - 1.2.0: TimerWheel::cancel() O(1), heterogeneous map lookup,
  *           Context::get<T>() inline cache, RadixTree binary search.
+ * - 1.2.1: libc++ portability hotfix — CMake propagates -fexperimental-library
+ *           for Clang/AppleClang consumers (std::jthread/stop_token/expected are
+ *           gated behind it on libc++); dns.hpp uses std::thread (detached) over
+ *           std::jthread. Fixes Clang+libc++ builds (Apple clang, clang<=18).
  * - 1.3.0: kqueue reactor sophistication (user-space buffer ring,
  *           multi-event batching, pointer-direct dispatch).
  * - 1.4.0: Unified DB abstraction (IDBDriver, ConnectionPool, Statement,
@@ -173,9 +177,9 @@ struct Version {
 #define QBUEM_VERSION_MINOR 2
 
 /** @brief Patch version number (for use in preprocessor `#if` conditions). */
-#define QBUEM_VERSION_PATCH 0
+#define QBUEM_VERSION_PATCH 1
 
 /** @brief Version string literal "major.minor.patch" (for use in preprocessor conditions). */
-#define QBUEM_VERSION_STRING "1.2.0"
+#define QBUEM_VERSION_STRING "1.2.1"
 
 /** @} */ // end of qbuem_version

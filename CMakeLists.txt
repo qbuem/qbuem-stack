@@ -4,7 +4,7 @@ cmake_minimum_required(VERSION 3.20)
 # qbuem-stack — Zero Latency · Zero Cost · Zero Dependency WAS Layer
 # ============================================================================
 project(qbuem-stack
-    VERSION 1.2.0
+    VERSION 1.2.1
     LANGUAGES CXX
     DESCRIPTION "qbuem-stack: zero-dependency C++23 async server framework (HTTP/1.1, HTTP/2, WebSocket, gRPC, Pipeline)"
 )
@@ -210,6 +210,15 @@ add_library(qbuem_result INTERFACE)
 add_library(qbuem-stack::result ALIAS qbuem_result)
 target_include_directories(qbuem_result INTERFACE ${QBUEM_INCLUDE_DIR} ${QBUEM_INSTALL_INCLUDE})
 target_compile_features(qbuem_result INTERFACE cxx_std_23)
+# libc++ portability: std::jthread / std::stop_token / std::expected are gated
+# behind -fexperimental-library on libc++ (Apple clang, clang <= 18). Every
+# qbuem-stack target links qbuem_result (directly or transitively), so adding the
+# flag here propagates across the whole library AND to consumers. GCC/libstdc++
+# expose these unconditionally → restrict the flag to Clang/AppleClang.
+target_compile_options(qbuem_result INTERFACE
+    $<$<CXX_COMPILER_ID:Clang,AppleClang>:-fexperimental-library>)
+target_link_options(qbuem_result INTERFACE
+    $<$<CXX_COMPILER_ID:Clang,AppleClang>:-fexperimental-library>)
 
 # qbuem::arena — Arena, FixedPoolResource, MmapArena, HugePages
 add_library(qbuem_arena INTERFACE)
