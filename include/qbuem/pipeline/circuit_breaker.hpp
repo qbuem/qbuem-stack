@@ -93,10 +93,17 @@ public:
      * - HalfOpen: increments the success counter; transitions to Closed when success_threshold is reached.
      */
     void record_success() noexcept {
+        // Lock-free fast path: in Closed (the overwhelmingly common state) a
+        // success just clears the consecutive-failure streak — no mutex, so a
+        // shared breaker behind a hot stage does not serialize all workers.
+        if (state_.load(std::memory_order_acquire) == State::Closed) {
+            failures_.store(0, std::memory_order_relaxed);
+            return;
+        }
         std::lock_guard lock(mtx_);
         switch (state_) {
             case State::Closed:
-                failures_ = 0;  // consecutive-failure semantics: success clears the streak
+                failures_.store(0, std::memory_order_relaxed);
                 break;
             case State::HalfOpen:
                 ++successes_;
@@ -118,11 +125,24 @@ public:
      * - Open: ignored.
      */
     void record_failure() noexcept {
+        // Lock-free fast path in Closed: atomically bump the failure counter and
+        // only take the mutex to perform the Closed→Open transition once the
+        // threshold is crossed (double-checked so exactly one thread transitions).
+        if (state_.load(std::memory_order_acquire) == State::Closed) {
+            const size_t f =
+                failures_.fetch_add(1, std::memory_order_acq_rel) + 1;
+            if (f >= cfg_.failure_threshold) {
+                std::lock_guard lock(mtx_);
+                if (state_.load(std::memory_order_relaxed) == State::Closed)
+                    transition(State::Open);
+            }
+            return;
+        }
         std::lock_guard lock(mtx_);
         switch (state_) {
             case State::Closed:
-                ++failures_;
-                if (failures_ >= cfg_.failure_threshold) {
+                if ((failures_.fetch_add(1, std::memory_order_acq_rel) + 1) >=
+                    cfg_.failure_threshold) {
                     transition(State::Open);
                 }
                 break;
@@ -146,8 +166,7 @@ public:
      * @brief Returns the current failure counter.
      */
     size_t failure_count() const noexcept {
-        std::lock_guard lock(mtx_);
-        return failures_;
+        return failures_.load(std::memory_order_acquire);
     }
 
     /**
@@ -163,7 +182,7 @@ public:
      */
     void reset() noexcept {
         std::lock_guard lock(mtx_);
-        failures_  = 0;
+        failures_.store(0, std::memory_order_relaxed);
         successes_ = 0;
         state_.store(State::Closed, std::memory_order_release);
         opened_at_ = {};
@@ -173,8 +192,8 @@ private:
     Config                                    cfg_;
     mutable std::mutex                        mtx_;
     std::atomic<State>                        state_{State::Closed};
-    size_t                                    failures_{0};
-    size_t                                    successes_{0};
+    std::atomic<size_t>                       failures_{0};  // lock-free Closed path
+    size_t                                    successes_{0};  // HalfOpen only (under mtx_)
     std::chrono::steady_clock::time_point     opened_at_{};
 
     /**
@@ -202,10 +221,10 @@ private:
 
         if (to == State::Open) {
             opened_at_ = std::chrono::steady_clock::now();
-            failures_  = 0;
+            failures_.store(0, std::memory_order_relaxed);
             successes_ = 0;
         } else if (to == State::Closed) {
-            failures_  = 0;
+            failures_.store(0, std::memory_order_relaxed);
             successes_ = 0;
         } else if (to == State::HalfOpen) {
             successes_ = 0;
