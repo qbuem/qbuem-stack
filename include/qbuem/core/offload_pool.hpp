@@ -55,7 +55,7 @@
 #include <mutex>
 #include <optional>
 #include <thread>
-#include <qbuem/compat/jthread.hpp>
+#include <qbuem/core/thread.hpp>
 #include <type_traits>
 #include <utility>
 #include <vector>
@@ -169,7 +169,7 @@ public:
       stopping_ = true;
     }
     cv_.notify_all();
-    workers_.clear(); // qbuem::jthread destructors join each worker
+    workers_.clear(); // qbuem::Thread destructors join each worker
   }
 
 private:
@@ -191,7 +191,7 @@ private:
   std::condition_variable           cv_;
   std::deque<std::function<void()>> queue_;
   bool                              stopping_ = false;
-  std::vector<qbuem::jthread>         workers_;
+  std::vector<qbuem::Thread>         workers_;
 };
 
 // ─── OffloadAwaiter::await_suspend (needs the full OffloadPool) ───────────────

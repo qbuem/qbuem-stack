@@ -47,7 +47,7 @@
 
 #include <qbuem/common.hpp>
 #include <qbuem/core/async_logger.hpp>
-#include <qbuem/compat/jthread.hpp>
+#include <qbuem/core/thread.hpp>
 #include <qbuem/tracing/trace_context.hpp>
 
 #include <array>
@@ -245,7 +245,7 @@ public:
      */
     void start() noexcept {
         if (running_.exchange(true)) return;
-        flush_thread_ = qbuem::jthread([this](std::stop_token st) {
+        flush_thread_ = qbuem::Thread([this](std::stop_token st) {
             flush_loop(st);
         });
     }
@@ -350,7 +350,7 @@ private:
     TraceLogRing<Cap>                  ring_;
     alignas(64) std::atomic<uint64_t>  dropped_{0};
     std::atomic<bool>                  running_{false};
-    qbuem::jthread                       flush_thread_;
+    qbuem::Thread                       flush_thread_;
 };
 
 } // namespace qbuem::tracing

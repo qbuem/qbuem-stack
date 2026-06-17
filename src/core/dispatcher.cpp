@@ -1,5 +1,5 @@
 #include <qbuem/core/dispatcher.hpp>
-#include <qbuem/compat/jthread.hpp>
+#include <qbuem/core/thread.hpp>
 
 #ifdef __APPLE__
 #include <qbuem/core/kqueue_reactor.hpp>
@@ -38,9 +38,10 @@ Dispatcher::Dispatcher(size_t thread_count) {
 
 void Dispatcher::run() {
   running_ = true;
-  std::vector<qbuem::jthread> threads;
+  std::vector<qbuem::Thread> threads;
   for (size_t i = 0; i < reactors_.size(); ++i) {
     threads.emplace_back([this, i]() {
+      qbuem::Thread::set_current_name("qbuem-reactor");   // visible in top -H / debuggers
       auto &reactor = reactors_[i];
       Reactor::set_current(reactor.get());
       while (running_) {
@@ -50,7 +51,7 @@ void Dispatcher::run() {
       }
     });
   }
-  // qbuem::jthread auto-joins on destruction when threads goes out of scope.
+  // qbuem::Thread auto-joins on destruction when threads goes out of scope.
 }
 
 void Dispatcher::stop() {

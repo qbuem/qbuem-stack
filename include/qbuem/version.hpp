@@ -50,6 +50,12 @@
  *           ships <stop_token> but not std::jthread; the drop-in is built on
  *           std::thread + std::stop_source. Verified: identical test results to
  *           native std::jthread (gcc), builds under clang+libc++.
+ * - 1.2.3: first-class `qbuem::Thread` component (core/thread.hpp) — owns the
+ *           threading primitive (std::thread + std::stop_token, std::jthread
+ *           semantics) and replaces every std::jthread / raw std::thread use.
+ *           One always-tested code path on all toolchains (no std::jthread
+ *           dependency); carries server extras (thread naming, CPU pinning next).
+ *           Supersedes the v1.2.2 compat/jthread.hpp shim.
  * - 1.3.0: kqueue reactor sophistication (user-space buffer ring,
  *           multi-event batching, pointer-direct dispatch).
  * - 1.4.0: Unified DB abstraction (IDBDriver, ConnectionPool, Statement,
@@ -182,9 +188,9 @@ struct Version {
 #define QBUEM_VERSION_MINOR 2
 
 /** @brief Patch version number (for use in preprocessor `#if` conditions). */
-#define QBUEM_VERSION_PATCH 2
+#define QBUEM_VERSION_PATCH 3
 
 /** @brief Version string literal "major.minor.patch" (for use in preprocessor conditions). */
-#define QBUEM_VERSION_STRING "1.2.2"
+#define QBUEM_VERSION_STRING "1.2.3"
 
 /** @} */ // end of qbuem_version

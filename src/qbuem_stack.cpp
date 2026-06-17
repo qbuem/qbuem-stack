@@ -1,5 +1,5 @@
 #include <qbuem/qbuem_stack.hpp>
-#include <qbuem/compat/jthread.hpp>
+#include <qbuem/core/thread.hpp>
 #include <qbuem/http/parser.hpp>
 #include <qbuem/middleware/static_files.hpp>
 
@@ -1400,7 +1400,7 @@ void StackController::run() {
   std::signal(SIGINT,  sig_handler);
 
   // Start each app in its own thread.
-  std::vector<qbuem::jthread> threads;
+  std::vector<qbuem::Thread> threads;
   threads.reserve(entries_.size());
   for (auto &e : entries_) {
     threads.emplace_back([&e]() {
@@ -1410,7 +1410,7 @@ void StackController::run() {
       }
     });
   }
-  // qbuem::jthread auto-joins on destruction.
+  // qbuem::Thread auto-joins on destruction.
 }
 
 } // namespace qbuem
