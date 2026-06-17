@@ -157,6 +157,52 @@ TEST(GenerationPoolTest, DefaultAndNullHandleAreInvalid) {
     EXPECT_TRUE(r.has_value());
 }
 
+namespace { int g_counted_live = 0; }
+struct Counted {
+    int v = 0;
+    Counted() { ++g_counted_live; }
+    explicit Counted(int x) : v(x) { ++g_counted_live; }
+    ~Counted() { --g_counted_live; }
+};
+
+TEST(GenerationPoolTest, EmplaceConstructs_ForEachLiveIterates_DestroyDestructs) {
+    g_counted_live = 0;
+    GenerationPool<Counted> pool(4);
+
+    // emplace() acquires + placement-constructs (the args reach the ctor).
+    auto a = pool.emplace(10);
+    auto b = pool.emplace(20);
+    ASSERT_TRUE(a.has_value());
+    ASSERT_TRUE(b.has_value());
+    EXPECT_EQ(a->ptr->v, 10);
+    EXPECT_EQ(b->ptr->v, 20);
+    EXPECT_EQ(g_counted_live, 2);
+
+    // for_each_live() visits exactly the live slots (and only them).
+    int count = 0, sum = 0;
+    pool.for_each_live([&](GenerationHandle, Counted& c) { ++count; sum += c.v; });
+    EXPECT_EQ(count, 2);
+    EXPECT_EQ(sum, 30);
+
+    // destroy() runs ~T and frees the slot; the handle goes stale.
+    pool.destroy(a->handle);
+    EXPECT_EQ(g_counted_live, 1);
+    EXPECT_EQ(pool.resolve(a->handle), nullptr);
+    count = 0; sum = 0;
+    pool.for_each_live([&](GenerationHandle, Counted& c) { ++count; sum += c.v; });
+    EXPECT_EQ(count, 1);
+    EXPECT_EQ(sum, 20);
+
+    // A destroyed slot is reusable.
+    auto c = pool.emplace(30);
+    ASSERT_TRUE(c.has_value());
+    EXPECT_EQ(g_counted_live, 2);
+
+    pool.destroy(b->handle);
+    pool.destroy(c->handle);
+    EXPECT_EQ(g_counted_live, 0);
+}
+
 // ─── LockFreeHashMap ────────────────────────────────────────────────────────────
 
 TEST(LockFreeHashMapTest, CapacityRoundsUpToPowerOfTwo) {

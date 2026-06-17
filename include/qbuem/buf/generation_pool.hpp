@@ -43,6 +43,7 @@
 #include <new>
 #include <optional>
 #include <type_traits>
+#include <utility>
 
 namespace qbuem {
 
@@ -116,6 +117,12 @@ public:
         for (size_t i = 0; i + 1 < capacity; ++i)
             slots_[i].next_free = static_cast<uint32_t>(i + 1);
         slots_[capacity - 1].next_free = kNilIdx;
+        // Pristine slots start at an ODD generation (= free). Acquire bumps to the
+        // next EVEN (= live), so `generation & 1 == 0` cleanly identifies live slots
+        // — the invariant `for_each_live()` relies on (a pristine slot must not look
+        // live). Handles remain opaque; ABA/resolve semantics are unchanged.
+        for (size_t i = 0; i < capacity; ++i)
+            slots_[i].generation.store(1u, std::memory_order_relaxed);
         head_.store(make_head(0, 0), std::memory_order_relaxed);
     }
 
@@ -206,6 +213,55 @@ public:
         if (cur_gen == handle.gen() && (cur_gen & 1u) == 0u)
             return std::launder(reinterpret_cast<T*>(&s.storage));
         return nullptr;
+    }
+
+    /**
+     * @brief Acquire a slot and construct a `T` in place.
+     *
+     * Convenience over `acquire()` + placement-new: the slot storage is
+     * constructed as `T(args...)`. Pair with `destroy()` (not bare `release()`)
+     * so the destructor runs for non-trivially-destructible `T`.
+     *
+     * @returns `{handle, ptr}` to the constructed object, or `std::nullopt` when full.
+     */
+    template <class... Args>
+    [[nodiscard]] std::optional<AcquireResult> emplace(Args&&... args) {
+        auto acq = acquire();
+        if (!acq) return std::nullopt;
+        ::new (static_cast<void*>(acq->ptr)) T(std::forward<Args>(args)...);
+        return acq;
+    }
+
+    /**
+     * @brief Destroy the object in a slot and return the slot to the pool.
+     *
+     * The mirror of `emplace()`: runs `~T()` then `release(handle)`. A no-op for a
+     * stale/null handle. Use this for non-trivially-destructible `T`.
+     */
+    void destroy(GenerationHandle handle) noexcept(std::is_nothrow_destructible_v<T>) {
+        if (T* p = resolve(handle)) {
+            p->~T();
+            release(handle);
+        }
+    }
+
+    /**
+     * @brief Invoke `f(GenerationHandle, T&)` for every live slot.
+     *
+     * For single-threaded or quiescent use: it scans all slots and is NOT atomic
+     * with respect to concurrent `acquire()`/`release()`. Iteration is in slot
+     * order. Relies on the even-generation-⇒-live invariant established in the
+     * constructor.
+     */
+    template <class F>
+    void for_each_live(F&& f) {
+        for (size_t i = 0; i < capacity_; ++i) {
+            Slot& s = slots_[i];
+            const uint32_t gen = s.generation.load(std::memory_order_acquire);
+            if ((gen & 1u) == 0u)   // even ⇒ live
+                f(GenerationHandle{static_cast<uint32_t>(i), gen},
+                  *std::launder(reinterpret_cast<T*>(&s.storage)));
+        }
     }
 
     /** @brief Pool capacity in slots. */
