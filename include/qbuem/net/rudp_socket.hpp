@@ -380,8 +380,14 @@ public:
                     co_await send_ack(st);
                     co_return copy_n;
                 } else if (static_cast<int32_t>(hdr.seq - recv_seq_) > 0) {
-                    // Future segment: buffer it and send NACK for the gap
-                    recv_buf_[hdr.seq] = std::move(payload);
+                    // Future segment: buffer ONLY if it falls inside the receive
+                    // window. Without this bound a peer (UDP source is spoofable)
+                    // could send ever-increasing seq numbers and never the gap,
+                    // growing recv_buf_ without limit → OOM. Out-of-window
+                    // segments are dropped; the NACK still asks for the gap.
+                    if (static_cast<uint32_t>(hdr.seq - recv_seq_) < kRudpWindow) {
+                        recv_buf_[hdr.seq] = std::move(payload);
+                    }
                     co_await send_nack(st);
                 }
                 // Past segment (duplicate): silently discard

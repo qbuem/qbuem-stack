@@ -487,7 +487,15 @@ public:
         (static_cast<uint32_t>(data[3]) <<  8u) |
         (static_cast<uint32_t>(data[4]));
 
-    if (data.size() < 5u + payload_len) {
+    // Reject oversized messages BEFORE allocating (DoS guard) and do the
+    // length check in 64-bit so `5 + payload_len` cannot wrap (a 32-bit
+    // `5u + 0xFFFFFFFF` wraps to 4, which would pass the guard and then read
+    // ~4 GiB out of bounds).
+    constexpr uint64_t kMaxGrpcMessage = 64ull * 1024 * 1024;  // 64 MiB
+    if (static_cast<uint64_t>(payload_len) > kMaxGrpcMessage) {
+      return unexpected(std::make_error_code(std::errc::message_size));
+    }
+    if (static_cast<uint64_t>(data.size()) < 5ull + payload_len) {
       return unexpected(
           std::make_error_code(std::errc::resource_unavailable_try_again));
     }
