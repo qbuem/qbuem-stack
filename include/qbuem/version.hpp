@@ -90,6 +90,15 @@
  *           lifetime UAF fixes; SHM attacker-trust validation; misuse-resistant
  *           AEAD; opt-in QBUEM_ENABLE_NATIVE_CRYPTO (hardware SHA-2/AES);
  *           crypto/SHM/2-thread-SPSC benchmarks.
+ * - 1.1.0: High-level WebSocket server (WsServer/WsConnection) — non-blocking
+ *           reactor-driven I/O (no blocking read/write on the event loop),
+ *           connection registry + rooms + broadcast, per-connection context,
+ *           bounded back-pressure send queue, heartbeat ping/pong dead-peer
+ *           detection, fragmentation reassembly, strict RFC 6455 framing
+ *           (RSV/opcode/mask/control-frame validation), UTF-8 text validation,
+ *           and Close handshake. Built for high-concurrency game/realtime
+ *           servers atop the existing WebSocketHandler codec
+ *           (encode_frame/decode_frame/encode_header/compute_accept_key).
  */
 
 /**
@@ -127,13 +136,13 @@ struct Version {
   static constexpr int major = 1;
 
   /** @brief Minor version number. Incremented when new backwards-compatible features are added. */
-  static constexpr int minor = 0;
+  static constexpr int minor = 1;
 
   /** @brief Patch version number. Incremented for backwards-compatible bug fixes only. */
   static constexpr int patch = 0;
 
   /** @brief Version string in "major.minor.patch" format (null-terminated). */
-  static constexpr std::string_view string = "1.0.0";
+  static constexpr std::string_view string = "1.1.0";
 };
 
 } // namespace qbuem
@@ -142,12 +151,12 @@ struct Version {
 #define QBUEM_VERSION_MAJOR 1
 
 /** @brief Minor version number (for use in preprocessor `#if` conditions). */
-#define QBUEM_VERSION_MINOR 0
+#define QBUEM_VERSION_MINOR 1
 
 /** @brief Patch version number (for use in preprocessor `#if` conditions). */
 #define QBUEM_VERSION_PATCH 0
 
 /** @brief Version string literal "major.minor.patch" (for use in preprocessor conditions). */
-#define QBUEM_VERSION_STRING "1.0.0"
+#define QBUEM_VERSION_STRING "1.1.0"
 
 /** @} */ // end of qbuem_version

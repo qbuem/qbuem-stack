@@ -21,7 +21,7 @@ Existing Korean comments in legacy files should be translated to English when to
 
 ## Project Identity
 
-**qbuem-stack v1.0.0** — Zero Latency · Zero Allocation · Zero Dependency
+**qbuem-stack v1.1.0** — Zero Latency · Zero Allocation · Zero Dependency
 C++23 high-performance infrastructure library for WAS (Web Application Servers), IPC, and data pipelines.
 
 - **Language**: C++23 (concepts, coroutines `co_await`/`co_return`, `std::expected`, `std::span`, `std::format`, `std::print`/`std::println`, `std::unreachable()`, `if consteval`, `std::to_underlying`)
@@ -55,7 +55,7 @@ CMake options:
 | Option | Default | Description |
 |---|---|---|
 | `QBUEM_BUILD_TESTS` | ON | Build unit tests under `tests/` |
-| `QBUEM_BUILD_EXAMPLES` | ON | Build all 59 examples under `examples/` |
+| `QBUEM_BUILD_EXAMPLES` | ON | Build all 60 examples under `examples/` |
 | `QBUEM_BUILD_BENCH` | ON | Build benchmarks under `bench/` |
 | `QBUEM_ENABLE_LTO` | OFF | Interprocedural optimization (LTO) for library targets |
 | `QBUEM_ENABLE_NATIVE_CRYPTO` | OFF | Compile crypto with the host CPU's hardware SHA-2/AES (host-targeting; ~11× SHA-256/HMAC). Requires that CPU to support them. |
@@ -74,7 +74,7 @@ include/qbuem/          ← ALL public headers (header-centric library)
   net/                  ← TCP/UDP/Unix socket async primitives, UDS FD passing, DNS
   io/                   ← IOVec<N>, scattered_span, buffers, async/direct file, sendfile
   http/                 ← HTTP/1.1 SIMD parser, Request, Response, Router, fetch client
-  server/               ← HTTP1/HTTP2/WebSocket/gRPC connection handlers
+  server/               ← HTTP1/HTTP2/gRPC handlers; WebSocketHandler (low-level codec) + WsServer (high-level non-blocking WS: rooms, broadcast, back-pressure, heartbeat)
   crypto/               ← SHA/HMAC/HKDF/PBKDF2/ChaCha20-Poly1305/AES-GCM/Base64/CSPRNG
   security/             ← SIMDJwtParser, JwtAuthAction
   tracing/              ← W3C TraceContext, SpanExporter, sampler, lifecycle tracer
@@ -85,9 +85,9 @@ include/qbuem/          ← ALL public headers (header-centric library)
 
 src/                    ← Non-inline implementations (reactors, http parser/router)
 tests/                  ← Unit tests (mirrors include/ structure)
-examples/               ← 59 registered examples in 11 category subdirectories
+examples/               ← 60 registered examples in 11 category subdirectories
   01-foundation/        → hello_world, async_timer, micro_ticker, offload_pool, config
-  02-network/           → tcp_echo_server, udp_advanced, udp_unix_socket, websocket, http_fetch, http2_server, grpc
+  02-network/           → tcp_echo_server, udp_advanced, udp_unix_socket, websocket, ws_game_server, http_fetch, http2_server, grpc
   03-memory/            → arena, zero_copy_arena_channel, numa_hugepages, lockfree_bench
   04-codec-security/    → codec, crypto_url, security_middleware, crypto_primitives, transport_codec, transport_plain
   05-pipeline/          → fanout, hardware_batching, dynamic_hotswap, sensor_fusion, observer_health, factory, subpipeline_migration, stream_ops, windowed_action, backpressure_monitor, stateful_window, dynamic_router
@@ -417,6 +417,7 @@ The `IOVec<N>` must remain in scope for as long as the `scattered_span` is used.
 | Add a new pipeline stage | `include/qbuem/pipeline/pipeline_builder.hpp`, examples in `examples/05-pipeline/` |
 | IPC / SHM integration | `include/qbuem/shm/shm_channel.hpp`, `docs/shm-messaging.md`, `examples/06-ipc-messaging/ipc_pipeline/` |
 | HTTP handler | `include/qbuem/http/`, `examples/02-network/tcp_echo_server/` |
+| WebSocket server (high-concurrency) | `include/qbuem/server/ws_server.hpp` (WsServer/WsConnection), `include/qbuem/server/websocket_handler.hpp` (codec), `examples/02-network/ws_game_server/`, `tests/ws_server_test.cpp` |
 | Resilience patterns | `include/qbuem/pipeline/resilience/`, `examples/07-resilience/resilience/` |
 | Distributed tracing | `include/qbuem/tracing/`, `examples/08-observability/tracing/` |
 | Memory allocation | `include/qbuem/buf/arena.hpp`, `examples/03-memory/arena/` |
