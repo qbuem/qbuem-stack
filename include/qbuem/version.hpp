@@ -99,6 +99,15 @@
  *           and Close handshake. Built for high-concurrency game/realtime
  *           servers atop the existing WebSocketHandler codec
  *           (encode_frame/decode_frame/encode_header/compute_accept_key).
+ *           Plus a high-concurrency hardening pass (docs/audit/
+ *           2026-06-17_v1.1.0-scale-audit.md): gRPC length-overflow guard;
+ *           HTTP/2 Rapid-Reset + DATA/CONTINUATION/HPACK DoS limits; RUDP
+ *           reorder-window bound; PBKDF2 iteration cap; SHMBus topic-name UAF
+ *           fix; Arena overflow guard; TimerWheel next_expiry O(1); idempotency
+ *           store capacity bound; stream-op busy-spin removal; WS slowloris
+ *           timeout; TcpStream write_all/read_exact. (Deferred to v1.2: App
+ *           async write, SHM futex, lock-free breaker, full HTTP/2-gRPC-DB
+ *           server transports — see the audit doc.)
  */
 
 /**
