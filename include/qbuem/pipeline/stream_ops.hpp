@@ -29,6 +29,7 @@
  * @{
  */
 
+#include <qbuem/core/awaiters.hpp>
 #include <qbuem/pipeline/stream.hpp>
 
 #include <chrono>
@@ -134,19 +135,14 @@ Stream<T> operator|(Stream<T> stream, StreamThrottleOp<T> op) {
           window_start = now;
         }
 
-        // If bucket is empty, yield and retry next iteration.
+        // If bucket is empty, SLEEP until the window refills instead of
+        // re-posting immediately (which pinned a reactor core at 100% for the
+        // whole window). One timer wait per empty window, not per reactor cycle.
         if (tokens == 0) {
-          struct Yield {
-            bool await_ready() noexcept { return false; }
-            void await_suspend(std::coroutine_handle<> h) noexcept {
-              if (auto* r = Reactor::current())
-                r->post([h]() mutable { h.resume(); });
-              else
-                h.resume();
-            }
-            void await_resume() noexcept {}
-          };
-          co_await Yield{};
+          int wait_ms = (static_cast<uint64_t>(elapsed) < window_ms)
+                            ? static_cast<int>(window_ms - static_cast<uint64_t>(elapsed)) + 1
+                            : 1;
+          co_await AsyncSleep{wait_ms};
           continue;
         }
 
@@ -245,18 +241,10 @@ Stream<T> operator|(Stream<T> stream, StreamDebounceOp<T> op) {
             co_return;
           }
 
-          // Yield to avoid busy-spin.
-          struct Yield {
-            bool await_ready() noexcept { return false; }
-            void await_suspend(std::coroutine_handle<> h) noexcept {
-              if (auto* r = Reactor::current())
-                r->post([h]() mutable { h.resume(); });
-              else
-                h.resume();
-            }
-            void await_resume() noexcept {}
-          };
-          co_await Yield{};
+          // Poll at 1 ms instead of re-posting every reactor cycle: debounce
+          // must still wake on newly-arriving items (it can't sleep the full
+          // gap), but a 1 ms timer caps CPU at ~0.1% per idle stream vs 100%.
+          co_await AsyncSleep{1};
         }
       }
     }
@@ -352,18 +340,10 @@ Stream<std::vector<T>> operator|(Stream<T> stream, StreamTumblingWindowOp<T> op)
           co_return;
         }
 
-        // Nothing available — yield to reactor.
-        struct Yield {
-          bool await_ready() noexcept { return false; }
-          void await_suspend(std::coroutine_handle<> h) noexcept {
-            if (auto* r = Reactor::current())
-              r->post([h]() mutable { h.resume(); });
-            else
-              h.resume();
-          }
-          void await_resume() noexcept {}
-        };
-        co_await Yield{};
+        // Nothing available — poll at 1 ms (the window pump must still observe
+        // newly-arriving items, so it can't sleep the whole window). Caps CPU at
+        // ~0.1% per idle stream instead of re-posting every reactor cycle (100%).
+        co_await AsyncSleep{1};
       }
     }
   };

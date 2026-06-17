@@ -214,6 +214,10 @@ struct WsServerConfig {
   bool validate_utf8 = true;
   /** @brief Set TCP_NODELAY on accepted sockets (low latency, recommended for games). */
   bool tcp_nodelay = true;
+  /** @brief Time a connection has to complete the HTTP upgrade handshake before
+   *  it is dropped (ms). Bounds slowloris on the pre-upgrade reader, which is
+   *  not yet covered by the post-upgrade heartbeat. 0 disables. Used by listen(). */
+  int handshake_timeout_ms = 10000;
 };
 
 // Forward declaration — WsConnection holds a back-pointer to its owning server.
@@ -1049,34 +1053,49 @@ private:
     Reactor* r = Reactor::current();
     auto state = std::make_shared<UpgradeState>();
     WsServer* self = this;
+
+    // Drop a stuck/slow pre-upgrade connection (slowloris): the post-upgrade
+    // heartbeat doesn't cover this phase. `done` guards against the timer racing
+    // a successful upgrade or an earlier close on the same reactor thread.
+    if (cfg_.handshake_timeout_ms > 0) {
+      auto tr = r->register_timer(cfg_.handshake_timeout_ms, [r, cfd, state](int) {
+        if (state->done) return;
+        state->done = true;
+        r->unregister_event(cfd, EventType::Read);
+        ::close(cfd);
+      });
+      if (tr) state->timer_id = *tr;
+    }
+
     r->register_event(cfd, EventType::Read, [self, r, cfd, state](int fd) {
+      if (state->done) return;
+      auto fail = [&] {
+        state->done = true;
+        if (state->timer_id != -1) r->unregister_timer(state->timer_id);
+        r->unregister_event(fd, EventType::Read);
+        ::close(fd);
+      };
       char tmp[4096];
       ssize_t n = ::read(fd, tmp, sizeof(tmp));
       if (n <= 0) {
         if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) return;
-        r->unregister_event(fd, EventType::Read);
-        ::close(fd);
+        fail();
         return;
       }
       state->buf.append(tmp, static_cast<size_t>(n));
       if (state->buf.size() > 64 * 1024) { // upgrade request DoS guard
-        r->unregister_event(fd, EventType::Read);
-        ::close(fd);
+        fail();
         return;
       }
       HttpParser parser;
       Request req;
       auto parsed = parser.parse(state->buf, req);
       if (!parsed) {
-        r->unregister_event(fd, EventType::Read);
-        ::close(fd);
+        fail();
         return;
       }
       if (!parser.is_complete()) return; // need more bytes
       // Full request available — stop this temporary reader and upgrade.
-      // Copy what we need into locals first: unregister_event destroys this
-      // very callback (and its captures), so nothing captured may be touched
-      // afterwards — only stack locals and `req`.
       // Copy what we need into stack locals first: unregister_event destroys
       // this callback (and its captures). In particular `req`'s header values
       // are string_views into `state->buf`, so `state` must be kept alive on
@@ -1085,6 +1104,8 @@ private:
       WsServer* s = self;
       int       cf = cfd;
       Reactor*  rr = r;
+      state->done = true;
+      if (state->timer_id != -1) rr->unregister_timer(state->timer_id);
       rr->unregister_event(cf, EventType::Read);
       (void)s->serve_connection(cf, req);
     });
@@ -1103,7 +1124,11 @@ private:
     [[maybe_unused]] ssize_t w = ::write(fd, resp.data(), resp.size());
   }
 
-  struct UpgradeState { std::string buf; };
+  struct UpgradeState {
+    std::string buf;
+    int  timer_id = -1;   ///< handshake-timeout timer (cancel on completion)
+    bool done     = false; ///< set once the connection is closed or upgraded
+  };
 
   WsHandlers<Ctx> handlers_;
   WsServerConfig  cfg_;
