@@ -299,12 +299,17 @@ public:
   }
 
   /**
-   * @brief Get a reference to the named stage's metrics (hot-path safe after register).
+   * @brief Get a reference to the named stage's metrics.
    *
-   * Performs a map lookup protected by a mutex on the first call per stage name
-   * (cold path); subsequent calls use the cached pointer (lock-free).
+   * @warning This performs a mutex-protected map lookup (and constructs a
+   *          `std::string` key) on **every** call — it is NOT lock-free. For the
+   *          hot path, call it ONCE after `register_stage()` and cache the
+   *          returned reference (the `StageMetrics` are heap-allocated; their
+   *          addresses are stable for the monitor's lifetime). The per-call
+   *          `StageMetrics::record_*` operations on the cached reference ARE
+   *          lock-free (atomics).
    *
-   * @pre `register_stage(name)` must have been called before the pipeline starts.
+   * @pre `register_stage(name)` should be called before the pipeline starts.
    * @param name  Stage name.
    * @return      Reference to the stage's `StageMetrics`.
    */

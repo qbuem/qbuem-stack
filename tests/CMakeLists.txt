@@ -157,6 +157,11 @@ add_executable(qbuem_ws_server_tests ws_server_test.cpp ${QBUEM_TLS_FIX})
 target_link_libraries(qbuem_ws_server_tests PRIVATE qbuem-stack::qbuem GTest::gtest_main)
 add_test(NAME qbuem_ws_server_tests COMMAND qbuem_ws_server_tests)
 
+# ── v1.2 high-level additions (secretbox / JWT / BufferedReader) ───────────────
+add_executable(qbuem_v12_additions_tests v12_additions_test.cpp ${QBUEM_TLS_FIX})
+target_link_libraries(qbuem_v12_additions_tests PRIVATE qbuem-stack::qbuem GTest::gtest_main)
+add_test(NAME qbuem_v12_additions_tests COMMAND qbuem_v12_additions_tests)
+
 # ── OffloadPool + Dispatcher graceful drain (thread-management) ────────────────
 add_executable(qbuem_offload_drain_tests offload_drain_test.cpp ${QBUEM_TLS_FIX})
 target_link_libraries(qbuem_offload_drain_tests PRIVATE qbuem-stack::qbuem GTest::gtest_main)

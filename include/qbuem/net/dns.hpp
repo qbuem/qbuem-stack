@@ -40,6 +40,7 @@
 #include <netinet/in.h>
 #include <sys/socket.h>
 
+#include <atomic>
 #include <coroutine>
 #include <memory>
 #include <string>
@@ -55,6 +56,22 @@ namespace qbuem {
  */
 class DnsResolver {
 public:
+  /**
+   * @brief Maximum concurrent in-flight resolver threads (process-wide).
+   *
+   * `getaddrinfo` is offloaded to a short-lived thread per call. Without a cap,
+   * a burst of concurrent hostname connects (e.g. a fetch fan-out) would spawn
+   * one OS thread each → thread exhaustion / OOM. Beyond this cap, resolve()
+   * fails fast with `errc::resource_unavailable_try_again` rather than spawning.
+   */
+  static constexpr int kMaxConcurrentResolves = 64;
+
+  /** @brief Current number of in-flight resolver threads. */
+  [[nodiscard]] static std::atomic<int>& inflight() noexcept {
+    static std::atomic<int> n{0};
+    return n;
+  }
+
   /**
    * @brief Resolve a hostname to a `SocketAddr` asynchronously.
    *
@@ -110,8 +127,24 @@ private:
     void await_suspend(std::coroutine_handle<> handle) const {
       // Capture reactor pointer before spawning — Reactor::current() is
       // thread-local and only valid on the reactor thread.
+      // NOTE: the reactor must outlive any in-flight resolve (do not destroy the
+      // Dispatcher while a DNS lookup is pending); the resumed post() targets it.
       Reactor* reactor = Reactor::current();
       auto     st      = state;
+
+      // Bound concurrent resolver threads — fail fast instead of exhausting
+      // OS threads under a connect flood.
+      if (inflight().fetch_add(1, std::memory_order_acq_rel) >=
+          kMaxConcurrentResolves) {
+        inflight().fetch_sub(1, std::memory_order_acq_rel);
+        st->result = std::unexpected(
+            std::make_error_code(std::errc::resource_unavailable_try_again));
+        if (reactor != nullptr)
+          reactor->post([handle]() mutable { handle.resume(); });
+        else
+          handle.resume();
+        return;
+      }
 
       // Move host into the lambda to avoid an extra string copy.
       // port is a struct member — capture by value via explicit init-capture.
@@ -158,6 +191,8 @@ private:
           ::freeaddrinfo(res);
           if (have_addr) st->result = found;
         }
+
+        inflight().fetch_sub(1, std::memory_order_acq_rel);
 
         // ── Resume coroutine on the reactor thread ────────────────────────
         if (reactor != nullptr) {

@@ -10,6 +10,7 @@
 #include <ctime>
 #include <format>
 #include <fcntl.h>
+#include <poll.h>
 #include <iostream>
 #include <mutex>
 #include <netinet/in.h>
@@ -60,6 +61,24 @@ std::string_view cached_http_date() noexcept {
   return g_date_buf;
 }
 
+// ─── wait_writable ────────────────────────────────────────────────────────────
+// Accepted client sockets are O_NONBLOCK, so write()/writev()/sendfile() return
+// EAGAIN once the socket send buffer fills (slow client + large response). The
+// old code treated EAGAIN as a hard error and broke out of the loop → a
+// TRUNCATED response (SO_SNDTIMEO does nothing on a non-blocking socket). Wait
+// for the socket to drain instead. The common case (response fits the send
+// buffer) never hits EAGAIN and never calls this. A fully-stalled client times
+// out here once and is dropped, bounding reactor occupancy.
+inline constexpr int kWriteStallBudgetMs = 5000;
+static bool wait_writable(int fd, int budget_ms) noexcept {
+  struct pollfd pfd; // NOLINT(misc-include-cleaner)
+  pfd.fd = fd;
+  pfd.events = POLLOUT;
+  pfd.revents = 0;
+  int r = ::poll(&pfd, 1, budget_ms);
+  return r > 0 && (pfd.revents & POLLOUT) != 0;
+}
+
 // ─── write_all ──────────────────────────────────────────────────────────────
 void write_all(int fd, const std::string &data) {
   const char *ptr = data.data();
@@ -67,9 +86,12 @@ void write_all(int fd, const std::string &data) {
   while (rem > 0) {
     ssize_t n = write(fd, ptr, static_cast<size_t>(rem));
     if (n <= 0) {
-      if (errno == EINTR)
+      if (n < 0 && errno == EINTR)
         continue;
-      break;
+      if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+        if (wait_writable(fd, kWriteStallBudgetMs)) continue;
+      }
+      break; // hard error or stalled client → abandon (connection is closed)
     }
     ptr += n;
     rem -= n;
@@ -88,7 +110,10 @@ static void send_file_body(int sock_fd, std::string_view path, size_t size) noex
     ssize_t n = ::sendfile(sock_fd, file_fd, &offset,
                            std::min(remaining, static_cast<size_t>(0x7fff'ffff)));
     if (n <= 0) {
-      if (errno == EINTR) continue;
+      if (n < 0 && errno == EINTR) continue;
+      if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+        if (wait_writable(sock_fd, kWriteStallBudgetMs)) continue;
+      }
       break;
     }
     remaining -= static_cast<size_t>(n);
@@ -107,7 +132,11 @@ static void send_file_body(int sock_fd, std::string_view path, size_t size) noex
     int r = ::sendfile(file_fd, sock_fd, offset, &len, nullptr, 0);
     if (len > 0) { offset += len; remaining -= len; }
     if (r < 0) {
-      if (errno == EINTR || errno == EAGAIN) continue;
+      if (errno == EINTR) continue;
+      if (errno == EAGAIN || errno == EWOULDBLOCK) {
+        // Wait for the socket to drain instead of busy-spinning on EAGAIN.
+        if (wait_writable(sock_fd, kWriteStallBudgetMs)) continue;
+      }
       break;
     }
   }
@@ -133,7 +162,10 @@ void writev_response(int fd, const std::string &hdr, std::string_view body) {
   while (sent < total) {
     ssize_t n = writev(fd, iov + idx, iov_cnt - idx);
     if (n <= 0) {
-      if (errno == EINTR) continue;
+      if (n < 0 && errno == EINTR) continue;
+      if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+        if (wait_writable(fd, kWriteStallBudgetMs)) continue;
+      }
       break;
     }
     sent += n;
