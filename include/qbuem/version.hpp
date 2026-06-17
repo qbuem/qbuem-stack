@@ -56,12 +56,17 @@
  *           One always-tested code path on all toolchains (no std::jthread
  *           dependency); carries server extras (thread naming, CPU pinning next).
  *           Supersedes the v1.2.2 compat/jthread.hpp shim.
- * - 1.3.0: kqueue reactor sophistication (user-space buffer ring,
- *           multi-event batching, pointer-direct dispatch).
- * - 1.4.0: Unified DB abstraction (IDBDriver, ConnectionPool, Statement,
- *           db::Value, SIMD protocol parser),
- *           SHM messaging (SHMChannel, Futex-uring sync, zero-copy DataArena,
- *           unified SHMBus with SHMSource/SHMSink pipeline integration).
+ * - 1.3.0: GenerationPool ergonomics — emplace() (acquire + placement-construct),
+ *           destroy() (~T + release), for_each_live() (iterate live slots; pristine
+ *           slots start at an odd generation so even==live is unambiguous).
+ * - 1.4.0: SpatialGrid<T, W, H, Layers, BucketSize> (buf/spatial_grid.hpp) — the
+ *           object-index companion to GridBitset: maps each (x, y, layer) to the
+ *           list of objects there (incl. several per cell, which a presence bitset
+ *           cannot), with clear()/insert()/for_each_in_radius() for AOI / broad-phase
+ *           queries. 0-alloc rebuild (buckets retain capacity).
+ * Roadmap (planned, not yet tagged): kqueue reactor sophistication; unified DB
+ *           abstraction (IDBDriver/ConnectionPool/Statement); SHM messaging
+ *           (SHMChannel/SHMBus) — the AOI broadcast path ("darkness = network").
  * - 1.5.0: Zero-dependency security & TLS
  *           (kTLS sendfile zero-copy encrypted transmission;
  *            SIMDJwtParser AVX2/SSE4.2/NEON/Scalar dot-scan + Base64url validation;
@@ -185,12 +190,12 @@ struct Version {
 #define QBUEM_VERSION_MAJOR 1
 
 /** @brief Minor version number (for use in preprocessor `#if` conditions). */
-#define QBUEM_VERSION_MINOR 3
+#define QBUEM_VERSION_MINOR 4
 
 /** @brief Patch version number (for use in preprocessor `#if` conditions). */
 #define QBUEM_VERSION_PATCH 0
 
 /** @brief Version string literal "major.minor.patch" (for use in preprocessor conditions). */
-#define QBUEM_VERSION_STRING "1.3.0"
+#define QBUEM_VERSION_STRING "1.4.0"
 
 /** @} */ // end of qbuem_version

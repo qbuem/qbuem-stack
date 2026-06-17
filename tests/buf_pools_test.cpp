@@ -25,9 +25,12 @@
 #include <qbuem/buf/generation_pool.hpp>
 #include <qbuem/buf/lock_free_hash_map.hpp>
 #include <qbuem/buf/simd_erasure.hpp>
+#include <qbuem/buf/spatial_grid.hpp>
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <set>
 #include <span>
@@ -531,4 +534,62 @@ TEST(ErasureCoderTest, ReconstructFailsWhenTooManyLost) {
                                                   static_cast<size_t>(f.k + f.m)));
     EXPECT_FALSE(r.has_value())
         << "reconstruct should fail with fewer than k shards present";
+}
+
+// ─── SpatialGrid ────────────────────────────────────────────────────────────────
+
+namespace { struct Obj { int x, y, v; }; }
+
+TEST(SpatialGridTest, ForEachInRadiusCoversAllWithinRadiusOnce) {
+    SpatialGrid<Obj, 128, 128, 1, 16> grid;
+    std::vector<Obj> objs;
+    objs.reserve(200);
+    for (int i = 0; i < 200; ++i) objs.push_back({ (i * 7) % 128, (i * 13) % 128, i });
+    grid.clear();
+    for (auto& o : objs) grid.insert(static_cast<uint32_t>(o.x), static_cast<uint32_t>(o.y), 0, &o);
+
+    // Query several points, incl. bucket boundaries (16, 31/32) and corners.
+    for (auto [qx, qy] : { std::pair{40, 40}, std::pair{16, 16}, std::pair{0, 0}, std::pair{127, 127}, std::pair{31, 32} }) {
+        const int r = 8;
+        std::set<Obj*> visited;
+        int visits = 0;
+        grid.for_each_in_radius(static_cast<uint32_t>(qx), static_cast<uint32_t>(qy), 0,
+                                static_cast<uint32_t>(r), [&](Obj* o) { visited.insert(o); ++visits; });
+        EXPECT_EQ(static_cast<int>(visited.size()), visits) << "each object visited at most once";
+        for (auto& o : objs) {
+            const int d = std::max(std::abs(o.x - qx), std::abs(o.y - qy));
+            if (d <= r)
+                EXPECT_TRUE(visited.count(&o)) << "missed object within radius at (" << o.x << "," << o.y << ")";
+        }
+    }
+}
+
+TEST(SpatialGridTest, LayersAreSeparateAndClearEmpties) {
+    SpatialGrid<Obj, 64, 64, 4, 16> grid;
+    Obj a{ 10, 10, 1 }, b{ 10, 10, 2 };   // same cell, different layers
+    grid.insert(10, 10, 0, &a);
+    grid.insert(10, 10, 2, &b);
+    int n0 = 0, n1 = 0, n2 = 0;
+    grid.for_each_in_radius(10, 10, 0, 4, [&](Obj*) { ++n0; });
+    grid.for_each_in_radius(10, 10, 1, 4, [&](Obj*) { ++n1; });
+    grid.for_each_in_radius(10, 10, 2, 4, [&](Obj*) { ++n2; });
+    EXPECT_EQ(n0, 1);
+    EXPECT_EQ(n1, 0);   // empty layer
+    EXPECT_EQ(n2, 1);
+
+    grid.clear();
+    int after = 0;
+    grid.for_each_in_radius(10, 10, 0, 4, [&](Obj*) { ++after; });
+    EXPECT_EQ(after, 0);
+}
+
+TEST(SpatialGridTest, MultipleObjectsPerCell) {
+    SpatialGrid<Obj, 64, 64, 1, 16> grid;
+    Obj a{ 5, 5, 1 }, b{ 5, 5, 2 }, c{ 5, 5, 3 };   // three in one cell (a bitset cannot do this)
+    grid.insert(5, 5, 0, &a);
+    grid.insert(5, 5, 0, &b);
+    grid.insert(5, 5, 0, &c);
+    int n = 0;
+    grid.for_each_in_radius(5, 5, 0, 0, [&](Obj*) { ++n; });
+    EXPECT_EQ(n, 3);
 }
