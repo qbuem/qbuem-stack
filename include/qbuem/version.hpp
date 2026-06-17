@@ -108,6 +108,16 @@
  *           timeout; TcpStream write_all/read_exact. (Deferred to v1.2: App
  *           async write, SHM futex, lock-free breaker, full HTTP/2-gRPC-DB
  *           server transports — see the audit doc.)
+ * - 1.2.0: High-level completeness + contention round. Misuse-resistant crypto
+ *           (crypto/secretbox.hpp seal_easy/open_easy random-nonce AEAD +
+ *           password_hash/verify_password; crypto/jwt.hpp HS256 sign/verify with
+ *           strict alg check; middleware/jwt_verifier.hpp HmacJwtVerifier);
+ *           io/buffered_reader.hpp (read_until/read_line); bounded DNS resolver
+ *           concurrency; CircuitBreaker lock-free Closed path; App write paths
+ *           fixed to not truncate responses on EAGAIN (non-blocking sockets) +
+ *           macOS sendfile no longer busy-spins. (Still deferred: awaiters
+ *           persistent registration, SHM futex, MessageBus RCU, full HTTP/2/
+ *           gRPC/DB server transports — see docs/audit/2026-06-17_*.)
  */
 
 /**
@@ -145,13 +155,13 @@ struct Version {
   static constexpr int major = 1;
 
   /** @brief Minor version number. Incremented when new backwards-compatible features are added. */
-  static constexpr int minor = 1;
+  static constexpr int minor = 2;
 
   /** @brief Patch version number. Incremented for backwards-compatible bug fixes only. */
   static constexpr int patch = 0;
 
   /** @brief Version string in "major.minor.patch" format (null-terminated). */
-  static constexpr std::string_view string = "1.1.0";
+  static constexpr std::string_view string = "1.2.0";
 };
 
 } // namespace qbuem
@@ -160,12 +170,12 @@ struct Version {
 #define QBUEM_VERSION_MAJOR 1
 
 /** @brief Minor version number (for use in preprocessor `#if` conditions). */
-#define QBUEM_VERSION_MINOR 1
+#define QBUEM_VERSION_MINOR 2
 
 /** @brief Patch version number (for use in preprocessor `#if` conditions). */
 #define QBUEM_VERSION_PATCH 0
 
 /** @brief Version string literal "major.minor.patch" (for use in preprocessor conditions). */
-#define QBUEM_VERSION_STRING "1.1.0"
+#define QBUEM_VERSION_STRING "1.2.0"
 
 /** @} */ // end of qbuem_version
