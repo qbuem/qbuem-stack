@@ -88,6 +88,17 @@ struct WsFrame {
   /** @brief Whether this is the final frame. false means it is part of a multi-frame message. */
   bool fin{true};
 
+  /**
+   * @brief RSV1/RSV2/RSV3 reserved bits (RFC 6455 §5.2).
+   *
+   * Must be 0 unless an extension that defines them was negotiated. A strict
+   * server (e.g. `WsServer`) closes the connection with code 1002 if any RSV
+   * bit is set without a matching extension. Decoded by `decode_frame()`.
+   */
+  bool rsv1{false};
+  bool rsv2{false}; ///< @see rsv1
+  bool rsv3{false}; ///< @see rsv1
+
   /** @brief Whether the payload is masked. Must be true for client → server direction. */
   bool masked{false};
 
@@ -98,10 +109,21 @@ struct WsFrame {
 // ─── WebSocketHandler ─────────────────────────────────────────────────────────
 
 /**
- * @brief RFC 6455 WebSocket server handler.
+ * @brief RFC 6455 WebSocket server handler (low-level, single-connection).
  *
  * Handles server-side WebSocket protocol processing from the HTTP/1.1 Upgrade
  * handshake through binary/text frame send and receive.
+ *
+ * @note **This is the low-level reference handler.** Its `run()` loop uses
+ *       blocking `::read`/`::write` and drives exactly one connection with no
+ *       backpressure, heartbeat, fragmentation reassembly, or broadcast. It is
+ *       suitable for tests, examples, and simple single-connection tools.
+ *       For a production, high-concurrency server (many simultaneous
+ *       connections, rooms, broadcast, dead-connection detection, bounded
+ *       send queues), use @ref qbuem::WsServer in
+ *       `<qbuem/server/ws_server.hpp>`, which is non-blocking (reactor-driven)
+ *       and reuses this class's static codec (`encode_frame`/`decode_frame`/
+ *       `encode_header`/`compute_accept_key`/`xor_mask`).
  *
  * ### Usage example
  * @code
@@ -228,7 +250,8 @@ public:
         if (frame.opcode == WsFrame::Opcode::Ping) {
           // Send Pong response
           auto pong_bytes = encode_frame(
-              WsFrame{WsFrame::Opcode::Pong, true, false, {}}, false);
+              WsFrame{.opcode = WsFrame::Opcode::Pong, .fin = true,
+                      .masked = false, .payload = {}}, false);
           write_all(fd, std::string_view(
               reinterpret_cast<const char*>(pong_bytes.data()),
               pong_bytes.size()));
@@ -238,8 +261,8 @@ public:
         if (frame.opcode == WsFrame::Opcode::Close) {
           // Echo Close and exit loop
           auto close_bytes = encode_frame(
-              WsFrame{WsFrame::Opcode::Close, true, false,
-                      frame.payload}, false);
+              WsFrame{.opcode = WsFrame::Opcode::Close, .fin = true,
+                      .masked = false, .payload = frame.payload}, false);
           write_all(fd, std::string_view(
               reinterpret_cast<const char*>(close_bytes.data()),
               close_bytes.size()));
@@ -481,6 +504,54 @@ public:
   }
 
   /**
+   * @brief Encodes only the RFC 6455 §5.2 frame header into a caller buffer.
+   *
+   * Writes the FIN/RSV/opcode byte, the MASK/length byte(s), and (when
+   * `mask == true`) the 4-byte masking key. The payload is **not** written —
+   * the caller sends `out[0..n)` and the payload as two segments via
+   * `::writev` (zero gather copy). This is the zero-allocation send path used
+   * by `WsServer`.
+   *
+   * @param out          Output buffer; must hold at least `kMaxHeaderBytes` (14) bytes.
+   * @param opcode       Frame opcode.
+   * @param payload_len  Length of the payload that will follow the header.
+   * @param fin          FIN bit (true for an unfragmented or final frame).
+   * @param mask         Whether the payload will be masked (server→client: false).
+   * @param key          4-byte masking key, used only when `mask == true`.
+   * @returns Number of header bytes written to @p out (2, 4, 10, +4 if masked).
+   */
+  static constexpr size_t kMaxHeaderBytes = 14;
+
+  static size_t encode_header(uint8_t* out, WsFrame::Opcode opcode,
+                              uint64_t payload_len, bool fin = true,
+                              bool mask = false,
+                              const std::array<uint8_t, 4>& key = {}) noexcept {
+    size_t n = 0;
+    out[n++] = static_cast<uint8_t>((fin ? 0x80u : 0x00u) |
+                                    (std::to_underlying(opcode) & 0x0Fu));
+
+    const uint8_t mask_bit = mask ? 0x80u : 0x00u;
+    if (payload_len < 126) {
+      out[n++] = static_cast<uint8_t>(mask_bit | payload_len);
+    } else if (payload_len <= 0xFFFF) {
+      out[n++] = static_cast<uint8_t>(mask_bit | 126u);
+      out[n++] = static_cast<uint8_t>(payload_len >> 8);
+      out[n++] = static_cast<uint8_t>(payload_len & 0xFF);
+    } else {
+      out[n++] = static_cast<uint8_t>(mask_bit | 127u);
+      for (int i = 7; i >= 0; --i)
+        out[n++] = static_cast<uint8_t>((payload_len >> (i * 8)) & 0xFF);
+    }
+    if (mask) {
+      out[n++] = key[0];
+      out[n++] = key[1];
+      out[n++] = key[2];
+      out[n++] = key[3];
+    }
+    return n;
+  }
+
+  /**
    * @brief Decodes a WebSocket frame from a byte span.
    *
    * Parses according to RFC 6455 §5.2.
@@ -507,6 +578,9 @@ public:
     uint8_t b1 = data[pos++];
 
     frame.fin     = (b0 & 0x80u) != 0;
+    frame.rsv1    = (b0 & 0x40u) != 0;
+    frame.rsv2    = (b0 & 0x20u) != 0;
+    frame.rsv3    = (b0 & 0x10u) != 0;
     frame.opcode  = static_cast<WsFrame::Opcode>(b0 & 0x0Fu);
     frame.masked  = (b1 & 0x80u) != 0;
 

@@ -120,6 +120,12 @@ public:
    *       The pointer is invalidated when the Arena is `reset()` or destroyed.
    */
   void *allocate(size_t size, size_t alignment = alignof(std::max_align_t)) {
+    // Overflow guard: a near-SIZE_MAX size would wrap `size + padding` (false
+    // pass of the bounds check → OOB pointer) or `size * 2` in the grow path.
+    // Capping at SIZE_MAX/2 keeps both computations well-defined; an absurd
+    // request fails the documented bad_alloc contract instead of corrupting.
+    if (size > (SIZE_MAX >> 1)) throw std::bad_alloc{};
+
     size_t padding =
         (alignment - (reinterpret_cast<uintptr_t>(current_ptr_) % alignment)) %
         alignment;

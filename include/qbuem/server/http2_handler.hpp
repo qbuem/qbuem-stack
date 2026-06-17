@@ -227,15 +227,21 @@ private:
             return value;
         }
 
-        // Multi-byte extension (RFC 7541 section 5.1)
+        // Multi-byte extension (RFC 7541 section 5.1). Accumulate in 64-bit and
+        // clamp: a malicious varint with many continuation bytes would shift by
+        // >=32 (undefined behavior on a uint32_t) and overflow `value`. The
+        // clamped UINT32_MAX is rejected by the caller's size/index checks.
+        uint64_t value64 = value;
         uint32_t shift = 0;
         while (pos < data.size()) {
             uint8_t byte = data[pos++];
-            value += static_cast<uint32_t>(byte & 0x7F) << shift;
+            value64 += static_cast<uint64_t>(byte & 0x7F) << shift;
+            if (value64 > 0xFFFFFFFFull) value64 = 0xFFFFFFFFull;
             shift += 7;
             if ((byte & 0x80) == 0) break; // MSB == 0: last byte
+            if (shift >= 64) break;        // guard the shift itself from UB
         }
-        return value;
+        return static_cast<uint32_t>(value64);
     }
 
     /**
@@ -957,6 +963,15 @@ private:
                 std::make_error_code(std::errc::protocol_error));
         }
 
+        // Enforce MAX_CONCURRENT_STREAMS for NEW streams (REFUSED_STREAM, not a
+        // connection error) — bounds memory and the number of detached handler
+        // tasks a single connection can spawn.
+        if (streams_.find(sid) == streams_.end() &&
+            streams_.size() >= MAX_CONCURRENT_STREAMS) {
+            co_await send_rst_stream(sid, 0x7 /* REFUSED_STREAM */);
+            co_return Result<void>{};
+        }
+
         // Create or look up stream
         auto& stream = get_or_create_stream(sid);
 
@@ -1000,12 +1015,18 @@ private:
             }
             stream->state = Http2Stream::State::OPEN;
         } else {
-            // Awaiting CONTINUATION frame — store in header block buffer
-            // (minimal implementation: continued processing in CONTINUATION frame)
-            continuation_buffer_[sid].insert(
-                continuation_buffer_[sid].end(),
-                header_block.begin(),
-                header_block.end());
+            // Awaiting CONTINUATION frame — store in header block buffer.
+            // Cap the accumulated header block: a CONTINUATION flood without
+            // END_HEADERS would otherwise grow this without bound (CVE-2024-27316).
+            auto& cbuf = continuation_buffer_[sid];
+            if (cbuf.size() + header_block.size() > MAX_HEADER_BLOCK) {
+                continuation_buffer_.erase(sid);
+                co_await send_goaway(last_stream_id_, 0xb /* ENHANCE_YOUR_CALM */,
+                                     "Header block too large");
+                co_return std::unexpected(
+                    std::make_error_code(std::errc::message_size));
+            }
+            cbuf.insert(cbuf.end(), header_block.begin(), header_block.end());
         }
 
         if (frame.flags & HTTP2_FLAG_END_STREAM) {
@@ -1043,8 +1064,15 @@ private:
                 std::make_error_code(std::errc::protocol_error));
         }
 
-        // Append to header block buffer
+        // Append to header block buffer (capped — CVE-2024-27316 CONTINUATION flood).
         auto& buf = it->second;
+        if (buf.size() + frame.payload.size() > MAX_HEADER_BLOCK) {
+            continuation_buffer_.erase(it);
+            co_await send_goaway(last_stream_id_, 0xb /* ENHANCE_YOUR_CALM */,
+                                 "Header block too large");
+            co_return std::unexpected(
+                std::make_error_code(std::errc::message_size));
+        }
         buf.insert(buf.end(), frame.payload.begin(), frame.payload.end());
 
         if (frame.flags & HTTP2_FLAG_END_HEADERS) {
@@ -1109,7 +1137,14 @@ private:
             data_end -= pad;
         }
 
-        // Collect body data
+        // Collect body data (capped — an unbounded DATA stream would OOM since
+        // flow control is not yet enforced).
+        const size_t add = (data_end > data_offset) ? (data_end - data_offset) : 0;
+        if (stream->request_body.size() + add > MAX_REQUEST_BODY) {
+            streams_.erase(it);
+            co_await send_rst_stream(sid, 0xb /* ENHANCE_YOUR_CALM */);
+            co_return Result<void>{};
+        }
         stream->request_body.insert(
             stream->request_body.end(),
             frame.payload.begin() + static_cast<ptrdiff_t>(data_offset),
@@ -1139,8 +1174,18 @@ private:
      */
     Task<Result<void>> handle_rst_stream(const Http2Frame& frame) {
         const uint32_t sid = frame.stream_id;
+        // ERASE the stream (not just mark CLOSED) so its memory is reclaimed —
+        // and rate-limit RST_STREAM to defeat Rapid Reset (CVE-2023-44487),
+        // where a peer opens+resets streams in a loop to spawn unbounded work.
         if (auto it = streams_.find(sid); it != streams_.end()) {
-            it->second->state = Http2Stream::State::CLOSED;
+            streams_.erase(it);
+        }
+        continuation_buffer_.erase(sid);
+        if (++rst_stream_count_ > MAX_RST_STREAMS) {
+            co_await send_goaway(last_stream_id_, 0xb /* ENHANCE_YOUR_CALM */,
+                                 "Excessive RST_STREAM (rapid reset)");
+            co_return std::unexpected(
+                std::make_error_code(std::errc::connection_aborted));
         }
         co_return Result<void>{};
     }
@@ -1245,6 +1290,20 @@ private:
 
     /** @brief Default initial flow control window size (RFC 7540 section 6.5.2). */
     static constexpr uint32_t DEFAULT_INITIAL_WINDOW_SIZE = 65535;
+
+    // ─── DoS protection limits (RFC 9113 / CVE-2023-44487, CVE-2024-27316) ────
+
+    /** @brief Max simultaneously-open streams; new streams beyond → REFUSED_STREAM. */
+    static constexpr size_t MAX_CONCURRENT_STREAMS = 128;
+    /** @brief Max accumulated request body per stream → RST_STREAM on exceed. */
+    static constexpr size_t MAX_REQUEST_BODY = 8u * 1024 * 1024;  // 8 MiB
+    /** @brief Max accumulated header-block (HEADERS+CONTINUATION) bytes per stream. */
+    static constexpr size_t MAX_HEADER_BLOCK = 64u * 1024;        // 64 KiB
+    /** @brief RST_STREAM count threshold per connection (Rapid Reset rate limit). */
+    static constexpr uint32_t MAX_RST_STREAMS = 200;
+
+    /** @brief Number of RST_STREAM frames received (Rapid Reset detection). */
+    uint32_t rst_stream_count_{0};
 };
 
 } // namespace qbuem

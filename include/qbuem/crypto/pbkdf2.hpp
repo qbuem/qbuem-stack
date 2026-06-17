@@ -96,6 +96,18 @@ inline void compute_block(HmacContext<H>&          hmac,
 
 }  // namespace detail::pbkdf2
 
+/**
+ * @brief Hard upper bound on PBKDF2 iterations (DoS backstop).
+ *
+ * PBKDF2 is a synchronous CPU-bound loop. If the iteration count is ever
+ * derived from untrusted input (e.g. a stored PHC string) an attacker could
+ * request billions of iterations and wedge the calling thread for minutes.
+ * Iterations are clamped to this bound (≫ any realistic value — OWASP 2023
+ * recommends ~600 000). **Always run PBKDF2 on an offload thread, never inline
+ * on a reactor thread** (it would stall every connection on that reactor).
+ */
+inline constexpr uint32_t kMaxPbkdf2Iterations = 100'000'000;
+
 // ─── PBKDF2-HMAC-SHA-256 ─────────────────────────────────────────────────────
 
 /**
@@ -112,6 +124,7 @@ inline void pbkdf2_hmac_sha256(std::span<const uint8_t> password,
                                 uint32_t                 iterations,
                                 std::span<uint8_t>       out) noexcept {
     static constexpr size_t dlen = Sha256Wrapper::kDigestSize;  // 32
+    if (iterations > kMaxPbkdf2Iterations) iterations = kMaxPbkdf2Iterations;
 
     HmacSha256 hmac{password};
 
@@ -189,6 +202,7 @@ inline void pbkdf2_hmac_sha512(std::span<const uint8_t> password,
                                 uint32_t                 iterations,
                                 std::span<uint8_t>       out) noexcept {
     static constexpr size_t dlen = Sha512Wrapper::kDigestSize;  // 64
+    if (iterations > kMaxPbkdf2Iterations) iterations = kMaxPbkdf2Iterations;
 
     HmacSha512 hmac{password};
 

@@ -196,6 +196,51 @@ public:
   }
 
   /**
+   * @brief Write the ENTIRE buffer, looping over short writes.
+   *
+   * Partial writes are the norm under back-pressure on a high-fan-out socket;
+   * `write()` may send fewer bytes than requested. This retries until all bytes
+   * are sent — prefer it over a hand-rolled short-write loop (a classic bug
+   * that truncates responses or busy-loops).
+   *
+   * @param buf Bytes to send in full.
+   * @returns empty Result on success; an error code (or connection_reset on a
+   *          0-byte write) on failure.
+   */
+  [[nodiscard]] Task<Result<void>> write_all(std::span<const std::byte> buf) {
+    size_t off = 0;
+    while (off < buf.size()) {
+      auto n = co_await write(buf.subspan(off));
+      if (!n) co_return std::unexpected(n.error());
+      if (*n == 0)
+        co_return std::unexpected(
+            std::make_error_code(std::errc::connection_reset));
+      off += *n;
+    }
+    co_return Result<void>{};
+  }
+
+  /**
+   * @brief Read EXACTLY `buf.size()` bytes, looping over short reads.
+   *
+   * @param buf Destination buffer; filled completely on success.
+   * @returns empty Result on success; connection_reset if EOF arrives before
+   *          the buffer is full, or the underlying read error.
+   */
+  [[nodiscard]] Task<Result<void>> read_exact(std::span<std::byte> buf) {
+    size_t off = 0;
+    while (off < buf.size()) {
+      auto n = co_await read(buf.subspan(off));
+      if (!n) co_return std::unexpected(n.error());
+      if (*n == 0)
+        co_return std::unexpected(
+            std::make_error_code(std::errc::connection_reset));
+      off += *n;
+    }
+    co_return Result<void>{};
+  }
+
+  /**
    * @brief Asynchronous scatter read from multiple buffers (readv).
    *
    * Waits for a Reactor read event, then calls `readv(2)`.

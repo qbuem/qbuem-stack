@@ -58,6 +58,10 @@ add_executable(websocket_example
     02-network/websocket/websocket_example.cpp)
 target_link_libraries(websocket_example PRIVATE qbuem-stack::qbuem)
 
+add_executable(ws_game_server
+    02-network/ws_game_server/ws_game_server.cpp)
+target_link_libraries(ws_game_server PRIVATE qbuem-stack::qbuem)
+
 add_executable(http_fetch_example
     02-network/http_fetch/http_fetch_example.cpp)
 target_link_libraries(http_fetch_example PRIVATE qbuem-stack::qbuem)

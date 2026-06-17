@@ -113,7 +113,7 @@ there is no hard dependency. macOS uses kqueue.
 | 5 Web / HTTP | `http`, `server` | `Request`, `Response`, `Router`, `App` |
 | 6 Pipeline | `pipeline` | `StaticPipeline`, `DynamicPipeline`, `PipelineGraph`, `AsyncChannel<T>` |
 | 7 Resilience / Ext | `pipeline/resilience`, `db`, `security` | `RetryAction`, `CircuitBreaker`, `IConnectionPool` |
-| 8 Protocols | `server/http2`, `server/websocket`, `server/grpc` | `Http2Handler`, `WebSocketHandler`, `GrpcHandler` |
+| 8 Protocols | `server/http2`, `server/websocket`, `server/ws_server`, `server/grpc` | `Http2Handler`, `WebSocketHandler`, `WsServer`, `GrpcHandler` |
 | 9 Umbrella | `qbuem_stack.hpp` | `App`, `StackController` |
 
 ---
@@ -127,7 +127,7 @@ Each row links to the **detailed guide** (role · when to use · how to use · g
 |---|---|---|---|---|
 | **`core`** | Async runtime: C++23 coroutines, per-core reactor (epoll/io_uring/kqueue), multi-core dispatcher with graceful `drain()`, blocking/CPU-bound offload pool, zero-alloc memory, timers | `Task<T>` · `Reactor` · `Dispatcher` · `OffloadPool` · `Arena` · `FixedPoolResource` · `TimerWheel` · `MicroTicker` | [02 — Core & Async](./docs/guide/02-core-and-async.md) | [01-foundation](./examples/01-foundation/), [03-memory](./examples/03-memory/) |
 | **`pipeline`** | Build & run processing graphs (ffmpeg-style): static / dynamic (hot-swap) / DAG (split+merge), channels, batching, windows, resilience | `PipelineBuilder` · `StaticPipeline` · `DynamicPipeline` · `PipelineGraph` · `RetryAction` · `CircuitBreaker` · `DeadLetterQueue` | [03 — Pipeline](./docs/guide/03-pipeline.md) | [05-pipeline](./examples/05-pipeline/), [07-resilience](./examples/07-resilience/) |
-| **`http` + `server`** | HTTP/1.1 SIMD parser, router, `App` web server, curl-free fetch client; HTTP/2 + WebSocket + gRPC handlers | `App` · `Request` · `Response` · `Router` · `fetch()` · `Http1Handler` · `WebSocketHandler` | [04 — HTTP & Server](./docs/guide/04-http-and-server.md) | [02-network](./examples/02-network/) |
+| **`http` + `server`** | HTTP/1.1 SIMD parser, router, `App` web server, curl-free fetch client; HTTP/2 + gRPC handlers; low-level `WebSocketHandler` codec **and** high-level non-blocking `WsServer` (rooms, broadcast, back-pressure, heartbeat — for high-concurrency game/realtime servers) | `App` · `Request` · `Response` · `Router` · `fetch()` · `Http1Handler` · `WebSocketHandler` · `WsServer` | [04 — HTTP & Server](./docs/guide/04-http-and-server.md) | [02-network](./examples/02-network/) |
 | **`crypto` + `security`** | SHA-256/512, HMAC, HKDF, PBKDF2, ChaCha20-Poly1305, AES-GCM, Base64, CSPRNG; SIMD JWT | `sha256` · `hmac` · `aes_gcm` · `chacha20_poly1305` · `base64` · `SIMDJwtParser` · `JwtAuthAction` | [05 — Crypto & Security](./docs/guide/05-crypto-and-security.md) | [04-codec-security](./examples/04-codec-security/) |
 | **`net` + `io` + `shm`** | TCP/UDP/Unix sockets, UDS FD passing, DNS; zero-copy scatter-gather + buffers + files; shared-memory IPC | `TcpStream` · `TcpListener` · `UdpSocket` · `IOVec<N>` · `scattered_span` · `SHMChannel<T>` · `SHMBus` | [06 — Net, I/O & SHM](./docs/guide/06-net-io-shm.md) | [02-network](./examples/02-network/), [06-ipc-messaging](./examples/06-ipc-messaging/) |
 | **`buf` + `codec` + `middleware`** | Zero-alloc pools & `inplace_function`, spatial bitsets, erasure coding; frame/line/length codecs; HTTP middleware | `GenerationPool` · `inplace_function` · `GridBitset` · `LineCodec` · `LengthPrefixedCodec` · `cors`/`rate_limit`/`token_auth` | [07 — Buffers, Codecs & Middleware](./docs/guide/07-buffers-codecs-middleware.md) | [03-memory](./examples/03-memory/), [04-codec-security](./examples/04-codec-security/), [11-advanced-apps](./examples/11-advanced-apps/) |
@@ -193,12 +193,12 @@ See `examples/11-advanced-apps/open_world/` and `spatial_fusion/`.
 
 ## Examples
 
-The [`examples/`](./examples/) directory contains **59 registered programs** in 11 categories.
+The [`examples/`](./examples/) directory contains **60 registered programs** in 11 categories.
 
 | # | Category | Programs | Highlights |
 | :--- | :--- | :---: | :--- |
 | [01](./examples/01-foundation/) | Foundation | 4 | `hello_world`, `async_timer`, `micro_ticker`, `config` |
-| [02](./examples/02-network/) | Network | 7 | TCP echo, UDP advanced, Unix socket, WebSocket, HTTP fetch, HTTP/2 server, gRPC |
+| [02](./examples/02-network/) | Network | 8 | TCP echo, UDP advanced, Unix socket, WebSocket codec, **`ws_game_server`** (high-level rooms/broadcast), HTTP fetch, HTTP/2 server, gRPC |
 | [03](./examples/03-memory/) | Memory | 4 | Arena, zero-copy arena channel, NUMA + huge pages, lock-free bench |
 | [04](./examples/04-codec-security/) | Codec & Security | 6 | Codecs, crypto URL, security middleware, **crypto primitives**, transport codec/plain |
 | [05](./examples/05-pipeline/) | Pipeline | 12 | Fan-out, hot-swap, batching, dynamic router, backpressure, stateful window, windowed action |

@@ -93,6 +93,19 @@ public:
 class InMemoryIdempotencyStore : public IIdempotencyStore {
 public:
     /**
+     * @brief Construct with a hard capacity bound.
+     *
+     * @param max_entries Maximum live keys. A peer (or at-least-once broker)
+     *        sending many DISTINCT keys would otherwise grow the map without
+     *        bound → OOM. When full, expired entries are swept first and, if
+     *        still full, the oldest entry is evicted to make room (the new key
+     *        is still inserted — failing open so a flood degrades dedup quality
+     *        rather than dropping legitimate work).
+     */
+    explicit InMemoryIdempotencyStore(size_t max_entries = 1u << 20 /* ~1M */)
+        : max_entries_(max_entries == 0 ? 1 : max_entries) {}
+
+    /**
      * @brief Inserts a key only if absent and returns the result.
      *
      * Overwrites expired entries (allows reprocessing after expiry).
@@ -113,6 +126,15 @@ public:
                 co_return false;
             }
             // Overwrite the expired entry.
+        } else if (map_.size() >= max_entries_) {
+            // Capacity guard (distinct-key OOM defense): sweep expired, then if
+            // still full evict an arbitrary entry to bound memory.
+            for (auto i = map_.begin(); i != map_.end();) {
+                if (i->second <= now) i = map_.erase(i); else ++i;
+            }
+            if (map_.size() >= max_entries_ && !map_.empty()) {
+                map_.erase(map_.begin());
+            }
         }
 
         map_[key_str] = now + ttl;
@@ -149,6 +171,9 @@ public:
 private:
     /** @brief Idempotency key → expiry timestamp map. */
     std::unordered_map<std::string, std::chrono::steady_clock::time_point> map_;
+
+    /** @brief Hard cap on live entries (distinct-key OOM defense). */
+    size_t max_entries_ = 1u << 20;
 
     /** @brief Mutex protecting map access. */
     std::mutex mutex_;
