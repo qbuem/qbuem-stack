@@ -135,6 +135,9 @@ public:
 
     insert(e);
     ++count_;
+    // Keep the cached minimum exact: a new timer can only lower it.
+    if (min_valid_ && e->expiry_ms < cached_min_expiry_)
+      cached_min_expiry_ = e->expiry_ms;
     return e->id;
   }
 
@@ -154,6 +157,8 @@ public:
     Entry *e = it->second;
     index_.erase(it);
     unlink(e->level_, e->slot_, e);
+    // Removing the (or a) minimum invalidates the cache → recompute on next query.
+    if (min_valid_ && e->expiry_ms <= cached_min_expiry_) min_valid_ = false;
     e->~Entry();
     pool_.deallocate(e);
     --count_;
@@ -212,13 +217,22 @@ public:
   [[nodiscard]] uint64_t next_expiry_ms() const noexcept {
     if (count_ == 0) return std::numeric_limits<uint64_t>::max();
 
-    uint64_t earliest = std::numeric_limits<uint64_t>::max();
-    for (const auto &[id, e] : index_) {
-      if (e->expiry_ms < earliest)
-        earliest = e->expiry_ms;
+    // Cache the earliest expiry across polls. The previous implementation
+    // walked all of `index_` on EVERY poll — O(active-timers), which collapses
+    // at tens of thousands of connection timers. The minimum only changes when
+    // a timer is scheduled below it (handled in schedule()) or when the current
+    // minimum is fired/cancelled (which clears `min_valid_`), so the recompute
+    // scan runs at most once per min-consumption and every other poll is O(1).
+    if (!min_valid_) {
+      uint64_t earliest = std::numeric_limits<uint64_t>::max();
+      for (const auto &[id, e] : index_) {
+        if (e->expiry_ms < earliest) earliest = e->expiry_ms;
+      }
+      cached_min_expiry_ = earliest;
+      min_valid_ = true;
     }
-    if (earliest <= current_ms_) return 0;
-    return earliest - current_ms_;
+    if (cached_min_expiry_ <= current_ms_) return 0;
+    return cached_min_expiry_ - current_ms_;
   }
 
   /**
@@ -328,6 +342,7 @@ private:
       if (e->expiry_ms <= current_ms_) {
         // Expired — remove from index, fire callback, return to pool
         index_.erase(e->id);
+        if (min_valid_ && e->expiry_ms <= cached_min_expiry_) min_valid_ = false;
         if (e->fn) e->fn();
         e->~Entry();
         pool_.deallocate(e);
@@ -382,6 +397,7 @@ private:
     }
     index_.clear();
     count_ = 0;
+    min_valid_ = false;
   }
 
   /**
@@ -406,6 +422,12 @@ private:
 
   /** @brief Total number of timers currently registered in slots. */
   size_t   count_ = 0;
+
+  /** @brief Cached earliest expiry (absolute ms) for O(1) next_expiry_ms().
+   *  `mutable` because next_expiry_ms() is const but lazily recomputes. */
+  mutable uint64_t cached_min_expiry_ = std::numeric_limits<uint64_t>::max();
+  /** @brief Whether cached_min_expiry_ is current; cleared when the min is removed. */
+  mutable bool     min_valid_ = false;
 
   /**
    * @brief Compute the bit-shift value for slot advancement at each level.
