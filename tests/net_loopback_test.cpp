@@ -162,6 +162,66 @@ TEST(NetLoopback, TcpSendAndReadBack) {
   EXPECT_EQ(to_string(rt.payload.data(), n), std::string(kMsg));
 }
 
+// ─── TcpStream::write_all / read_exact (high-level helpers) ───────────────────
+
+constexpr uint16_t kTcpPort2 = 53919;
+constexpr size_t   kBigLen   = 64 * 1024; // large enough to span multiple reads
+
+// Server: accept, read EXACTLY kBigLen bytes via read_exact, record success +
+// a simple checksum so a partial/misordered read would be detected.
+Task<void> tcp_server_exact(TcpListener &listener, RoundTrip &rt) {
+  auto client = co_await listener.accept();
+  if (!client) {
+    rt.error.store(true); rt.done.store(true, std::memory_order_release); co_return;
+  }
+  std::vector<std::byte> buf(kBigLen);
+  auto r = co_await client->read_exact(buf);
+  if (!r) {
+    rt.error.store(true); rt.done.store(true, std::memory_order_release); co_return;
+  }
+  uint32_t sum = 0;
+  for (std::byte b : buf) sum += static_cast<uint8_t>(b);
+  rt.len.store(sum);
+  rt.done.store(true, std::memory_order_release);
+  co_return;
+}
+
+// Client: connect, send kBigLen bytes via write_all in one call.
+Task<void> tcp_client_all(SocketAddr addr, std::atomic<bool> &failed) {
+  auto stream = co_await TcpStream::connect(addr);
+  if (!stream) { failed.store(true); co_return; }
+  std::vector<std::byte> payload(kBigLen, std::byte{0x01});
+  auto w = co_await stream->write_all(payload);
+  if (!w) failed.store(true);
+  co_return;
+}
+
+TEST(NetLoopback, TcpWriteAllReadExact) {
+  auto addr = SocketAddr::from_ipv4("127.0.0.1", kTcpPort2);
+  ASSERT_TRUE(addr.has_value());
+  auto listener = TcpListener::bind(*addr);
+  ASSERT_TRUE(listener.has_value()) << "bind failed";
+
+  Dispatcher disp(1);
+  RoundTrip rt;
+  std::atomic<bool> client_failed{false};
+
+  disp.spawn(tcp_server_exact(*listener, rt));
+  std::jthread spawn_client([&] {
+    std::this_thread::sleep_for(40ms);
+    disp.spawn(tcp_client_all(*addr, client_failed));
+  });
+
+  const bool completed = run_until(disp, rt.done, 3000ms);
+  spawn_client.join();
+
+  ASSERT_TRUE(completed) << "write_all/read_exact round trip timed out";
+  EXPECT_FALSE(rt.error.load()) << "read_exact failed";
+  EXPECT_FALSE(client_failed.load()) << "write_all failed";
+  // Every byte was 0x01, so the checksum must be exactly kBigLen.
+  EXPECT_EQ(rt.len.load(), static_cast<size_t>(kBigLen));
+}
+
 // ─── Unix domain socket loopback ──────────────────────────────────────────────
 
 const char *const kUnixPath = "/tmp/qbuem_net_loopback_test.sock";
