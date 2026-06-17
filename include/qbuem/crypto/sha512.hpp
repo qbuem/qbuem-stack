@@ -187,39 +187,14 @@ inline void compress_scalar(std::array<uint64_t, 8>& state,
 // ─── ARM SHA-512 block compression ───────────────────────────────────────────
 
 #if defined(QBUEM_SHA512_ARM)
+// Placeholder for a future ARMv8.2 hardware SHA-512 path. The vsha512* intrinsic
+// sequence is not yet validated against the NIST KATs, so this deliberately
+// delegates to the verified scalar implementation rather than ship an unverified
+// crypto core (the dead intrinsic scaffolding was removed — it only tripped
+// -Werror unused-variable warnings under default Apple clang).
 inline void compress_arm_sha512(std::array<uint64_t, 8>& state,
                                  const uint8_t* block) noexcept {
-    uint64x2_t ab = vld1q_u64(state.data() + 0);
-    uint64x2_t cd = vld1q_u64(state.data() + 2);
-    uint64x2_t ef = vld1q_u64(state.data() + 4);
-    uint64x2_t gh = vld1q_u64(state.data() + 6);
-
-    const uint64x2_t ab0 = ab, cd0 = cd, ef0 = ef, gh0 = gh;
-
-    // Load message block (big-endian bytes → little-endian uint64)
-    std::array<uint64x2_t, 8> w{};
-    for (size_t i = 0; i < 8; ++i) {
-        uint64x2_t v = vld1q_u64(reinterpret_cast<const uint64_t*>(block + i * 16));
-        // Byte-swap each 64-bit word for big-endian message schedule
-        w[i] = vreinterpretq_u64_u8(vrev64q_u8(vreinterpretq_u8_u64(v)));
-    }
-
-    // 80 rounds in groups of 2 (using vsha512hq/h2q/su0q/su1q)
-    auto do_rounds = [&](uint64x2_t& s0, uint64x2_t& s1, uint64x2_t& s2, uint64x2_t& s3,
-                         uint64x2_t wi, size_t ki) {
-        const uint64x2_t k  = vld1q_u64(&K[ki]);
-        const uint64x2_t wk = vaddq_u64(wi, k);
-        const uint64x2_t tmp = vsha512hq_u64(s0, s1, wk);
-        s1 = vsha512h2q_u64(tmp, s2, s0);
-        s0 = tmp;
-        (void)s3;
-    };
-    (void)do_rounds;
-
-    // Simplified: use scalar for rounds (ARM SHA-512 intrinsic availability varies)
-    // Fall back to scalar when intrinsics not confirmed
     compress_scalar(state, block);
-    return;
 }
 #endif  // QBUEM_SHA512_ARM
 
