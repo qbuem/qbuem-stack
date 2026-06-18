@@ -16,6 +16,7 @@
 #include <qbuem/core/reactor.hpp>
 #include <qbuem/core/task.hpp>
 
+#include <cerrno>
 #include <coroutine>
 #include <netinet/in.h>
 #include <sys/socket.h>
@@ -77,6 +78,53 @@ struct AsyncWrite {
   }
 
   [[nodiscard]] ssize_t await_resume() const noexcept { return result; }
+};
+
+/**
+ * @brief Awaiter that writes an ENTIRE buffer to a non-blocking fd.
+ *
+ * Unlike AsyncWrite (one ::write, may be short), WriteAll loops inside the Write
+ * event callback: it keeps writing until all `count` bytes are sent, staying
+ * registered on EAGAIN/EWOULDBLOCK (the Reactor re-fires when writable again) and
+ * stopping with ok=false on a real error. Used for mid-handler chunked/SSE flushes
+ * (Response::flush). The caller must keep `buf` alive across the co_await — a
+ * coroutine-frame local string does that. Runs on the fd's reactor thread.
+ */
+struct WriteAll {
+  int         fd;
+  const char *buf;
+  size_t      count;
+  size_t      off = 0;
+  bool        ok  = true;
+
+  [[nodiscard]] bool await_ready() const noexcept { return count == 0; }
+
+  void await_suspend(std::coroutine_handle<> handle) {
+    auto *reactor = Reactor::current();
+    if (reactor == nullptr) {
+      ok = false;
+      handle.resume();
+      return;
+    }
+
+    reactor->register_event(fd, EventType::Write, [handle, this](int f) {
+      while (off < count) {
+        ssize_t n = ::write(f, buf + off, count - off);
+        if (n > 0) {
+          off += static_cast<size_t>(n);
+          continue;
+        }
+        if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK))
+          return; // stay registered; the Reactor re-fires when writable
+        ok = false; // real error (or n == 0)
+        break;
+      }
+      Reactor::current()->unregister_event(f, EventType::Write);
+      handle.resume();
+    });
+  }
+
+  [[nodiscard]] bool await_resume() const noexcept { return ok; }
 };
 
 /**

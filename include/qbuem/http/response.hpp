@@ -13,8 +13,10 @@
  */
 
 #include <qbuem/common.hpp>
+#include <qbuem/core/task.hpp>   // Task<void> for the streaming flush API
 
 #include <array>
+#include <cstddef>
 #include <ctime>
 #include <string>
 #include <string_view>
@@ -187,6 +189,38 @@ public:
   /** @brief Returns the pre-encoded chunked body (framing included). */
   std::string_view chunk_buf() const noexcept { return chunk_buf_; }
 
+  // ── Streaming (flush-on-suspend) — opt-in true chunked/SSE streaming ────────
+  // Without this, chunk()/SSE buffer into chunk_buf_ and only reach the socket
+  // when the handler returns. When the connection injects a socket fd (async
+  // handlers only — see App::listen), flush() writes the pending chunk buffer to
+  // the socket MID-handler, sending the HTTP header on the first flush, so a
+  // long-lived SSE/stream loop streams live. No-op if set_stream_fd was not called
+  // (every existing response is unchanged: stream_fd_ stays -1, streamed_ false).
+
+  /** @brief Inject the connection's socket fd to enable mid-handler streaming. */
+  void set_stream_fd(int fd) noexcept { stream_fd_ = fd; }
+  /** @brief True once flush() has written part of the response to the socket. */
+  bool is_streamed() const noexcept { return streamed_; }
+  /** @brief True while the stream fd is live; becomes false after a failed flush
+   *  (client disconnect) — a streaming loop should stop when this goes false. */
+  bool is_stream_open() const noexcept { return stream_fd_ >= 0; }
+  /** @brief Total bytes flushed to the socket by flush()/flush_end(). */
+  std::size_t streamed_bytes() const noexcept { return streamed_bytes_; }
+
+  /**
+   * @brief Flush the pending chunk buffer to the socket (header first).
+   *
+   * No-op unless set_stream_fd() was called. Sends the serialized HTTP header
+   * (with Transfer-Encoding: chunked) on the first flush, then the accumulated
+   * chunk frames, then clears the buffer. Must run on the connection's reactor
+   * thread (uses Reactor::current()). After any flush, is_streamed() is true and
+   * the connection skips its normal post-handler send.
+   */
+  qbuem::Task<void> flush();
+
+  /** @brief Flush any remainder + the terminal 0-length chunk, closing the stream. */
+  qbuem::Task<void> flush_end();
+
 private:
   std::string_view status_to_string(int code) const;
 
@@ -202,6 +236,12 @@ private:
   // Chunked transfer encoding accumulator
   bool        chunked_      = false;
   std::string chunk_buf_;   // encoded chunked body (framing included)
+
+  // Streaming (flush-on-suspend) state — see set_stream_fd()/flush().
+  int         stream_fd_     = -1;     // socket fd injected by the connection (-1 = buffered)
+  bool        header_sent_   = false;  // HTTP header already written to the socket
+  bool        streamed_      = false;  // some bytes already streamed → skip post-handler send
+  std::size_t streamed_bytes_ = 0;     // bytes written by flush()/flush_end()
 
   // HTTP Trailers (RFC 7230 §4.1.2) — sent after last chunk
   std::vector<std::pair<std::string, std::string>> trailers_;

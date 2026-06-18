@@ -1,4 +1,5 @@
 #include <qbuem/http/response.hpp>
+#include <qbuem/core/awaiters.hpp>   // qbuem::WriteAll (mid-handler socket flush)
 #include <array>
 #include <cstdio>
 
@@ -40,6 +41,44 @@ Response &Response::end_chunks() {
   chunk_buf_ += "0\r\n"; // terminal chunk header (trailers or CRLF follow)
   chunked_ = true;
   return *this;
+}
+
+// ── Streaming (flush-on-suspend) ──────────────────────────────────────────────
+
+Task<void> Response::flush() {
+  if (stream_fd_ < 0) co_return; // buffered mode → unchanged behavior
+  std::string out;
+  if (!header_sent_) {
+    chunked_ = true;                 // announce Transfer-Encoding: chunked
+    out = serialize_header();        // status line + headers + chunked framing line
+    header_sent_ = true;
+    streamed_ = true;                // → App::listen skips the post-handler send
+  }
+  out += chunk_buf_;                 // accumulated "<hex>\r\n<data>\r\n" frames
+  chunk_buf_.clear();
+  if (out.empty()) co_return;
+  bool ok = co_await WriteAll{stream_fd_, out.data(), out.size()};
+  if (ok) streamed_bytes_ += out.size();
+  else    stream_fd_ = -1;           // socket dead → further flushes become no-ops
+  co_return;
+}
+
+Task<void> Response::flush_end() {
+  if (stream_fd_ < 0) co_return;
+  std::string out;
+  if (!header_sent_) {               // close without ever flushing → still valid
+    chunked_ = true;
+    out = serialize_header();
+    header_sent_ = true;
+    streamed_ = true;
+  }
+  out += chunk_buf_;
+  chunk_buf_.clear();
+  out += "0\r\n\r\n";                // terminal 0-length chunk closes the stream
+  bool ok = co_await WriteAll{stream_fd_, out.data(), out.size()};
+  if (ok) streamed_bytes_ += out.size();
+  stream_fd_ = -1;
+  co_return;
 }
 
 // ── HTTP Trailers (RFC 7230 §4.1.2) ──────────────────────────────────────────

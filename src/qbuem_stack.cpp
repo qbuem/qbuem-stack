@@ -546,6 +546,10 @@ Result<void> App::listen(int port, bool ipv6) {
   g_app_instance = this;
   std::signal(SIGTERM, on_shutdown_signal);
   std::signal(SIGINT,  on_shutdown_signal);
+  // Writes to a peer-closed socket (HTTP chunk/SSE flush, WS frames) must fail with
+  // EPIPE, not kill the process. macOS uses SO_NOSIGPIPE per-socket; Linux needs a
+  // global ignore.
+  std::signal(SIGPIPE, SIG_IGN);
 
   // ── SO_REUSEPORT per-reactor listening sockets ────────────────────────────
   // Create one listening socket per reactor thread.  The kernel distributes
@@ -850,6 +854,13 @@ Result<void> App::listen(int port, bool ipv6) {
               auto send_response = [this, cfd, keep_alive, &ctx,
                                     req_start](const Request &rq,
                                                Response &r) mutable {
+                // Streaming handlers (Response::flush / SseStream::send_async) have
+                // already written the full chunked response to the socket. Account
+                // for the bytes and skip the normal header/body send entirely.
+                if (r.is_streamed()) {
+                  cnt_bytes_sent_.fetch_add(r.streamed_bytes(), std::memory_order_relaxed);
+                  return;
+                }
                 auto if_none_match = rq.header("If-None-Match");
                 auto resp_etag     = r.get_header("ETag");
                 if (!if_none_match.empty() && !resp_etag.empty()) {
@@ -1023,6 +1034,7 @@ Result<void> App::listen(int port, bool ipv6) {
                     }
                   } else {
                     auto &ah = std::get<AsyncHandler>(handler);
+                    rsp->set_stream_fd(fd);   // enable mid-handler streaming (SSE/chunk flush)
                     try { co_await ah(*rqp, *rsp); }
                     catch (const std::exception &ex) {
                       std::cerr << "[ERROR] async handler: " << ex.what() << "\n";
@@ -1121,6 +1133,7 @@ Result<void> App::listen(int port, bool ipv6) {
                        bool ka_flag, bool head_fb,
                        std::function<void()> arm, // NOLINT(performance-unnecessary-value-param)
                        decltype(send_response) sr_fn) -> Task<void> { // NOLINT(performance-unnecessary-value-param)
+                  ares.set_stream_fd(fd);   // enable mid-handler streaming (SSE/chunk flush)
                   try {
                     co_await ah(areq, ares);
                   } catch (const std::exception &ex) {
@@ -1172,6 +1185,10 @@ Result<void> App::listen_unix(std::string_view path) {
   g_app_instance = this;
   std::signal(SIGTERM, on_shutdown_signal);
   std::signal(SIGINT,  on_shutdown_signal);
+  // Writes to a peer-closed socket (HTTP chunk/SSE flush, WS frames) must fail with
+  // EPIPE, not kill the process. macOS uses SO_NOSIGPIPE per-socket; Linux needs a
+  // global ignore.
+  std::signal(SIGPIPE, SIG_IGN);
 
   // ── Unix domain socket ────────────────────────────────────────────────────
   int server_fd = ::socket(AF_UNIX, SOCK_STREAM, 0);

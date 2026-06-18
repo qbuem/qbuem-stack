@@ -16,13 +16,18 @@
  *     sse.close();
  *   }));
  *
- * Note: For long-lived push streams, use an AsyncHandler with co_await sleep()
- * between events.  SseStream::send() calls Response::chunk() which buffers the
- * event; the buffer is sent when the handler returns (or when close() is called
- * which calls end_chunks()).
+ * Two modes:
+ *   - send() (sync): buffers via Response::chunk(); the buffer reaches the socket
+ *     when the handler RETURNS. Fine for a bounded burst, NOT for live streaming.
+ *   - send_async() (co_await, since v1.4.1): flushes each event to the socket
+ *     mid-handler via Response::flush(), so a long-lived
+ *       for(;;){ co_await sse.send_async(json,"ev"); co_await qbuem::sleep(1000); }
+ *     loop streams live. Use this for SSE push. Requires an AsyncHandler (the
+ *     connection injects the socket fd for async routes). End with close_async().
  */
 
 #include <qbuem/http/response.hpp>
+#include <qbuem/core/task.hpp>   // Task<void> for send_async/close_async
 
 #include <cstdint>
 #include <string>
@@ -58,43 +63,33 @@ public:
                   std::string_view event = {},
                   std::string_view id    = {},
                   int              retry = -1) {
-    std::string frame;
-    frame.reserve(16 + event.size() + id.size() + data.size());
-
-    if (!event.empty()) {
-      frame += "event: ";
-      frame += event;
-      frame += '\n';
-    }
-    if (!id.empty()) {
-      frame += "id: ";
-      frame += id;
-      frame += '\n';
-    }
-    if (retry >= 0) {
-      frame += "retry: ";
-      frame += std::to_string(retry);
-      frame += '\n';
-    }
-
-    // Split multi-line data across multiple "data:" fields.
-    size_t start = 0;
-    while (start < data.size()) {
-      auto nl = data.find('\n', start);
-      frame += "data: ";
-      if (nl == std::string_view::npos) {
-        frame += data.substr(start);
-        start = data.size();
-      } else {
-        frame += data.substr(start, nl - start);
-        start = nl + 1;
-      }
-      frame += '\n';
-    }
-    frame += '\n'; // blank line terminates the event
-
-    res_.chunk(frame);
+    res_.chunk(build_frame(data, event, id, retry));   // buffered — flushes at return
     return *this;
+  }
+
+  /**
+   * @brief Send an SSE event AND flush it to the socket immediately (streaming).
+   *
+   * Unlike send() (which buffers until the handler returns), send_async() writes
+   * the event to the socket mid-handler via Response::flush(), so a long-lived
+   * `for(;;){ send_async(...); co_await sleep(...); }` loop streams live. Requires
+   * an async handler whose connection injected the socket fd (App::listen does so
+   * for AsyncHandler routes). On the connection's reactor thread.
+   */
+  Task<void> send_async(std::string_view data,
+                        std::string_view event = {},
+                        std::string_view id    = {},
+                        int              retry = -1) {
+    res_.chunk(build_frame(data, event, id, retry));
+    co_await res_.flush();
+  }
+
+  /** @brief Flush the terminal chunk to close a streamed SSE response. */
+  Task<void> close_async() {
+    if (!closed_) {
+      co_await res_.flush_end();
+      closed_ = true;
+    }
   }
 
   /**
@@ -123,6 +118,26 @@ public:
   ~SseStream() { close(); }
 
 private:
+  // Build the raw SSE wire frame (event:/id:/retry: lines + data: line(s) + blank).
+  static std::string build_frame(std::string_view data, std::string_view event,
+                                 std::string_view id, int retry) {
+    std::string frame;
+    frame.reserve(16 + event.size() + id.size() + data.size());
+    if (!event.empty()) { frame += "event: "; frame += event; frame += '\n'; }
+    if (!id.empty())    { frame += "id: ";    frame += id;    frame += '\n'; }
+    if (retry >= 0)     { frame += "retry: "; frame += std::to_string(retry); frame += '\n'; }
+    size_t start = 0;
+    while (start < data.size()) {
+      auto nl = data.find('\n', start);
+      frame += "data: ";
+      if (nl == std::string_view::npos) { frame += data.substr(start); start = data.size(); }
+      else { frame += data.substr(start, nl - start); start = nl + 1; }
+      frame += '\n';
+    }
+    frame += '\n'; // blank line terminates the event
+    return frame;
+  }
+
   Response &res_;
   bool      closed_ = false;
 };

@@ -64,6 +64,16 @@
  *           list of objects there (incl. several per cell, which a presence bitset
  *           cannot), with clear()/insert()/for_each_in_radius() for AOI / broad-phase
  *           queries. 0-alloc rebuild (buckets retain capacity).
+ * - 1.4.1: HTTP/SSE flush-on-suspend — true server-push streaming. Response gains
+ *           set_stream_fd()/flush()/flush_end()/is_streamed()/is_stream_open();
+ *           SseStream gains send_async()/close_async(); a WriteAll awaiter
+ *           (core/awaiters.hpp) drains a buffer to a non-blocking socket mid-handler.
+ *           App::listen injects the socket fd into async-handler Responses and skips
+ *           the post-handler send when streamed. Before this, chunk()/SSE buffered
+ *           until the handler returned, so a long-lived SSE loop never reached the
+ *           client. Also: global SIGPIPE ignore (writes to a closed peer fail with
+ *           EPIPE instead of killing the process). Additive + opt-in: buffered
+ *           responses are unchanged.
  * Roadmap (planned, not yet tagged): kqueue reactor sophistication; unified DB
  *           abstraction (IDBDriver/ConnectionPool/Statement); SHM messaging
  *           (SHMChannel/SHMBus) — the AOI broadcast path ("darkness = network").
@@ -175,13 +185,13 @@ struct Version {
   static constexpr int major = 1;
 
   /** @brief Minor version number. Incremented when new backwards-compatible features are added. */
-  static constexpr int minor = 2;
+  static constexpr int minor = 4;
 
   /** @brief Patch version number. Incremented for backwards-compatible bug fixes only. */
-  static constexpr int patch = 0;
+  static constexpr int patch = 1;
 
   /** @brief Version string in "major.minor.patch" format (null-terminated). */
-  static constexpr std::string_view string = "1.2.0";
+  static constexpr std::string_view string = "1.4.1";
 };
 
 } // namespace qbuem
@@ -193,9 +203,9 @@ struct Version {
 #define QBUEM_VERSION_MINOR 4
 
 /** @brief Patch version number (for use in preprocessor `#if` conditions). */
-#define QBUEM_VERSION_PATCH 0
+#define QBUEM_VERSION_PATCH 1
 
 /** @brief Version string literal "major.minor.patch" (for use in preprocessor conditions). */
-#define QBUEM_VERSION_STRING "1.4.0"
+#define QBUEM_VERSION_STRING "1.4.1"
 
 /** @} */ // end of qbuem_version
