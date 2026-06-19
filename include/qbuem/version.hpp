@@ -148,6 +148,23 @@
  *           macOS sendfile no longer busy-spins. (Still deferred: awaiters
  *           persistent registration, SHM futex, MessageBus RCU, full HTTP/2/
  *           gRPC/DB server transports — see docs/audit/2026-06-17_*.)
+ * - 1.3.0: GenerationPool — emplace / destroy / for_each_live (ABA-safe
+ *           generation-tagged object pool for stable-handle entity storage).
+ * - 1.4.0: SpatialGrid<T> — uniform-grid object spatial index for AOI /
+ *           broad-phase neighbor queries (insert/move/remove, query-in-radius).
+ * - 1.4.1: HTTP SSE / chunked flush-on-suspend — true server-push streaming
+ *           (a handler can flush bytes mid-coroutine before it returns).
+ * - 1.5.0: Precise fixed-timestep ticking.
+ *           TickLoop (core/tick_loop.hpp): drift-compensated absolute-deadline
+ *           scheduler, deterministic catch-up of missed ticks (bounded by
+ *           max_catchup; a f(seed,tick) sim never skips), zero-allocation jitter
+ *           + work latency histograms (p50/p99/p99.9) readable cross-thread,
+ *           two drive modes (advance(now) for reactor coroutines / manual; and
+ *           run_pinned() nanosleep+busy-spin for sub-ms control loops).
+ *           TickScheduler (core/tick_scheduler.hpp): high-level multi-rate
+ *           systems (every/phase/order), deterministic (seed,tick) splitmix64
+ *           RNG, pause / time-scale / single-step + render-interpolation alpha,
+ *           per-system work metrics + overrun watchdog. Verified TSan/ASan/UBSan.
  */
 
 /**
@@ -177,7 +194,7 @@ namespace qbuem {
  *
  * @code
  * static_assert(qbuem::Version::major >= 1, "qbuem-stack 1.x required");
- * std::print("{}\n", qbuem::Version::string); // "1.0.0"
+ * std::print("{}\n", qbuem::Version::string); // "1.5.0"
  * @endcode
  */
 struct Version {
@@ -185,13 +202,13 @@ struct Version {
   static constexpr int major = 1;
 
   /** @brief Minor version number. Incremented when new backwards-compatible features are added. */
-  static constexpr int minor = 4;
+  static constexpr int minor = 5;
 
   /** @brief Patch version number. Incremented for backwards-compatible bug fixes only. */
-  static constexpr int patch = 1;
+  static constexpr int patch = 0;
 
   /** @brief Version string in "major.minor.patch" format (null-terminated). */
-  static constexpr std::string_view string = "1.4.1";
+  static constexpr std::string_view string = "1.5.0";
 };
 
 } // namespace qbuem
@@ -200,12 +217,12 @@ struct Version {
 #define QBUEM_VERSION_MAJOR 1
 
 /** @brief Minor version number (for use in preprocessor `#if` conditions). */
-#define QBUEM_VERSION_MINOR 4
+#define QBUEM_VERSION_MINOR 5
 
 /** @brief Patch version number (for use in preprocessor `#if` conditions). */
-#define QBUEM_VERSION_PATCH 1
+#define QBUEM_VERSION_PATCH 0
 
 /** @brief Version string literal "major.minor.patch" (for use in preprocessor conditions). */
-#define QBUEM_VERSION_STRING "1.4.1"
+#define QBUEM_VERSION_STRING "1.5.0"
 
 /** @} */ // end of qbuem_version

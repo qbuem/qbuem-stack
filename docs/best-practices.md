@@ -826,6 +826,28 @@ ticker.start([&reactor](auto now) {
 
 Use when: `TimerWheel` 1ms granularity is not enough — e.g., HFT matching engine heartbeats, hardware sensor polling.
 
+### TickLoop / TickScheduler — fixed-timestep simulation & control
+
+```cpp
+#include <qbuem/core/tick_scheduler.hpp>
+
+TickScheduler sched({.interval = std::chrono::milliseconds{100}}); // 10 Hz
+sched.set_seed(match_seed);                                        // deterministic (seed,tick)
+sched.add_system({.every = 1, .order = 0, .name = "sim"},
+                 [&](const TickContext& t){ world.step(t.tick, *t.rng); });
+sched.add_system({.every = 2, .order = 10, .name = "aoi"},
+                 [&](const TickContext&){ broadcast(); });
+// reactor:  for(;;){ sched.advance(); co_await sleep(sched.next_sleep_ms()); }
+// pinned :  sched.run_pinned();
+```
+
+Use when: you need a **drift-free, deterministic** fixed-timestep loop that
+re-runs missed ticks (game servers, physics, robotics/PID, audio blocks) with
+per-tick/per-system latency metrics. `TickLoop` is the single-rate core;
+`TickScheduler` adds multi-rate systems + deterministic RNG + pause/time-scale.
+Prefer over a raw `MicroTicker` when you need catch-up, metrics, or multiple
+update rates; prefer `MicroTicker` for a bare sub-ms heartbeat.
+
 ### CPU affinity and cache hints
 
 ```cpp
@@ -921,9 +943,11 @@ CRYPTO
   JWT                → simd_jwt
 
 TIMING
-  scheduled callbacks → TimerWheel
-  sub-ms precision    → MicroTicker
-  structured wait     → TaskGroup
+  scheduled callbacks    → TimerWheel
+  sub-ms heartbeat       → MicroTicker
+  fixed-timestep sim/tick→ TickLoop (drift-free + catch-up + metrics)
+  multi-rate game tick   → TickScheduler (systems + deterministic RNG + pause/scale)
+  structured wait        → TaskGroup
 
 OBSERVABILITY
   distributed tracing → TraceContext + Span + Exporter

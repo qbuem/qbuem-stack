@@ -140,7 +140,7 @@ under [`examples/`](../../examples/).
 
 ```
 include/qbuem/
-  core/        Task, Reactor (epoll/io_uring/kqueue), Dispatcher, Arena, TimerWheel, awaiters
+  core/        Task, Reactor (epoll/io_uring/kqueue), Dispatcher, Arena, TimerWheel, awaiters, TickLoop/TickScheduler
   pipeline/    Static/Dynamic/Graph pipelines, channels, actions, resilience, windows
   http/        HTTP/1.1 parser, Request/Response, Router, fetch client
   server/      HTTP1/HTTP2/WebSocket/gRPC connection handlers

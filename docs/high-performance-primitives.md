@@ -137,6 +137,35 @@ sequenceDiagram
 
 ---
 
+## 4b. TickLoop / TickScheduler (Fixed-Timestep Simulation)
+
+Where `MicroTicker` is a bare heartbeat, `TickLoop` (`<qbuem/core/tick_loop.hpp>`)
+is the **fixed-timestep simulation core**, and `TickScheduler`
+(`<qbuem/core/tick_scheduler.hpp>`) is the high-level multi-rate orchestrator.
+
+| Property | Mechanism |
+|---|---|
+| **No drift** | Advances an absolute deadline by exactly `interval` each tick (a `sleep(interval)` loop sags by the per-tick work time). |
+| **Deterministic catch-up** | Re-runs every missed tick in order (a `f(seed,tick)` sim never skips), bounded per wakeup by `max_catchup`. |
+| **0-alloc metrics** | Jitter + work histograms (p50/p99/p99.9), overrun/catchup/backlog counters, EWMA load — readable from a monitoring thread with no hot-path allocation. |
+| **Two drive modes** | `advance(now)` (reactor coroutine / manual / testable) and `run_pinned()` (dedicated thread, nanosleep + busy-spin for sub-ms). |
+| **TickScheduler adds** | Multi-rate systems (`every`/`phase`/`order`), deterministic `(seed,tick)` splitmix64 RNG, pause / time-scale / single-step + render `alpha()`, per-system metrics + overrun watchdog. |
+
+```cpp
+qbuem::TickScheduler sched({.interval = std::chrono::milliseconds{100}}); // 10 Hz
+sched.set_seed(match_seed);
+sched.add_system({.every = 1, .name = "sim"}, [&](const qbuem::TickContext& t){ world.step(t.tick, *t.rng); });
+sched.add_system({.every = 2, .name = "aoi"}, [&](const qbuem::TickContext&){ broadcast(); });
+sched.run_pinned();   // or: advance() + co_await sleep(next_sleep_ms()) on a reactor
+```
+
+> [!TIP]
+> Use `TickLoop`/`TickScheduler` for game-server ticks, physics, robotics/PID,
+> audio blocks and fixed-rate sensor sampling — anywhere you need a precise,
+> drift-free, instrumented heartbeat that **never silently skips a tick**.
+
+---
+
 ## 5. GridBitset<Dim> (2.5D/3D Support)
 
 A spatial bitset flattened into a 1D array, optimized for SIMD bitwise queries.

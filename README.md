@@ -107,7 +107,7 @@ there is no hard dependency. macOS uses kqueue.
 | Level | Modules | Key Types |
 |---|---|---|
 | 1 Foundation | `core/arena`, `crypto` | `Arena`, `FixedPoolResource`, `Result<T>` |
-| 2 Async Core | `core/task`, `core/reactor`, `core/dispatcher` | `Task<T>`, `Reactor`, `Dispatcher` |
+| 2 Async Core | `core/task`, `core/reactor`, `core/dispatcher`, `core/tick_loop` | `Task<T>`, `Reactor`, `Dispatcher`, `TickLoop`, `TickScheduler` |
 | 3 IO Primitives | `net`, `io`, `shm`, `buf` | `TcpStream`, `IOVec<N>`, `scattered_span`, `SHMChannel<T>` |
 | 4 Transport / Codec | `transport`, `codec` | `PlainTransport`, `LengthPrefixCodec`, `LineCodec` |
 | 5 Web / HTTP | `http`, `server` | `Request`, `Response`, `Router`, `App` |

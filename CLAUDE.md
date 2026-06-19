@@ -21,7 +21,7 @@ Existing Korean comments in legacy files should be translated to English when to
 
 ## Project Identity
 
-**qbuem-stack v1.2.0** — Zero Latency · Zero Allocation · Zero Dependency
+**qbuem-stack v1.5.0** — Zero Latency · Zero Allocation · Zero Dependency
 C++23 high-performance infrastructure library for WAS (Web Application Servers), IPC, and data pipelines.
 
 - **Language**: C++23 (concepts, coroutines `co_await`/`co_return`, `std::expected`, `std::span`, `std::format`, `std::print`/`std::println`, `std::unreachable()`, `if consteval`, `std::to_underlying`)
@@ -68,7 +68,7 @@ CMake options:
 ```
 include/qbuem/          ← ALL public headers (header-centric library)
   qbuem_stack.hpp       ← Umbrella include — pulls the App/server surface
-  core/                 ← Dispatcher, Task<T>, Reactor (epoll/io_uring/kqueue), Arena, TimerWheel
+  core/                 ← Dispatcher, Task<T>, Reactor (epoll/io_uring/kqueue), Arena, TimerWheel, MicroTicker, TickLoop + TickScheduler (precise fixed-timestep ticking)
   pipeline/             ← StaticPipeline, DynamicPipeline, PipelineGraph, actions, resilience
   shm/                  ← SHMChannel<T>, SHMBus, futex_sync
   net/                  ← TCP/UDP/Unix socket async primitives, UDS FD passing, DNS
@@ -422,6 +422,7 @@ The `IOVec<N>` must remain in scope for as long as the `scattered_span` is used.
 | Distributed tracing | `include/qbuem/tracing/`, `examples/08-observability/tracing/` |
 | Memory allocation | `include/qbuem/buf/arena.hpp`, `examples/03-memory/arena/` |
 | Thread management / blocking-work offload | `include/qbuem/core/dispatcher.hpp` (`spawn_on`, `drain`), `include/qbuem/core/offload_pool.hpp`, `include/qbuem/core/numa.hpp`, `examples/01-foundation/offload_pool/` |
+| Precise fixed-timestep tick (game/sim/control loops) | `include/qbuem/core/tick_loop.hpp` (drift-free + catch-up + 0-alloc metrics), `include/qbuem/core/tick_scheduler.hpp` (multi-rate systems + deterministic (seed,tick) RNG + pause/time-scale/step), `examples/01-foundation/tick_loop/`, `tests/tick_loop_test.cpp` |
 
 ---
 

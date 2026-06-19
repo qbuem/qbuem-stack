@@ -211,6 +211,7 @@ All modules must adhere to these quantitative benchmarks to be considered part o
 - [x] **`GenerationPool<T>`**: Lock-free object pool with generation-indexed `Handle<T>` (ABA-safe). (`include/qbuem/buf/generation_pool.hpp`)
 - [x] **`IntrusiveList<T>`**: Zero-allocation linked list (objects carry pointers). (`include/qbuem/buf/intrusive_list.hpp`)
 - [x] **`MicroTicker`**: High-precision Reactor driver — nanosleep + busy-spin hybrid, <5µs jitter, drift compensation. (`include/qbuem/reactor/micro_ticker.hpp`)
+- [x] **`TickLoop` / `TickScheduler`** (v1.5.0): drift-free fixed-timestep ticking with deterministic catch-up + 0-alloc jitter/work metrics; high-level multi-rate systems + deterministic `(seed,tick)` RNG + pause/time-scale/step + per-system metrics. TSan/ASan/UBSan-verified. (`include/qbuem/core/tick_loop.hpp`, `include/qbuem/core/tick_scheduler.hpp`)
 - [x] **`FileIO (O_DIRECT)`**: `DirectFile`, `FileSink<T>`, `FileSource<T>` — page-cache bypass with 512-byte aligned I/O. (`include/qbuem/io/direct_file.hpp`)
 - [x] **`Epoll (Edge-Triggered)`**: `EpollReactor` updated to `EPOLLET | EPOLLONESHOT` with automatic post-callback re-arming. (`src/core/epoll_reactor.cpp`)
 - [x] **`PCIeDevice (VFIO)`**: Full VFIO implementation — `open()`, `map_bar()`, `alloc_dma_buffer()`, MMIO read/write. (`src/pcie/pcie_device.cpp`)
