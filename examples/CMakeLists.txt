@@ -44,6 +44,11 @@ add_executable(offload_pool_example
     01-foundation/offload_pool/offload_pool_example.cpp)
 target_link_libraries(offload_pool_example PRIVATE qbuem-stack::qbuem)
 
+# TickLoop: drift-free fixed-timestep ticking + catch-up + 0-alloc metrics
+add_executable(tick_loop_example
+    01-foundation/tick_loop/tick_loop_example.cpp)
+target_link_libraries(tick_loop_example PRIVATE qbuem-stack::qbuem)
+
 # ── 02 Network ────────────────────────────────────────────────────────────────
 
 add_executable(tcp_echo_server

@@ -55,7 +55,7 @@ CMake options:
 | Option | Default | Description |
 |---|---|---|
 | `QBUEM_BUILD_TESTS` | ON | Build unit tests under `tests/` |
-| `QBUEM_BUILD_EXAMPLES` | ON | Build all 60 examples under `examples/` |
+| `QBUEM_BUILD_EXAMPLES` | ON | Build all 61 examples under `examples/` |
 | `QBUEM_BUILD_BENCH` | ON | Build benchmarks under `bench/` |
 | `QBUEM_ENABLE_LTO` | OFF | Interprocedural optimization (LTO) for library targets |
 | `QBUEM_ENABLE_NATIVE_CRYPTO` | OFF | Compile crypto with the host CPU's hardware SHA-2/AES (host-targeting; ~11× SHA-256/HMAC). Requires that CPU to support them. |
@@ -85,8 +85,8 @@ include/qbuem/          ← ALL public headers (header-centric library)
 
 src/                    ← Non-inline implementations (reactors, http parser/router)
 tests/                  ← Unit tests (mirrors include/ structure)
-examples/               ← 60 registered examples in 11 category subdirectories
-  01-foundation/        → hello_world, async_timer, micro_ticker, offload_pool, config
+examples/               ← 61 registered examples in 11 category subdirectories
+  01-foundation/        → hello_world, async_timer, micro_ticker, tick_loop, offload_pool, config
   02-network/           → tcp_echo_server, udp_advanced, udp_unix_socket, websocket, ws_game_server, http_fetch, http2_server, grpc
   03-memory/            → arena, zero_copy_arena_channel, numa_hugepages, lockfree_bench
   04-codec-security/    → codec, crypto_url, security_middleware, crypto_primitives, transport_codec, transport_plain
