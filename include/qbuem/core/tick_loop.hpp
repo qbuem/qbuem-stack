@@ -167,7 +167,6 @@ struct TickStats {
   uint64_t jitter_p50_ns = 0, jitter_p99_ns = 0, jitter_p999_ns = 0;
   uint64_t work_p50_ns = 0, work_p99_ns = 0, work_p999_ns = 0;
   double   load = 0.0;           ///< EWMA(work / interval); ≥ 1.0 ⇒ cannot keep up.
-  uint64_t behind = 0;           ///< Ticks currently due but not yet run.
 };
 
 // ─── TickConfig ───────────────────────────────────────────────────────────────
@@ -249,10 +248,12 @@ public:
         max_work_ns_.store(work, std::memory_order_relaxed);
       if (work > static_cast<uint64_t>(interval_.count()))
         overruns_.fetch_add(1, std::memory_order_relaxed);
-      // EWMA load (1/16 weight) — fixed-point-free, monitoring only.
+      // EWMA load (1/16 weight) — monitoring only. Atomic store so a monitor
+      // thread can read it via stats() without a data race (single writer here).
       const double inst = static_cast<double>(work) /
                           static_cast<double>(interval_.count());
-      load_ = load_ + (inst - load_) * 0.0625;
+      const double prev = load_.load(std::memory_order_relaxed);
+      load_.store(prev + (inst - prev) * 0.0625, std::memory_order_relaxed);
 
       ++tick_;
       ++fired;
@@ -293,7 +294,9 @@ public:
     return next_sleep_ms(Clock::now());
   }
 
-  /** @brief Ticks currently due but not yet run (backlog) as of @p now. */
+  /** @brief Ticks currently due but not yet run (backlog) as of @p now.
+   *  @warning Reads live (non-atomic) scheduling state — call from the driving
+   *  thread only, not concurrently with `advance()`/`run_pinned()`. */
   [[nodiscard]] uint64_t behind(Clock::time_point now) const noexcept {
     if (!started_ || now < next_deadline_) return 0;
     return static_cast<uint64_t>((now - next_deadline_).count()) /
@@ -328,7 +331,15 @@ public:
     return running_.load(std::memory_order_relaxed);
   }
 
-  /** @brief Take a metrics snapshot (safe from any thread). */
+  /**
+   * @brief Take a metrics snapshot.
+   *
+   * Safe to call from ANY thread concurrently with the driving thread: it reads
+   * only atomics (counters, the EWMA load, and the histogram buckets). It does
+   * NOT read live scheduling state — use `behind()` / `next_sleep_ms()` for that
+   * (those read the non-atomic deadline/clock and must be called on the driving
+   * thread). `backlog_events` is the monitor-side "falling behind" signal.
+   */
   [[nodiscard]] TickStats stats() const noexcept {
     TickStats s;
     s.ticks = ticks_.load(std::memory_order_relaxed);
@@ -343,8 +354,7 @@ public:
     s.work_p50_ns = hist_work_.percentile(0.50);
     s.work_p99_ns = hist_work_.percentile(0.99);
     s.work_p999_ns = hist_work_.percentile(0.999);
-    s.load = load_;
-    s.behind = behind();
+    s.load = load_.load(std::memory_order_relaxed);
     return s;
   }
 
@@ -398,7 +408,7 @@ private:
   std::atomic<uint64_t> backlog_events_{0};
   std::atomic<uint64_t> max_lateness_ns_{0};
   std::atomic<uint64_t> max_work_ns_{0};
-  double                load_ = 0.0;
+  std::atomic<double>   load_{0.0};
   TickHistogram         hist_jitter_;
   TickHistogram         hist_work_;
 };

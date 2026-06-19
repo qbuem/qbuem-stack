@@ -9,9 +9,11 @@
 
 #include <qbuem/core/tick_loop.hpp>
 
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <gtest/gtest.h>
+#include <thread>
 #include <vector>
 
 using namespace qbuem;
@@ -140,4 +142,57 @@ TEST(TickHistogram, EmptyReturnsZero) {
   TickHistogram h;
   EXPECT_EQ(h.count(), 0u);
   EXPECT_EQ(h.percentile(0.99), 0u);
+}
+
+// ─── run_pinned + concurrency + overrun (real threads / real clock) ───────────
+
+TEST(TickLoop, RunPinnedTicksAndStops) {
+  TickLoop loop({.interval = 2ms, .spin_window = 200us});
+  std::atomic<uint64_t> count{0};
+  std::jthread t([&] {
+    loop.run_pinned([&](TickInfo) { count.fetch_add(1, std::memory_order_relaxed); });
+  });
+  std::this_thread::sleep_for(120ms);
+  loop.stop();
+  t.join();
+  // ~60 ticks in 120 ms @ 2 ms; wide slack for CI/scheduler jitter.
+  EXPECT_GE(count.load(), 25u);
+  EXPECT_LE(count.load(), 100u);
+  EXPECT_FALSE(loop.running());
+  EXPECT_EQ(loop.stats().ticks, count.load());
+}
+
+TEST(TickLoop, ConcurrentStatsReadIsSafe) {
+  // A reader hammers stats() while the tick thread runs — the cross-thread-read
+  // claim is exactly what TSan/ASan validate here.
+  TickLoop loop({.interval = 1ms, .spin_window = 100us});
+  std::atomic<bool> go{true};
+  std::atomic<uint64_t> sink{0};
+  std::jthread reader([&] {
+    while (go.load(std::memory_order_relaxed)) {
+      auto s = loop.stats();
+      sink.fetch_add(s.ticks + s.jitter_p99_ns + s.work_p99_ns,
+                     std::memory_order_relaxed); // prevent elision
+    }
+  });
+  std::jthread driver([&] { loop.run_pinned([](TickInfo) {}); });
+  std::this_thread::sleep_for(80ms);
+  loop.stop();
+  driver.join();
+  go.store(false, std::memory_order_relaxed);
+  reader.join();
+  SUCCEED(); // no data race / crash
+}
+
+TEST(TickLoop, OverrunAndLoadDetected) {
+  TickLoop loop({.interval = 1ms, .max_catchup = 0});
+  const auto t0 = Clock::now();
+  loop.advance(t0, [](TickInfo) {});
+  // A callback that takes longer than one interval → overrun + load > 0.
+  loop.advance(t0 + 1ms,
+               [](TickInfo) { std::this_thread::sleep_for(3ms); });
+  auto s = loop.stats();
+  EXPECT_GE(s.overruns, 1u);
+  EXPECT_GT(s.load, 0.0);
+  EXPECT_GT(s.max_work_ns, 1'000'000u); // > 1 ms work recorded
 }
