@@ -14,8 +14,10 @@
 
 #include <qbuem/compat/print.hpp>
 #include <qbuem/core/tick_loop.hpp>
+#include <qbuem/core/tick_scheduler.hpp>
 
 #include <chrono>
+#include <string>
 #include <thread>
 #include <vector>
 
@@ -72,9 +74,38 @@ int main() {
   println("    tick order (contiguous, none skipped): {}", seq);
   print_stats("10Hz", sim.stats());
 
+  // ── (3) TickScheduler: multi-rate systems + deterministic RNG + metrics ───
+  println("\n== (3) TickScheduler: multi-rate systems, deterministic RNG, metrics ==");
+  TickScheduler sched({.interval = 100ms}); // 10 Hz base
+  sched.set_seed(0xC0FFEE);                  // deterministic (seed, tick)
+
+  uint64_t sim_runs = 0, ai_runs = 0, metrics_runs = 0;
+  uint64_t rng_checksum = 0;
+  sched.add_system({.every = 1, .order = 0, .name = "sim"},
+                   [&](const TickContext& t) { ++sim_runs; rng_checksum ^= t.rng->next_u64(); });
+  sched.add_system({.every = 3, .order = 10, .name = "ai"},
+                   [&](const TickContext&) { ++ai_runs; });
+  uint32_t metrics_id = sched.add_system(
+      {.every = 10, .order = 20, .name = "metrics"}, [&](const TickContext&) { ++metrics_runs; });
+
+  // Drive 20 sim ticks on a synthetic clock (deterministic, no real waiting).
+  const auto s0 = TickLoop::Clock::now();
+  sched.advance(s0);
+  for (int k = 1; k <= 20; ++k) sched.advance(s0 + std::chrono::milliseconds(100 * k));
+
+  println("    20 sim ticks → sim={} ai(every 3)={} metrics(every 10)={}",
+          sim_runs, ai_runs, metrics_runs);
+  println("    deterministic rng checksum = {:#x} (same seed ⇒ same every run)",
+          rng_checksum);
+  auto ms = sched.system_stats(metrics_id);
+  println("    per-system metrics: 'metrics' ran {} times, work p99={}us", ms.ticks,
+          ms.work_p99_ns / 1000);
+  println("    (also supports: pause()/step()/set_time_scale() for replay & debug, "
+          "alpha() for render interpolation, per-system overrun watchdog)");
+
   println("\nWhere this is useful: game-server ticks, physics steps, robotics/PID "
           "control, audio block processing, market-data strobes, fixed-rate "
-          "sensor sampling — anywhere a precise, drift-free, instrumented "
-          "heartbeat matters.");
+          "sensor sampling — anywhere a precise, drift-free, instrumented, "
+          "multi-rate heartbeat matters.");
   return 0;
 }

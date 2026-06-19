@@ -8,11 +8,13 @@
  */
 
 #include <qbuem/core/tick_loop.hpp>
+#include <qbuem/core/tick_scheduler.hpp>
 
 #include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <gtest/gtest.h>
+#include <string>
 #include <thread>
 #include <vector>
 
@@ -195,4 +197,145 @@ TEST(TickLoop, OverrunAndLoadDetected) {
   EXPECT_GE(s.overruns, 1u);
   EXPECT_GT(s.load, 0.0);
   EXPECT_GT(s.max_work_ns, 1'000'000u); // > 1 ms work recorded
+}
+
+// ─── TickScheduler ────────────────────────────────────────────────────────────
+
+namespace {
+// Stateful synthetic-clock driver: keeps ONE monotonic timeline for a scheduler
+// so multiple drive segments compose (each drive() resetting t0 would clash with
+// the loop's persisted deadline).
+struct Driver {
+  TickScheduler& s;
+  std::chrono::milliseconds interval;
+  Clock::time_point t0 = Clock::now();
+  int k = 0;
+  Driver(TickScheduler& sc, std::chrono::milliseconds iv) : s(sc), interval(iv) {
+    s.advance(t0); // establish the first deadline at t0 + interval
+  }
+  void tick(int base_ticks) {
+    for (int i = 0; i < base_ticks; ++i) { ++k; s.advance(t0 + interval * k); }
+  }
+};
+// One-shot helper for single-segment tests.
+void drive(TickScheduler& s, int base_ticks, std::chrono::milliseconds interval) {
+  Driver(s, interval).tick(base_ticks);
+}
+} // namespace
+
+TEST(TickScheduler, MultiRateSystemsFireAtTheirOwnRate) {
+  TickScheduler s({.interval = 10ms});
+  std::atomic<int> n1{0}, n2{0}, n3{0};
+  s.add_system({.every = 1, .name = "every1"}, [&](const TickContext&) { n1++; });
+  s.add_system({.every = 2, .name = "every2"}, [&](const TickContext&) { n2++; });
+  s.add_system({.every = 3, .name = "every3"}, [&](const TickContext&) { n3++; });
+
+  drive(s, 6, 10ms); // 6 sim ticks (time_scale 1.0)
+  EXPECT_EQ(s.tick(), 6u);
+  EXPECT_EQ(n1.load(), 6);          // every tick
+  EXPECT_EQ(n2.load(), 3);          // ticks 0,2,4
+  EXPECT_EQ(n3.load(), 2);          // ticks 0,3
+}
+
+TEST(TickScheduler, SystemsRunInOrder) {
+  TickScheduler s({.interval = 10ms});
+  std::vector<int> seq;
+  s.add_system({.order = 30, .name = "c"}, [&](const TickContext&) { seq.push_back(30); });
+  s.add_system({.order = 10, .name = "a"}, [&](const TickContext&) { seq.push_back(10); });
+  s.add_system({.order = 20, .name = "b"}, [&](const TickContext&) { seq.push_back(20); });
+  drive(s, 1, 10ms);
+  ASSERT_EQ(seq.size(), 3u);
+  EXPECT_EQ(seq[0], 10);
+  EXPECT_EQ(seq[1], 20);
+  EXPECT_EQ(seq[2], 30);
+}
+
+TEST(TickScheduler, DeterministicRngIsReplayable) {
+  auto run = [](uint64_t seed) {
+    TickScheduler s({.interval = 10ms});
+    s.set_seed(seed);
+    std::vector<uint64_t> out;
+    s.add_system({.every = 1}, [&](const TickContext& c) { out.push_back(c.rng->next_u64()); });
+    drive(s, 10, 10ms);
+    return out;
+  };
+  auto a = run(123), b = run(123), c = run(456);
+  EXPECT_EQ(a.size(), 10u);
+  EXPECT_EQ(a, b); // same (seed) ⇒ identical stream — replay-verifiable
+  EXPECT_NE(a, c); // different seed ⇒ different
+}
+
+TEST(TickScheduler, PauseStepResume) {
+  TickScheduler s({.interval = 10ms});
+  std::atomic<int> n{0};
+  s.add_system({.every = 1}, [&](const TickContext&) { n++; });
+
+  Driver d(s, 10ms);            // one monotonic timeline across all segments
+  s.pause();
+  d.tick(5);                    // paused ⇒ no sim ticks
+  EXPECT_EQ(n.load(), 0);
+  EXPECT_EQ(s.tick(), 0u);
+
+  s.step(3);                    // queue 3 single-steps (still paused)
+  d.tick(1);
+  EXPECT_EQ(n.load(), 3);
+
+  s.resume();
+  d.tick(4);
+  EXPECT_EQ(n.load(), 7);       // 3 stepped + 4 resumed
+}
+
+TEST(TickScheduler, TimeScaleFastAndSlow) {
+  { // 2x: each base tick → 2 sim ticks
+    TickScheduler s({.interval = 10ms});
+    std::atomic<int> n{0};
+    s.add_system({.every = 1}, [&](const TickContext&) { n++; });
+    s.set_time_scale(2.0);
+    drive(s, 3, 10ms);
+    EXPECT_EQ(n.load(), 6);
+  }
+  { // 0.5x: one sim tick per 2 base ticks
+    TickScheduler s({.interval = 10ms});
+    std::atomic<int> n{0};
+    s.add_system({.every = 1}, [&](const TickContext&) { n++; });
+    s.set_time_scale(0.5);
+    drive(s, 6, 10ms);
+    EXPECT_EQ(n.load(), 3);
+  }
+}
+
+TEST(TickScheduler, PerSystemMetricsAndOverrunWatchdog) {
+  TickScheduler s({.interval = 5ms});
+  uint32_t slow = s.add_system({.every = 1, .name = "slow"},
+                               [&](const TickContext&) { std::this_thread::sleep_for(2ms); });
+  std::atomic<int> alarms{0};
+  s.set_overrun_handler(1ms, [&](uint32_t id, uint64_t) { if (id == slow) alarms++; });
+
+  drive(s, 3, 5ms);
+  auto st = s.system_stats(slow);
+  EXPECT_EQ(st.ticks, 3u);
+  EXPECT_GT(st.max_work_ns, 1'000'000u);     // > 1 ms work recorded
+  EXPECT_EQ(s.system_overruns(slow), 3u);    // every run exceeded the 1 ms budget
+  EXPECT_EQ(alarms.load(), 3);
+}
+
+TEST(TickScheduler, ConcurrentStatsReadIsSafe) {
+  TickScheduler s({.interval = 1ms, .spin_window = 100us});
+  uint32_t id = s.add_system({.every = 1}, [](const TickContext&) {});
+  std::atomic<bool> go{true};
+  std::atomic<uint64_t> sink{0};
+  std::jthread reader([&] {
+    while (go.load(std::memory_order_relaxed)) {
+      auto a = s.stats();
+      auto b = s.system_stats(id);
+      sink.fetch_add(a.ticks + b.ticks + b.work_p99_ns, std::memory_order_relaxed);
+    }
+  });
+  std::jthread driver([&] { s.run_pinned(); });
+  std::this_thread::sleep_for(80ms);
+  s.stop();
+  driver.join();
+  go.store(false, std::memory_order_relaxed);
+  reader.join();
+  SUCCEED(); // no data race / crash under TSan + ASan
 }
