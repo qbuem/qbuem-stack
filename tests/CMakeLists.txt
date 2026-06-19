@@ -162,6 +162,11 @@ add_executable(qbuem_v12_additions_tests v12_additions_test.cpp ${QBUEM_TLS_FIX}
 target_link_libraries(qbuem_v12_additions_tests PRIVATE qbuem-stack::qbuem GTest::gtest_main)
 add_test(NAME qbuem_v12_additions_tests COMMAND qbuem_v12_additions_tests)
 
+# ── TickLoop (drift-free fixed-timestep + catch-up + metrics) ──────────────────
+add_executable(qbuem_tick_loop_tests tick_loop_test.cpp ${QBUEM_TLS_FIX})
+target_link_libraries(qbuem_tick_loop_tests PRIVATE qbuem-stack::qbuem GTest::gtest_main)
+add_test(NAME qbuem_tick_loop_tests COMMAND qbuem_tick_loop_tests)
+
 # ── OffloadPool + Dispatcher graceful drain (thread-management) ────────────────
 add_executable(qbuem_offload_drain_tests offload_drain_test.cpp ${QBUEM_TLS_FIX})
 target_link_libraries(qbuem_offload_drain_tests PRIVATE qbuem-stack::qbuem GTest::gtest_main)

@@ -884,6 +884,84 @@ ticker.run([&](uint64_t tick) {
 
 ---
 
+## `TickLoop` & `TickScheduler` — precise fixed-timestep ticking
+
+`<qbuem/core/tick_loop.hpp>` · `<qbuem/core/tick_scheduler.hpp>`
+
+### What they are / role
+Where `MicroTicker` is a *bare* sub-ms heartbeat, these are the **fixed-timestep
+simulation/control layer** on top of it — built for game-server ticks, physics
+steps, robotics/PID control, audio block processing, market-data strobes and
+fixed-rate sensor sampling.
+
+- **`TickLoop`** (core) solves the three problems a naive `sleep(interval)` loop has:
+  1. **No drift** — it advances an *absolute* deadline by exactly `interval`
+     each tick, so the long-run rate is exact (a `sleep(interval)` loop sags by
+     each tick's own work time).
+  2. **Deterministic catch-up** — a late wakeup re-runs *every* missed tick in
+     order (a `f(seed, tick)` sim never skips), bounded per wakeup by
+     `max_catchup` to avoid a spiral of death; the rest drain next wakeup.
+  3. **Observability** — per-tick *jitter* and *work* latency histograms
+     (p50/p99/p99.9), overrun/catchup/backlog counters and an EWMA load, all with
+     **zero hot-path allocation** and readable from a monitoring thread.
+- **`TickScheduler`** (high-level) adds, over a `TickLoop`: **multi-rate systems**
+  (each runs `every` N ticks with a `phase` stagger and an `order`), a
+  **deterministic `(seed, tick)` splitmix64 RNG** (enforces the "no live RNG"
+  invariant → replay-verifiable / cheat-proof results), **pause / time-scale /
+  single-step** + a render-interpolation `alpha()`, and **per-system** work
+  metrics + an overrun watchdog.
+
+### Two ways to drive (both)
+| Mode | Method | Use for |
+|---|---|---|
+| Reactor coroutine / manual | `advance(now, fn)` then `co_await sleep(next_sleep_ms())` | a server tick sharing one reactor thread with I/O (no extra thread, no busy-spin) |
+| Dedicated pinned thread | `run_pinned(fn)` (nanosleep + busy-spin) | sub-millisecond control/audio/HFT loops |
+
+`advance(now, …)` takes an explicit clock reading, so the scheduling logic is
+deterministically unit-testable with a synthetic clock.
+
+### When to use which
+- **`MicroTicker`**: a bare heartbeat driving a reactor; you don't need catch-up
+  or metrics.
+- **`TickLoop`**: one fixed-rate loop that must not drift, must execute every
+  tick (determinism), and you want jitter/work metrics.
+- **`TickScheduler`**: several subsystems at different rates in one loop, with
+  deterministic RNG and per-system metrics (the game-server case).
+
+```cpp
+#include <qbuem/core/tick_scheduler.hpp>
+using namespace qbuem;
+using namespace std::chrono_literals;
+
+TickScheduler sched({.interval = 100ms});            // 10 Hz base
+sched.set_seed(match_seed);                          // deterministic (seed, tick)
+sched.add_system({.every = 1, .order = 0,  .name = "sim"},
+                 [&](const TickContext& t) { world.step(t.tick, *t.rng); });
+sched.add_system({.every = 2, .order = 10, .name = "aoi"},
+                 [&](const TickContext&)   { broadcast_aoi(); });
+
+// (A) on a reactor thread, inside a spawned Task<void>:
+for (;;) { sched.advance(); co_await sleep(sched.next_sleep_ms()); }
+// (B) or a dedicated pinned thread: sched.run_pinned();
+
+// Live ops page (another thread): overall + per-system metrics, zero-alloc.
+TickStats s  = sched.stats();            // jitter/work p99, overruns, load …
+TickStats ai = sched.system_stats(/*id*/1);
+```
+
+### Gotchas / constraints
+- **Threading:** `stats()` / `system_stats()` read only atomics → safe from any
+  thread (e.g. a metrics endpoint). `behind()` / `next_sleep_ms()` read live
+  deadline state → call them on the driving thread only.
+- `run_pinned()` busy-spins for the final `spin_window` — give it a dedicated,
+  CPU-pinned thread (it is NOT for a reactor thread; the `advance()` path is).
+- Catch-up preserves determinism by **never skipping** a tick; if the work
+  genuinely can't keep up, `backlog_events` rises and `load ≥ 1.0` — that is the
+  "degradation point" signal, not a silent drop.
+- Verified under TSan + ASan + UBSan. Runnable: `examples/01-foundation/tick_loop/`.
+
+---
+
 ## NUMA & CPU affinity — `numa.hpp`
 
 `<qbuem/core/numa.hpp>` (includes `<qbuem/core/dispatcher.hpp>`)
