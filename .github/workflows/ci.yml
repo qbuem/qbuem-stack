@@ -302,3 +302,32 @@ jobs:
       - name: Test (serial, TSan; fail on any data race)
         working-directory: build_tsan
         run: TSAN_OPTIONS="halt_on_error=1 history_size=4" ctest -j1 --timeout 180 --output-on-failure
+
+  # ── 8. Benchmark smoke: build all benchmarks Release and RUN them.
+  #    This is a build+run HEALTH gate (a crash, hang, or build break surfaces) —
+  #    it does NOT assert the per-bench "goal" thresholds, which are
+  #    hardware-dependent (the bench binaries print ✓/✗ but always exit 0).
+  #    Reproducible measured numbers live in bench/RESULTS.md.
+  bench-smoke:
+    name: Benchmark Smoke (build + run)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install liburing
+        run: sudo apt-get update -q && sudo apt-get install -y liburing-dev
+      - name: Configure (Release, benchmarks only)
+        run: |
+          cmake -B build_bench \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DQBUEM_BUILD_TESTS=OFF \
+            -DQBUEM_BUILD_EXAMPLES=OFF \
+            -DQBUEM_BUILD_BENCH=ON
+      - name: Build benchmarks
+        run: cmake --build build_bench --parallel 2
+      - name: Run each benchmark (fail on crash/hang/non-zero exit)
+        run: |
+          for b in build_bench/bench/bench_*; do
+            [ -x "$b" ] || continue
+            echo "── running $b ──"
+            timeout 120 "$b" || { echo "FAIL: $b exited non-zero / timed out"; exit 1; }
+          done

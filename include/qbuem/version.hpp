@@ -59,6 +59,10 @@
  *           an O(1) snapshot (one refcount bump) instead of copying every
  *           handler into two freshly-allocated vectors per message; writers
  *           copy-on-write. No API change; verified race-free under TSan.
+ * - 1.8.0: Proof — reproducible benchmark results committed (bench/RESULTS.md,
+ *           Apple M1 Pro baseline) + a CI bench-smoke job (build & run every
+ *           benchmark); production checklist (docs/production-checklist.md);
+ *           qbuem-game documented as the flagship real-world consumer. No API change.
  */
 
 /**
@@ -88,7 +92,7 @@ namespace qbuem {
  *
  * @code
  * static_assert(qbuem::Version::major >= 1, "qbuem-stack 1.x required");
- * std::print("{}\n", qbuem::Version::string); // "1.7.1"
+ * std::print("{}\n", qbuem::Version::string); // "1.8.0"
  * @endcode
  */
 struct Version {
@@ -96,13 +100,13 @@ struct Version {
   static constexpr int major = 1;
 
   /** @brief Minor version number. Incremented when new backwards-compatible features are added. */
-  static constexpr int minor = 7;
+  static constexpr int minor = 8;
 
   /** @brief Patch version number. Incremented for backwards-compatible bug fixes only. */
-  static constexpr int patch = 1;
+  static constexpr int patch = 0;
 
   /** @brief Version string in "major.minor.patch" format (null-terminated). */
-  static constexpr std::string_view string = "1.7.1";
+  static constexpr std::string_view string = "1.8.0";
 };
 
 } // namespace qbuem
@@ -111,12 +115,12 @@ struct Version {
 #define QBUEM_VERSION_MAJOR 1
 
 /** @brief Minor version number (for use in preprocessor `#if` conditions). */
-#define QBUEM_VERSION_MINOR 7
+#define QBUEM_VERSION_MINOR 8
 
 /** @brief Patch version number (for use in preprocessor `#if` conditions). */
-#define QBUEM_VERSION_PATCH 1
+#define QBUEM_VERSION_PATCH 0
 
 /** @brief Version string literal "major.minor.patch" (for use in preprocessor conditions). */
-#define QBUEM_VERSION_STRING "1.7.1"
+#define QBUEM_VERSION_STRING "1.8.0"
 
 /** @} */ // end of qbuem_version
