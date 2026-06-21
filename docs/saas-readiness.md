@@ -42,18 +42,38 @@ RS256/JWKS, OTLP, and multi-tenancy — not a from-scratch effort.
 ## 4. Phased plan
 
 ### 안건 1 — SaaS surfaces (build out)
-1. **HTTP/2 flow control + SETTINGS negotiation** ✅ *(done — `http2_handler.hpp`; see §5)*
-2. HTTP/2 **dynamic HPACK table** (encoder + decoder) with size accounting.
-3. HTTP/2 **h2c socket loop**: connection preface, `Upgrade: h2c` from the App
-   umbrella, frame read/write loop on the reactor, send-window **back-pressure**
-   (defer DATA when the window is exhausted; flush on WINDOW_UPDATE).
-4. **gRPC over h2c**: map the existing `GrpcHandler` framing onto the h2c server;
-   one real RPC end-to-end test.
-5. **Auth port**: RS256/JWKS verifier behind the `JwtVerifier` port (asymmetric
-   verify is an adapter; HS256 stays native). Tenant-scoped auth middleware.
-6. **DB port polish** + one reference adapter as an opt-in example.
-7. **OTLP exporter adapter** behind `SpanExporter` (opt-in).
-8. **Per-tenant quota** middleware.
+
+**Priority (locked 2026-06-21 by product answers): SaaS critical path over the
+existing Stable HTTP/1.1 App first; HTTP/2/gRPC deferred.** Rationale: with TLS
+terminated at the edge, the proxy speaks h2 to clients and the backend can speak
+HTTP/1.1 — so h2c-to-backend is a performance nicety, not a launch blocker. The
+product is REST/JSON (no gRPC needed yet) and auth uses an external IdP (RS256).
+
+Critical path (do first):
+1. **Auth — RS256/JWKS** (external-IdP tokens). Sub-steps:
+   - a. **Native RS256 verify primitive** ✅ *(done — `crypto/rsa.hpp`; see §5)*
+   - b. JWK / JWKS parsing (kid → modulus/exponent) + key-set cache with rotation.
+   - c. `Rs256JwtVerifier` implementing the existing `ITokenVerifier` port
+     (alg=RS256 + kid lookup + `crypto::rsa_pkcs1_v15_sha256_verify`), wired into
+     the `token_auth` middleware. (HS256 stays native; an OpenSSL adapter could
+     replace the RSA step behind the same port if hardware RSA is ever wanted.)
+   - d. *(optional)* JWKS HTTPS **fetch adapter** (opt-in) — until then keys are
+     supplied out-of-band / statically configured.
+2. **Multi-tenancy**: tenant context + per-tenant **quota** middleware (extends
+   the existing rate-limit middleware).
+3. **DB port polish** + one reference adapter as an opt-in example.
+4. **OTLP exporter adapter** behind the existing `SpanExporter` port (opt-in).
+
+Deferred until a concrete need (gRPC service, or backend h2 multiplexing):
+5. HTTP/2 **dynamic HPACK table** (encoder + decoder) with size accounting.
+6. HTTP/2 **h2c socket loop**: connection preface, `Upgrade: h2c` from the App
+   umbrella, frame read/write loop on the reactor, send-window **back-pressure**.
+   *(The SETTINGS negotiation + flow control from step 0 below is the foundation
+   already in place for this.)*
+7. **gRPC over h2c**: map `GrpcHandler` framing onto the h2c server.
+
+Already done (foundation, kept regardless of ordering):
+- 0. **HTTP/2 SETTINGS negotiation + flow control** ✅ *(`http2_handler.hpp`; §5)*
 
 ### 안건 2 — pipeline de-duplication (depth not breadth)
 - Remove confirmed zero-consumer surface (e.g. `SloObserver` hooks).
@@ -68,7 +88,18 @@ RS256/JWKS, OTLP, and multi-tenancy — not a from-scratch effort.
 
 ## 5. Progress log
 
-- **2026-06-21** — 안건 1.1: HTTP/2 **SETTINGS negotiation + flow control**
+- **2026-06-21** — 안건 1.1.a: native **RS256 verify** (`include/qbuem/crypto/rsa.hpp`).
+  RSASSA-PKCS1-v1.5 + SHA-256 signature *verification*, zero-dependency: a compact
+  verify-only big-integer (no division/Montgomery — modular reduction by binary
+  long division; square-and-multiply modexp) does `s^e mod n`, then EMSA-PKCS1-v1.5
+  padding + SHA-256 DigestInfo are checked in constant time. Verification only (no
+  keygen/sign/private-key). Foundation for RS256/JWKS IdP-token auth — and, per the
+  ports-and-adapters layout, replaceable by an OpenSSL/mbedTLS adapter behind the
+  `ITokenVerifier` port. Tests: `tests/rsa_verify_test.cpp` — 6 tests against an
+  OpenSSL-minted RSA-2048 vector (valid + tamper/wrong-msg/wrong-exp/wrong-len/
+  leading-zero-modulus); Release + ASan/UBSan clean. Next: 1.1.b/c — JWK(S) parse +
+  `Rs256JwtVerifier` (`ITokenVerifier`) wired into `token_auth`.
+- **2026-06-21** — 안건 1.0: HTTP/2 **SETTINGS negotiation + flow control**
   (`include/qbuem/server/http2_handler.hpp`). Real peer-SETTINGS parsing/validation
   (`INITIAL_WINDOW_SIZE` with §6.9.2 retroactive stream-window adjustment,
   `MAX_FRAME_SIZE` range check, `ENABLE_PUSH` 0/1, ACK rules); connection +

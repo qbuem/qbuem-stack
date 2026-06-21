@@ -177,6 +177,11 @@ add_executable(qbuem_http2_flow_control_tests http2_flow_control_test.cpp ${QBUE
 target_link_libraries(qbuem_http2_flow_control_tests PRIVATE qbuem-stack::qbuem GTest::gtest_main)
 add_test(NAME qbuem_http2_flow_control_tests COMMAND qbuem_http2_flow_control_tests)
 
+# ── RS256 (RSASSA-PKCS1-v1.5 + SHA-256) signature verification ─────────────────
+add_executable(qbuem_rsa_verify_tests rsa_verify_test.cpp ${QBUEM_TLS_FIX})
+target_link_libraries(qbuem_rsa_verify_tests PRIVATE qbuem-stack::qbuem GTest::gtest_main)
+add_test(NAME qbuem_rsa_verify_tests COMMAND qbuem_rsa_verify_tests)
+
 # ── OffloadPool + Dispatcher graceful drain (thread-management) ────────────────
 add_executable(qbuem_offload_drain_tests offload_drain_test.cpp ${QBUEM_TLS_FIX})
 target_link_libraries(qbuem_offload_drain_tests PRIVATE qbuem-stack::qbuem GTest::gtest_main)
