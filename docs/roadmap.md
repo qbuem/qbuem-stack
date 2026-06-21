@@ -48,15 +48,15 @@ proving the performance claims, and keeping the docs honest.
 - [x] Docs rewritten to match the implementation; fictional/out-of-scope docs removed.
 - [x] Feature-maturity matrix; `CHANGELOG.md`; honest `version.hpp` history.
 
-### v1.7 — Depth on the core path  *(in progress)*
+### v1.7 — Depth on the core path  *(done)*
 Make the heavily-used path production-grade and ergonomic.
 - [x] `App` high-level surface for WebSocket — `app.ws("/path", handlers)` serves
       WS on the same port as HTTP, no hand-wired upgrade callback (v1.7.0).
 - [x] `MessageBus` publish without per-message handler copies — RCU snapshot
       (v1.7.1). *(Persistent reactor registration for the awaiter fast path
-      remains to evaluate.)*
-- [ ] Per-subsystem "production checklist" (limits, timeouts, backpressure,
-      teardown) verified and documented for the Stable modules.
+      remains to evaluate — deferred to v2.0 identity work.)*
+- [x] Per-subsystem [production checklist](./production-checklist.md) (real
+      limits, timeouts, back-pressure, teardown) for the Stable modules.
 
 ### v1.8 — Proof  *(planned)*
 Turn performance *targets* into *measured, tracked* numbers.
