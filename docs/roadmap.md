@@ -52,9 +52,9 @@ proving the performance claims, and keeping the docs honest.
 Make the heavily-used path production-grade and ergonomic.
 - [x] `App` high-level surface for WebSocket — `app.ws("/path", handlers)` serves
       WS on the same port as HTTP, no hand-wired upgrade callback (v1.7.0).
-- [ ] Carry the remaining high-concurrency hardening into the used path
-      (e.g. `MessageBus` publish without per-message handler copies; evaluate
-      persistent reactor registration for the awaiter fast path).
+- [x] `MessageBus` publish without per-message handler copies — RCU snapshot
+      (v1.7.1). *(Persistent reactor registration for the awaiter fast path
+      remains to evaluate.)*
 - [ ] Per-subsystem "production checklist" (limits, timeouts, backpressure,
       teardown) verified and documented for the Stable modules.
 

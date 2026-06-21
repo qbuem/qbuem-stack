@@ -381,6 +381,41 @@ TEST(MessageBusTest, TryPublishNonBlocking) {
     });
 }
 
+// RCU correctness: publishing (snapshot reads) concurrently with continuous
+// subscribe/unsubscribe (copy-on-write of the subscriber list) must be race-free.
+// This is the guarantee the shared_ptr<const vector<Sub>> snapshot provides —
+// validated under TSan + ASan. try_publish is synchronous, so no reactor needed.
+TEST(MessageBusTest, ConcurrentPublishAndSubscribeIsRaceFree) {
+    MessageBus bus;
+    std::atomic<bool> stop{false};
+    std::atomic<uint64_t> pubs{0};
+
+    std::jthread pub([&] {
+        while (!stop.load(std::memory_order_relaxed)) {
+            bus.try_publish("hot", 7);
+            pubs.fetch_add(1, std::memory_order_relaxed);
+        }
+    });
+
+    std::vector<std::jthread> mutators;
+    for (int t = 0; t < 3; ++t)
+        mutators.emplace_back([&] {
+            while (!stop.load(std::memory_order_relaxed)) {
+                auto sub = bus.subscribe(
+                    "hot",
+                    [](MessageBus::Msg, Context) -> Task<Result<void>> { co_return {}; });
+                // Subscription RAII drops here → unsubscribe (COW remove).
+            }
+        });
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(150));
+    stop.store(true, std::memory_order_relaxed);
+    pub.join();
+    for (auto& m : mutators) m.join();
+
+    EXPECT_GT(pubs.load(), 0u); // made progress; sanitizers assert no race/crash
+}
+
 // ─── TaskGroup ────────────────────────────────────────────────────────────────
 
 // Named (non-lambda) coroutine: GCC HALO does not elide heap allocation for
