@@ -52,13 +52,14 @@ product is REST/JSON (no gRPC needed yet) and auth uses an external IdP (RS256).
 Critical path (do first):
 1. **Auth — RS256/JWKS** (external-IdP tokens). Sub-steps:
    - a. **Native RS256 verify primitive** ✅ *(done — `crypto/rsa.hpp`; see §5)*
-   - b. JWK / JWKS parsing (kid → modulus/exponent) + key-set cache with rotation.
-   - c. `Rs256JwtVerifier` implementing the existing `ITokenVerifier` port
-     (alg=RS256 + kid lookup + `crypto::rsa_pkcs1_v15_sha256_verify`), wired into
-     the `token_auth` middleware. (HS256 stays native; an OpenSSL adapter could
-     replace the RSA step behind the same port if hardware RSA is ever wanted.)
-   - d. *(optional)* JWKS HTTPS **fetch adapter** (opt-in) — until then keys are
-     supplied out-of-band / statically configured.
+   - b. **JWK / JWKS parsing** (kid → modulus/exponent) ✅ *(done — `parse_jwks`)*
+   - c. **`Rs256JwtVerifier`** implementing the existing `ITokenVerifier` port
+     (alg=RS256 pin + kid lookup + `crypto::rsa_pkcs1_v15_sha256_verify` + exp/nbf),
+     usable directly with `bearer_auth()` ✅ *(done — `middleware/rs256_verifier.hpp`;
+     see §5)*. (HS256 stays native; an OpenSSL adapter could replace the RSA step
+     behind the same port if hardware RSA is ever wanted.)
+   - d. *(optional)* JWKS HTTPS **fetch adapter** (opt-in) + key-set cache/rotation
+     — until then the JWKS document is supplied out-of-band / from config.
 2. **Multi-tenancy**: tenant context + per-tenant **quota** middleware (extends
    the existing rate-limit middleware).
 3. **DB port polish** + one reference adapter as an opt-in example.
@@ -88,6 +89,18 @@ Already done (foundation, kept regardless of ordering):
 
 ## 5. Progress log
 
+- **2026-06-21** — 안건 1.1.b/c: **RS256 JWT + JWKS verifier**
+  (`include/qbuem/middleware/rs256_verifier.hpp`). `parse_jwks()` turns a JWKS (or
+  a bare JWK) document into RSA public keys (base64url n/e → bytes; brace-scan over
+  the `keys` array). `Rs256JwtVerifier` implements the existing `ITokenVerifier`
+  port — splits the JWT, **pins `alg` to RS256** (rejecting `none`/`HS256`
+  downgrade), selects the key by `kid`, verifies the signature via
+  `crypto::rsa_pkcs1_v15_sha256_verify` over the signing input, then enforces
+  `exp`/`nbf` and extracts `sub`/`iss`/`aud` — so it drops straight into
+  `bearer_auth()`. This completes **end-to-end external-IdP (RS256) token auth** on
+  the existing HTTP/1.1 App. Tests: `tests/rs256_jwt_test.cpp` — 8 tests against an
+  OpenSSL-minted JWT+JWKS (valid; tampered/expired/alg-none/alg-HS256/wrong-key/
+  malformed rejected); Release + ASan/UBSan clean. Next: 안건 2 — per-tenant quota.
 - **2026-06-21** — 안건 1.1.a: native **RS256 verify** (`include/qbuem/crypto/rsa.hpp`).
   RSASSA-PKCS1-v1.5 + SHA-256 signature *verification*, zero-dependency: a compact
   verify-only big-integer (no division/Montgomery — modular reduction by binary
