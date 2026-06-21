@@ -121,7 +121,7 @@ inline void shl1(BigUint& a, uint32_t bit) {
         a[i] = (a[i] << 1) | carry;
         carry = next;
     }
-    if (carry) a.push_back(1);
+    if (carry != 0) a.push_back(1);
 }
 
 // Schoolbook multiply: returns a * b.

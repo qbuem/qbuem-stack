@@ -17,7 +17,8 @@
  * @code
  * auto v = std::make_shared<qbuem::middleware::Rs256JwtVerifier>(
  *     qbuem::middleware::Rs256JwtVerifier::from_jwks(jwks_json));
- * app.use_async(qbuem::middleware::bearer_auth(v));
+ * v->expect_issuer("https://idp.example.com").expect_audience("my-api");
+ * app.use(qbuem::middleware::bearer_auth(v));   // bearer_auth is a sync Middleware
  * @endcode
  *
  * JWKS *fetching* over HTTPS is intentionally out of scope here (the core has no
@@ -129,6 +130,25 @@ public:
   /** @brief Number of RSA keys loaded. */
   [[nodiscard]] size_t key_count() const noexcept { return keys_.size(); }
 
+  /**
+   * @brief Require the token's `iss` to equal @p issuer (RFC 8725 §3.1).
+   * Empty (default) = no issuer check. Fluent; set before first use.
+   */
+  Rs256JwtVerifier& expect_issuer(std::string issuer) {
+    expected_issuer_ = std::move(issuer);
+    return *this;
+  }
+
+  /**
+   * @brief Require the token's `aud` to equal @p audience (RFC 8725 §3.2).
+   * Empty (default) = no audience check. Note: only a string `aud` is matched;
+   * array audiences are not yet supported. Fluent; set before first use.
+   */
+  Rs256JwtVerifier& expect_audience(std::string audience) {
+    expected_audience_ = std::move(audience);
+    return *this;
+  }
+
   std::optional<TokenClaims> verify(std::string_view token) noexcept override {
     // Split "header.payload.signature" — exactly three base64url parts.
     const auto d1 = token.find('.');
@@ -182,13 +202,21 @@ public:
     c.audience = detail::jwtclaims::find_string(json, "aud");
     c.exp = exp;
     c.nbf = nbf;
+
+    // RFC 8725 §3.1/§3.2: validate issuer/audience when configured.
+    if (!expected_issuer_.empty() && c.issuer != expected_issuer_)
+      return std::nullopt;
+    if (!expected_audience_.empty() && c.audience != expected_audience_)
+      return std::nullopt;
     return c;
   }
 
 private:
-  // kid selection: with a single configured key, use it for any token (the
-  // operator explicitly trusts that one key; the signature check is the real
-  // gate). With multiple keys, require a matching kid.
+  // kid selection. With MULTIPLE keys we require a matching kid (true JWKS key
+  // rotation). With a SINGLE configured key we use it regardless of the token's
+  // kid — this is safe because the RSA signature check is the real gate: a token
+  // signed by any other key simply fails verification. (Single-key mode is the
+  // raw-key constructor or a one-entry JWKS.)
   [[nodiscard]] const JwkRsaKey* find_key(std::string_view kid) const noexcept {
     if (keys_.size() == 1) return &keys_[0];
     if (kid.empty()) return nullptr;
@@ -199,6 +227,8 @@ private:
 
   std::vector<JwkRsaKey> keys_;
   long                   leeway_ = 0;
+  std::string            expected_issuer_;   // empty = no iss check
+  std::string            expected_audience_; // empty = no aud check
 };
 
 } // namespace qbuem::middleware

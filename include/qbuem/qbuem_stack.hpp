@@ -17,9 +17,21 @@
 #include <qbuem/shm/shm_bus.hpp>
 #include <qbuem/shm/futex_sync.hpp>
 
-// Security — zero-dep JWT (parse + pipeline action)
+// Security — zero-dep JWT (parse + pipeline action) + RSA verify primitive
 #include <qbuem/security/simd_jwt.hpp>
 #include <qbuem/security/jwt_action.hpp>
+#include <qbuem/crypto/rsa.hpp>
+
+// HTTP middleware — SaaS-ready surface: bearer auth (HS256/RS256 JWT + JWKS),
+// per-tenant quota, rate limit, CORS, security headers, request-id.
+#include <qbuem/middleware/token_auth.hpp>
+#include <qbuem/middleware/jwt_verifier.hpp>
+#include <qbuem/middleware/rs256_verifier.hpp>
+#include <qbuem/middleware/quota.hpp>
+#include <qbuem/middleware/rate_limit.hpp>
+#include <qbuem/middleware/cors.hpp>
+#include <qbuem/middleware/security.hpp>
+#include <qbuem/middleware/request_id.hpp>
 
 // Networking — UDS FD passing, DNS, UDP infrastructure
 #include <qbuem/net/uds_advanced.hpp>
@@ -41,9 +53,11 @@
 // Erasure coding (SIMD) — for spatial/storage applications
 #include <qbuem/buf/simd_erasure.hpp>
 
-// Observability — in-process lifecycle tracing + trace-correlated logging
+// Observability — in-process lifecycle tracing + trace-correlated logging +
+// OTLP/JSON span export (off-process, to an OpenTelemetry collector)
 #include <qbuem/tracing/lifecycle_tracer.hpp>
 #include <qbuem/tracing/trace_logger.hpp>
+#include <qbuem/tracing/otlp_exporter.hpp>
 
 // Zero-allocation config + Secret<T> management
 #include <qbuem/config/config_manager.hpp>

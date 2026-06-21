@@ -15,10 +15,13 @@
  * - **Connection preface**: Used after TLS handshake when "h2" ALPN negotiation succeeds
  * - **Coroutine-based async processing**: Uses C++20 Task<> and co_return
  *
- * ### Limitations (minimal implementation)
- * - HPACK dynamic table not supported (only static table 62 entries + literal encoding)
- * - PRIORITY and PUSH_PROMISE frames are silently ignored on receipt
- * - Flow Control not implemented
+ * ### Status (Experimental — codec + state machine; not yet socket-wired)
+ * - SETTINGS negotiation + flow control ARE implemented (RFC 7540 §6.5/§6.9):
+ *   per-connection/per-stream send+receive windows, WINDOW_UPDATE, and send_data
+ *   enforces the send window (returns `operation_would_block` when exhausted).
+ * - HPACK uses the static table only (no dynamic table); header decode allocates
+ *   per request — this handler is Experimental and not on the `App` umbrella yet.
+ * - PRIORITY and PUSH_PROMISE frames are silently ignored on receipt.
  *
  * @{
  */
@@ -688,12 +691,26 @@ public:
      * @param data       Byte data to send.
      * @param end_stream Whether to set the END_STREAM flag on the DATA frame.
      *                   If true, this frame is the last data on the stream.
-     * @returns Processing result.
+     * @returns Processing result. Returns `std::errc::operation_would_block` when
+     *          the connection or stream SEND window has insufficient credit — the
+     *          caller must wait for a WINDOW_UPDATE and retry (RFC 7540 §6.9). The
+     *          frame is NOT emitted in that case.
      */
     Task<Result<void>> send_data(
             uint32_t stream_id,
             std::span<const uint8_t> data,
             bool end_stream = true) {
+        // Send-side flow-control ENFORCEMENT (RFC 7540 §6.9): never emit DATA past
+        // the peer's advertised window. Available credit = min(connection, stream).
+        const int64_t spent = static_cast<int64_t>(data.size());
+        auto sit = streams_.find(stream_id);
+        const int64_t stream_win =
+            (sit != streams_.end()) ? sit->second->send_window : MAX_WINDOW;
+        if (spent > conn_send_window_ || spent > stream_win) {
+            co_return std::unexpected(
+                std::make_error_code(std::errc::operation_would_block));
+        }
+
         Http2Frame frame;
         frame.type      = Http2FrameType::DATA;
         frame.stream_id = stream_id;
@@ -701,15 +718,9 @@ public:
         frame.payload.assign(data.begin(), data.end());
         frame.length    = static_cast<uint32_t>(frame.payload.size());
 
-        // Send-side flow-control accounting (RFC 7540 §6.9). A DATA frame spends
-        // both the connection and the stream SEND window. Back-pressure ENFORCEMENT
-        // (deferring the write when a window is exhausted) belongs to the socket
-        // write-loop; here we keep the windows accurate so that loop — and tests —
-        // can observe remaining credit.
-        const int64_t spent = static_cast<int64_t>(frame.payload.size());
+        // Debit both windows now that the send is authorized.
         conn_send_window_ -= spent;
-        if (auto sit = streams_.find(stream_id); sit != streams_.end())
-            sit->second->send_window -= spent;
+        if (sit != streams_.end()) sit->second->send_window -= spent;
 
         pending_frames_.push_back(std::move(frame));
 

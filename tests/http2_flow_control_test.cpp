@@ -216,6 +216,25 @@ TEST(Http2FlowControl, ReceiveDataConsumesAndReplenishesWindow) {
     EXPECT_TRUE(drain_has(h2, Http2FrameType::WINDOW_UPDATE));
 }
 
+TEST(Http2FlowControl, SendDataEnforcesWindow) {
+  auto h2 = make_handler();
+  // Peer advertises a tiny initial window → new stream's SEND window = 10.
+  (void)sync_wait(h2.handle_frame(settings_frame({{0x4 /*INITIAL_WINDOW_SIZE*/, 10}})));
+  h2.drain_pending_frames();
+  (void)sync_wait(h2.handle_frame(headers_frame(1, /*end_stream=*/false)));
+  h2.drain_pending_frames();
+  ASSERT_EQ(h2.stream_send_window(1), 10);
+
+  const std::vector<uint8_t> five(5, 0x41), ten(10, 0x41);
+  auto r1 = sync_wait(h2.send_data(1, std::span<const uint8_t>(five), false));
+  EXPECT_TRUE(r1.has_value());            // 5 <= 10 → sent
+  EXPECT_EQ(h2.stream_send_window(1), 5);
+
+  auto r2 = sync_wait(h2.send_data(1, std::span<const uint8_t>(ten), false));
+  EXPECT_FALSE(r2.has_value());           // 10 > remaining 5 → refused (would_block)
+  EXPECT_EQ(h2.stream_send_window(1), 5); // window unchanged — frame not emitted
+}
+
 TEST(Http2FlowControl, ReceiveExceedingConnectionWindowGoesAway) {
     auto h2 = make_handler();
     (void)sync_wait(h2.handle_frame(headers_frame(1, false)));
