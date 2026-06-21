@@ -49,6 +49,11 @@
  * - 1.6.0: Documentation truth pass — docs rewritten to match the actual
  *           implementation; a feature-maturity matrix added; CHANGELOG added;
  *           fictional/aspirational docs removed. No API change.
+ * - 1.7.0: `App::ws(path, handlers)` — high-level WebSocket endpoints served on
+ *           the same App/port as HTTP routes, no hand-wired upgrade callback.
+ *           Each connection is driven by a per-reactor `WsServer` (shared-nothing;
+ *           callbacks race-free; rooms/broadcast are per-reactor). Verified
+ *           end-to-end (HTTP + WS same port) under ASan/UBSan.
  */
 
 /**
@@ -78,7 +83,7 @@ namespace qbuem {
  *
  * @code
  * static_assert(qbuem::Version::major >= 1, "qbuem-stack 1.x required");
- * std::print("{}\n", qbuem::Version::string); // "1.6.0"
+ * std::print("{}\n", qbuem::Version::string); // "1.7.0"
  * @endcode
  */
 struct Version {
@@ -86,13 +91,13 @@ struct Version {
   static constexpr int major = 1;
 
   /** @brief Minor version number. Incremented when new backwards-compatible features are added. */
-  static constexpr int minor = 6;
+  static constexpr int minor = 7;
 
   /** @brief Patch version number. Incremented for backwards-compatible bug fixes only. */
   static constexpr int patch = 0;
 
   /** @brief Version string in "major.minor.patch" format (null-terminated). */
-  static constexpr std::string_view string = "1.6.0";
+  static constexpr std::string_view string = "1.7.0";
 };
 
 } // namespace qbuem
@@ -101,12 +106,12 @@ struct Version {
 #define QBUEM_VERSION_MAJOR 1
 
 /** @brief Minor version number (for use in preprocessor `#if` conditions). */
-#define QBUEM_VERSION_MINOR 6
+#define QBUEM_VERSION_MINOR 7
 
 /** @brief Patch version number (for use in preprocessor `#if` conditions). */
 #define QBUEM_VERSION_PATCH 0
 
 /** @brief Version string literal "major.minor.patch" (for use in preprocessor conditions). */
-#define QBUEM_VERSION_STRING "1.6.0"
+#define QBUEM_VERSION_STRING "1.7.0"
 
 /** @} */ // end of qbuem_version

@@ -48,7 +48,7 @@ server transport** — usable as a building block, not a turnkey server yet.
 | `core` — `TickLoop`, `TickScheduler` | **Stable** | fixed-timestep ticking; deterministic, TSan/ASan/UBSan-verified (v1.5.0) |
 | `http` + HTTP/1.1 `App` server | **Stable** | SIMD parser, router, middleware, keep-alive, `serve_static`, `sendfile`, health/metrics |
 | `http` — `fetch` client (HTTP) | **Stable** | curl-free; HTTP only (no TLS — see below) |
-| `server` — `WsServer` / `WsConnection` (WebSocket) | **Stable** | non-blocking, rooms, broadcast, backpressure, heartbeat (v1.1.0) |
+| `server` — `WsServer` / `WsConnection` (WebSocket) | **Stable** | non-blocking, rooms, broadcast, backpressure, heartbeat (v1.1.0). Also via `App::ws("/path", handlers)` — WS on the same port as HTTP (v1.7.0) |
 | `pipeline` — Static/Dynamic/Graph, channels, actions, resilience, windows | **Stable** | the data-flow engine |
 | `shm` — `SHMChannel`, `SHMBus`, futex sync | **Stable** | zero-copy cross-process IPC |
 | `net` — TCP/UDP/Unix sockets, UDS FD passing, DNS | **Stable** | DNS is bounded thread-offload |
@@ -88,6 +88,13 @@ int main() {
         auto id = req.param("id");
         res.status(200).body("{\"id\":\"" + std::string(id) + "\"}");
         co_return;
+    });
+
+    // WebSocket on the same port — no upgrade plumbing (v1.7+)
+    app.ws("/ws", {
+        .on_open    = [](auto conn) { conn->send_text("welcome"); },
+        .on_message = [](auto conn, qbuem::WsMessage m) { conn->send_text(m.text()); },
+        .on_close   = [](auto conn, uint16_t code) {},
     });
 
     return app.listen(8080) ? 0 : 1;

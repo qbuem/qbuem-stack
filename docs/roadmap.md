@@ -48,10 +48,10 @@ proving the performance claims, and keeping the docs honest.
 - [x] Docs rewritten to match the implementation; fictional/out-of-scope docs removed.
 - [x] Feature-maturity matrix; `CHANGELOG.md`; honest `version.hpp` history.
 
-### v1.7 — Depth on the core path  *(planned)*
+### v1.7 — Depth on the core path  *(in progress)*
 Make the heavily-used path production-grade and ergonomic.
-- [ ] `App` high-level surface for WebSocket — `app.ws("/path", handlers)` so a
-      WS endpoint doesn't require hand-wiring the upgrade callback.
+- [x] `App` high-level surface for WebSocket — `app.ws("/path", handlers)` serves
+      WS on the same port as HTTP, no hand-wired upgrade callback (v1.7.0).
 - [ ] Carry the remaining high-concurrency hardening into the used path
       (e.g. `MessageBus` publish without per-message handler copies; evaluate
       persistent reactor registration for the awaiter fast path).
