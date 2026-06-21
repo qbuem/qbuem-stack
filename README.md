@@ -270,6 +270,7 @@ hello_world → async_timer → tcp_echo_server → arena → pipeline/fanout
 - **[Feature guide](./docs/guide/)** (`01`–`08`) — detailed per-module reference: role · when to use · how to use · gotchas, grounded in the real API. **The main docs.**
 - **[Usage guide](./docs/usage-guide.md)** — task-oriented quick reference.
 - **[Best practices](./docs/best-practices.md)** — pattern selection (which primitive for which job).
+- **[Production checklist](./docs/production-checklist.md)** — real limits, timeouts, back-pressure, and shutdown semantics for the Stable modules.
 - **[CHANGELOG](./CHANGELOG.md)** — per-release notes (real, tagged releases only).
 - **[Roadmap](./docs/roadmap.md)** — current state + where this is going.
 - **Deep dives** under `docs/` — pipeline, SHM messaging, crypto, DB, config, I/O architecture, and per-platform optimization (kqueue/epoll/NEON).
