@@ -71,10 +71,11 @@ Critical path (do first):
    `std::mutex` is on the documented *cold* acquire/release path. A real bundled
    driver is intentionally out of scope (BYO). Adding another reference adapter
    would just duplicate `db_session` — not done, to avoid over-engineering.
-4. **OTLP exporter adapter** behind the existing `SpanExporter` port (opt-in) —
-   *optional*; the app can ship with stderr logging + the existing Prometheus-text
-   exporter + app-layer analytics. Build when off-process tracing is actually
-   needed (OTLP/JSON over the zero-dep HTTP fetch client to a local collector).
+4. **OTLP exporter adapter** ✅ *(done — `tracing/otlp_exporter.hpp`)*. OTLP/JSON
+   encoder + `OtlpHttpExporter` (background flush thread, injectable transport)
+   behind the existing `SpanExporter` port. Transport is injected (ports &
+   adapters) so the exporter stays zero-dep/reactor-agnostic — deliver the JSON to
+   a local collector via a `fetch()` POST or a sidecar write; see §5.
 
 Deferred until a concrete need (gRPC service, or backend h2 multiplexing):
 5. HTTP/2 **dynamic HPACK table** (encoder + decoder) with size accounting.
@@ -100,6 +101,19 @@ Already done (foundation, kept regardless of ordering):
 
 ## 5. Progress log
 
+- **2026-06-21** — 안건 1.4: **OTLP/JSON span exporter**
+  (`include/qbuem/tracing/otlp_exporter.hpp`). `encode_otlp_traces_json()` renders
+  spans as an OTLP/HTTP `ExportTraceServiceRequest` (hex trace/span IDs, decimal-
+  string Unix-nanos, status 0/1/2, pipeline/action + attributes, JSON-escaped).
+  `OtlpHttpExporter` implements the `SpanExporter` port: enqueues on `export_span`
+  (cold path), batches + sends on a background flush thread via an **injected
+  transport** (the exporter stays zero-dep + reactor-agnostic — the fetch client
+  is coroutine-native, so byte delivery is the deployment's adapter). Bounded
+  queue (drops + counts overflow). Tests: `tests/otlp_exporter_test.cpp` — 9
+  tests (encoder fields/parent/escape/error/multi-span; exporter flush/shutdown/
+  drop); Release 43/43 + ASan/UBSan + **TSan** clean (threaded). **This completes
+  the planned SaaS-readiness program** (auth, multi-tenancy, DB port, observability
+  export); HTTP/2 h2c server + gRPC remain deferred until a concrete need.
 - **2026-06-21** — 안건 2: per-tenant **quota** middleware
   (`include/qbuem/middleware/quota.hpp`). Fixed-window request budget (e.g.
   10k/day per tenant) — distinct from the token-bucket `rate_limit`. Keyed by the
