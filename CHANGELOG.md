@@ -10,6 +10,19 @@ pre-release internal iteration and is not tracked here.
 
 ---
 
+## [1.7.1] — MessageBus zero-copy publish fast path
+
+### Changed
+- **`MessageBus`** holds its per-topic subscriber list as an immutable RCU
+  snapshot (`shared_ptr<const vector<Sub>>`). `publish` / `try_publish` now take
+  an **O(1) snapshot** (one refcount bump) and iterate it without holding the
+  lock across `co_await` — eliminating the previous per-message copy of every
+  subscriber's `std::function` into two freshly-allocated vectors. Writers
+  (`subscribe`/`unsubscribe`) copy-on-write. No API change; verified race-free
+  under ThreadSanitizer (concurrent publish + subscribe/unsubscribe).
+
+[1.7.1]: https://github.com/qbuem/qbuem-stack/releases/tag/v1.7.1
+
 ## [1.7.0] — `App::ws()` — WebSocket on the same App/port
 
 ### Added

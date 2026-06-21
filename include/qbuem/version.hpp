@@ -54,6 +54,11 @@
  *           Each connection is driven by a per-reactor `WsServer` (shared-nothing;
  *           callbacks race-free; rooms/broadcast are per-reactor). Verified
  *           end-to-end (HTTP + WS same port) under ASan/UBSan.
+ * - 1.7.1: `MessageBus` publish fast path — subscribers held as an immutable
+ *           RCU snapshot (`shared_ptr<const vector>`); publish/try_publish take
+ *           an O(1) snapshot (one refcount bump) instead of copying every
+ *           handler into two freshly-allocated vectors per message; writers
+ *           copy-on-write. No API change; verified race-free under TSan.
  */
 
 /**
@@ -83,7 +88,7 @@ namespace qbuem {
  *
  * @code
  * static_assert(qbuem::Version::major >= 1, "qbuem-stack 1.x required");
- * std::print("{}\n", qbuem::Version::string); // "1.7.0"
+ * std::print("{}\n", qbuem::Version::string); // "1.7.1"
  * @endcode
  */
 struct Version {
@@ -94,10 +99,10 @@ struct Version {
   static constexpr int minor = 7;
 
   /** @brief Patch version number. Incremented for backwards-compatible bug fixes only. */
-  static constexpr int patch = 0;
+  static constexpr int patch = 1;
 
   /** @brief Version string in "major.minor.patch" format (null-terminated). */
-  static constexpr std::string_view string = "1.7.0";
+  static constexpr std::string_view string = "1.7.1";
 };
 
 } // namespace qbuem
@@ -109,9 +114,9 @@ struct Version {
 #define QBUEM_VERSION_MINOR 7
 
 /** @brief Patch version number (for use in preprocessor `#if` conditions). */
-#define QBUEM_VERSION_PATCH 0
+#define QBUEM_VERSION_PATCH 1
 
 /** @brief Version string literal "major.minor.patch" (for use in preprocessor conditions). */
-#define QBUEM_VERSION_STRING "1.7.0"
+#define QBUEM_VERSION_STRING "1.7.1"
 
 /** @} */ // end of qbuem_version

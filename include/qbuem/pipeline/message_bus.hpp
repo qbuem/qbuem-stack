@@ -35,6 +35,7 @@
 #include <qbuem/pipeline/service_registry.hpp>
 #include <qbuem/pipeline/static_pipeline.hpp>
 
+#include <algorithm>
 #include <any>
 #include <atomic>
 #include <functional>
@@ -178,10 +179,7 @@ public:
         sub.handler = std::move(handler);
         // No internal channel: handlers are dispatched directly via invoke_handler.
 
-        {
-            std::unique_lock lock(state->mtx);
-            state->subs.push_back(std::move(sub));
-        }
+        state->add_sub(std::move(sub));
 
         return Subscription(topic, id, this);
     }
@@ -211,29 +209,20 @@ public:
 
         Msg any_msg = std::move(msg);
 
-        std::vector<Handler> handlers;
-        std::vector<std::function<bool(const Msg&)>> direct_senders;
-        {
-            std::shared_lock lock(state->mtx);
-            // Pre-reserve to the number of subs — prevents reallocation on each publish
-            handlers.reserve(state->subs.size());
-            direct_senders.reserve(state->subs.size());
-            for (auto& sub : state->subs) {
-                if (sub.direct_sender)
-                    direct_senders.push_back(sub.direct_sender);
-                else if (sub.handler)
-                    handlers.push_back(sub.handler);
-            }
-        }
+        // O(1) snapshot: no per-handler copy, no per-publish vector allocation.
+        // The snapshot keeps the subscriber list alive across the co_awaits below
+        // even if a concurrent subscribe/unsubscribe COWs a new list.
+        auto snap = state->snapshot();
 
-        // Direct (subscribe_stream) senders — non-blocking to avoid deadlock
-        for (auto& ds : direct_senders)
-            ds(any_msg);
+        // Direct (subscribe_stream) senders first — non-blocking to avoid deadlock.
+        for (const auto& sub : *snap)
+            if (sub.direct_sender) sub.direct_sender(any_msg);
 
-        // Directly co_await each handler so publish() provides backpressure and
-        // the caller knows handlers have run before publish() returns.
-        for (auto& h : handlers)
-            co_await invoke_handler(h, any_msg, ctx);
+        // Then co_await each handler so publish() provides backpressure and the
+        // caller knows handlers have run before publish() returns.
+        for (const auto& sub : *snap)
+            if (!sub.direct_sender && sub.handler)
+                co_await invoke_handler(sub.handler, any_msg, ctx);
         co_return Result<void>{};
     }
 
@@ -263,8 +252,8 @@ public:
         Msg any_msg = std::move(msg);
         bool all_ok = true;
 
-        std::shared_lock lock(state->mtx);
-        for (auto& sub : state->subs) {
+        auto snap = state->snapshot();
+        for (const auto& sub : *snap) {
             if (sub.direct_sender) {
                 if (!sub.direct_sender(any_msg)) all_ok = false;
             } else if (sub.channel) {
@@ -306,10 +295,7 @@ public:
             return false;
         };
 
-        {
-            std::unique_lock lock(state->mtx);
-            state->subs.push_back(std::move(sub));
-        }
+        state->add_sub(std::move(sub));
 
         return stream_ch;
     }
@@ -367,8 +353,8 @@ public:
             state = it->second;
         }
         state->closed.store(true, std::memory_order_release);
-        std::shared_lock lock(state->mtx);
-        for (auto& sub : state->subs) {
+        auto snap = state->snapshot();
+        for (const auto& sub : *snap) {
             if (sub.channel)
                 sub.channel->close();
         }
@@ -386,8 +372,7 @@ public:
         auto it = topics_.find(topic);
         if (it == topics_.end())
             return 0;
-        std::shared_lock inner(it->second->mtx);
-        return it->second->subs.size();
+        return it->second->snapshot()->size();
     }
 
     /**
@@ -446,10 +431,39 @@ private:
     };
 
     struct TopicState {
-        mutable std::shared_mutex      mtx;
-        std::vector<Sub>               subs;
-        std::atomic<size_t>            next_id{1};
-        std::atomic<bool>              closed{false};
+        // The subscriber list is an immutable snapshot behind a shared_ptr (RCU):
+        // readers (publish/try_publish/close) grab the current snapshot in O(1)
+        // (one refcount bump — NO per-handler std::function copy and NO per-publish
+        // vector allocation), and can iterate it without holding the lock across a
+        // co_await. Writers (subscribe/unsubscribe) copy-on-write under the lock.
+        mutable std::shared_mutex                       mtx;  // guards subs swaps
+        std::shared_ptr<const std::vector<Sub>>         subs{
+            std::make_shared<const std::vector<Sub>>()};
+        std::atomic<size_t>                             next_id{1};
+        std::atomic<bool>                               closed{false};
+
+        // O(1) read snapshot; safe to iterate after the lock is released (and
+        // across coroutine suspension) because the pointed-to vector is immutable.
+        std::shared_ptr<const std::vector<Sub>> snapshot() const {
+            std::shared_lock lock(mtx);
+            return subs;
+        }
+        // Copy-on-write append (writers are rare relative to publishes).
+        void add_sub(Sub s) {
+            std::unique_lock lock(mtx);
+            auto next = std::make_shared<std::vector<Sub>>(*subs);
+            next->push_back(std::move(s));
+            subs = std::move(next);
+        }
+        // Copy-on-write remove by id.
+        void remove_sub(size_t id) {
+            std::unique_lock lock(mtx);
+            auto next = std::make_shared<std::vector<Sub>>(*subs);
+            next->erase(std::remove_if(next->begin(), next->end(),
+                            [id](const Sub& s) { return s.id == id; }),
+                        next->end());
+            subs = std::move(next);
+        }
     };
 
     // -------------------------------------------------------------------------
@@ -493,12 +507,7 @@ private:
                 return;
             state = it->second;
         }
-        std::unique_lock lock(state->mtx);
-        auto& subs = state->subs;
-        subs.erase(
-            std::remove_if(subs.begin(), subs.end(),
-                [id](const Sub& s) { return s.id == id; }),
-            subs.end());
+        state->remove_sub(id);
     }
 
     // -------------------------------------------------------------------------
