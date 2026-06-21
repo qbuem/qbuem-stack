@@ -303,14 +303,25 @@ jobs:
         working-directory: build_tsan
         run: TSAN_OPTIONS="halt_on_error=1 history_size=4" ctest -j1 --timeout 180 --output-on-failure
 
-  # ── 8. Benchmark smoke: build all benchmarks Release and RUN them.
-  #    This is a build+run HEALTH gate (a crash, hang, or build break surfaces) —
-  #    it does NOT assert the per-bench "goal" thresholds, which are
-  #    hardware-dependent (the bench binaries print ✓/✗ but always exit 0).
-  #    Reproducible measured numbers live in bench/RESULTS.md.
-  bench-smoke:
-    name: Benchmark Smoke (build + run)
-    runs-on: ubuntu-24.04
+  # ── 8. Benchmarks: build all benchmarks Release, RUN them, and PUBLISH the
+  #    measured numbers. Two purposes:
+  #      (1) build+run HEALTH gate — a crash, hang, or build break fails the job;
+  #      (2) the actual numbers are surfaced in the run's Job Summary, printed in
+  #          the log, and uploaded as an artifact — per arch (x86_64 + aarch64),
+  #          giving committed server baselines alongside bench/RESULTS.md.
+  #    Hardware-dependent ✓/✗ "goal" thresholds are NOT asserted (the bench
+  #    binaries print them but always exit 0).
+  benchmarks:
+    name: Benchmarks / ${{ matrix.platform }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            platform: linux-x86_64
+          - os: ubuntu-24.04-arm
+            platform: linux-aarch64
     steps:
       - uses: actions/checkout@v4
       - name: Install liburing
@@ -324,10 +335,41 @@ jobs:
             -DQBUEM_BUILD_BENCH=ON
       - name: Build benchmarks
         run: cmake --build build_bench --parallel 2
-      - name: Run each benchmark (fail on crash/hang/non-zero exit)
+      - name: Run benchmarks + publish numbers
         run: |
+          mkdir -p bench-out
+          {
+            echo "## Benchmark results — ${{ matrix.platform }}"
+            echo ""
+            echo "Runner \`${{ matrix.os }}\` · $(nproc) cores · Release \`-O3\`"
+            echo ""
+          } >> "$GITHUB_STEP_SUMMARY"
+          fail=0
           for b in build_bench/bench/bench_*; do
             [ -x "$b" ] || continue
-            echo "── running $b ──"
-            timeout 120 "$b" || { echo "FAIL: $b exited non-zero / timed out"; exit 1; }
+            name=$(basename "$b")
+            echo "────── running $name ──────"
+            if timeout 120 "$b" > "bench-out/$name.txt" 2>&1; then
+              cat "bench-out/$name.txt"
+            else
+              echo "FAIL: $name exited non-zero / timed out"
+              cat "bench-out/$name.txt" || true
+              fail=1
+            fi
+            {
+              echo "<details><summary><code>$name</code></summary>"
+              echo ""
+              echo '```'
+              perl -pe 's/\e\[[0-9;]*m//g' "bench-out/$name.txt"
+              echo '```'
+              echo "</details>"
+              echo ""
+            } >> "$GITHUB_STEP_SUMMARY"
           done
+          exit $fail
+      - name: Upload benchmark output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmarks-${{ matrix.platform }}
+          path: bench-out/

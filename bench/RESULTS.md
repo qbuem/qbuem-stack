@@ -10,6 +10,12 @@ scale with your CPU.
 > goal flags, as the result. CI runs the benchmarks for **build+run health**
 > (regressions/crashes surface), not to assert these thresholds.
 
+> **Live CI numbers.** Every push runs the `Benchmarks / linux-x86_64` and
+> `Benchmarks / linux-aarch64` jobs, which **print the full measured numbers in
+> the run's Job Summary** and upload them as `benchmarks-<arch>` artifacts — so
+> current per-architecture **server** baselines (x86_64 + aarch64) are always
+> available on the Actions run page, alongside the local laptop baseline below.
+
 ## How to reproduce
 
 ```sh

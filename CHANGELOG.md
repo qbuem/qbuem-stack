@@ -10,6 +10,26 @@ pre-release internal iteration and is not tracked here.
 
 ---
 
+## [1.8.1] — CI publishes benchmark numbers (x86_64 + aarch64)
+
+No API change.
+
+### Changed
+- The CI benchmark job is now a **matrix** (`linux-x86_64` + `linux-aarch64`) that
+  **publishes the measured numbers**: full per-benchmark output is written to the
+  run's **Job Summary**, printed in the log, and uploaded as `benchmarks-<arch>`
+  **artifacts** — so current per-architecture **server** baselines are always
+  visible on the Actions run page (alongside the local M1 baseline in
+  `bench/RESULTS.md`). Still a build+run health gate; hardware-dependent
+  thresholds are not asserted.
+
+### Verification
+Final production-readiness sweep on the Stable surface: `-Werror` (Debug +
+Release), `ctest` green, full **ASan + UBSan** and **ThreadSanitizer** suites
+green. See [`docs/production-checklist.md`](docs/production-checklist.md).
+
+[1.8.1]: https://github.com/qbuem/qbuem-stack/releases/tag/v1.8.1
+
 ## [1.8.0] — Proof: committed benchmarks + CI smoke + production checklist
 
 No API change — turns performance *targets* into *measured, tracked* numbers and

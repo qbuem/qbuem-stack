@@ -61,13 +61,17 @@ Make the heavily-used path production-grade and ergonomic.
 ### v1.8 — Proof  *(in progress)*
 Turn performance *targets* into *measured, tracked* numbers.
 - [x] Reproducible benchmark results with the measurement environment
-      ([`bench/RESULTS.md`](../bench/RESULTS.md), Apple M1 Pro baseline) + a CI
-      `bench-smoke` job that builds and runs every benchmark (regressions/crashes
+      ([`bench/RESULTS.md`](../bench/RESULTS.md), Apple M1 Pro baseline) + CI
+      `Benchmarks` jobs that build and run every benchmark (regressions/crashes
       surface; thresholds are not asserted since they are hardware-dependent).
+- [x] **CI publishes the measured numbers** per architecture (x86_64 + aarch64)
+      in each run's Job Summary + as artifacts — committed server baselines.
 - [x] `qbuem-game` documented as the flagship real-world consumer (pins a
       released tag; exercises core/WsServer/TickScheduler/pipeline/SHM/crypto).
-- [ ] At least one second reference application in a different domain.
-- [ ] Add more machine baselines to `bench/RESULTS.md` (server x86).
+- [ ] A second *external* reference application in a non-game domain. *(The
+      `examples/11-advanced-apps/` set already spans finance, automotive, IoT and
+      gaming as in-repo demos; a full external consumer like `qbuem-game` in
+      another domain is a separate, larger effort tracked for after v2.0.)*
 
 ### v2.0 — Identity  *(decision point, not a feature dump)*
 Only after 1.7–1.8, and informed by what adopters actually ask for, decide the
