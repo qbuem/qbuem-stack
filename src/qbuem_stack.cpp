@@ -879,8 +879,10 @@ Result<void> App::listen(int port, bool ipv6) {
                     // that was the last reference, ctx->buf is freed and every
                     // string_view in `req` dangles before serve_connection reads
                     // them (observed as a spurious 400 on macOS). The local ref
-                    // keeps ctx->buf alive through the handoff.
-                    auto ctx_pin = ctx; // keep ctx->buf alive across unregister
+                    // keeps ctx->buf alive through the handoff. The copy is
+                    // load-bearing precisely BECAUSE it is otherwise "unused": its
+                    // refcount is what pins ctx->buf — hence the NOLINT.
+                    auto ctx_pin = ctx; // NOLINT(performance-unnecessary-copy-initialization) lifetime pin across unregister_event
                     // Cancel App's OWN read registration on this fd BEFORE handing
                     // off. The reactor must not keep dispatching this (HTTP) read
                     // callback on a fd the WsServer now owns: on io_uring the read
