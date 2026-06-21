@@ -182,6 +182,11 @@ add_executable(qbuem_rsa_verify_tests rsa_verify_test.cpp ${QBUEM_TLS_FIX})
 target_link_libraries(qbuem_rsa_verify_tests PRIVATE qbuem-stack::qbuem GTest::gtest_main)
 add_test(NAME qbuem_rsa_verify_tests COMMAND qbuem_rsa_verify_tests)
 
+# ── RS256 JWT + JWKS verifier (external-IdP token auth, end-to-end) ────────────
+add_executable(qbuem_rs256_jwt_tests rs256_jwt_test.cpp ${QBUEM_TLS_FIX})
+target_link_libraries(qbuem_rs256_jwt_tests PRIVATE qbuem-stack::qbuem GTest::gtest_main)
+add_test(NAME qbuem_rs256_jwt_tests COMMAND qbuem_rs256_jwt_tests)
+
 # ── OffloadPool + Dispatcher graceful drain (thread-management) ────────────────
 add_executable(qbuem_offload_drain_tests offload_drain_test.cpp ${QBUEM_TLS_FIX})
 target_link_libraries(qbuem_offload_drain_tests PRIVATE qbuem-stack::qbuem GTest::gtest_main)
