@@ -822,9 +822,6 @@ Result<void> App::listen(int port, bool ipv6) {
               // Record request start time for access log duration.
               auto req_start = std::chrono::steady_clock::now();
 
-              // Consume parsed bytes; remainder stays for pipelining
-              ctx->buf.erase(0, *parsed);
-
               ctx->handled++;
               cnt_requests_.fetch_add(1, std::memory_order_relaxed);
 
@@ -874,11 +871,40 @@ Result<void> App::listen(int port, bool ipv6) {
                       reactor->unregister_timer(ctx->idle_timer_id);
                       ctx->idle_timer_id = -1;
                     }
+                    // Pin ctx (which owns ctx->buf, the backing store for req's
+                    // header string_views, incl. Sec-WebSocket-Key/Version) with a
+                    // local strong ref BEFORE unregister_event. On kqueue/epoll
+                    // unregister_event destroys THIS read-callback closure
+                    // synchronously, releasing its captured `ctx` shared_ptr; if
+                    // that was the last reference, ctx->buf is freed and every
+                    // string_view in `req` dangles before serve_connection reads
+                    // them (observed as a spurious 400 on macOS). The local ref
+                    // keeps ctx->buf alive through the handoff.
+                    auto ctx_pin = ctx; // keep ctx->buf alive across unregister
+                    // Cancel App's OWN read registration on this fd BEFORE handing
+                    // off. The reactor must not keep dispatching this (HTTP) read
+                    // callback on a fd the WsServer now owns: on io_uring the read
+                    // poll is oneshot-with-auto-resubmit, so a stale App callback
+                    // would fire again, read EAGAIN, and close(cfd) out from under
+                    // the WsServer (EBADF on its first write). serve_connection
+                    // re-registers its own read; on epoll/kqueue this is a clean
+                    // unregister-then-register instead of relying on overwrite.
+                    reactor->unregister_event(cfd, EventType::Read);
                     (void)it->second->serve_connection(cfd, req);
                     return; // WsServer now owns this fd + its read callback.
                   }
                 }
               }
+
+              // Consume parsed bytes now that the WS-upgrade handoff has been
+              // ruled out. The handoff (serve_connection) reads req's headers,
+              // which are string_views into ctx->buf; erasing earlier would
+              // invalidate them before the WsServer copies out the
+              // Sec-WebSocket-Key/Version. libc++ moves the backing storage on
+              // erase-to-empty (libstdc++ happens not to) — so erasing before the
+              // handoff produced a spurious 400 on macOS only. Remainder of the
+              // buffer stays for request pipelining on the normal HTTP path.
+              ctx->buf.erase(0, *parsed);
 
               // Expose the remote peer IP via Request::remote_addr().
               req.set_remote_addr(ctx->client_ip);

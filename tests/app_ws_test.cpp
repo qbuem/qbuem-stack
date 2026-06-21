@@ -95,6 +95,18 @@ TEST(AppWs, ServesWebSocketAndHttpOnSamePort) {
   });
 
   std::jthread server([&] { (void)app.listen(kPort); });
+
+  // Hang-proofing: app.listen() blocks until app.stop() and does NOT observe the
+  // jthread stop_token. If any assertion below returns early (or throws), ~jthread
+  // would join() a still-running listen() forever. This guard is declared AFTER
+  // the jthread, so it destructs FIRST — calling app.stop() before ~jthread joins.
+  struct StopOnExit {
+    App& app;
+    bool done = false;
+    void stop() { if (!done) { done = true; app.stop(); } }
+    ~StopOnExit() { stop(); }
+  } stop_guard{app};
+
   std::this_thread::sleep_for(150ms); // let listen() bind
 
   // ── 1. Plain HTTP on the same port still works ────────────────────────────
@@ -176,8 +188,8 @@ TEST(AppWs, ServesWebSocketAndHttpOnSamePort) {
 
   // Give the reactor a moment to run on_close after the client closed.
   std::this_thread::sleep_for(100ms);
-  app.stop();
-  server.join();
+  stop_guard.stop();   // graceful stop so on_close fires before the checks below
+  server.join();       // listen() has returned, so this completes promptly
 
   EXPECT_EQ(client_log, "ok");
   EXPECT_TRUE(opened.load())   << "on_open did not fire";
