@@ -100,7 +100,6 @@ You can also link finer-grained targets (`qbuem-stack::result`,
 | `QBUEM_ENABLE_LTO` | OFF | Interprocedural optimization (LTO) for library targets |
 | `QBUEM_ENABLE_NATIVE_CRYPTO` | OFF | Host hardware SHA-2/AES for the crypto module (~11× SHA-256; host-targeting) |
 | `QBUEM_SANITIZE` | "" | `asan` \| `tsan` \| `msan` |
-| `QBUEM_XDP` | OFF | AF_XDP support (Linux 4.18+) |
 
 ---
 
@@ -245,7 +244,7 @@ if (resp && resp->status() == 200)
     process(resp->body());
 ```
 
-Retry/circuit-breaker wrappers: `<qbuem/http/fetch_pipeline.hpp>`; backoff
+Retry/circuit-breaker: compose `pipeline/resilience` around `fetch()`; backoff
 strategies: `<qbuem/http/backoff.hpp>`.
 
 > 📁 `examples/02-network/http_fetch/` (builds and runs on macOS).
@@ -444,10 +443,9 @@ W3C TraceContext + span export (OTLP): `<qbuem/tracing/*>`.
 
 | Surface | Status |
 |---------|--------|
-| `rdma/`, `spdk/`, `ebpf/ebpf_tracer` | **Interface only — no implementation.** Linking against them fails. |
-| `db/simd_parser` | **No implementation** (references a non-existent `.cpp`). |
-| `shm/futex_sync` | Async `wait`/`wake` **unimplemented**; `SHMChannel` falls back to a ≈1 ms poll. |
-| `db/smart_cache` | Works **in-process only** despite "shared memory" docs — each process gets a private cache. |
+| `db/*` | **Interfaces + connection pool only — no bundled driver.** Implement `IConnection` for your database. |
+| `shm/futex_sync` | Async `wait`/`wake` use a ≈1 ms poll fallback (a real futex path is planned). |
+| `db/smart_cache` | In-process cache (per-process); not shared across processes. |
 | `db/connection_pool` | A `std::mutex` + `vector` pool (the "lock-free" path is not wired). |
 | AVX2 SIMD: ChaCha20 / Base64 encode / JSON validator | **Scalar fallback active** on x86 (NEON paths are real on ARM). Functionally correct, not yet the advertised throughput. |
 | `DynamicPipeline::hot_swap` / runtime `add_stage` after `start()` | Does not safely hot-swap a *running* pipeline — configure before `start()`. |
@@ -469,7 +467,7 @@ See `docs/audit/2026-06-14_codebase-audit.md` for the full assessment.
 |---|-------|-------|
 | Reactor | `io_uring` (`QBUEM_HAS_IOURING`) | `kqueue` |
 | Batched UDP | `recvmmsg`/`sendmmsg` | emulated via `recvmsg`/`sendmsg` loop |
-| NUMA / hugepages / AF_XDP | supported (kernel ≥ 5.x) | not available (no-op / `not_supported`) |
+| NUMA / hugepages | supported (kernel ≥ 5.x) | not available (no-op / `not_supported`) |
 | AES-GCM | AES-NI + PCLMUL | ARM AES + PMULL |
 
 Both platforms are first-class and built+tested in CI. Windows is explicitly

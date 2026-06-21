@@ -21,7 +21,7 @@ Existing Korean comments in legacy files should be translated to English when to
 
 ## Project Identity
 
-**qbuem-stack v1.5.0** — Zero Latency · Zero Allocation · Zero Dependency
+**qbuem-stack v1.6.0** — Zero Latency · Zero Allocation · Zero Dependency
 C++23 high-performance infrastructure library for WAS (Web Application Servers), IPC, and data pipelines.
 
 - **Language**: C++23 (concepts, coroutines `co_await`/`co_return`, `std::expected`, `std::span`, `std::format`, `std::print`/`std::println`, `std::unreachable()`, `if consteval`, `std::to_underlying`)
@@ -243,7 +243,7 @@ Every code contribution — human or AI — is evaluated against the pillars bel
 |---|------|-------------|
 | E1 | **Reference Design Alignment** | Every implementation MUST follow the specific design guide in `docs/` (e.g., `docs/kqueue-optimization-guide.md`). |
 | E2 | **Platform Reactor Selection** | Linux: `io_uring` Multishot. macOS: `kqueue` udata-dispatch. Windows: `RIO` (Registered IO). |
-| E3 | **Zero-Copy File I/O** | Must use `O_DIRECT` + `io_uring` fixed buffers or Windows RIO registered buffers. |
+| E3 | **Zero-Copy File I/O** | Must use `O_DIRECT` + `io_uring` fixed buffers (Linux); `sendfile`/`copy_file_range` for transfer. |
 | E4 | **Hardware Locality** | Pin reactor threads to CPU cores (`numa.hpp` affinity helpers); keep per-thread data NUMA-local. |
 | E5 | **Zero-Copy File Transfer** | Use `sendfile()` / `copy_file_range()` (`io/zero_copy.hpp`) for file-to-socket and file-to-file transfer. |
 

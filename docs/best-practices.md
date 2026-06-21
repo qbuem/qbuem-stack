@@ -12,7 +12,7 @@ Every section includes the decision criteria, the right API, and a minimal examp
 3. [Channels — SPSC, Async, Priority, Arena](#3-channels)
 4. [IPC & Messaging — SHMChannel, MessageBus, SHMBus](#4-ipc-and-messaging)
 5. [Network — TCP, UDP, Unix Sockets, UDS](#5-network)
-6. [HTTP Client — fetch, FetchPipeline, fetch_stream](#6-http-client)
+6. [HTTP Client — fetch, retry/circuit-breaker, backoff](#6-http-client)
 7. [HTTP Server — Router, Middleware, App](#7-http-server)
 8. [IO Primitives — IOVec, scattered_span, writev](#8-io-primitives)
 9. [Memory — Arena, FixedPoolResource, LockFreeHashMap](#9-memory)
@@ -323,29 +323,29 @@ auto batch = co_await sock.recv_batch(32);  // up to 32 msgs per syscall
 | Need | API | Header |
 |------|-----|--------|
 | Simple one-off HTTP request | `qbuem::fetch()` | `fetch.hpp` |
-| With retry / circuit-breaker | `FetchPipeline` | `fetch_pipeline.hpp` |
-| Large response body (streaming) | `fetch_stream()` | `fetch_stream.hpp` |
-| HTTPS (TLS) | `fetch_tls()` | `fetch_tls.hpp` |
-| HTTP/2 (multiplexing) | `Http2Client` | `http2_client.hpp` |
-| gRPC | `GrpcChannel` | `grpc/grpc_channel.hpp` |
+| Connection-pooled client | `FetchClient` | `fetch_client.hpp` |
 
-### FetchPipeline — recommended for production
+> HTTP only. There is no TLS/HTTPS, HTTP/2, or gRPC **client** in the
+> zero-dependency core — terminate TLS at a reverse proxy. See the
+> [feature-maturity matrix](../README.md#feature-maturity).
+
+### Retry / circuit-breaker around `fetch()`
+
+There is no separate "fetch pipeline" type — compose the generic resilience
+actions (`pipeline/resilience/`) around a plain `fetch()` call, with backoff from
+`<qbuem/http/backoff.hpp>`:
 
 ```cpp
-#include <qbuem/http/fetch_pipeline.hpp>
+#include <qbuem/http/fetch.hpp>
 #include <qbuem/http/backoff.hpp>
+#include <qbuem/pipeline/resilience/circuit_breaker.hpp>
 
-auto pipe = FetchPipeline{}
-    .use(stages::logging("my-api"))
-    .use(stages::retry_jitter(3))            // 3 attempts, jittered backoff
-    .use(stages::circuit_breaker());         // open after 5 failures
+CircuitBreaker cb{.failure_threshold = 5, .recovery_timeout = 30s};
+auto policy = backoff::jitter(500ms, 30s);
 
-auto resp = co_await pipe.execute({
-    .method = "POST",
-    .url    = "https://api.example.com/data",
-    .body   = json_payload,
-});
-if (!resp) { /* circuit open or all retries exhausted */ }
+if (!cb.allow_request()) { /* fail fast — circuit open */ }
+auto resp = co_await qbuem::fetch({.method = "POST", .url = url, .body = body});
+resp ? cb.record_success() : cb.record_failure();
 ```
 
 ### Backoff strategy selection
@@ -479,11 +479,10 @@ scattered_span scatter{vec};
 | Scatter-gather `write`/`writev` | `IOVec<N>` + `scattered_span` | `iovec.hpp`, `scattered_span.hpp` |
 | Zero-copy file sendfile | `ZeroCopyFile` | `zero_copy.hpp` |
 | Direct I/O (O_DIRECT) | `DirectFile` | `direct_file.hpp` |
-| Async file I/O (`io_uring`) | `AsyncFile` | `async_file.hpp` |
-| io_uring raw ops | `uring_ops` | `uring_ops.hpp` |
+| Async file I/O (`io_uring` on Linux) | `AsyncFile` | `async_file.hpp` |
 | Read buffer management | `ReadBuf` | `read_buf.hpp` |
+| Buffered delimiter reads | `BufferedReader` | `buffered_reader.hpp` |
 | Write buffer pool | `BufferPool` | `buffer_pool.hpp` |
-| kTLS (TLS in kernel) | `kTLS` | `ktls.hpp` |
 
 ---
 
@@ -801,16 +800,15 @@ router->add_route(Method::Post, "/users", create_user_handler);
 
 | Feature | Linux | macOS | Header |
 |---------|-------|-------|--------|
-| `io_uring` async I/O | ✓ | ✗ | `reactor/io_uring_reactor.hpp` |
-| `kqueue` event loop | ✗ | ✓ | `reactor/kqueue_reactor.hpp` |
-| `epoll` event loop | ✓ | ✗ | `reactor/epoll_reactor.hpp` |
+| `io_uring` async I/O | ✓ | ✗ | `core/io_uring_reactor.hpp` |
+| `epoll` event loop | ✓ | ✗ | `core/epoll_reactor.hpp` |
+| `kqueue` event loop / timer / user event | ✗ | ✓ | `core/kqueue_reactor.hpp` |
 | `recvmmsg`/`sendmmsg` batch UDP | ✓ | ✗ | `net/udp_mmsg.hpp` |
-| NUMA-aware allocation | ✓ | partial | `reactor/numa.hpp` |
-| Hugepages (2MB) | ✓ | ✗ | `reactor/huge_pages.hpp` |
-| kTLS (kernel TLS offload) | ✓ | ✗ | `io/ktls.hpp` |
-| `kqueue` timer/user event | ✗ | ✓ | `reactor/kqueue_reactor.hpp` |
-| eBPF tracing | ✓ | ✗ | `ebpf/` |
-| PCIe / RDMA / NVMe-oF | ✓ | ✗ | `pcie/`, `rdma/`, `spdk/` |
+| NUMA-aware allocation | ✓ | partial | `core/numa.hpp` |
+| Hugepages (2MB) | ✓ | ✗ | `core/huge_pages.hpp` |
+
+The reactor backend is selected automatically per platform; you normally use
+`Dispatcher`/`App` and never name a reactor directly.
 
 ### MicroTicker — sub-millisecond precision timer
 
@@ -907,9 +905,9 @@ NETWORK I/O
   IPC          → UnixSocket
 
 HTTP CLIENT
-  one-off      → qbuem::fetch()
-  production   → FetchPipeline (retry + CB)
-  streaming    → fetch_stream()
+  one-off       → qbuem::fetch()
+  pooled        → FetchClient
+  retry / CB    → fetch() + pipeline/resilience + backoff.hpp
 
 MEMORY
   per-request  → Arena (reset() at end)
