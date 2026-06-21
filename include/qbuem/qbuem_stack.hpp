@@ -3,6 +3,7 @@
 #include <qbuem/common.hpp>
 #include <qbuem/core/dispatcher.hpp>
 #include <qbuem/http/router.hpp>
+#include <qbuem/server/ws_server.hpp>
 #include <qbuem/version.hpp>
 
 // Unified DB abstraction — zero-dep interfaces (concrete drivers are app-level)
@@ -51,8 +52,12 @@
 #include <chrono>
 #include <cstdint>
 #include <functional>
+#include <memory>
+#include <string>
 #include <string_view>
 #include <thread>
+#include <unordered_map>
+#include <vector>
 
 namespace qbuem {
 
@@ -178,6 +183,38 @@ public:
    * @param root_dir    Filesystem root directory, e.g., "./public".
    */
   void serve_static(std::string_view url_prefix, std::string_view root_dir);
+
+  /**
+   * @brief Register a high-level WebSocket endpoint on this App.
+   *
+   * Serves WebSocket on the **same port** as the HTTP routes — no hand-wiring of
+   * the upgrade handshake. When a request to @p path carries `Upgrade: websocket`,
+   * the connection is upgraded and driven by a non-blocking `WsServer`
+   * (`WsConnection` lifecycle: `on_open` / `on_message` / `on_close` / `on_error`,
+   * back-pressured `send_text`/`send_binary`, heartbeat, fragmentation reassembly).
+   *
+   * @code
+   * app.ws("/ws", {
+   *   .on_open    = [](auto conn){ conn->send_text("welcome"); },
+   *   .on_message = [](auto conn, qbuem::WsMessage m){ conn->send_text(m.text()); },
+   *   .on_close   = [](auto conn, uint16_t code){ },
+   * });
+   * @endcode
+   *
+   * @note **Threading model.** App is multi-reactor (one per core, `SO_REUSEPORT`).
+   *   Each WS connection is served on the reactor thread that accepted it, and
+   *   each reactor owns its own `WsServer` instance for the route — so callbacks
+   *   are race-free, but rooms/broadcast are **per-reactor**. For whole-server
+   *   broadcast across all connections, run the App single-reactor
+   *   (`App{1}`) or use a standalone `WsServer` directly. Per-connection
+   *   send and typed per-connection context are not exposed here — use a
+   *   standalone `WsServer<Ctx>` when you need those.
+   * @note Must be called before `listen()`.
+   *
+   * @param path     Exact request path to upgrade (e.g. "/ws").
+   * @param handlers Lifecycle callbacks (default per-connection context).
+   */
+  void ws(std::string_view path, WsHandlers<> handlers);
 
   /**
    * @brief Register a built-in health check endpoint.
@@ -384,6 +421,14 @@ public:
 private:
   Dispatcher dispatcher_;
   Router     router_;
+
+  // WebSocket routes registered via ws() (path → handlers). Read-only once
+  // listen() starts. ws_servers_[reactor_idx][path] holds one WsServer per
+  // reactor per route (shared-nothing: each reactor touches only its own slot),
+  // built in listen() and used by the per-reactor accept/read callbacks.
+  std::unordered_map<std::string, WsHandlers<>> ws_routes_;
+  std::vector<std::unordered_map<std::string, std::unique_ptr<WsServer<>>>>
+      ws_servers_;
 
   // Access logger callback (null = disabled).
   std::function<void(std::string_view, std::string_view, int, long)> logger_;

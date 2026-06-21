@@ -10,6 +10,22 @@ pre-release internal iteration and is not tracked here.
 
 ---
 
+## [1.7.0] — `App::ws()` — WebSocket on the same App/port
+
+### Added
+- **`App::ws(path, handlers)`**: register a high-level WebSocket endpoint that is
+  served on the **same port** as the App's HTTP routes — no hand-wiring of the
+  upgrade handshake. A matching `Upgrade: websocket` request is upgraded and
+  driven by a non-blocking `WsServer` (`on_open`/`on_message`/`on_close`/
+  `on_error`, back-pressured send, heartbeat, fragmentation reassembly).
+  - Threading: each connection is served on the reactor thread that accepted it,
+    via a per-reactor `WsServer` for the route (shared-nothing → callbacks are
+    race-free). Rooms/broadcast are therefore **per-reactor**; for whole-server
+    broadcast run the App single-reactor (`App{1}`) or use a standalone
+    `WsServer`. Verified end-to-end (HTTP + WS on one port) under ASan/UBSan.
+
+[1.7.0]: https://github.com/qbuem/qbuem-stack/releases/tag/v1.7.0
+
 ## [1.6.0] — Documentation truth pass
 
 No API or behavior change — a documentation-only release that makes the docs

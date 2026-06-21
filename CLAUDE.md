@@ -21,7 +21,7 @@ Existing Korean comments in legacy files should be translated to English when to
 
 ## Project Identity
 
-**qbuem-stack v1.6.0** — Zero Latency · Zero Allocation · Zero Dependency
+**qbuem-stack v1.7.0** — Zero Latency · Zero Allocation · Zero Dependency
 C++23 high-performance infrastructure library for WAS (Web Application Servers), IPC, and data pipelines.
 
 - **Language**: C++23 (concepts, coroutines `co_await`/`co_return`, `std::expected`, `std::span`, `std::format`, `std::print`/`std::println`, `std::unreachable()`, `if consteval`, `std::to_underlying`)

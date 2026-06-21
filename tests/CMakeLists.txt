@@ -167,6 +167,11 @@ add_executable(qbuem_tick_loop_tests tick_loop_test.cpp ${QBUEM_TLS_FIX})
 target_link_libraries(qbuem_tick_loop_tests PRIVATE qbuem-stack::qbuem GTest::gtest_main)
 add_test(NAME qbuem_tick_loop_tests COMMAND qbuem_tick_loop_tests)
 
+# ── App::ws() — WebSocket + HTTP on the same App/port (end-to-end) ─────────────
+add_executable(qbuem_app_ws_tests app_ws_test.cpp ${QBUEM_TLS_FIX})
+target_link_libraries(qbuem_app_ws_tests PRIVATE qbuem-stack::qbuem GTest::gtest_main)
+add_test(NAME qbuem_app_ws_tests COMMAND qbuem_app_ws_tests)
+
 # ── OffloadPool + Dispatcher graceful drain (thread-management) ────────────────
 add_executable(qbuem_offload_drain_tests offload_drain_test.cpp ${QBUEM_TLS_FIX})
 target_link_libraries(qbuem_offload_drain_tests PRIVATE qbuem-stack::qbuem GTest::gtest_main)

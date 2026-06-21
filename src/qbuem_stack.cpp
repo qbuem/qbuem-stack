@@ -4,6 +4,7 @@
 #include <qbuem/middleware/static_files.hpp>
 
 #include <arpa/inet.h>
+#include <cctype>
 #include <cerrno>
 #include <chrono>
 #include <csignal>
@@ -283,6 +284,9 @@ void App::head(std::string_view path, HandlerVariant handler) { // NOLINT(perfor
 void App::options(std::string_view path, HandlerVariant handler) { // NOLINT(performance-unnecessary-value-param)
   router_.add_route(Method::Options, path, std::move(handler));
 }
+void App::ws(std::string_view path, WsHandlers<> handlers) { // NOLINT(performance-unnecessary-value-param)
+  ws_routes_[std::string(path)] = std::move(handlers);
+}
 void App::serve_static(std::string_view url_prefix, std::string_view root_dir) {
   router_.add_prefix_route(
       Method::Get, url_prefix,
@@ -561,6 +565,19 @@ Result<void> App::listen(int port, bool ipv6) {
   std::vector<int> server_fds;
   server_fds.reserve(N);
 
+  // ── Per-reactor WebSocket servers (shared-nothing) ────────────────────────
+  // One WsServer per reactor per ws() route. Each reactor thread only ever
+  // touches ws_servers_[its_index], so no locking is needed; a connection
+  // accepted on reactor i is served by ws_servers_[i][path].
+  if (!ws_routes_.empty()) {
+    ws_servers_.clear();
+    ws_servers_.resize(N);
+    for (size_t i = 0; i < N; ++i)
+      for (const auto &[rpath, rhandlers] : ws_routes_)
+        ws_servers_[i].emplace(
+            rpath, std::make_unique<WsServer<>>(rhandlers));
+  }
+
   for (size_t i = 0; i < N; ++i) {
     int fd = make_listen_socket(port, ipv6);
     if (fd < 0) {
@@ -577,8 +594,10 @@ Result<void> App::listen(int port, bool ipv6) {
   // ── Accept loop — one accept-callback per reactor ─────────────────────────
   for (size_t i = 0; i < N; ++i) {
     auto listen_res = dispatcher_.register_listener_at(
-        server_fds[i], i, [this](int lfd) {
+        server_fds[i], i, [this, i](int lfd) {
         Reactor *reactor = Reactor::current();
+        // This reactor's WebSocket route → server map (null if no ws() routes).
+        auto *ws_map = ws_servers_.empty() ? nullptr : &ws_servers_[i];
 
         struct sockaddr_storage client_addr{};
         socklen_t client_len = sizeof(client_addr);
@@ -726,7 +745,7 @@ Result<void> App::listen(int port, bool ipv6) {
         // ── Per-connection read callback ──────────────────────────────────
         reactor->register_event(
             client_fd, EventType::Read,
-            [this, reactor, ctx, arm_idle,
+            [this, reactor, ctx, ws_map, arm_idle,
              arm_read_timeout, cancel_read_timeout](int cfd) mutable {
               // Activity received — disarm idle timer
               if (ctx->idle_timer_id != -1) {
@@ -831,6 +850,33 @@ Result<void> App::listen(int port, bool ipv6) {
                   reactor->unregister_event(cfd, EventType::Read);
                   close(cfd);
                   return;
+                }
+              }
+
+              // ── WebSocket upgrade (app.ws routes) ───────────────────────
+              // If this is an Upgrade: websocket request to a registered ws()
+              // path, hand the fd off to this reactor's WsServer for that route.
+              // The WsServer performs the 101 handshake and re-registers its own
+              // (non-blocking) read callback on this fd — overwriting this HTTP
+              // callback. We cancel our timers and return without closing; the
+              // ConnCtx deleter then decrements the active count as usual.
+              if (ws_map != nullptr && !ws_map->empty()) {
+                std::string_view up = req.header("Upgrade");
+                bool is_ws = up.size() == 9;
+                for (size_t k = 0; is_ws && k < 9; ++k)
+                  is_ws = std::tolower(static_cast<unsigned char>(up[k])) ==
+                          "websocket"[k];
+                if (is_ws) {
+                  auto it = ws_map->find(std::string(req.path()));
+                  if (it != ws_map->end()) {
+                    cancel_read_timeout();
+                    if (ctx->idle_timer_id != -1) {
+                      reactor->unregister_timer(ctx->idle_timer_id);
+                      ctx->idle_timer_id = -1;
+                    }
+                    (void)it->second->serve_connection(cfd, req);
+                    return; // WsServer now owns this fd + its read callback.
+                  }
                 }
               }
 
