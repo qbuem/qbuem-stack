@@ -61,7 +61,7 @@ co_await reactor.recv(fd, buf);
 
 ### 3.2 Protocol Parsing
 - **Stateless Parsing**: The protocol parser should be a state machine that doesn't allocate.
-- **SIMD Acceleration**: Use bit-packing and SIMD instructions to parse large ResultSets (aligned with `io-deep-dive.md`).
+- **SIMD Acceleration**: Use bit-packing and SIMD instructions to parse large ResultSets.
 
 ### 3.3 Type Mapping
 A unified `db::Value` variant (heap-free) is used for parameter binding and result extraction.

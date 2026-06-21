@@ -1,6 +1,6 @@
 # High-Performance Essential Primitives Design
 
-This document provides a detailed technical specification for the high-performance primitives introduced in v2.4.0. These modules are designed as **Level 7 Extensions**, providing specialized infrastructure for zero-latency and zero-allocation applications.
+This document provides a detailed technical specification for the high-performance primitives in qbuem-stack — specialized infrastructure for zero-latency and zero-allocation applications (lock-free pools, spatial indexes, precise ticking).
 
 ## 1. LockFreeHashMap<K, V>
 

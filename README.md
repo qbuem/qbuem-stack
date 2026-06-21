@@ -2,16 +2,20 @@
 
 **Zero Latency · Zero Copy · Zero Allocation · Zero Dependency**
 
-> **v1.0.0** — A focused, zero-dependency C++23 infrastructure core for
-> Web Application Servers (WAS), Inter-Process Communication (IPC), and data pipelines.
+> **v1.6.0** — A focused, zero-dependency C++23 infrastructure library for
+> Web Application Servers (WAS), Inter-Process Communication (IPC), real-time
+> simulation, and data pipelines.
 >
-> **Supported platforms:** Linux x86_64 · ARM64 boards (Jetson-class) · macOS aarch64.
-> No exotic-hardware or third-party dependencies — stdlib + OS/arch intrinsics only.
+> **Supported platforms:** Linux x86_64 (`io_uring`/`epoll`) · Linux ARM64
+> (Jetson-class) · macOS aarch64 (`kqueue`). POSIX only — Windows is not
+> supported. No third-party dependencies — C++23 stdlib + OS/arch intrinsics only.
 
 > 📚 **Start here:** [Getting Started](./docs/guide/01-getting-started.md) ·
 > **Full feature guide:** [`docs/guide/`](./docs/guide/) (per-module: role · when to use ·
 > how to use · gotchas, grounded in the real API) ·
-> **Runnable examples:** [`examples/`](./examples/) (59 programs).
+> **Runnable examples:** [`examples/`](./examples/) (61 programs) ·
+> **What's stable vs experimental:** [Feature maturity](#feature-maturity) ·
+> [CHANGELOG](./CHANGELOG.md) · [Roadmap](./docs/roadmap.md).
 
 ---
 
@@ -26,6 +30,42 @@
 | **Shared-Nothing** | Thread-per-core reactor · `SO_REUSEPORT` · NUMA-aware pinning · minimal cross-thread sync |
 
 Errors are returned as values (`std::expected`), never thrown — exceptions are forbidden on hot paths.
+
+---
+
+## Feature maturity
+
+Honest status of every module, so you know what to build on. **Stable** = used in
+production/dogfooding, well-tested (incl. sanitizers), API unlikely to change.
+**Experimental** = works and tested but the API may evolve. **Codec-only** = the
+wire format / state machine is implemented and tested, but there is **no wired
+server transport** — usable as a building block, not a turnkey server yet.
+
+| Module | Status | Notes |
+| :--- | :--- | :--- |
+| `core` — `Task`, reactor (epoll/io_uring/kqueue), `Dispatcher`, awaiters, `OffloadPool` | **Stable** | the runtime; thread-per-core, shared-nothing |
+| `core` — `Arena`, `FixedPoolResource`, `TimerWheel`, `MicroTicker`, `cpu_hints`, NUMA | **Stable** | zero-alloc memory + timing |
+| `core` — `TickLoop`, `TickScheduler` | **Stable** | fixed-timestep ticking; deterministic, TSan/ASan/UBSan-verified (v1.5.0) |
+| `http` + HTTP/1.1 `App` server | **Stable** | SIMD parser, router, middleware, keep-alive, `serve_static`, `sendfile`, health/metrics |
+| `http` — `fetch` client (HTTP) | **Stable** | curl-free; HTTP only (no TLS — see below) |
+| `server` — `WsServer` / `WsConnection` (WebSocket) | **Stable** | non-blocking, rooms, broadcast, backpressure, heartbeat (v1.1.0) |
+| `pipeline` — Static/Dynamic/Graph, channels, actions, resilience, windows | **Stable** | the data-flow engine |
+| `shm` — `SHMChannel`, `SHMBus`, futex sync | **Stable** | zero-copy cross-process IPC |
+| `net` — TCP/UDP/Unix sockets, UDS FD passing, DNS | **Stable** | DNS is bounded thread-offload |
+| `io` — `IOVec`/`scattered_span`, buffers, `BufferedReader`, async/direct file, `sendfile` | **Stable** | scatter-gather zero-copy |
+| `crypto` + `security` — SHA/HMAC/HKDF/PBKDF2/ChaCha20-Poly1305/AES-GCM/Base64/CSPRNG, `secretbox`, HS256 JWT, SIMD JWT parser | **Stable** | misuse-resistant wrappers (v1.2.0); software + opt-in hardware paths |
+| `buf` — pools, `GenerationPool`, `inplace_function`, `GridBitset`/`TiledBitset`, `SpatialGrid` | **Stable** | spatial indexes for game/sim/robotics |
+| `middleware` — CORS, rate-limit, security headers, SSE, token/JWT auth, body encoder | **Stable** | composable HTTP middleware |
+| `tracing` — W3C `TraceContext`, span exporter, sampler, lifecycle tracer | **Stable** | distributed tracing |
+| `config` — `ConfigManager`, `Secret<T>` | **Stable** | zero-heap config + redacted secrets |
+| `db` — `Value`, `IConnection`/`IConnectionPool`, `connection_pool`, `SmartCache` | **Experimental** | interfaces + pool; **no bundled driver** — bring your own |
+| `server` — `Http2Handler` (HTTP/2) | **Codec-only** | HPACK static table + framing; **no flow control, no wired server**; DoS-hardened |
+| `server` — `GrpcHandler` (gRPC) | **Codec-only** | message framing + dispatch; no HTTP/2 transport wiring |
+
+**Not in this library (and not planned for the zero-dependency core):** TLS,
+RDMA, PCIe/VFIO, NVMe passthrough, eBPF, AF_XDP, Windows. Any doc you find
+referencing these is stale — they are out of scope (they require third-party
+libraries or special hardware, which breaks the zero-dependency contract).
 
 ---
 
@@ -198,7 +238,7 @@ The [`examples/`](./examples/) directory contains **61 registered programs** in 
 | # | Category | Programs | Highlights |
 | :--- | :--- | :---: | :--- |
 | [01](./examples/01-foundation/) | Foundation | 5 | `hello_world`, `async_timer`, `micro_ticker`, **`tick_loop`** (drift-free fixed-timestep), `config` |
-| [02](./examples/02-network/) | Network | 8 | TCP echo, UDP advanced, Unix socket, WebSocket codec, **`ws_game_server`** (high-level rooms/broadcast), HTTP fetch, HTTP/2 server, gRPC |
+| [02](./examples/02-network/) | Network | 8 | TCP echo, UDP advanced, Unix socket, WebSocket codec, **`ws_game_server`** (high-level rooms/broadcast), HTTP fetch, HTTP/2 + gRPC *(codec demos — see maturity)* |
 | [03](./examples/03-memory/) | Memory | 4 | Arena, zero-copy arena channel, NUMA + huge pages, lock-free bench |
 | [04](./examples/04-codec-security/) | Codec & Security | 6 | Codecs, crypto URL, security middleware, **crypto primitives**, transport codec/plain |
 | [05](./examples/05-pipeline/) | Pipeline | 12 | Fan-out, hot-swap, batching, dynamic router, backpressure, stateful window, windowed action |
@@ -219,10 +259,16 @@ hello_world → async_timer → tcp_echo_server → arena → pipeline/fanout
 
 ## Documentation
 
-- **[Feature guide](./docs/guide/)** — detailed per-module reference (the main docs).
+- **[Getting Started](./docs/guide/01-getting-started.md)** — build, install, the model, first server.
+- **[Feature guide](./docs/guide/)** (`01`–`08`) — detailed per-module reference: role · when to use · how to use · gotchas, grounded in the real API. **The main docs.**
 - **[Usage guide](./docs/usage-guide.md)** — task-oriented quick reference.
-- **[Codebase audit](./docs/audit/)** — review + over-engineering cleanup record.
-- **Per-platform design notes** under `docs/` (kqueue, epoll, NEON, primitives).
+- **[Best practices](./docs/best-practices.md)** — pattern selection (which primitive for which job).
+- **[CHANGELOG](./CHANGELOG.md)** — per-release notes (real, tagged releases only).
+- **[Roadmap](./docs/roadmap.md)** — current state + where this is going.
+- **Deep dives** under `docs/` — pipeline, SHM messaging, crypto, DB, config, I/O architecture, and per-platform optimization (kqueue/epoll/NEON).
+
+Every feature documented here exists in the code at this version. See
+[Feature maturity](#feature-maturity) for what's stable vs experimental.
 
 ---
 
