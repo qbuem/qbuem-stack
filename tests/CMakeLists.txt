@@ -172,6 +172,11 @@ add_executable(qbuem_app_ws_tests app_ws_test.cpp ${QBUEM_TLS_FIX})
 target_link_libraries(qbuem_app_ws_tests PRIVATE qbuem-stack::qbuem GTest::gtest_main)
 add_test(NAME qbuem_app_ws_tests COMMAND qbuem_app_ws_tests)
 
+# ── HTTP/2 SETTINGS negotiation + flow control (RFC 7540 §6.5/§6.9) ────────────
+add_executable(qbuem_http2_flow_control_tests http2_flow_control_test.cpp ${QBUEM_TLS_FIX})
+target_link_libraries(qbuem_http2_flow_control_tests PRIVATE qbuem-stack::qbuem GTest::gtest_main)
+add_test(NAME qbuem_http2_flow_control_tests COMMAND qbuem_http2_flow_control_tests)
+
 # ── OffloadPool + Dispatcher graceful drain (thread-management) ────────────────
 add_executable(qbuem_offload_drain_tests offload_drain_test.cpp ${QBUEM_TLS_FIX})
 target_link_libraries(qbuem_offload_drain_tests PRIVATE qbuem-stack::qbuem GTest::gtest_main)

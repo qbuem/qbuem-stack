@@ -505,6 +505,22 @@ struct Http2Stream {
 
     /** @brief Frame queue for frames to send on this stream (outgoing channel). */
     std::shared_ptr<AsyncChannel<Http2Frame>> outgoing;
+
+    /**
+     * @brief Flow-control SEND window (RFC 7540 §6.9) — DATA bytes we may still send
+     *        on this stream before the peer must grant more via WINDOW_UPDATE.
+     *
+     * Initialized from the peer's SETTINGS_INITIAL_WINDOW_SIZE; may go negative when
+     * the peer lowers that setting (§6.9.2). `int64_t` so over/underflow is
+     * detectable against the 2^31-1 cap.
+     */
+    int64_t send_window{65535};
+
+    /**
+     * @brief Flow-control RECEIVE window — DATA bytes the peer may still send us on
+     *        this stream before we replenish via WINDOW_UPDATE.
+     */
+    int64_t recv_window{65535};
 };
 
 // ─── Http2Handler ─────────────────────────────────────────────────────────────
@@ -605,8 +621,7 @@ public:
                 co_return co_await handle_rst_stream(frame);
 
             case Http2FrameType::WINDOW_UPDATE:
-                // Flow control not implemented — ignore on receipt
-                co_return Result<void>{};
+                co_return co_await handle_window_update(frame);
 
             case Http2FrameType::PRIORITY:
                 // Priority frame not implemented — ignore on receipt
@@ -685,6 +700,16 @@ public:
         frame.flags     = end_stream ? HTTP2_FLAG_END_STREAM : 0;
         frame.payload.assign(data.begin(), data.end());
         frame.length    = static_cast<uint32_t>(frame.payload.size());
+
+        // Send-side flow-control accounting (RFC 7540 §6.9). A DATA frame spends
+        // both the connection and the stream SEND window. Back-pressure ENFORCEMENT
+        // (deferring the write when a window is exhausted) belongs to the socket
+        // write-loop; here we keep the windows accurate so that loop — and tests —
+        // can observe remaining credit.
+        const int64_t spent = static_cast<int64_t>(frame.payload.size());
+        conn_send_window_ -= spent;
+        if (auto sit = streams_.find(stream_id); sit != streams_.end())
+            sit->second->send_window -= spent;
 
         pending_frames_.push_back(std::move(frame));
 
@@ -821,9 +846,11 @@ public:
     /**
      * @brief Sends the HTTP/2 server connection preface.
      *
-     * Must be called immediately after TLS handshake and ALPN "h2" negotiation complete.
-     * The client sends the "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n" preface, and
-     * the server responds with an initial SETTINGS frame (RFC 7540 section 3.5).
+     * Call once the connection is established and known to be HTTP/2: either after
+     * ALPN "h2" over TLS, or — the qbuem default — over cleartext **h2c** behind an
+     * edge TLS terminator (prior-knowledge preface or an HTTP/1.1 `Upgrade: h2c`).
+     * The client sends the "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n" preface, and the
+     * server responds with an initial SETTINGS frame (RFC 7540 section 3.5).
      *
      * @returns Processing result. Always returns success.
      */
@@ -871,6 +898,31 @@ public:
         return out;
     }
 
+    // ─── Flow-control / negotiated-SETTINGS observability ─────────────────────
+    // These expose the connection's negotiated state so a socket write-loop (and
+    // tests) can honour back-pressure. All are post-negotiation values.
+
+    /** @brief Connection-level SEND window (bytes we may still send across all streams). */
+    [[nodiscard]] int64_t connection_send_window() const noexcept { return conn_send_window_; }
+
+    /** @brief Connection-level RECEIVE window (bytes the peer may still send us). */
+    [[nodiscard]] int64_t connection_recv_window() const noexcept { return conn_recv_window_; }
+
+    /** @brief Per-stream SEND window, or 0 if the stream is unknown/closed. */
+    [[nodiscard]] int64_t stream_send_window(uint32_t sid) const {
+        auto it = streams_.find(sid);
+        return it == streams_.end() ? 0 : it->second->send_window;
+    }
+
+    /** @brief Negotiated peer SETTINGS_INITIAL_WINDOW_SIZE (initial per-stream SEND window). */
+    [[nodiscard]] uint32_t peer_initial_window_size() const noexcept { return peer_initial_window_size_; }
+
+    /** @brief Negotiated peer SETTINGS_MAX_FRAME_SIZE (largest frame we may emit). */
+    [[nodiscard]] uint32_t peer_max_frame_size() const noexcept { return peer_max_frame_size_; }
+
+    /** @brief Whether the peer's initial SETTINGS frame has been received + applied. */
+    [[nodiscard]] bool peer_settings_received() const noexcept { return peer_settings_received_; }
+
 private:
     // ─── Internal frame processing methods ───────────────────────────────────
 
@@ -893,13 +945,100 @@ private:
         }
 
         if (frame.flags & HTTP2_FLAG_ACK) {
-            // ACK SETTINGS received — ignore
+            // ACK to our SETTINGS. RFC 7540 §6.5: an ACK carries no payload.
+            if (!frame.payload.empty()) {
+                co_await send_goaway(last_stream_id_, 0x6 /* FRAME_SIZE_ERROR */,
+                                     "SETTINGS ACK with payload");
+                co_return std::unexpected(
+                    std::make_error_code(std::errc::protocol_error));
+            }
             co_return Result<void>{};
         }
 
-        // Process peer SETTINGS parameters (currently ignored, minimal implementation)
-        // Send ACK response
-        co_await send_settings(true);
+        // A SETTINGS payload is a sequence of 6-byte entries: id(u16) + value(u32).
+        if (frame.payload.size() % 6 != 0) {
+            co_await send_goaway(last_stream_id_, 0x6 /* FRAME_SIZE_ERROR */,
+                                 "SETTINGS length not a multiple of 6");
+            co_return std::unexpected(
+                std::make_error_code(std::errc::protocol_error));
+        }
+
+        for (size_t off = 0; off + 6 <= frame.payload.size(); off += 6) {
+            const uint16_t id =
+                static_cast<uint16_t>((frame.payload[off] << 8) | frame.payload[off + 1]);
+            const uint32_t val =
+                (static_cast<uint32_t>(frame.payload[off + 2]) << 24) |
+                (static_cast<uint32_t>(frame.payload[off + 3]) << 16) |
+                (static_cast<uint32_t>(frame.payload[off + 4]) <<  8) |
+                 static_cast<uint32_t>(frame.payload[off + 5]);
+
+            switch (id) {
+                case SETTINGS_ENABLE_PUSH:
+                    // §6.5.2: MUST be 0 or 1, else PROTOCOL_ERROR.
+                    if (val > 1) {
+                        co_await send_goaway(last_stream_id_, 0x1 /* PROTOCOL_ERROR */,
+                                             "ENABLE_PUSH must be 0 or 1");
+                        co_return std::unexpected(
+                            std::make_error_code(std::errc::protocol_error));
+                    }
+                    break;
+
+                case SETTINGS_INITIAL_WINDOW_SIZE: {
+                    // §6.5.2: values above 2^31-1 are a FLOW_CONTROL_ERROR.
+                    if (val > static_cast<uint32_t>(MAX_WINDOW)) {
+                        co_await send_goaway(last_stream_id_, 0x3 /* FLOW_CONTROL_ERROR */,
+                                             "INITIAL_WINDOW_SIZE exceeds 2^31-1");
+                        co_return std::unexpected(
+                            std::make_error_code(std::errc::protocol_error));
+                    }
+                    // §6.9.2: a change retroactively adjusts the SEND window of every
+                    // existing stream by the delta (new - old).
+                    const int64_t delta = static_cast<int64_t>(val) -
+                                          static_cast<int64_t>(peer_initial_window_size_);
+                    for (auto& [sid, s] : streams_) {
+                        s->send_window += delta;
+                        if (s->send_window > MAX_WINDOW) {
+                            co_await send_goaway(last_stream_id_, 0x3 /* FLOW_CONTROL_ERROR */,
+                                                 "stream SEND window overflow on SETTINGS");
+                            co_return std::unexpected(
+                                std::make_error_code(std::errc::protocol_error));
+                        }
+                    }
+                    peer_initial_window_size_ = val;
+                    break;
+                }
+
+                case SETTINGS_MAX_FRAME_SIZE:
+                    // §4.2: allowed range is [2^14, 2^24-1].
+                    if (val < MIN_MAX_FRAME_SIZE || val > MAX_ALLOWED_FRAME_SIZE) {
+                        co_await send_goaway(last_stream_id_, 0x1 /* PROTOCOL_ERROR */,
+                                             "MAX_FRAME_SIZE out of range");
+                        co_return std::unexpected(
+                            std::make_error_code(std::errc::protocol_error));
+                    }
+                    peer_max_frame_size_ = val;
+                    break;
+
+                case SETTINGS_HEADER_TABLE_SIZE:
+                    // Cap the peer is willing to let our HPACK encoder use. We encode
+                    // with the static table only, so this is recorded, not enforced.
+                    peer_header_table_size_ = val;
+                    break;
+
+                case SETTINGS_MAX_CONCURRENT_STREAMS:
+                case SETTINGS_MAX_HEADER_LIST_SIZE:
+                    // Constrain streams/headers WE initiate. As a server that does not
+                    // push, these are informational — accepted without action.
+                    break;
+
+                default:
+                    // §6.5.2: an endpoint MUST ignore unknown settings identifiers.
+                    break;
+            }
+        }
+
+        peer_settings_received_ = true;
+        co_await send_settings(true); // ACK the applied SETTINGS.
         co_return Result<void>{};
     }
 
@@ -1120,6 +1259,28 @@ private:
 
         auto& stream = it->second;
 
+        // ── Receive-side flow control (RFC 7540 §6.9) ──
+        // The ENTIRE DATA frame payload (including any padding and the pad-length
+        // byte) consumes flow-control credit on both the connection and the stream.
+        const int64_t fc_len = static_cast<int64_t>(frame.payload.size());
+        conn_recv_window_   -= fc_len;
+        stream->recv_window -= fc_len;
+        if (conn_recv_window_ < 0) {
+            // Peer exceeded the connection window → connection-level FLOW_CONTROL_ERROR.
+            co_await send_goaway(last_stream_id_, 0x3 /* FLOW_CONTROL_ERROR */,
+                                 "connection receive window underflow");
+            co_return std::unexpected(
+                std::make_error_code(std::errc::protocol_error));
+        }
+        if (stream->recv_window < 0) {
+            // Peer exceeded the stream window → stream-level FLOW_CONTROL_ERROR.
+            co_await send_rst_stream(sid, 0x3 /* FLOW_CONTROL_ERROR */);
+            streams_.erase(it);
+            co_return Result<void>{};
+        }
+        // Replenish the (shared) connection window so other streams keep flowing.
+        co_await maybe_replenish_recv_window(0, conn_recv_window_);
+
         // Process PADDED flag
         size_t data_offset = 0;
         size_t data_end    = frame.payload.size();
@@ -1159,6 +1320,9 @@ private:
                                   stream);
                 t.detach();
             }
+        } else {
+            // More DATA is expected on this stream — keep its receive window open.
+            co_await maybe_replenish_recv_window(sid, stream->recv_window);
         }
 
         co_return Result<void>{};
@@ -1207,6 +1371,103 @@ private:
         co_return;
     }
 
+    /**
+     * @brief Processes a WINDOW_UPDATE frame (RFC 7540 §6.9).
+     *
+     * Adds the advertised increment to the connection SEND window (stream 0) or the
+     * named stream's SEND window, validating the increment and the resulting window.
+     *
+     * @param frame Received WINDOW_UPDATE frame.
+     * @returns Processing result.
+     */
+    Task<Result<void>> handle_window_update(const Http2Frame& frame) {
+        if (frame.payload.size() != 4) {
+            co_await send_goaway(last_stream_id_, 0x6 /* FRAME_SIZE_ERROR */,
+                                 "WINDOW_UPDATE length != 4");
+            co_return std::unexpected(
+                std::make_error_code(std::errc::protocol_error));
+        }
+        // 31-bit increment (high bit reserved).
+        const uint32_t incr =
+            ((static_cast<uint32_t>(frame.payload[0]) << 24) |
+             (static_cast<uint32_t>(frame.payload[1]) << 16) |
+             (static_cast<uint32_t>(frame.payload[2]) <<  8) |
+              static_cast<uint32_t>(frame.payload[3])) & 0x7FFFFFFF;
+
+        if (incr == 0) {
+            // §6.9: a 0 increment is PROTOCOL_ERROR — connection error on stream 0,
+            // stream error otherwise.
+            if (frame.stream_id == 0) {
+                co_await send_goaway(last_stream_id_, 0x1 /* PROTOCOL_ERROR */,
+                                     "WINDOW_UPDATE increment 0");
+                co_return std::unexpected(
+                    std::make_error_code(std::errc::protocol_error));
+            }
+            co_await send_rst_stream(frame.stream_id, 0x1 /* PROTOCOL_ERROR */);
+            co_return Result<void>{};
+        }
+
+        if (frame.stream_id == 0) {
+            conn_send_window_ += incr;
+            if (conn_send_window_ > MAX_WINDOW) {
+                co_await send_goaway(last_stream_id_, 0x3 /* FLOW_CONTROL_ERROR */,
+                                     "connection SEND window overflow");
+                co_return std::unexpected(
+                    std::make_error_code(std::errc::protocol_error));
+            }
+        } else {
+            auto it = streams_.find(frame.stream_id);
+            if (it == streams_.end()) {
+                // WINDOW_UPDATE for an unknown/closed stream — ignore (benign race).
+                co_return Result<void>{};
+            }
+            it->second->send_window += incr;
+            if (it->second->send_window > MAX_WINDOW) {
+                // §6.9.1: overflowing a stream window is a stream-level error.
+                co_await send_rst_stream(frame.stream_id, 0x3 /* FLOW_CONTROL_ERROR */);
+                streams_.erase(it);
+            }
+        }
+        co_return Result<void>{};
+    }
+
+    /**
+     * @brief Emits a WINDOW_UPDATE frame granting `increment` more receive credit.
+     *
+     * @param stream_id 0 for the connection window, else the target stream.
+     * @param increment Bytes of receive credit to grant (clamped to 31 bits).
+     */
+    Task<void> send_window_update(uint32_t stream_id, uint32_t increment) {
+        Http2Frame frame;
+        frame.type      = Http2FrameType::WINDOW_UPDATE;
+        frame.stream_id = stream_id;
+        frame.flags     = 0;
+        frame.length    = 4;
+        append_uint32(frame.payload, increment & 0x7FFFFFFF);
+        pending_frames_.push_back(std::move(frame));
+        co_return;
+    }
+
+    /**
+     * @brief Tops a receive window back up to the initial size once half-consumed.
+     *
+     * A live server would tie replenishment to the application actually draining the
+     * body; for this in-memory handler we replenish as DATA is accepted, which keeps
+     * the peer unblocked while still exercising real WINDOW_UPDATE emission.
+     *
+     * @param stream_id 0 for the connection window, else the target stream.
+     * @param window    The window counter to inspect and refill (by reference).
+     */
+    Task<void> maybe_replenish_recv_window(uint32_t stream_id, int64_t& window) {
+        constexpr int64_t target = DEFAULT_INITIAL_WINDOW_SIZE;
+        if (window < target / 2) {
+            const uint32_t incr = static_cast<uint32_t>(target - window);
+            window += incr;
+            co_await send_window_update(stream_id, incr);
+        }
+        co_return;
+    }
+
     // ─── Stream management utilities ──────────────────────────────────────────
 
     /**
@@ -1222,6 +1483,11 @@ private:
             stream->id       = sid;
             stream->state    = Http2Stream::State::IDLE;
             stream->outgoing = std::make_shared<AsyncChannel<Http2Frame>>(64);
+            // Initialize flow-control windows from the negotiated SETTINGS: our SEND
+            // window starts at the peer's INITIAL_WINDOW_SIZE; our RECEIVE window at
+            // the size we advertise (the default — send_settings advertises it).
+            stream->send_window = static_cast<int64_t>(peer_initial_window_size_);
+            stream->recv_window = static_cast<int64_t>(DEFAULT_INITIAL_WINDOW_SIZE);
             streams_[sid]    = stream;
             return streams_[sid];
         }
@@ -1290,6 +1556,35 @@ private:
 
     /** @brief Default initial flow control window size (RFC 7540 section 6.5.2). */
     static constexpr uint32_t DEFAULT_INITIAL_WINDOW_SIZE = 65535;
+
+    // ─── SETTINGS parameter identifiers (RFC 7540 §6.5.2) ─────────────────────
+    static constexpr uint16_t SETTINGS_HEADER_TABLE_SIZE      = 0x1;
+    static constexpr uint16_t SETTINGS_ENABLE_PUSH            = 0x2;
+    static constexpr uint16_t SETTINGS_MAX_CONCURRENT_STREAMS = 0x3;
+    static constexpr uint16_t SETTINGS_INITIAL_WINDOW_SIZE    = 0x4;
+    static constexpr uint16_t SETTINGS_MAX_FRAME_SIZE         = 0x5;
+    static constexpr uint16_t SETTINGS_MAX_HEADER_LIST_SIZE   = 0x6;
+
+    /** @brief Largest legal flow-control window (RFC 7540 §6.9.1): 2^31 - 1. */
+    static constexpr int64_t  MAX_WINDOW             = 0x7FFFFFFF;
+    /** @brief Smallest legal SETTINGS_MAX_FRAME_SIZE (RFC 7540 §4.2): 2^14. */
+    static constexpr uint32_t MIN_MAX_FRAME_SIZE     = 16384;
+    /** @brief Largest legal SETTINGS_MAX_FRAME_SIZE (RFC 7540 §4.2): 2^24 - 1. */
+    static constexpr uint32_t MAX_ALLOWED_FRAME_SIZE = 16777215;
+
+    // ─── Flow control (RFC 7540 §6.9) + negotiated peer SETTINGS ──────────────
+    /** @brief Connection-level SEND window — DATA bytes we may send across all streams. */
+    int64_t conn_send_window_{DEFAULT_INITIAL_WINDOW_SIZE};
+    /** @brief Connection-level RECEIVE window — DATA bytes the peer may send us. */
+    int64_t conn_recv_window_{DEFAULT_INITIAL_WINDOW_SIZE};
+    /** @brief Peer's SETTINGS_INITIAL_WINDOW_SIZE — initial SEND window for new streams. */
+    uint32_t peer_initial_window_size_{DEFAULT_INITIAL_WINDOW_SIZE};
+    /** @brief Peer's SETTINGS_MAX_FRAME_SIZE — largest frame we may emit. */
+    uint32_t peer_max_frame_size_{DEFAULT_MAX_FRAME_SIZE};
+    /** @brief Peer's SETTINGS_HEADER_TABLE_SIZE — HPACK dynamic-table cap offered to us. */
+    uint32_t peer_header_table_size_{DEFAULT_HEADER_TABLE_SIZE};
+    /** @brief Whether the peer's initial SETTINGS has been received + applied. */
+    bool peer_settings_received_{false};
 
     // ─── DoS protection limits (RFC 9113 / CVE-2023-44487, CVE-2024-27316) ────
 
