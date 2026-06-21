@@ -188,24 +188,29 @@ Each row links to the **detailed guide** (role · when to use · how to use · g
 
 ## Performance Benchmarks
 
-> Single-threaded micro-benchmarks, `-O3 -march=native`. Reproduce with `bench/`.
-> Throughput figures are component micro-benchmarks, not end-to-end server RPS.
+> **Real measured numbers** on an **Apple M1 Pro** (`Release`, Apple clang),
+> reproducible via `bench/`. Component micro-benchmarks, not end-to-end RPS.
+> Full table + how-to-reproduce + per-machine baselines: **[`bench/RESULTS.md`](./bench/RESULTS.md)**.
 
-| Component | Operation | Result |
+| Component | Operation | Result (M1 Pro) |
 | :--- | :--- | :--- |
-| **Arena** | 64 B bump-alloc | **2.6 ns** / alloc |
-| **Arena** | request lifecycle (10 alloc + reset) | **1.3 ns** / req |
-| **FixedPool** | alloc + dealloc (free-list) | **1.2 ns** / round-trip |
-| **AsyncChannel** | try_send + try_recv (MPMC) | **47M ops/s** |
-| **SpscChannel** | try_send + try_recv (wait-free) | **113M ops/s** |
-| **SpscChannel** | batch fill 1000 + drain 1000 | **271M ops/s** (~1 GB/s) |
-| **HTTP Parser** | GET (74 B) | **320 MB/s** |
-| **HTTP Parser** | POST + 10 headers (310 B) | **303 MB/s** |
-| **Router** | static route lookup | **120 ns** |
-| **Router** | param route (`/users/:id`) | **147 ns** |
+| **Arena** | 64 B bump-alloc | **6.7 ns** / alloc (vs 28.8 ns malloc) |
+| **Arena** | request lifecycle (10 alloc + reset) | **4.5 ns** / req |
+| **FixedPool** | alloc + dealloc (free-list) | **5.1 ns** / round-trip |
+| **AsyncChannel** | try_send + try_recv (MPMC) | **132M ops/s** |
+| **AsyncChannel** | batch fill 1000 + drain 1000 | **305M ops/s** (~1.16 GB/s) |
+| **SpscChannel** | try_send + try_recv (wait-free) | **96M ops/s** |
+| **SHMChannel** | try_send + try_recv (IPC) | **10.4 ns** (~2.9 GB/s) |
+| **HTTP Parser** | GET (74 B) | **367 MB/s** |
+| **HTTP Parser** | POST + 10 headers (310 B) | **561 MB/s** |
+| **Router** | static route lookup | **60 ns** |
+| **Router** | param route (`/users/:id`) | **74 ns** |
 | **IOVec / IOSlice** | create + `to_iovec()` | **0.3 ns** |
-| **SHMChannel** | inter-process latency | **< 150 ns** |
-| **inplace_function** | call vs `std::function` | **~8.7×** faster, 0 allocs |
+| **inplace_function** | call vs `std::function` | **11.8×** faster, 0 allocs |
+
+> Numbers scale with the CPU — these are an ARM laptop part; server x86 is
+> faster. The benchmark binaries also print aspirational `✓`/`✗` "goals"
+> calibrated for server hardware; treat the measured numbers as the result.
 
 ---
 
@@ -277,6 +282,11 @@ hello_world → async_timer → tcp_echo_server → arena → pipeline/fanout
 
 Every feature documented here exists in the code at this version. See
 [Feature maturity](#feature-maturity) for what's stable vs experimental.
+
+**Real-world use:** the `qbuem-game` server is built on a released qbuem-stack
+tag (consumed via `FetchContent`) and exercises the core runtime, `WsServer`,
+`TickScheduler`, pipelines, SHM IPC and crypto — the dogfooding that keeps the
+Stable surface honest.
 
 ---
 

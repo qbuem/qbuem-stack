@@ -58,13 +58,16 @@ Make the heavily-used path production-grade and ergonomic.
 - [x] Per-subsystem [production checklist](./production-checklist.md) (real
       limits, timeouts, back-pressure, teardown) for the Stable modules.
 
-### v1.8 — Proof  *(planned)*
+### v1.8 — Proof  *(in progress)*
 Turn performance *targets* into *measured, tracked* numbers.
-- [ ] Commit reproducible benchmark results (with the measurement environment)
-      and add a CI benchmark smoke run so regressions are visible.
-- [ ] Promote `qbuem-game` as the flagship case study (live-ops metrics page as
-      the public proof artifact).
+- [x] Reproducible benchmark results with the measurement environment
+      ([`bench/RESULTS.md`](../bench/RESULTS.md), Apple M1 Pro baseline) + a CI
+      `bench-smoke` job that builds and runs every benchmark (regressions/crashes
+      surface; thresholds are not asserted since they are hardware-dependent).
+- [x] `qbuem-game` documented as the flagship real-world consumer (pins a
+      released tag; exercises core/WsServer/TickScheduler/pipeline/SHM/crypto).
 - [ ] At least one second reference application in a different domain.
+- [ ] Add more machine baselines to `bench/RESULTS.md` (server x86).
 
 ### v2.0 — Identity  *(decision point, not a feature dump)*
 Only after 1.7–1.8, and informed by what adopters actually ask for, decide the

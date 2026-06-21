@@ -10,6 +10,24 @@ pre-release internal iteration and is not tracked here.
 
 ---
 
+## [1.8.0] — Proof: committed benchmarks + CI smoke + production checklist
+
+No API change — turns performance *targets* into *measured, tracked* numbers and
+adds operational docs.
+
+### Added
+- **`bench/RESULTS.md`** — real, reproducible benchmark numbers with the exact
+  measurement environment (Apple M1 Pro baseline) and a how-to-reproduce; the
+  README perf table now shows these measured numbers (not unsourced targets).
+- **CI `bench-smoke` job** — builds every benchmark `Release` and runs it, so a
+  crash/hang/build-break surfaces (hardware-dependent thresholds are not asserted).
+- **`docs/production-checklist.md`** — real resource limits, timeouts,
+  back-pressure behavior, and shutdown semantics for the Stable modules
+  (completes the v1.7 milestone), plus a pre-deploy checklist.
+- README documents `qbuem-game` as the flagship real-world consumer.
+
+[1.8.0]: https://github.com/qbuem/qbuem-stack/releases/tag/v1.8.0
+
 ## [1.7.1] — MessageBus zero-copy publish fast path
 
 ### Changed
