@@ -32,7 +32,7 @@ fi
 # target name -> extra source files (http parser needs its .cpp implementation).
 extra_src() {
   case "$1" in
-    http_parser) echo "src/http/parser.cpp src/http/request.cpp src/http/response.cpp" ;;
+    http_parser) echo "src/http/parser.cpp src/http/request.cpp" ;;
     *) echo "" ;;
   esac
 }

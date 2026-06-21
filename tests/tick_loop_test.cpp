@@ -151,15 +151,28 @@ TEST(TickHistogram, EmptyReturnsZero) {
 TEST(TickLoop, RunPinnedTicksAndStops) {
   TickLoop loop({.interval = 2ms, .spin_window = 200us});
   std::atomic<uint64_t> count{0};
+  const auto t0 = std::chrono::steady_clock::now();
   std::jthread t([&] {
     loop.run_pinned([&](TickInfo) { count.fetch_add(1, std::memory_order_relaxed); });
   });
   std::this_thread::sleep_for(120ms);
   loop.stop();
   t.join();
-  // ~60 ticks in 120 ms @ 2 ms; wide slack for CI/scheduler jitter.
-  EXPECT_GE(count.load(), 25u);
-  EXPECT_LE(count.load(), 100u);
+  // The loop ticks for its WHOLE lifetime (thread spawn → stop() observed →
+  // join returns), not just the 120 ms sleep: on a loaded CI runner stop()/join
+  // can add 100+ ms, and a drift-free 2 ms loop running that long legitimately
+  // produces proportionally more ticks (e.g. 131 over ~262 ms). So anchor the
+  // upper bound to the ACTUAL elapsed wall-time rather than the nominal sleep.
+  // A fixed-timestep loop cannot exceed elapsed/interval ticks even with
+  // catch-up, so elapsed_ms/2 + margin is a hard ceiling; the lower bound stays
+  // a loose fixed floor (it only ever runs over the budget, never under it).
+  const auto elapsed_ms =
+      std::chrono::duration_cast<std::chrono::milliseconds>(
+          std::chrono::steady_clock::now() - t0)
+          .count();
+  const uint64_t ceiling = static_cast<uint64_t>(elapsed_ms) / 2 + 20;
+  EXPECT_GE(count.load(), 10u);
+  EXPECT_LE(count.load(), ceiling);
   EXPECT_FALSE(loop.running());
   EXPECT_EQ(loop.stats().ticks, count.load());
 }

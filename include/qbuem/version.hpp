@@ -66,6 +66,13 @@
  * - 1.8.1: CI publishes measured benchmark numbers per architecture (x86_64 +
  *           aarch64) in each run's Job Summary + as artifacts (committed server
  *           baselines). Final production-readiness verification sweep. No API change.
+ * - 1.8.2: Correctness + CI hardening. Fixes a use-after-free in the `App::ws()`
+ *           upgrade handoff on kqueue/epoll (unregister_event destroyed the
+ *           read-callback closure, freeing the buffer backing the request's
+ *           header views before the WsServer read them — a spurious 400 on
+ *           macOS); buffer erase is now deferred until after the handoff. Also
+ *           greens CI: clang-tidy (C-arrays → std::array), the fuzz link, and the
+ *           benchmark job timeout. No API change; verified under ASan/UBSan/TSan.
  */
 
 /**
@@ -95,7 +102,7 @@ namespace qbuem {
  *
  * @code
  * static_assert(qbuem::Version::major >= 1, "qbuem-stack 1.x required");
- * std::print("{}\n", qbuem::Version::string); // "1.8.1"
+ * std::print("{}\n", qbuem::Version::string); // "1.8.2"
  * @endcode
  */
 struct Version {
@@ -106,10 +113,10 @@ struct Version {
   static constexpr int minor = 8;
 
   /** @brief Patch version number. Incremented for backwards-compatible bug fixes only. */
-  static constexpr int patch = 1;
+  static constexpr int patch = 2;
 
   /** @brief Version string in "major.minor.patch" format (null-terminated). */
-  static constexpr std::string_view string = "1.8.1";
+  static constexpr std::string_view string = "1.8.2";
 };
 
 } // namespace qbuem
@@ -121,9 +128,9 @@ struct Version {
 #define QBUEM_VERSION_MINOR 8
 
 /** @brief Patch version number (for use in preprocessor `#if` conditions). */
-#define QBUEM_VERSION_PATCH 1
+#define QBUEM_VERSION_PATCH 2
 
 /** @brief Version string literal "major.minor.patch" (for use in preprocessor conditions). */
-#define QBUEM_VERSION_STRING "1.8.1"
+#define QBUEM_VERSION_STRING "1.8.2"
 
 /** @} */ // end of qbuem_version

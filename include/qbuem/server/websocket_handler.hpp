@@ -228,11 +228,11 @@ public:
 
     for (;;) {
       // Receive data from socket (simplified: up to 64KB chunks)
-      uint8_t tmp[65536];
-      ssize_t n = ::read(fd, tmp, sizeof(tmp));
+      std::array<uint8_t, 65536> tmp;
+      ssize_t n = ::read(fd, tmp.data(), tmp.size());
       if (n <= 0) break; // EOF or error
 
-      buf.insert(buf.end(), tmp, tmp + n);
+      buf.insert(buf.end(), tmp.data(), tmp.data() + n);
 
       // Extract complete frames from buffer
       size_t consumed = 0;

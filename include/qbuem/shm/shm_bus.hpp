@@ -50,8 +50,10 @@
 #include <qbuem/pipeline/async_channel.hpp>
 #include <qbuem/shm/shm_channel.hpp>
 
+#include <array>
 #include <atomic>
 #include <cstdint>
+#include <cstring>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -289,16 +291,16 @@ private:
     // Copy a topic name into a fixed owned buffer (null-terminated). The
     // subscription must NOT alias the caller's string_view, which may be a
     // temporary — `topic()` returning a dangling pointer was a UAF.
-    static void copy_name(char (&dst)[64], std::string_view n) noexcept {
+    static void copy_name(std::array<char, 64>& dst, std::string_view n) noexcept {
         size_t len = n.size() < 63 ? n.size() : 63;
-        if (len > 0) std::memcpy(dst, n.data(), len);
+        if (len > 0) std::memcpy(dst.data(), n.data(), len);
         dst[len] = '\0';
     }
 
     template <typename T>
     struct LocalSub final : ISubscription<T> {
-        AsyncChannel<T>* ch;
-        char             name_buf_[64]{};  ///< owned topic name (no dangling alias)
+        AsyncChannel<T>*    ch;
+        std::array<char, 64> name_buf_{};  ///< owned topic name (no dangling alias)
         T                buf_{};  ///< per-subscriber buffer (avoids static thread_local aliasing)
 
         LocalSub(AsyncChannel<T>* c, std::string_view n) : ch(c) {
@@ -319,14 +321,14 @@ private:
             return &buf_;
         }
 
-        [[nodiscard]] std::string_view topic() const noexcept override { return name_buf_; }
+        [[nodiscard]] std::string_view topic() const noexcept override { return name_buf_.data(); }
         [[nodiscard]] TopicScope scope() const noexcept override { return TopicScope::LOCAL_ONLY; }
     };
 
     template <typename T>
     struct SystemSub final : ISubscription<T> {
-        SHMChannel<T>* ch;
-        char           name_buf_[64]{};  ///< owned topic name (no dangling alias)
+        SHMChannel<T>*       ch;
+        std::array<char, 64> name_buf_{};  ///< owned topic name (no dangling alias)
 
         SystemSub(SHMChannel<T>* c, std::string_view n) : ch(c) {
             copy_name(name_buf_, n);
@@ -334,7 +336,7 @@ private:
 
         Task<std::optional<const T*>> recv() override { return ch->recv(); }
         std::optional<const T*> try_recv() override { return ch->try_recv(); }
-        [[nodiscard]] std::string_view topic() const noexcept override { return name_buf_; }
+        [[nodiscard]] std::string_view topic() const noexcept override { return name_buf_.data(); }
         [[nodiscard]] TopicScope scope() const noexcept override { return TopicScope::SYSTEM_WIDE; }
     };
 

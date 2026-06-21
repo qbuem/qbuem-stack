@@ -10,6 +10,39 @@ pre-release internal iteration and is not tracked here.
 
 ---
 
+## [1.8.2] — Correctness + CI hardening
+
+No API change.
+
+### Fixed
+- **`App::ws()` upgrade handoff use-after-free (kqueue/epoll).** When a WebSocket
+  upgrade was handed off to the per-reactor `WsServer`, the App cancelled its own
+  read registration (`unregister_event`) before calling `serve_connection`. On
+  kqueue/epoll that destroys the currently-executing read-callback closure
+  **synchronously**, releasing its captured `ConnCtx` `shared_ptr`; when that was
+  the last reference, `ctx->buf` — the backing store for the request's header
+  `string_view`s — was freed before the `WsServer` read `Sec-WebSocket-Key` /
+  `Sec-WebSocket-Version`, producing a spurious **`400 Bad Request`** (observed
+  on macOS; latent on Linux). Fixed by pinning `ConnCtx` with a local strong
+  reference across the handoff and **deferring `ctx->buf.erase()`** until after
+  the upgrade path is ruled out (so the header views stay valid through
+  `serve_connection`). Verified end-to-end (HTTP + WS on one port) on macOS
+  (kqueue, Release/ASan/UBSan/TSan) and Linux (io_uring, GCC 13).
+
+### Changed (CI / tooling — no library impact)
+- **clang-tidy** is green again: the six `modernize-avoid-c-arrays` findings in
+  `ws_server.hpp`, `websocket_handler.hpp`, and `shm_bus.hpp` are converted from
+  C-style arrays to `std::array`.
+- **Fuzz smoke** links again: the `http_parser` target no longer pulls in
+  `src/http/response.cpp` (which transitively referenced `Reactor::current()`
+  from the SSE write awaiter); the parser fuzzer only needs `parser.cpp` +
+  `request.cpp`.
+- **Benchmark job** no longer fails the run when a single benchmark exceeds the
+  shared-runner time budget: each benchmark gets a 240 s timeout that emits a CI
+  warning instead of a hard failure (a crash still fails the job).
+
+---
+
 ## [1.8.1] — CI publishes benchmark numbers (x86_64 + aarch64)
 
 No API change.

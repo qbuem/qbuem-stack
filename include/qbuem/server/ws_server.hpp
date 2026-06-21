@@ -524,9 +524,9 @@ private:
                   const Self* self) {
     if (finished_) return false;
 
-    uint8_t hdr[WebSocketHandler::kMaxHeaderBytes];
+    std::array<uint8_t, WebSocketHandler::kMaxHeaderBytes> hdr;
     const size_t hlen = WebSocketHandler::encode_header(
-        hdr, op, payload.size(), /*fin=*/true, /*mask=*/false);
+        hdr.data(), op, payload.size(), /*fin=*/true, /*mask=*/false);
 
     const size_t pending = sbuf_.size() - ssent_;
     const size_t need = hlen + payload.size();
@@ -540,17 +540,17 @@ private:
     if (pending == 0 && !write_armed_) {
       // Fast path: single writev of header + payload, no buffering.
       IOVec<2> vec;
-      vec.push(hdr, hlen);
+      vec.push(hdr.data(), hlen);
       if (!payload.empty()) vec.push(payload.data(), payload.size());
       ssize_t n = ::writev(fd_, vec.vecs.data(), static_cast<int>(vec.count));
       if (n >= 0) {
         if (static_cast<size_t>(n) == need) return true; // fully sent
-        buffer_tail(hdr, hlen, payload, static_cast<size_t>(n));
+        buffer_tail(hdr.data(), hlen, payload, static_cast<size_t>(n));
         arm_write(*self);
         return true;
       }
       if (errno == EAGAIN || errno == EWOULDBLOCK) {
-        raw_append(reinterpret_cast<const std::byte*>(hdr), hlen);
+        raw_append(reinterpret_cast<const std::byte*>(hdr.data()), hlen);
         raw_append(payload.data(), payload.size());
         arm_write(*self);
         return true;
@@ -561,7 +561,7 @@ private:
     }
 
     // Already buffering — append and keep the Write callback armed.
-    raw_append(reinterpret_cast<const std::byte*>(hdr), hlen);
+    raw_append(reinterpret_cast<const std::byte*>(hdr.data()), hlen);
     raw_append(payload.data(), payload.size());
     if (!write_armed_) arm_write(*self);
     return true;
@@ -1075,14 +1075,14 @@ private:
         r->unregister_event(fd, EventType::Read);
         ::close(fd);
       };
-      char tmp[4096];
-      ssize_t n = ::read(fd, tmp, sizeof(tmp));
+      std::array<char, 4096> tmp;
+      ssize_t n = ::read(fd, tmp.data(), tmp.size());
       if (n <= 0) {
         if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) return;
         fail();
         return;
       }
-      state->buf.append(tmp, static_cast<size_t>(n));
+      state->buf.append(tmp.data(), static_cast<size_t>(n));
       if (state->buf.size() > 64 * 1024) { // upgrade request DoS guard
         fail();
         return;
