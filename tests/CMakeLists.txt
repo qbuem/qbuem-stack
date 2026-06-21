@@ -187,6 +187,11 @@ add_executable(qbuem_rs256_jwt_tests rs256_jwt_test.cpp ${QBUEM_TLS_FIX})
 target_link_libraries(qbuem_rs256_jwt_tests PRIVATE qbuem-stack::qbuem GTest::gtest_main)
 add_test(NAME qbuem_rs256_jwt_tests COMMAND qbuem_rs256_jwt_tests)
 
+# ── Per-tenant quota middleware (SaaS multi-tenancy) ───────────────────────────
+add_executable(qbuem_quota_tests quota_test.cpp ${QBUEM_TLS_FIX})
+target_link_libraries(qbuem_quota_tests PRIVATE qbuem-stack::qbuem GTest::gtest_main)
+add_test(NAME qbuem_quota_tests COMMAND qbuem_quota_tests)
+
 # ── OffloadPool + Dispatcher graceful drain (thread-management) ────────────────
 add_executable(qbuem_offload_drain_tests offload_drain_test.cpp ${QBUEM_TLS_FIX})
 target_link_libraries(qbuem_offload_drain_tests PRIVATE qbuem-stack::qbuem GTest::gtest_main)

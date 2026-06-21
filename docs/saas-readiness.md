@@ -60,8 +60,9 @@ Critical path (do first):
      behind the same port if hardware RSA is ever wanted.)
    - d. *(optional)* JWKS HTTPS **fetch adapter** (opt-in) + key-set cache/rotation
      — until then the JWKS document is supplied out-of-band / from config.
-2. **Multi-tenancy**: tenant context + per-tenant **quota** middleware (extends
-   the existing rate-limit middleware).
+2. **Multi-tenancy**: per-tenant **quota** middleware ✅ *(done —
+   `middleware/quota.hpp`; fixed-window budget keyed by the authenticated tenant
+   (`X-Auth-Sub`/`X-Tenant-Id`), plan-tier overrides; see §5)*.
 3. **DB port polish** + one reference adapter as an opt-in example.
 4. **OTLP exporter adapter** behind the existing `SpanExporter` port (opt-in).
 
@@ -89,6 +90,17 @@ Already done (foundation, kept regardless of ordering):
 
 ## 5. Progress log
 
+- **2026-06-21** — 안건 2: per-tenant **quota** middleware
+  (`include/qbuem/middleware/quota.hpp`). Fixed-window request budget (e.g.
+  10k/day per tenant) — distinct from the token-bucket `rate_limit`. Keyed by the
+  authenticated tenant (`X-Auth-Sub` from bearer_auth → `X-Tenant-Id` → client IP),
+  with per-key plan-tier overrides; emits `X-Quota-Limit`/`X-Quota-Remaining`/
+  `Retry-After`, 429 on exceed. Lock-free thread_local state (Pillar 1), mirroring
+  `rate_limit`'s structure; effective budget is `limit × N reactor threads` — an
+  exact global quota is a future shared-store (DB/Redis) adapter (BYO-DB port).
+  Tests: `tests/quota_test.cpp` — 6 tests (under/over limit, countdown,
+  per-tenant isolation, plan-tier override, window reset); Release 42/42 +
+  ASan/UBSan clean. Next: DB port polish, then OTLP exporter adapter.
 - **2026-06-21** — 안건 1.1.b/c: **RS256 JWT + JWKS verifier**
   (`include/qbuem/middleware/rs256_verifier.hpp`). `parse_jwks()` turns a JWKS (or
   a bare JWK) document into RSA public keys (base64url n/e → bytes; brace-scan over
