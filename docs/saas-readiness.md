@@ -63,8 +63,18 @@ Critical path (do first):
 2. **Multi-tenancy**: per-tenant **quota** middleware ✅ *(done —
    `middleware/quota.hpp`; fixed-window budget keyed by the authenticated tenant
    (`X-Auth-Sub`/`X-Tenant-Id`), plan-tier overrides; see §5)*.
-3. **DB port polish** + one reference adapter as an opt-in example.
-4. **OTLP exporter adapter** behind the existing `SpanExporter` port (opt-in).
+3. **DB port** ✅ *(already satisfied — no work needed)*. `db/driver.hpp` already
+   defines a fully async port (`IConnection`/`IStatement`/`IResultSet`/
+   `ITransaction`/`IConnectionPool`/`IDriver`, all `Task<Result<…>>`), with
+   `LockFreeConnectionPool` + `PooledConnection` RAII, a reference example
+   (`examples/09-database/db_session`) and `tests/db_coverage_test.cpp`. The only
+   `std::mutex` is on the documented *cold* acquire/release path. A real bundled
+   driver is intentionally out of scope (BYO). Adding another reference adapter
+   would just duplicate `db_session` — not done, to avoid over-engineering.
+4. **OTLP exporter adapter** behind the existing `SpanExporter` port (opt-in) —
+   *optional*; the app can ship with stderr logging + the existing Prometheus-text
+   exporter + app-layer analytics. Build when off-process tracing is actually
+   needed (OTLP/JSON over the zero-dep HTTP fetch client to a local collector).
 
 Deferred until a concrete need (gRPC service, or backend h2 multiplexing):
 5. HTTP/2 **dynamic HPACK table** (encoder + decoder) with size accounting.
