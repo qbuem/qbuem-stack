@@ -192,6 +192,11 @@ add_executable(qbuem_quota_tests quota_test.cpp ${QBUEM_TLS_FIX})
 target_link_libraries(qbuem_quota_tests PRIVATE qbuem-stack::qbuem GTest::gtest_main)
 add_test(NAME qbuem_quota_tests COMMAND qbuem_quota_tests)
 
+# ── OTLP/JSON span exporter (off-process tracing) ──────────────────────────────
+add_executable(qbuem_otlp_exporter_tests otlp_exporter_test.cpp ${QBUEM_TLS_FIX})
+target_link_libraries(qbuem_otlp_exporter_tests PRIVATE qbuem-stack::qbuem GTest::gtest_main)
+add_test(NAME qbuem_otlp_exporter_tests COMMAND qbuem_otlp_exporter_tests)
+
 # ── OffloadPool + Dispatcher graceful drain (thread-management) ────────────────
 add_executable(qbuem_offload_drain_tests offload_drain_test.cpp ${QBUEM_TLS_FIX})
 target_link_libraries(qbuem_offload_drain_tests PRIVATE qbuem-stack::qbuem GTest::gtest_main)
