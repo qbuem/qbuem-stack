@@ -36,6 +36,7 @@
 #include <qbuem/tracing/span.hpp>
 
 #include <atomic>
+#include <array>
 #include <chrono>
 #include <format>
 #include <memory>
@@ -131,28 +132,29 @@ public:
    */
   void export_span(const SpanData& span) override {
     // TraceId → hex string
-    char trace_buf[33];
-    span.trace_id.to_chars(trace_buf, sizeof(trace_buf));
+    std::array<char, 33> trace_buf{};
+    span.trace_id.to_chars(trace_buf.data(), trace_buf.size());
 
     // SpanId → hex string
-    char span_buf[17];
-    span.span_id.to_chars(span_buf, sizeof(span_buf));
+    std::array<char, 17> span_buf{};
+    span.span_id.to_chars(span_buf.data(), span_buf.size());
 
     // parent SpanId → hex string
-    char parent_buf[17];
-    span.parent_span_id.to_chars(parent_buf, sizeof(parent_buf));
+    std::array<char, 17> parent_buf{};
+    span.parent_span_id.to_chars(parent_buf.data(), parent_buf.size());
 
     // Calculate duration (milliseconds)
     const auto duration_us = std::chrono::duration_cast<std::chrono::microseconds>(
         span.end_time - span.start_time).count();
     const double duration_ms = static_cast<double>(duration_us) / 1000.0;
 
-    // Status string
+    // Status string ("Unset" is the default; Unset case omitted so the
+    // initializer is not a dead store).
     const char* status_str = "Unset";
     switch (span.status) {
       case SpanStatus::Ok:    status_str = "Ok";    break;
       case SpanStatus::Error: status_str = "Error"; break;
-      case SpanStatus::Unset: status_str = "Unset"; break;
+      case SpanStatus::Unset: break;
     }
 
     // Assemble output string.
@@ -161,7 +163,7 @@ public:
         "       trace={} span={} parent={}\n"
         "       status={} duration={:.3f}ms",
         span.name, span.pipeline_name, span.action_name,
-        trace_buf, span_buf, parent_buf,
+        trace_buf.data(), span_buf.data(), parent_buf.data(),
         status_str, duration_ms);
 
     if (span.status == SpanStatus::Error && !span.error_message.empty()) {
@@ -220,7 +222,7 @@ public:
    *
    * @param span Completed span data.
    */
-  void export_span(SpanData span) {
+  void export_span(const SpanData& span) {
     std::lock_guard<std::mutex> lk(mtx_);
     if (exporter_) {
       exporter_->export_span(span);
@@ -288,9 +290,9 @@ private:
  * Runs only when `ended_` is false, preventing double exports.
  */
 inline Span::~Span() {
-  if (!ended_ && tracer_) {
+  if (!ended_ && tracer_ != nullptr) {
     data_.end_time = std::chrono::system_clock::now();
-    tracer_->export_span(std::move(data_));
+    tracer_->export_span(data_); // export_span takes const ref (exporter copies)
     ended_ = true;
   }
 }
@@ -340,7 +342,7 @@ public:
   static PipelineTracer& global() {
     static PipelineTracer default_instance;
     PipelineTracer* ptr = s_global_.load(std::memory_order_acquire);
-    return ptr ? *ptr : default_instance;
+    return ptr != nullptr ? *ptr : default_instance;
   }
 
   /**
@@ -383,7 +385,7 @@ public:
    *
    * @param span_data Completed span metadata.
    */
-  void end_span(SpanData span_data) {
+  void end_span(const SpanData& span_data) {
     std::lock_guard<std::mutex> lk(mtx_);
     std::shared_ptr<SpanExporter> exp = exporter_;
     if (exp) {

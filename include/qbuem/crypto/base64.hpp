@@ -81,10 +81,10 @@ using Result = std::expected<T, std::error_code>;
 
 namespace detail::b64 {
 
-inline constexpr char kStdAlpha[] =
+inline constexpr char kStdAlpha[] = // NOLINT(modernize-avoid-c-arrays) — string-literal table
     "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
-inline constexpr char kUrlAlpha[] =
+inline constexpr char kUrlAlpha[] = // NOLINT(modernize-avoid-c-arrays) — string-literal table
     "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
 
 // Decoding lookup: maps ASCII → 6-bit value, 0xFF = invalid, 0xFE = padding '='

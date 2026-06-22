@@ -91,7 +91,7 @@ inline Middleware cors(CorsConfig cfg = {}) {
     // Dynamic whitelist: reflect the request Origin only if whitelisted.
     if (!wl.empty()) {
       std::string_view req_origin = req.header("Origin");
-      if (!req_origin.empty() && wl.count(std::string(req_origin))) {
+      if (!req_origin.empty() && wl.contains(std::string(req_origin))) {
         effective_origin = std::string(req_origin);
         res.header("Vary", "Origin"); // instruct caches to vary on Origin
       } else {
