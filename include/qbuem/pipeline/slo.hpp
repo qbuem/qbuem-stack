@@ -383,6 +383,11 @@ private:
  *   }
  * };
  * ```
+ *
+ * @deprecated No consumers; use `PipelineObserver` (observability.hpp) directly.
+ *   Redundant — scheduled for removal in v2. See docs/consolidation.md. (Not
+ *   marked `[[deprecated]]` to avoid a self-warning at `LoggingSloObserver`'s
+ *   derivation; the leaf class carries the attribute.)
  */
 class SloObserver : public PipelineObserver {
 public:
@@ -413,7 +418,10 @@ public:
  * Intended for development and debugging.
  * Output format: `[qbuem/slo] violation: action=<name> metric=<metric> measured=<value> target=<target>`
  */
-class LoggingSloObserver : public SloObserver {
+class [[deprecated(
+    "SloObserver hooks have no consumers; use PipelineObserver "
+    "(observability.hpp) directly. Scheduled for removal in v2. "
+    "See docs/consolidation.md")]] LoggingSloObserver : public SloObserver {
 public:
   /**
    * @brief Print the SLO violation to standard error (`stderr`).

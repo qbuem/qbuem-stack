@@ -73,6 +73,15 @@
  *           macOS); buffer erase is now deferred until after the handoff. Also
  *           greens CI: clang-tidy (C-arrays → std::array), the fuzz link, and the
  *           benchmark job timeout. No API change; verified under ASan/UBSan/TSan.
+ * - 1.9.0: SaaS-readiness + v1 finalization. Adds (all zero-dependency, behind an
+ *           edge TLS terminator): RS256/JWKS bearer auth (`Rs256JwtVerifier`,
+ *           `parse_jwks`, RFC-8725 iss/aud) + native `rsa_pkcs1_v15_sha256_verify`;
+ *           per-tenant `quota` middleware; OTLP/JSON span export (`OtlpHttpExporter`);
+ *           HTTP/2 SETTINGS negotiation + flow control. The umbrella now exposes the
+ *           middleware/crypto/tracing SaaS surface; `examples/12-saas/`. Consolidation
+ *           guide (docs/consolidation.md) marks redundant pipeline APIs for v2 removal
+ *           (`SloObserver` deprecated). This wraps up the v1 line — subsequent changes
+ *           are hotfix-only. Backwards-compatible (additive).
  */
 
 /**
@@ -102,7 +111,7 @@ namespace qbuem {
  *
  * @code
  * static_assert(qbuem::Version::major >= 1, "qbuem-stack 1.x required");
- * std::print("{}\n", qbuem::Version::string); // "1.8.2"
+ * std::print("{}\n", qbuem::Version::string); // "1.9.0"
  * @endcode
  */
 struct Version {
@@ -110,13 +119,13 @@ struct Version {
   static constexpr int major = 1;
 
   /** @brief Minor version number. Incremented when new backwards-compatible features are added. */
-  static constexpr int minor = 8;
+  static constexpr int minor = 9;
 
   /** @brief Patch version number. Incremented for backwards-compatible bug fixes only. */
-  static constexpr int patch = 2;
+  static constexpr int patch = 0;
 
   /** @brief Version string in "major.minor.patch" format (null-terminated). */
-  static constexpr std::string_view string = "1.8.2";
+  static constexpr std::string_view string = "1.9.0";
 };
 
 } // namespace qbuem
@@ -125,12 +134,12 @@ struct Version {
 #define QBUEM_VERSION_MAJOR 1
 
 /** @brief Minor version number (for use in preprocessor `#if` conditions). */
-#define QBUEM_VERSION_MINOR 8
+#define QBUEM_VERSION_MINOR 9
 
 /** @brief Patch version number (for use in preprocessor `#if` conditions). */
-#define QBUEM_VERSION_PATCH 2
+#define QBUEM_VERSION_PATCH 0
 
 /** @brief Version string literal "major.minor.patch" (for use in preprocessor conditions). */
-#define QBUEM_VERSION_STRING "1.8.2"
+#define QBUEM_VERSION_STRING "1.9.0"
 
 /** @} */ // end of qbuem_version
