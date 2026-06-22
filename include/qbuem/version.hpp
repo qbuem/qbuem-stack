@@ -82,6 +82,15 @@
  *           guide (docs/consolidation.md) marks redundant pipeline APIs for v2 removal
  *           (`SloObserver` deprecated). This wraps up the v1 line — subsequent changes
  *           are hotfix-only. Backwards-compatible (additive).
+ * - 2.0.0: BREAKING — removed the redundant/over-engineered pipeline surface
+ *           (rather than deprecate): `pipeline_factory.hpp` (`PipelineFactory`),
+ *           `migration.hpp` (`MigrationAction`/`DlqReprocessor`), `stream_ops.hpp`,
+ *           `stateful_window.hpp` (`StatefulWindow`), the standalone
+ *           `subpipeline_action.hpp` (dup of the `message_bus.hpp` one), and
+ *           `SloObserver`/`LoggingSloObserver` from `slo.hpp`. Canonical
+ *           replacements: `StaticPipeline`/`PipelineGraph`, `WindowedAction`,
+ *           `event_actions` (Throttle/Debounce), `DeadLetterQueue`,
+ *           `PipelineObserver`. See docs/consolidation.md. No additions.
  */
 
 /**
@@ -111,35 +120,35 @@ namespace qbuem {
  *
  * @code
  * static_assert(qbuem::Version::major >= 1, "qbuem-stack 1.x required");
- * std::print("{}\n", qbuem::Version::string); // "1.9.0"
+ * std::print("{}\n", qbuem::Version::string); // "2.0.0"
  * @endcode
  */
 struct Version {
   /** @brief Major version number. Incremented on backwards-incompatible API changes. */
-  static constexpr int major = 1;
+  static constexpr int major = 2;
 
   /** @brief Minor version number. Incremented when new backwards-compatible features are added. */
-  static constexpr int minor = 9;
+  static constexpr int minor = 0;
 
   /** @brief Patch version number. Incremented for backwards-compatible bug fixes only. */
   static constexpr int patch = 0;
 
   /** @brief Version string in "major.minor.patch" format (null-terminated). */
-  static constexpr std::string_view string = "1.9.0";
+  static constexpr std::string_view string = "2.0.0";
 };
 
 } // namespace qbuem
 
 /** @brief Major version number (for use in preprocessor `#if` conditions). */
-#define QBUEM_VERSION_MAJOR 1
+#define QBUEM_VERSION_MAJOR 2
 
 /** @brief Minor version number (for use in preprocessor `#if` conditions). */
-#define QBUEM_VERSION_MINOR 9
+#define QBUEM_VERSION_MINOR 0
 
 /** @brief Patch version number (for use in preprocessor `#if` conditions). */
 #define QBUEM_VERSION_PATCH 0
 
 /** @brief Version string literal "major.minor.patch" (for use in preprocessor conditions). */
-#define QBUEM_VERSION_STRING "1.9.0"
+#define QBUEM_VERSION_STRING "2.0.0"
 
 /** @} */ // end of qbuem_version

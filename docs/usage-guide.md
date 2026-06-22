@@ -318,10 +318,11 @@ graph.connect("source", {"a", "b"});
 graph.connect({"a", "b"}, "merge");
 ```
 
-Stream operators (map/filter/window/throttle/debounce):
-`<qbuem/pipeline/stream_ops.hpp>`.
+Stream operators (map/filter/chunk/scan/zip/merge): `<qbuem/pipeline/stream.hpp>`.
+For throttle/debounce/windowing as pipeline stages use `event_actions.hpp`
+(`ThrottleAction`/`DebounceAction`) and `windowed_action.hpp`.
 
-> 📁 `examples/05-pipeline/fanout/`, `examples/05-pipeline/stream_ops/`.
+> 📁 `examples/05-pipeline/fanout/`, `examples/05-pipeline/windowed_action/`.
 
 ---
 

@@ -15,13 +15,13 @@ Umbrella include: `#include <qbuem/pipeline/pipeline.hpp>` pulls the core (actio
 | Group | Types | Header |
 |---|---|---|
 | Stage contract | `Action<In,Out>`, `ActionEnv`, `ContextualItem<T>`, `WorkerLocal<T>`, `Context`, concepts | `action.hpp`, `action_env.hpp`, `context.hpp`, `concepts.hpp` |
-| Pipeline kinds | `StaticPipeline` + `PipelineBuilder`, `DynamicPipeline`, `PipelineGraph`, `SubpipelineAction` | `static_pipeline.hpp`, `dynamic_pipeline.hpp`, `pipeline_graph.hpp`, `subpipeline_action.hpp` |
+| Pipeline kinds | `StaticPipeline` + `PipelineBuilder`, `DynamicPipeline`, `PipelineGraph` | `static_pipeline.hpp`, `dynamic_pipeline.hpp`, `pipeline_graph.hpp` |
 | Channels | `AsyncChannel`, `SpscChannel`, `ArenaChannel`, `PriorityChannel` | `async_channel.hpp`, `spsc_channel.hpp`, `arena_channel.hpp`, `priority_channel.hpp` |
 | Resilience | `RetryAction`, `CircuitBreaker(Action)`, `DeadLetterQueue` / `DlqAction`, `SagaOrchestrator`, `IdempotencyFilter` | `retry_policy.hpp`, `circuit_breaker.hpp`, `dead_letter.hpp`, `saga.hpp`, `idempotency.hpp` |
-| Throughput / events | `BatchAction`, `DebounceAction`, `ThrottleAction`, `ScatterGatherAction`, `WindowedAction`, `StatefulWindow`, `DynamicRouter` | `batch_action.hpp`, `event_actions.hpp`, `windowed_action.hpp`, `stateful_window.hpp`, `dynamic_router.hpp` |
-| Streams | `Stream<T>` + `stream_map/filter/chunk/scan/...`, `stream_throttle/debounce/tumbling_window` | `stream.hpp`, `stream_ops.hpp` |
+| Throughput / events | `BatchAction`, `DebounceAction`, `ThrottleAction`, `ScatterGatherAction`, `WindowedAction`, `DynamicRouter` | `batch_action.hpp`, `event_actions.hpp`, `windowed_action.hpp`, `dynamic_router.hpp` |
+| Streams | `Stream<T>` + `stream_map/filter/chunk/scan/...` | `stream.hpp` |
 | Concurrency / wiring | `TaskGroup`, `MessageBus` (+ `MessageBusSource/Sink`), `ServiceRegistry` | `task_group.hpp`, `message_bus.hpp`, `service_registry.hpp` |
-| Ops / advanced | `BackpressureMonitor`, `SloConfig`/`ErrorBudgetTracker`, `CanaryRouter`, `CheckpointedPipeline`, `MigrationAction`, health, `PipelineFactory` | `backpressure_monitor.hpp`, `slo.hpp`, `canary.hpp`, `checkpoint.hpp`, `migration.hpp`, `health.hpp`, `pipeline_factory.hpp` |
+| Ops / advanced | `BackpressureMonitor`, `SloConfig`/`ErrorBudgetTracker`, `CanaryRouter`, `CheckpointedPipeline`, health | `backpressure_monitor.hpp`, `slo.hpp`, `canary.hpp`, `checkpoint.hpp`, `health.hpp` |
 
 ---
 
@@ -248,20 +248,6 @@ See `examples/05-pipeline/fanout/` for a runnable fan-out/fan-in graph (`ingest 
 
 **When NOT to use:** for a pure 1→N broadcast at the channel level (no per-branch transform), `DynamicRouter` (§6.6) is lighter. **Gotchas:** the graph must be acyclic; build it fully before `start()` (nodes/edges aren't added live); all nodes share type `T`.
 
-### 3.4 `SubpipelineAction<In, Out>` (`subpipeline_action.hpp`)
-
-Wraps a *built and started* `StaticPipeline<In,Out>` so it satisfies the `Action<In,Out>` call contract — `operator()(In, ActionEnv) -> Task<Result<Out>>`. This enables hierarchical composition: reuse one pipeline as a stage inside another. `operator()` pushes one item in and waits for exactly one output item (`errc::no_message` if the inner output closes first).
-
-```cpp
-auto inner = pipeline_builder<RawEvent>()
-    .add<NormEvent>(normalize).add<RichEvent>(enrich).build();
-inner.start(dispatcher);                       // must be started first
-SubpipelineAction<RawEvent, RichEvent> sub(std::move(inner));
-// `sub` is now usable anywhere an Action<RawEvent,RichEvent> fn is accepted.
-```
-
-> Note: `message_bus.hpp` also declares a *different* `SubpipelineAction` (push/start/drain wrapper, not a per-item callable). The callable form in `subpipeline_action.hpp` is the one to use for composition. The inner pipeline must be started before the first `operator()` call or it blocks forever waiting for a non-existent worker.
-
 ---
 
 ## 4. Channels — pick the right one
@@ -444,27 +430,7 @@ co_await w.push(click, Context{}.put(EventTime{event_ts}));
 
 `advance_watermark(Watermark{ts})` injects watermarks from an external source. On EOS all remaining windows flush. `Key` requires `std::hash<Key>`. See `examples/05-pipeline/windowed_action/`.
 
-### 6.3 `StatefulWindow<T, Acc, Out>` (`stateful_window.hpp:113`)
-
-Higher-throughput windowing with **per-worker** accumulators (no shared mutex, no watermark). Strategies: `TumblingFlush` (time), `CountFlush` (N items), `HybridFlush` (whichever first). Designed to plug into `PipelineBuilder` via `as_action()`.
-
-```cpp
-struct SumAcc { int64_t total = 0; size_t count = 0; };
-struct Res    { int64_t sum;   size_t count; };
-
-auto win = make_count_window<int64_t, SumAcc, Res>(
-    /*max_items=*/1024, /*num_workers=*/4,
-    [](SumAcc& a, int64_t v){ a.total += v; ++a.count; },
-    [](SumAcc& a) -> Res { Res r{a.total, a.count}; a = {}; return r; });
-
-auto p = PipelineBuilder<int64_t, Res>{}.add<Res>(win.as_action()).build();
-```
-
-`as_action()` captures `this`, so the `StatefulWindow` must outlive the pipeline. Between flushes the action returns `errc::operation_in_progress` (a sentinel the pipeline drops), so only flushed windows reach the output. Call `drain()` on shutdown to flush partial windows. Convenience builders: `make_tumbling_window`, `make_count_window`. See `examples/05-pipeline/stateful_window/`.
-
-**WindowedAction vs StatefulWindow:** use `WindowedAction` when you need event-time correctness, out-of-order handling, sliding/session windows, or per-key sub-aggregation. Use `StatefulWindow` for maximum throughput per-worker count/time windows where processing-time semantics are acceptable.
-
-### 6.4 `DebounceAction<T>` & `ThrottleAction<T>` (`event_actions.hpp`)
+### 6.3 `DebounceAction<T>` & `ThrottleAction<T>` (`event_actions.hpp`)
 
 `DebounceAction` emits the last item after a silence `gap` (collapses bursts). `ThrottleAction` is a token-bucket rate limiter (`rate_per_sec`, `burst`).
 
@@ -528,17 +494,7 @@ auto batch = co_await result.next();
 
 Operators: `stream_map` (`T → Task<Result<U>>`), `stream_filter`, `stream_chunk(n)` (→ `vector<T>`), `stream_take_while`, `stream_scan(init, fn)` (stateful), `stream_map_filter(map, pred)` (fused — no intermediate channel), `stream_flat_map` (`T → Stream<U>`), `stream_zip(a, b)`, `stream_merge(vec)` / `stream_merge(a, b)`, plus `Stream::tee()`.
 
-### 7.2 `stream_ops.hpp` extensions
-
-Adds `stream_throttle<T>(max, window_ms)`, `stream_debounce<T>(gap_ms)`, and `stream_tumbling_window<T>(window_ms)` (→ `Stream<std::vector<T>>`):
-
-```cpp
-auto throttled = my_stream | stream_throttle<Event>(100, 1000);  // 100 / sec
-auto debounced = my_stream | stream_debounce<Event>(50);
-auto windows   = my_stream | stream_tumbling_window<Event>(200); // 200ms batches
-```
-
-**When NOT to use streams:** for high-throughput multi-worker stages, the `Action`/pipeline path autoscales and is more efficient. Streams shine for single-consumer transform chains and Rx-style composition. See `examples/05-pipeline/stream_ops/`.
+**When NOT to use streams:** for high-throughput multi-worker stages, the `Action`/pipeline path autoscales and is more efficient. Streams shine for single-consumer transform chains and Rx-style composition. (For throttle/debounce/windowing as pipeline stages, use `ThrottleAction`/`DebounceAction` (§6.3) and `WindowedAction` (§6.2).)
 
 ---
 
@@ -622,7 +578,7 @@ Snapshot/alert calls are cold-path — run them from a monitoring thread, not th
 
 ### 10.2 SLO tracking (`slo.hpp`)
 
-`SloConfig` (p99/p999 targets, `error_budget`, `on_violation`) can be attached to an `Action` via `Action::Config::slo`. Standalone: `ErrorBudgetTracker` records `record_success(latency)` / `record_error()`, exposes `error_rate()`, `budget_exhausted()`, and `check_slo()` (fires the callback on breach). `LatencyHistogram` gives `p99()`/`p999()` over a 1024-sample rolling window. `SloObserver`/`LoggingSloObserver` extend `PipelineObserver` with `on_slo_violation`.
+`SloConfig` (p99/p999 targets, `error_budget`, `on_violation`) can be attached to an `Action` via `Action::Config::slo`. Standalone: `ErrorBudgetTracker` records `record_success(latency)` / `record_error()`, exposes `error_rate()`, `budget_exhausted()`, and `check_slo()` (fires the callback on breach). `LatencyHistogram` gives `p99()`/`p999()` over a 1024-sample rolling window. For event hooks, implement `PipelineObserver` (`observability.hpp`).
 
 ```cpp
 Action<Req,Resp> a(handle, {.slo = SloConfig{
@@ -668,30 +624,9 @@ co_await cp.push_counted(item);
 
 See `examples/07-resilience/checkpoint/` and `examples/07-resilience/idempotency_slo/`.
 
-### 10.6 `MigrationAction` / `DlqReprocessor` (`migration.hpp`)
-
-`MigrationAction<OldT, NewT>` converts old-format messages with a `MigrationFn = std::function<Result<NewT>(OldT)>`; `DlqReprocessor` drains a DLQ of old-format messages and migrates them. Use during schema/version upgrades. See `examples/05-pipeline/subpipeline_migration/`.
-
-### 10.7 health (`health.hpp`)
+### 10.6 health (`health.hpp`)
 
 `PipelineVersion` (+ `compatible_with`), `ActionHealth`, `HealthStatus { HEALTHY, DEGRADED, UNHEALTHY }`, `PipelineHealth::recompute()`, `HealthRegistry`, `PipelineVersionRegistry`, and `GraphTopologyExporter`. See `examples/05-pipeline/observer_health/`.
-
-### 10.8 `PipelineFactory<T>` (`pipeline_factory.hpp`)
-
-Config-driven assembly of `DynamicPipeline<T>` / `PipelineGraph<T>` from JSON. Register name→stage-fn plugins with `register_plugin(name, factory)` (factory: `(const detail::Json&) -> DynamicPipeline<T>::StageFn`), then `from_json(json)` (linear) or `graph_from_json(json)` (DAG).
-
-```cpp
-PipelineFactory<int> factory;
-factory.register_plugin("multiplier", [](const auto& cfg){
-    int f = cfg.value("factor", 1);
-    return [f](int x, ActionEnv) -> Task<Result<int>> { co_return x * f; };
-});
-auto dp = factory.from_json(
-    R"({"type":"linear","stages":[{"name":"x2","plugin":"multiplier","config":{"factor":2}}]})");
-dp->start(dispatcher);
-```
-
-**Zero-dependency note:** JSON support is opt-in. It activates only when the sibling `qbuem-json` is present (`__has_include(<qbuem_json/qbuem_json.hpp>)`); a core build with no qbuem-json compiles a stub (pillars D1/D4 — no third-party JSON in core). `register_plugin` throws `std::invalid_argument` on empty/duplicate names — one of the few API points that can throw (cold-path config, not the hot path). See `examples/05-pipeline/factory/`.
 
 ---
 
@@ -700,6 +635,6 @@ dp->start(dispatcher);
 - **Zero allocation (pillar A):** stage bodies on the hot path must avoid `new`/`std::vector`/`std::string`/`std::format`/`std::function`/`std::shared_ptr`. Use `WorkerLocal<T>` scratch, `Arena`, and `ArenaChannel` for intra-reactor handoff. `Context::put` is O(1) but does allocate a node — build contexts at the edge, not per-item in tight loops.
 - **Zero copy (pillar C):** prefer `const&`/`std::span`/`std::string_view` in stage signatures; `std::move` ownership out of a stage. Fan-out in `PipelineGraph`/`DynamicRouter` must copy the value per branch (unavoidable), but `Context` copies are O(1) shared-pointer prepends.
 - **Zero latency (pillar L):** check `env.stop.stop_requested()` before each `co_await`; never block a reactor thread (`RetryAction` uses the reactor timer, falling back to a thread sleep only when no reactor is present — keep one running).
-- **No exceptions:** return `std::unexpected(...)`. The exceptions to this rule are intentional and cold-path: `SagaOrchestrator` catches inside compensation, and `PipelineFactory::register_plugin` throws on misconfiguration.
-- **Lifetime:** channels passed to `DynamicRouter`/`StatefulWindow::as_action` (captures `this`) / `MessageBusSource` must outlive their consumers. `SubpipelineAction`'s inner pipeline must be started before first use. `IOVec`/`scattered_span` (io module) lifetime rules apply when bridging to sockets.
+- **No exceptions:** return `std::unexpected(...)`. The one intentional, cold-path exception is `SagaOrchestrator` catching inside compensation.
+- **Lifetime:** channels passed to `DynamicRouter` / `MessageBusSource` must outlive their consumers. `IOVec`/`scattered_span` (io module) lifetime rules apply when bridging to sockets.
 - **Threading:** `AsyncChannel`/`PriorityChannel`/`SpscChannel` resume waiters on their owning reactor (cross-reactor safe). `ArenaChannel` is single-reactor only. Never call `handle.resume()` across reactor threads — use `reactor->post(...)`.

@@ -14,13 +14,14 @@ scenario, architecture, key APIs, and expected output.
 | [02](#02-network) | Network | 7 | tcp_echo_server, udp_unix_socket, udp_advanced, websocket, http_fetch, http2_server, grpc |
 | [03](#03-memory) | Memory | 4 | arena, zero_copy_arena_channel, numa_hugepages, lockfree_bench |
 | [04](#04-codec--security) | Codec & Security | 6 | codec, crypto_url, crypto_primitives, security_middleware, transport_codec, transport_plain |
-| [05](#05-pipeline) | Pipeline | 12 | fanout, dynamic_hotswap, hardware_batching, sensor_fusion, observer_health, factory, subpipeline_migration, stream_ops, windowed_action, dynamic_router, stateful_window, backpressure_monitor |
+| [05](#05-pipeline) | Pipeline | 8 | fanout, dynamic_hotswap, hardware_batching, sensor_fusion, observer_health, windowed_action, dynamic_router, backpressure_monitor |
 | [06](#06-ipc--messaging) | IPC & Messaging | 5 | shm_channel, ipc_pipeline, message_bus, priority_spsc_channel, scatter_send |
 | [07](#07-resilience) | Resilience | 6 | canary, checkpoint, resilience, saga, scatter_gather, idempotency_slo |
 | [08](#08-observability) | Observability | 3 | tracing, timer_wheel, task_group |
 | [09](#09-database) | Database | 3 | db_session, coro_json, smart_cache |
 | [10](#10-hardware) | Hardware | 1 | kqueue_sophistication (macOS) |
 | [11](#11-advanced-apps) | Advanced Apps | 9 | autonomous_driving, sensor_fusion, io_metrics_dashboard, trading_platform, game_server, middleware, hft_matching, open_world, spatial_fusion |
+| [12](#12-saas) | SaaS | 3 | rs256_auth, quota, otlp_export |
 
 ---
 
@@ -38,7 +39,7 @@ cmake --build build --target hello_world
 ```
 
 > **Note:** Examples requiring `qbuem-json` (`trading_platform`, `game_server`,
-> `middleware_example`, `db_session_example`, `pipeline_factory_example`, `coro_json`)
+> `middleware_example`, `db_session_example`, `coro_json`)
 > are automatically fetched. Set `-DQBUEM_JSON_TAG=<tag>` to pin a version.
 
 ---
@@ -107,12 +108,8 @@ Reference: [Pipeline Master Guide](../docs/pipeline-master-guide.md).
 | [dynamic_hotswap](05-pipeline/dynamic_hotswap/) | `pipeline_dynamic_hotswap.cpp` | §3-2 | `DynamicPipeline` + live hot-swap + DLQ |
 | [sensor_fusion](05-pipeline/sensor_fusion/) | `pipeline_sensor_fusion.cpp` | §6A | N:1 gather with `ServiceRegistry` |
 | [observer_health](05-pipeline/observer_health/) | `pipeline_observer_health_example.cpp` | — | `PipelineObserver`, metrics, JSON/DOT/Mermaid export |
-| [factory](05-pipeline/factory/) | `pipeline_factory_example.cpp` | — | JSON-driven `PipelineFactory` (requires qbuem-json) |
-| [subpipeline_migration](05-pipeline/subpipeline_migration/) | `subpipeline_migration_example.cpp` | — | `SubpipelineAction`, `MigrationAction`, `DlqReprocessor` |
-| [stream_ops](05-pipeline/stream_ops/) | `stream_ops_example.cpp` | — | `map`, `filter`, `throttle`, `debounce`, `tumbling_window` operators |
 | [windowed_action](05-pipeline/windowed_action/) | `windowed_action_example.cpp` | — | `TumblingWindow`, `SlidingWindow`, `SessionWindow`, `Watermark` |
 | [dynamic_router](05-pipeline/dynamic_router/) | `dynamic_router_example.cpp` | — | `DynamicRouter` SIMD predicate: FirstMatch / AllMatch / LoadBalance routing |
-| [stateful_window](05-pipeline/stateful_window/) | `stateful_window_example.cpp` | — | `StatefulWindow` thread-local accumulator: TumblingFlush / CountFlush / HybridFlush |
 | [backpressure_monitor](05-pipeline/backpressure_monitor/) | `backpressure_monitor_example.cpp` | — | `BackpressureMonitor` — per-stage atomic counters, latency histogram, P50/P99/P99.9 |
 
 ---
@@ -206,7 +203,6 @@ Full-stack applications combining multiple qbuem-stack layers.
 | middleware | ✓ |
 | db_session | ✓ |
 | coro_json | ✓ |
-| pipeline_factory | ✓ |
 | All others | — |
 
 ---

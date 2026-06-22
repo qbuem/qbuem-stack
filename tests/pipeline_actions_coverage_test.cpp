@@ -11,7 +11,6 @@
  *   - service_registry.hpp    ServiceRegistry     (DI container)
  *   - dynamic_router.hpp      DynamicRouter<T>    (predicate routing + stats)
  *   - backpressure_monitor.hpp StageMetrics / BackpressureMonitor
- *   - stateful_window.hpp     StatefulWindow<T,Acc,Out>
  *   - windowed_action.hpp     Tumbling/Sliding/SessionWindow policies + Watermark
  *   - batch_action.hpp        BatchAction<In,Out> (accumulate N then dispatch)
  *
@@ -32,7 +31,6 @@
 #include <qbuem/pipeline/priority_channel.hpp>
 #include <qbuem/pipeline/service_registry.hpp>
 #include <qbuem/pipeline/spsc_channel.hpp>
-#include <qbuem/pipeline/stateful_window.hpp>
 #include <qbuem/pipeline/windowed_action.hpp>
 
 #include <gtest/gtest.h>
@@ -716,120 +714,6 @@ TEST(BackpressureMonitorCoverageTest, CheckAlertsNoCallbackIsSafe) {
     BackpressureAlert alert; // no on_alert callback set
     mon.check_alerts(alert); // must not crash / no-op
     SUCCEED();
-}
-
-// =============================================================================
-// StatefulWindow<T, Acc, Out>
-// =============================================================================
-
-namespace {
-struct SumAcc { int64_t total = 0; size_t count = 0; };
-struct WinResult { int64_t sum = 0; size_t count = 0; };
-} // namespace
-
-TEST(StatefulWindowCoverageTest, CountFlushEmitsAfterN) {
-    RunGuard guard;
-    StatefulWindow<int64_t, SumAcc, WinResult> window{
-        StatefulWindowConfig{
-            .strategy    = FlushStrategy::CountFlush,
-            .max_items   = 3,
-            .num_workers = 1,
-        },
-        [](SumAcc& a, int64_t v) { a.total += v; ++a.count; },
-        [](SumAcc& a) -> WinResult {
-            WinResult r{a.total, a.count};
-            a = {};
-            return r;
-        }};
-
-    auto action = window.as_action();
-    auto emitted = std::make_shared<std::atomic<int64_t>>(-1);
-
-    guard.run_and_wait([&action, emitted]() -> Task<void> {
-        ServiceRegistry reg;
-        std::stop_source ss;
-        ActionEnv env{Context{}, ss.get_token(), 0, &reg};
-        // First two items: in-progress (no flush).
-        auto r1 = co_await action(int64_t{10}, env);
-        EXPECT_FALSE(r1.has_value());
-        auto r2 = co_await action(int64_t{20}, env);
-        EXPECT_FALSE(r2.has_value());
-        // Third item hits max_items -> flush.
-        auto r3 = co_await action(int64_t{30}, env);
-        EXPECT_TRUE(r3.has_value());
-        if (r3.has_value())
-            emitted->store(r3->sum, std::memory_order_release);
-    });
-    EXPECT_EQ(emitted->load(), 60);
-}
-
-TEST(StatefulWindowCoverageTest, StopRequestedReturnsCanceled) {
-    RunGuard guard;
-    auto window = make_count_window<int64_t, SumAcc, WinResult>(
-        5, 1,
-        [](SumAcc& a, int64_t v) { a.total += v; ++a.count; },
-        [](SumAcc& a) -> WinResult { WinResult r{a.total, a.count}; a = {}; return r; });
-    auto action = window.as_action();
-    auto canceled = std::make_shared<std::atomic<bool>>(false);
-
-    guard.run_and_wait([&action, canceled]() -> Task<void> {
-        ServiceRegistry reg;
-        std::stop_source ss;
-        ss.request_stop();
-        ActionEnv env{Context{}, ss.get_token(), 0, &reg};
-        auto r = co_await action(int64_t{1}, env);
-        if (!r.has_value()) canceled->store(true, std::memory_order_release);
-    });
-    EXPECT_TRUE(canceled->load());
-}
-
-TEST(StatefulWindowCoverageTest, DrainFlushesPartialWindow) {
-    RunGuard guard;
-    auto window = std::make_shared<StatefulWindow<int64_t, SumAcc, WinResult>>(
-        StatefulWindowConfig{
-            .strategy    = FlushStrategy::CountFlush,
-            .max_items   = 100, // never auto-flushes in this test
-            .num_workers = 1,
-        },
-        [](SumAcc& a, int64_t v) { a.total += v; ++a.count; },
-        [](SumAcc& a) -> WinResult { WinResult r{a.total, a.count}; a = {}; return r; });
-
-    auto action = window->as_action();
-    guard.run_and_wait([&action]() -> Task<void> {
-        ServiceRegistry reg;
-        std::stop_source ss;
-        ActionEnv env{Context{}, ss.get_token(), 0, &reg};
-        co_await action(int64_t{5}, env);
-        co_await action(int64_t{7}, env);
-    });
-
-    EXPECT_EQ(window->item_count(0), 2u);
-    auto results = window->drain();
-    ASSERT_EQ(results.size(), 1u);
-    EXPECT_EQ(results[0].sum, 12);
-    EXPECT_EQ(window->item_count(0), 0u); // reset after drain
-}
-
-TEST(StatefulWindowCoverageTest, ResetClearsState) {
-    auto window = StatefulWindow<int64_t, SumAcc, WinResult>{
-        StatefulWindowConfig{.strategy = FlushStrategy::CountFlush, .max_items = 100, .num_workers = 2},
-        [](SumAcc& a, int64_t v) { a.total += v; ++a.count; },
-        [](SumAcc& a) -> WinResult { WinResult r{a.total, a.count}; a = {}; return r; }};
-    // item_count for out-of-range worker is 0.
-    EXPECT_EQ(window.item_count(5), 0u);
-    window.reset();
-    EXPECT_EQ(window.item_count(0), 0u);
-    EXPECT_EQ(window.item_count(1), 0u);
-}
-
-TEST(StatefulWindowCoverageTest, MakeTumblingWindowFactory) {
-    // Verify factory constructs a usable instance; drain on empty yields nothing.
-    auto window = make_tumbling_window<int64_t, SumAcc, WinResult>(
-        100, 2,
-        [](SumAcc& a, int64_t v) { a.total += v; ++a.count; },
-        [](SumAcc& a) -> WinResult { WinResult r{a.total, a.count}; a = {}; return r; });
-    auto empty = window.drain();
-    EXPECT_TRUE(empty.empty());
 }
 
 // =============================================================================

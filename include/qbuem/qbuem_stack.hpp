@@ -47,7 +47,6 @@
 
 // Pipeline extras (core pipeline lives under qbuem/pipeline/*)
 #include <qbuem/pipeline/backpressure_monitor.hpp>
-#include <qbuem/pipeline/stateful_window.hpp>
 #include <qbuem/pipeline/dynamic_router.hpp>
 
 // Erasure coding (SIMD) — for spatial/storage applications

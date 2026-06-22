@@ -153,7 +153,6 @@ Use when: multiple independent processing branches feed back into a single stage
 | `BatchAction<I,O>` | `batch_action.hpp` | Accumulate N items → dispatch to hardware/GPU in one call |
 | `WindowedAction` | `windowed_action.hpp` | Tumbling / sliding / session windows with watermarks |
 | `ScatterGatherAction` | `pipeline_graph.hpp` | Fan-out to N backends, wait for all, merge |
-| `StatefulAction` | `stateful_window.hpp` | Per-key stateful aggregation (count, sum, last-N) |
 | `IdempotencyFilter` | `idempotency.hpp` | Deduplicate by ID; skip already-processed messages |
 
 ---

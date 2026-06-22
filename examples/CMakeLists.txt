@@ -10,8 +10,9 @@
 #   03-memory/            arena, zero_copy_arena_channel, numa_hugepages
 #   04-codec-security/    codec, crypto_url, security_middleware, crypto_primitives
 #   05-pipeline/          fanout, hardware_batching, dynamic_hotswap,
-#                         sensor_fusion, observer_health, factory (json),
-#                         subpipeline_migration, stream_ops, windowed_action
+#                         sensor_fusion, observer_health, windowed_action,
+#                         backpressure_monitor, dynamic_router
+#   12-saas/              rs256_auth, quota, otlp_export
 #   06-ipc-messaging/     shm_channel, ipc_pipeline, message_bus, scatter_send,
 #                         priority_spsc_channel
 #   07-resilience/        canary, checkpoint, resilience, saga,
@@ -134,16 +135,6 @@ target_link_libraries(pipeline_dynamic_hotswap PRIVATE qbuem-stack::qbuem)
 add_executable(pipeline_observer_health_example
     05-pipeline/observer_health/pipeline_observer_health_example.cpp)
 target_link_libraries(pipeline_observer_health_example PRIVATE qbuem-stack::qbuem)
-
-# SubpipelineAction + MigrationAction + DlqReprocessor
-add_executable(subpipeline_migration_example
-    05-pipeline/subpipeline_migration/subpipeline_migration_example.cpp)
-target_link_libraries(subpipeline_migration_example PRIVATE qbuem-stack::qbuem)
-
-# Stream operators: map, filter, throttle, debounce, tumbling_window
-add_executable(stream_ops_example
-    05-pipeline/stream_ops/stream_ops_example.cpp)
-target_link_libraries(stream_ops_example PRIVATE qbuem-stack::qbuem)
 
 # WindowedAction: TumblingWindow, SlidingWindow, SessionWindow, Watermark
 add_executable(windowed_action_example
@@ -282,12 +273,6 @@ if(NOT qbuem_json_POPULATED)
 endif()
 
 if(TARGET qbuem_json::qbuem_json)
-    # 05 Pipeline — Factory (JSON-driven pipeline builder)
-    add_executable(pipeline_factory_example
-        05-pipeline/factory/pipeline_factory_example.cpp)
-    target_link_libraries(pipeline_factory_example
-        PRIVATE qbuem-stack::qbuem qbuem_json::qbuem_json)
-
     # 09 Database — Connection pool + session store
     add_executable(db_session_example
         09-database/db_session/db_session_example.cpp)
@@ -320,7 +305,7 @@ if(TARGET qbuem_json::qbuem_json)
 else()
     message(WARNING
         "qbuem-json target not found — skipping:\n"
-        "  pipeline_factory_example, db_session_example, coro_json,\n"
+        "  db_session_example, coro_json,\n"
         "  middleware_example, trading_platform, game_server\n"
         "  Set -DQBUEM_JSON_TAG=<tag> or ensure network access."
     )
@@ -340,10 +325,6 @@ target_link_libraries(transport_codec_example PRIVATE qbuem-stack::qbuem)
 add_executable(backpressure_monitor_example
     05-pipeline/backpressure_monitor/backpressure_monitor_example.cpp)
 target_link_libraries(backpressure_monitor_example PRIVATE qbuem-stack::qbuem)
-
-add_executable(stateful_window_example
-    05-pipeline/stateful_window/stateful_window_example.cpp)
-target_link_libraries(stateful_window_example PRIVATE qbuem-stack::qbuem)
 
 # ── Gap-filling examples (2026-06-14): previously-uncovered features.
 #    smart_cache + grpc are header-only; http2_server is experimental but runs
