@@ -212,7 +212,15 @@ public:
 
   /** @brief Stop the worker and perform a final flush. Idempotent. */
   void shutdown() override {
-    bool was = stop_.exchange(true);
+    bool was;
+    {
+      // Set the stop flag UNDER the mutex so the notify cannot be lost in the
+      // window where the worker has checked the predicate but not yet entered
+      // cv_.wait_for() — otherwise the worker could sleep the full flush_interval
+      // and join() would hang (caught by CI ASan as a timeout).
+      std::lock_guard lk(mtx_);
+      was = stop_.exchange(true);
+    }
     cv_.notify_all();
     if (worker_.joinable()) worker_.join();
     if (!was) flush(); // final drain once

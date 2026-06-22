@@ -10,6 +10,38 @@ pre-release internal iteration and is not tracked here.
 
 ---
 
+## [2.0.0] — Remove redundant pipeline surface (breaking)
+
+**BREAKING.** Deletes the over-engineered / redundant pipeline APIs outright
+(rather than deprecating them). No additions; consumers pinned to 1.x are
+unaffected (this is a major bump).
+
+### Removed
+- `pipeline/pipeline_factory.hpp` (`PipelineFactory`) — use `StaticPipeline` or
+  `PipelineGraph` built in code.
+- `pipeline/migration.hpp` (`MigrationAction`, `DlqReprocessor`) — use a plain
+  `Action<Old,New>` transform stage; `DeadLetterQueue` for re-drive.
+- `pipeline/stream_ops.hpp` (`stream_throttle`/`stream_debounce`/
+  `stream_tumbling_window`) — use `ThrottleAction`/`DebounceAction`
+  (`event_actions.hpp`) and `WindowedAction`.
+- `pipeline/stateful_window.hpp` (`StatefulWindow`, `make_tumbling_window`,
+  `make_counting_window`) — use `WindowedAction` + `TumblingWindow`.
+- `pipeline/subpipeline_action.hpp` (standalone) — duplicate of the
+  `SubpipelineAction` in `message_bus.hpp`; that one remains. Resolves a latent
+  ODR hazard.
+- `SloObserver` / `LoggingSloObserver` from `pipeline/slo.hpp` (zero consumers) —
+  use `PipelineObserver` (`observability.hpp`). The rest of `slo.hpp`
+  (`SloConfig`, `LatencyHistogram`, `ErrorBudgetTracker`) is unchanged.
+- The four corresponding `examples/05-pipeline/` demos (factory, stream_ops,
+  stateful_window, subpipeline_migration). Canonical examples remain (`fanout`,
+  `windowed_action`, `07-resilience/resilience`).
+
+The umbrella `qbuem_stack.hpp` no longer pulls `stateful_window.hpp`. See
+`docs/consolidation.md`. Verified: macOS Release/ASan/UBSan/TSan, gcc 13.3
+`-Werror`, clang-tidy-18.
+
+---
+
 ## [1.9.0] — SaaS readiness + v1 finalization
 
 Backwards-compatible (additive). This release wraps up the **v1** line: it is
