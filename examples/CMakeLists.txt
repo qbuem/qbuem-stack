@@ -366,6 +366,19 @@ add_executable(transport_plain_example
 target_link_libraries(transport_plain_example PRIVATE qbuem-stack::qbuem)
 target_compile_definitions(transport_plain_example PRIVATE QBUEM_TRANSPORT_PLAIN_LINK_LIB)
 
+# ── 12-saas: SaaS-readiness features (auth, multi-tenancy, observability) ──────
+add_executable(rs256_auth_example
+    12-saas/rs256_auth/rs256_auth_example.cpp)
+target_link_libraries(rs256_auth_example PRIVATE qbuem-stack::qbuem)
+
+add_executable(quota_example
+    12-saas/quota/quota_example.cpp)
+target_link_libraries(quota_example PRIVATE qbuem-stack::qbuem)
+
+add_executable(otlp_export_example
+    12-saas/otlp_export/otlp_export_example.cpp)
+target_link_libraries(otlp_export_example PRIVATE qbuem-stack::qbuem)
+
 # NOT registered — these orphaned examples exist on disk but exercise stale or
 # experimental APIs and do NOT compile (deferred, tracked in docs/audit/):
 #   udp_advanced   — uses a removed Dispatcher::current()->spawn API

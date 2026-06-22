@@ -53,13 +53,13 @@ server transport** — usable as a building block, not a turnkey server yet.
 | `shm` — `SHMChannel`, `SHMBus`, futex sync | **Stable** | zero-copy cross-process IPC |
 | `net` — TCP/UDP/Unix sockets, UDS FD passing, DNS | **Stable** | DNS is bounded thread-offload |
 | `io` — `IOVec`/`scattered_span`, buffers, `BufferedReader`, async/direct file, `sendfile` | **Stable** | scatter-gather zero-copy |
-| `crypto` + `security` — SHA/HMAC/HKDF/PBKDF2/ChaCha20-Poly1305/AES-GCM/Base64/CSPRNG, `secretbox`, HS256 JWT, SIMD JWT parser | **Stable** | misuse-resistant wrappers (v1.2.0); software + opt-in hardware paths |
+| `crypto` + `security` — SHA/HMAC/HKDF/PBKDF2/ChaCha20-Poly1305/AES-GCM/Base64/CSPRNG, `secretbox`, HS256 JWT, SIMD JWT parser, **RS256 verify** | **Stable** | misuse-resistant wrappers (v1.2.0); software + opt-in hardware paths; zero-dep `rsa_pkcs1_v15_sha256_verify` (RFC 8017) |
 | `buf` — pools, `GenerationPool`, `inplace_function`, `GridBitset`/`TiledBitset`, `SpatialGrid` | **Stable** | spatial indexes for game/sim/robotics |
-| `middleware` — CORS, rate-limit, security headers, SSE, token/JWT auth, body encoder | **Stable** | composable HTTP middleware |
-| `tracing` — W3C `TraceContext`, span exporter, sampler, lifecycle tracer | **Stable** | distributed tracing |
+| `middleware` — CORS, rate-limit, **per-tenant quota**, security headers, SSE, **bearer auth (HS256/RS256 JWT + JWKS)**, body encoder | **Stable** | composable HTTP middleware; SaaS-ready auth + multi-tenancy |
+| `tracing` — W3C `TraceContext`, span exporter, sampler, lifecycle tracer, **OTLP/JSON exporter** | **Stable** | distributed tracing; off-process export to an OpenTelemetry collector |
 | `config` — `ConfigManager`, `Secret<T>` | **Stable** | zero-heap config + redacted secrets |
-| `db` — `Value`, `IConnection`/`IConnectionPool`, `connection_pool`, `SmartCache` | **Experimental** | interfaces + pool; **no bundled driver** — bring your own |
-| `server` — `Http2Handler` (HTTP/2) | **Codec-only** | HPACK static table + framing; **no flow control, no wired server**; DoS-hardened |
+| `db` — `Value`, `IConnection`/`IConnectionPool`, `connection_pool`, `SmartCache` | **Experimental** | async interfaces + pool; **no bundled driver** — bring your own |
+| `server` — `Http2Handler` (HTTP/2) | **Codec-only** | HPACK static table + framing + **SETTINGS negotiation + flow control** (RFC 7540 §6.5/§6.9); **not socket-wired** to `App`; DoS-hardened |
 | `server` — `GrpcHandler` (gRPC) | **Codec-only** | message framing + dispatch; no HTTP/2 transport wiring |
 
 **Not in this library (and not planned for the zero-dependency core):** TLS,

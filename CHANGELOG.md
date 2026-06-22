@@ -10,6 +10,46 @@ pre-release internal iteration and is not tracked here.
 
 ---
 
+## [1.9.0] — SaaS readiness + v1 finalization
+
+Backwards-compatible (additive). This release wraps up the **v1** line: it is
+SaaS-ready behind an edge TLS terminator, and subsequent changes are hotfix-only.
+All new surface is zero-dependency.
+
+### Added
+- **External-IdP auth (RS256 / JWKS).** `middleware/rs256_verifier.hpp`:
+  `parse_jwks()` + `Rs256JwtVerifier : ITokenVerifier` — `alg`-pinned (rejects
+  `none`/`HS256` downgrade), `kid` selection, `exp`/`nbf`, and optional
+  `expect_issuer()`/`expect_audience()` (RFC 8725). Drops into `bearer_auth()`.
+- **Native RSA verify.** `crypto/rsa.hpp`: zero-dependency
+  `rsa_pkcs1_v15_sha256_verify` (RFC 8017), verify-only.
+- **Per-tenant quota.** `middleware/quota.hpp`: fixed-window request budget keyed
+  by tenant (`X-Auth-Sub`/`X-Tenant-Id`), plan-tier overrides, `X-Quota-*` headers.
+- **OTLP/JSON span export.** `tracing/otlp_exporter.hpp`: `encode_otlp_traces_json`
+  + `OtlpHttpExporter` (background flush thread, injected transport) behind the
+  `SpanExporter` port.
+- **HTTP/2 SETTINGS negotiation + flow control** (RFC 7540 §6.5/§6.9) in
+  `Http2Handler`; `send_data` enforces the send window. (Still Experimental /
+  not socket-wired.)
+- `Hs256JwtVerifier` alias; `examples/12-saas/` (RS256 auth, quota, OTLP).
+
+### Changed
+- The umbrella `qbuem_stack.hpp` now exposes the SaaS surface (middleware: auth,
+  quota, rate-limit, CORS, security, request-id; `crypto/rsa`; OTLP exporter) —
+  previously no `middleware/*` was reachable from the umbrella.
+- README maturity matrix updated (RS256/JWKS, quota, OTLP, h2 flow control).
+
+### Deprecated
+- `SloObserver` / `LoggingSloObserver` (zero consumers) — use `PipelineObserver`.
+  See `docs/consolidation.md` for the full canonical-vs-redundant map and the v2
+  removal plan (`PipelineFactory`, `migration`, duplicate windowing/stream ops).
+
+### Fixed
+- `base64.hpp` `-Werror` unused-variable/parameter in the AVX2 stub + non-NEON
+  `encode_impl` path (surfaced once the umbrella pulled it into the gcc library TU).
+
+---
+
 ## [1.8.2] — Correctness + CI hardening
 
 No API change.

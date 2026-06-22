@@ -103,3 +103,23 @@ TEST(Rs256Jwt, MalformedTokensRejected) {
   EXPECT_FALSE(v.verify("only.two").has_value());
   EXPECT_FALSE(v.verify("").has_value());
 }
+
+TEST(Rs256Jwt, IssuerValidated) {
+  auto good = Rs256JwtVerifier::from_jwks(kJwks);
+  good.expect_issuer("https://idp.example.com");
+  EXPECT_TRUE(good.verify(kJwt).has_value()); // iss matches
+
+  auto bad = Rs256JwtVerifier::from_jwks(kJwks);
+  bad.expect_issuer("https://evil.example.com");
+  EXPECT_FALSE(bad.verify(kJwt).has_value()); // iss mismatch rejected (RFC 8725)
+}
+
+TEST(Rs256Jwt, AudienceValidated) {
+  auto good = Rs256JwtVerifier::from_jwks(kJwks);
+  good.expect_audience("qbuem");
+  EXPECT_TRUE(good.verify(kJwt).has_value()); // aud matches
+
+  auto bad = Rs256JwtVerifier::from_jwks(kJwks);
+  bad.expect_audience("other-api");
+  EXPECT_FALSE(bad.verify(kJwt).has_value()); // aud mismatch rejected (RFC 8725)
+}

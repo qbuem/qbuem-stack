@@ -121,7 +121,7 @@ inline void shl1(BigUint& a, uint32_t bit) {
         a[i] = (a[i] << 1) | carry;
         carry = next;
     }
-    if (carry) a.push_back(1);
+    if (carry != 0) a.push_back(1);
 }
 
 // Schoolbook multiply: returns a * b.
@@ -171,7 +171,7 @@ inline BigUint modexp(BigUint base, std::span<const uint8_t> exp_be,
     for (size_t i = i0; i < exp_be.size(); ++i) {
         for (int bit = 7; bit >= 0; --bit) {
             result = modmul(result, result, n);
-            if ((exp_be[i] >> bit) & 1) result = modmul(result, base, n);
+            if (((exp_be[i] >> bit) & 1) != 0) result = modmul(result, base, n);
         }
     }
     return result; // exp == 0 → result stays 1

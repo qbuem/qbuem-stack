@@ -121,12 +121,12 @@ inline Middleware quota(QuotaConfig cfg = {}) {
     const std::string key = key_fn(req);
     const auto now = std::chrono::steady_clock::now();
 
-    // LRU eviction by window start, to bound memory.
+    // O(1) bounded eviction. A per-request O(n) "find oldest" scan would itself
+    // become a latency cliff / DoS vector once the map fills (exactly what this
+    // middleware is meant to prevent), so we drop one arbitrary entry
+    // (hash-order begin()) instead — a memory bound, not strict LRU.
     if (max_keys > 0 && windows.size() >= max_keys) {
-      auto oldest = windows.begin();
-      for (auto it = std::next(oldest); it != windows.end(); ++it)
-        if (it->second.start < oldest->second.start) oldest = it;
-      windows.erase(oldest);
+      windows.erase(windows.begin());
     }
 
     long limit = default_limit;

@@ -81,10 +81,10 @@ using Result = std::expected<T, std::error_code>;
 
 namespace detail::b64 {
 
-inline constexpr char kStdAlpha[] =
+inline constexpr char kStdAlpha[] = // NOLINT(modernize-avoid-c-arrays) — string-literal table
     "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
-inline constexpr char kUrlAlpha[] =
+inline constexpr char kUrlAlpha[] = // NOLINT(modernize-avoid-c-arrays) — string-literal table
     "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
 
 // Decoding lookup: maps ASCII → 6-bit value, 0xFF = invalid, 0xFE = padding '='
@@ -135,7 +135,12 @@ inline void encode_scalar(const uint8_t* src, size_t len,
 #if defined(QBUEM_BASE64_AVX2)
 inline size_t encode_avx2(const uint8_t* src, size_t len,
                             char* dst, const char* alpha) noexcept {
-    size_t i = 0, o = 0;
+    // The AVX2 encode path is currently a stub: it returns 0 so the caller falls
+    // back to the (fast) scalar encoder. Only `alpha` is consumed (to build the
+    // LUTs retained for a future full implementation); the data pointers are
+    // intentionally unused.
+    (void)src; (void)len; (void)dst;
+    size_t i = 0;
 
     // Build 32-byte lookup tables (4 × 8-byte ASCII ranges)
     const __m256i lut_lo = _mm256_setr_epi8(
@@ -236,7 +241,7 @@ inline size_t encode_neon(const uint8_t* src, size_t len,
  */
 inline size_t encode_impl(const uint8_t* src, size_t len,
                            char* dst, const char* alpha, bool pad) noexcept {
-    size_t done = 0;
+    [[maybe_unused]] size_t done = 0; // used only by the NEON path below
 
 #if defined(QBUEM_BASE64_NEON)
     done = encode_neon(src, len, dst, alpha);

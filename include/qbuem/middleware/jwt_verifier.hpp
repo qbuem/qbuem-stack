@@ -13,7 +13,7 @@
  *
  * @code
  * auto verifier = std::make_shared<qbuem::middleware::HmacJwtVerifier>(secret);
- * app.use_async(qbuem::middleware::bearer_auth(verifier));
+ * app.use(qbuem::middleware::bearer_auth(verifier));   // bearer_auth is a sync Middleware
  * @endcode
  */
 
@@ -117,5 +117,8 @@ private:
   std::string secret_;
   long        leeway_ = 0;
 };
+
+/** @brief Algorithm-named alias for `HmacJwtVerifier` (mirrors `Rs256JwtVerifier`). */
+using Hs256JwtVerifier = HmacJwtVerifier;
 
 } // namespace qbuem::middleware
