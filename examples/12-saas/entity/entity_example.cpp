@@ -16,7 +16,7 @@
 
 #include <qbuem/entity/entity_router.hpp>
 
-#include <print>
+#include <qbuem/compat/print.hpp> // std::print/println shim (GCC 13 lacks <print>)
 #include <string>
 #include <vector>
 

@@ -17,9 +17,10 @@
 #include <qbuem/http/parser.hpp>
 #include <qbuem/qbuem_stack.hpp>
 
+#include <qbuem/compat/print.hpp> // std::print/println shim (GCC 13 lacks <print>)
+
 #include <chrono>
 #include <memory>
-#include <print>
 #include <string>
 
 using namespace qbuem;

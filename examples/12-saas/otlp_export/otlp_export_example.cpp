@@ -21,8 +21,9 @@
 
 #include <qbuem/qbuem_stack.hpp> // exposes tracing/otlp_exporter.hpp via the umbrella
 
+#include <qbuem/compat/print.hpp> // std::print/println shim (GCC 13 lacks <print>)
+
 #include <chrono>
-#include <print>
 #include <string_view>
 
 using namespace qbuem::tracing;
