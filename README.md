@@ -58,6 +58,7 @@ server transport** — usable as a building block, not a turnkey server yet.
 | `middleware` — CORS, rate-limit, **per-tenant quota**, security headers, SSE, **bearer auth (HS256/RS256 JWT + JWKS)**, body encoder | **Stable** | composable HTTP middleware; SaaS-ready auth + multi-tenancy |
 | `tracing` — W3C `TraceContext`, span exporter, sampler, lifecycle tracer, **OTLP/JSON exporter** | **Stable** | distributed tracing; off-process export to an OpenTelemetry collector |
 | `config` — `ConfigManager`, `Secret<T>` | **Stable** | zero-heap config + redacted secrets |
+| `entity` — `EntityRouter` (type-tagged serialize + dispatch for game/web entities) | **Stable · opt-in** | thin reuse layer on **qbuem-json** — header self-disables (`__has_include`) when qbuem-json is absent, so the zero-dep core is untouched; no base class/vtable |
 | `db` — `Value`, `IConnection`/`IConnectionPool`, `connection_pool`, `SmartCache` | **Experimental** | async interfaces + pool; **no bundled driver** — bring your own |
 | `server` — `Http2Handler` (HTTP/2) | **Codec-only** | HPACK static table + framing + **SETTINGS negotiation + flow control** (RFC 7540 §6.5/§6.9); **not socket-wired** to `App`; DoS-hardened |
 | `server` — `GrpcHandler` (gRPC) | **Codec-only** | message framing + dispatch; no HTTP/2 transport wiring |
@@ -245,21 +246,22 @@ See `examples/11-advanced-apps/open_world/` and `spatial_fusion/`.
 
 ## Examples
 
-The [`examples/`](./examples/) directory contains **61 registered programs** in 11 categories.
+The [`examples/`](./examples/) directory contains **61 registered programs** in 12 categories.
 
 | # | Category | Programs | Highlights |
 | :--- | :--- | :---: | :--- |
-| [01](./examples/01-foundation/) | Foundation | 5 | `hello_world`, `async_timer`, `micro_ticker`, **`tick_loop`** (drift-free fixed-timestep), `config` |
-| [02](./examples/02-network/) | Network | 8 | TCP echo, UDP advanced, Unix socket, WebSocket codec, **`ws_game_server`** (high-level rooms/broadcast), HTTP fetch, HTTP/2 + gRPC *(codec demos — see maturity)* |
+| [01](./examples/01-foundation/) | Foundation | 6 | `hello_world`, `async_timer`, `micro_ticker`, **`tick_loop`** (drift-free fixed-timestep), `offload_pool`, `config` |
+| [02](./examples/02-network/) | Network | 7 | TCP echo, UDP/Unix socket, WebSocket codec, **`ws_game_server`** (high-level rooms/broadcast), HTTP fetch, HTTP/2 + gRPC *(codec demos — see maturity)* |
 | [03](./examples/03-memory/) | Memory | 4 | Arena, zero-copy arena channel, NUMA + huge pages, lock-free bench |
 | [04](./examples/04-codec-security/) | Codec & Security | 6 | Codecs, crypto URL, security middleware, **crypto primitives**, transport codec/plain |
-| [05](./examples/05-pipeline/) | Pipeline | 12 | Fan-out, hot-swap, batching, dynamic router, backpressure, stateful window, windowed action |
+| [05](./examples/05-pipeline/) | Pipeline | 7 | Fan-out, hot-swap, hardware batching, backpressure monitor, observer health, sensor fusion, windowed action |
 | [06](./examples/06-ipc-messaging/) | IPC & Messaging | 5 | SHMChannel, **flagship IPC pipeline**, MessageBus, SPSC, scatter-send |
 | [07](./examples/07-resilience/) | Resilience | 6 | Retry + CircuitBreaker + DLQ, Saga, Canary, Checkpoint, SLO |
 | [08](./examples/08-observability/) | Observability | 3 | W3C tracing, TimerWheel, TaskGroup |
 | [09](./examples/09-database/) | Database | 3 | Connection pool / session, coroutine JSON, SmartCache |
 | [10](./examples/10-hardware/) | Hardware | 1 | kqueue sophistication (macOS) |
 | [11](./examples/11-advanced-apps/) | Advanced Apps | 9 | Autonomous driving, HFT matching, open-world spatial, trading platform, game server |
+| [12](./examples/12-saas/) | SaaS / Game | 4 | RS256/JWKS bearer auth, per-tenant quota, OTLP/JSON export, **`entity`** (tagged serialize + dispatch) |
 
 **Recommended learning path:**
 ```

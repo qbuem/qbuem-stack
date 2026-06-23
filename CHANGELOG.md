@@ -10,6 +10,42 @@ pre-release internal iteration and is not tracked here.
 
 ---
 
+## [2.1.0] — Extensible Entity framework (additive)
+
+Backwards-compatible (additive). A thin, reusable **entity** layer that both
+games and web/SaaS servers want, built entirely on top of **qbuem-json** — the
+zero-dependency core is untouched.
+
+### Added
+- `entity/entity_router.hpp` — `qbuem::entity::EntityRouter`. An entity is just a
+  plain struct registered with `QBUEM_JSON_FIELDS(T, ...)` (so it already has JSON
+  + CBOR); there is **no base class and no vtable**. The router adds the
+  cross-project reuse layer:
+  - `on<T>(name, handler)` — extensible registry: register your own entity types
+    by name; adding a type never edits a central enum/variant.
+  - `encode<T>(e)` — a self-describing envelope (`[u16 name_len][name][CBOR]`)
+    you can put on a socket, an `SHMChannel` (as bytes), a save file, or a DB
+    blob.
+  - `dispatch(bytes)` — reads the type tag and routes to the typed handler;
+    `noexcept`, contains qbuem-json's parse exceptions at the untrusted-bytes
+    trust boundary (unknown type / malformed bytes → `false`, never throws).
+  - `EntityId` (opaque `uint64_t`), `type_name<T>()`, `registered_count()`.
+- `examples/12-saas/entity/entity_example.cpp` — one pattern covering game
+  entities (`Weapon`/`Monster`/`Character`) and web entities (`User`/`Order`):
+  JSON I/O, a heterogeneous tagged stream encode→dispatch, and boundary-safety
+  checks. Doubles as a self-test (8/8 PASS).
+
+### Notes
+- **Opt-in:** the whole header is guarded by `#if __has_include(<qbuem_json/…>)`,
+  so a build without qbuem-json compiles it away — the zero-dependency contract
+  for the core is preserved. For single-type / human-readable I/O use qbuem-json
+  directly (`qbuem::write` / `qbuem::read<T>`); this layer is for tagged,
+  polymorphic entity *streams*.
+- Verified: macOS Release build + the example (8/8 PASS), gcc 13 `-Werror`,
+  clang-tidy-18.
+
+---
+
 ## [2.0.0] — Remove redundant pipeline surface (breaking)
 
 **BREAKING.** Deletes the over-engineered / redundant pipeline APIs outright
