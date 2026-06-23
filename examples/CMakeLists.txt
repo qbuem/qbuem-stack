@@ -273,6 +273,12 @@ if(NOT qbuem_json_POPULATED)
 endif()
 
 if(TARGET qbuem_json::qbuem_json)
+    # 12 SaaS/Game — extensible Entity framework (qbuem/entity, on qbuem-json)
+    add_executable(entity_example
+        12-saas/entity/entity_example.cpp)
+    target_link_libraries(entity_example
+        PRIVATE qbuem-stack::qbuem qbuem_json::qbuem_json)
+
     # 09 Database — Connection pool + session store
     add_executable(db_session_example
         09-database/db_session/db_session_example.cpp)
@@ -305,7 +311,7 @@ if(TARGET qbuem_json::qbuem_json)
 else()
     message(WARNING
         "qbuem-json target not found — skipping:\n"
-        "  db_session_example, coro_json,\n"
+        "  entity_example, db_session_example, coro_json,\n"
         "  middleware_example, trading_platform, game_server\n"
         "  Set -DQBUEM_JSON_TAG=<tag> or ensure network access."
     )

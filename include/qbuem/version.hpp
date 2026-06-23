@@ -91,6 +91,13 @@
  *           replacements: `StaticPipeline`/`PipelineGraph`, `WindowedAction`,
  *           `event_actions` (Throttle/Debounce), `DeadLetterQueue`,
  *           `PipelineObserver`. See docs/consolidation.md. No additions.
+ * - 2.1.0: Extensible **Entity framework** (`qbuem/entity/entity_router.hpp`) — a
+ *           thin reuse layer on qbuem-json for game/web entities: register plain
+ *           structs (`QBUEM_JSON_FIELDS`) by name, `encode()` to a self-describing
+ *           envelope (type tag + CBOR), `dispatch()` routes a heterogeneous stream
+ *           to typed handlers. No base class/vtable; opt-in (`__has_include`
+ *           qbuem-json → zero-dep core untouched). `examples/12-saas/entity/`.
+ *           Additive, backwards-compatible.
  */
 
 /**
@@ -120,7 +127,7 @@ namespace qbuem {
  *
  * @code
  * static_assert(qbuem::Version::major >= 1, "qbuem-stack 1.x required");
- * std::print("{}\n", qbuem::Version::string); // "2.0.0"
+ * std::print("{}\n", qbuem::Version::string); // "2.1.0"
  * @endcode
  */
 struct Version {
@@ -128,13 +135,13 @@ struct Version {
   static constexpr int major = 2;
 
   /** @brief Minor version number. Incremented when new backwards-compatible features are added. */
-  static constexpr int minor = 0;
+  static constexpr int minor = 1;
 
   /** @brief Patch version number. Incremented for backwards-compatible bug fixes only. */
   static constexpr int patch = 0;
 
   /** @brief Version string in "major.minor.patch" format (null-terminated). */
-  static constexpr std::string_view string = "2.0.0";
+  static constexpr std::string_view string = "2.1.0";
 };
 
 } // namespace qbuem
@@ -143,12 +150,12 @@ struct Version {
 #define QBUEM_VERSION_MAJOR 2
 
 /** @brief Minor version number (for use in preprocessor `#if` conditions). */
-#define QBUEM_VERSION_MINOR 0
+#define QBUEM_VERSION_MINOR 1
 
 /** @brief Patch version number (for use in preprocessor `#if` conditions). */
 #define QBUEM_VERSION_PATCH 0
 
 /** @brief Version string literal "major.minor.patch" (for use in preprocessor conditions). */
-#define QBUEM_VERSION_STRING "2.0.0"
+#define QBUEM_VERSION_STRING "2.1.0"
 
 /** @} */ // end of qbuem_version

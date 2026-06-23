@@ -21,7 +21,7 @@ Existing Korean comments in legacy files should be translated to English when to
 
 ## Project Identity
 
-**qbuem-stack v2.0.0** — Zero Latency · Zero Allocation · Zero Dependency
+**qbuem-stack v2.1.0** — Zero Latency · Zero Allocation · Zero Dependency
 C++23 high-performance infrastructure library for WAS (Web Application Servers), IPC, and data pipelines.
 
 - **Language**: C++23 (concepts, coroutines `co_await`/`co_return`, `std::expected`, `std::span`, `std::format`, `std::print`/`std::println`, `std::unreachable()`, `if consteval`, `std::to_underlying`)
@@ -85,18 +85,19 @@ include/qbuem/          ← ALL public headers (header-centric library)
 
 src/                    ← Non-inline implementations (reactors, http parser/router)
 tests/                  ← Unit tests (mirrors include/ structure)
-examples/               ← 61 registered examples in 11 category subdirectories
+examples/               ← 61 registered examples in 12 category subdirectories
   01-foundation/        → hello_world, async_timer, micro_ticker, tick_loop, offload_pool, config
-  02-network/           → tcp_echo_server, udp_advanced, udp_unix_socket, websocket, ws_game_server, http_fetch, http2_server, grpc
+  02-network/           → tcp_echo_server, udp_unix_socket, websocket, ws_game_server, http_fetch, http2_server, grpc
   03-memory/            → arena, zero_copy_arena_channel, numa_hugepages, lockfree_bench
   04-codec-security/    → codec, crypto_url, security_middleware, crypto_primitives, transport_codec, transport_plain
-  05-pipeline/          → fanout, hardware_batching, dynamic_hotswap, sensor_fusion, observer_health, factory, subpipeline_migration, stream_ops, windowed_action, backpressure_monitor, stateful_window, dynamic_router
+  05-pipeline/          → fanout, hardware_batching, dynamic_hotswap, sensor_fusion, observer_health, windowed_action, backpressure_monitor
   06-ipc-messaging/     → shm_channel, ipc_pipeline (flagship), message_bus, priority_spsc_channel, scatter_send
   07-resilience/        → canary, checkpoint, resilience, saga, scatter_gather, idempotency_slo
   08-observability/     → tracing, timer_wheel, task_group
   09-database/          → db_session, coro_json, smart_cache
   10-hardware/          → kqueue_sophistication (macOS only)
   11-advanced-apps/     → autonomous_driving, hft_matching, open_world, spatial_fusion, trading_platform, game_server, sensor_fusion, io_metrics_dashboard, middleware
+  12-saas/              → rs256_auth, quota, otlp_export, entity (extensible Entity framework on qbuem-json)
 docs/                   ← Design documents (all English Markdown)
 bench/                  ← Benchmarks
 ```

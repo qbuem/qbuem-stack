@@ -19,7 +19,7 @@
 
 #include <qbuem/qbuem_stack.hpp> // umbrella now exposes the middleware/crypto SaaS surface
 
-#include <print>
+#include <qbuem/compat/print.hpp> // std::print/println shim (GCC 13 lacks <print>)
 #include <string_view>
 
 using qbuem::middleware::Rs256JwtVerifier;
